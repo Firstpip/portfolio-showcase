@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>멀티테넌트 B2B 통합 어드민 플랫폼 — 구현 데모</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Pretendard',sans-serif;background:#FAF5FF;color:#1E1B4B}
+::-webkit-scrollbar{width:5px}
+::-webkit-scrollbar-thumb{background:#D4D4D8;border-radius:3px}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes barGrow{from{width:0%}to{width:var(--target-width)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect}=React;
+const {BarChart,Bar,PieChart,Pie,Cell,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,AreaChart,Area}=Recharts;
+
+const C={
+  primary:'#7C3AED',secondary:'#1E1B4B',accent:'#A78BFA',
+  bg:'#FAF5FF',surface:'#FFFFFF',border:'#E5E7EB',
+  text:'#1E1B4B',textLight:'#6B7280',textMuted:'#9CA3AF',
+  success:'#059669',warning:'#D97706',danger:'#DC2626',
+};
+
+// ─── Data ───
+const TENANTS=[
+  {id:1,name:'넥스테라',plan:'Enterprise',status:'활성',users:48,apiCalls:32400,storage:'128GB',domain:'nextera.admin.io',created:'2025-04-10',alerts:0,color:'#7C3AED'},
+  {id:2,name:'데이터플로우',plan:'Business',status:'활성',users:22,apiCalls:14200,storage:'56GB',domain:'dataflow.admin.io',created:'2025-06-20',alerts:1,color:'#06B6D4'},
+  {id:3,name:'클라우드피크',plan:'Starter',status:'정지',users:8,apiCalls:2100,storage:'12GB',domain:'cloudpeak.admin.io',created:'2025-09-15',alerts:3,color:'#F43F5E'},
+  {id:4,name:'스마트링크',plan:'Enterprise',status:'활성',users:35,apiCalls:28600,storage:'98GB',domain:'smartlink.admin.io',created:'2025-05-01',alerts:0,color:'#10B981'},
+  {id:5,name:'인포베이',plan:'Business',status:'활성',users:15,apiCalls:8900,storage:'32GB',domain:'infobay.admin.io',created:'2025-08-12',alerts:0,color:'#F59E0B'},
+  {id:6,name:'테크웨이브',plan:'Enterprise',status:'활성',users:42,apiCalls:26800,storage:'110GB',domain:'techwave.admin.io',created:'2025-07-01',alerts:2,color:'#8B5CF6'},
+];
+
+const WORKFLOWS=[
+  {id:1,name:'신규 테넌트 온보딩',trigger:'테넌트 생성 시',actions:['DB 스키마 생성','기본 역할 설정','웰컴 이메일 발송'],status:'활성',runs:24,lastRun:'2026-03-27 09:30'},
+  {id:2,name:'API 사용량 경고',trigger:'API 호출 80% 초과 시',actions:['Slack 알림','이메일 발송','대시보드 배지'],status:'활성',runs:156,lastRun:'2026-03-27 14:15'},
+  {id:3,name:'비활성 계정 정리',trigger:'매주 월요일 02:00',actions:['30일 미접속 계정 검출','경고 메일 발송','로그 기록'],status:'활성',runs:12,lastRun:'2026-03-24 02:00'},
+  {id:4,name:'플랜 만료 알림',trigger:'만료 7일 전',actions:['담당자 이메일','Slack DM','CRM 태스크 생성'],status:'비활성',runs:8,lastRun:'2026-03-20 10:00'},
+  {id:5,name:'보안 감사 로그',trigger:'권한 변경 시',actions:['감사 로그 기록','관리자 알림'],status:'활성',runs:342,lastRun:'2026-03-27 11:45'},
+];
+
+const WHITELABEL_PRESETS=[
+  {name:'기본',primary:'#7C3AED',surface:'#FFFFFF',bg:'#FAF5FF'},
+  {name:'Ocean',primary:'#0066CC',surface:'#FFFFFF',bg:'#F0F9FF'},
+  {name:'Forest',primary:'#059669',surface:'#FFFFFF',bg:'#F0FDF4'},
+  {name:'Coral',primary:'#F43F5E',surface:'#FFFFFF',bg:'#FFF1F2'},
+  {name:'Amber',primary:'#D97706',surface:'#FFFFFF',bg:'#FFFBEB'},
+];
+
+const ALERTS=[
+  {tenant:'데이터플로우',type:'API 사용량 경고',msg:'API 호출량이 월간 한도의 85%에 도달했습니다.',time:'14분 전',level:'warning'},
+  {tenant:'클라우드피크',type:'결제 실패',msg:'3월 결제가 실패했습니다. 결제 수단을 확인해주세요.',time:'2시간 전',level:'danger'},
+  {tenant:'클라우드피크',type:'인증서 만료 임박',msg:'SSL 인증서가 7일 후 만료됩니다.',time:'5시간 전',level:'warning'},
+  {tenant:'테크웨이브',type:'비정상 접근 감지',msg:'알 수 없는 IP에서 다수의 로그인 시도가 감지되었습니다.',time:'6시간 전',level:'danger'},
+  {tenant:'테크웨이브',type:'스토리지 경고',msg:'스토리지 사용량이 90%를 초과했습니다.',time:'1일 전',level:'warning'},
+];
+
+const API_TREND=[
+  {month:'10월',넥스테라:28000,데이터플로우:10000,스마트링크:24000},
+  {month:'11월',넥스테라:29500,데이터플로우:11500,스마트링크:25000},
+  {month:'12월',넥스테라:30200,데이터플로우:12800,스마트링크:26500},
+  {month:'1월',넥스테라:31000,데이터플로우:13500,스마트링크:27200},
+  {month:'2월',넥스테라:31800,데이터플로우:13900,스마트링크:28000},
+  {month:'3월',넥스테라:32400,데이터플로우:14200,스마트링크:28600},
+];
+
+// ─── Components ───
+function CountUpNum({end,suffix=''}){
+  const [val,setVal]=useState(0);
+  useEffect(()=>{let s=0;const step=end/(1200/16);const t=setInterval(()=>{s+=step;if(s>=end){setVal(end);clearInterval(t);}else setVal(Math.floor(s));},16);return()=>clearInterval(t);},[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({message,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:C.secondary,color:'#fff',padding:'12px 24px',borderRadius:12,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.2)',fontSize:14}}>{message}</div>;
+}
+
+function Modal({title,onClose,children,width=560}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.35)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:'#fff',borderRadius:20,zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.12)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'20px 24px',borderBottom:'1px solid '+C.border}}>
+          <h3 style={{fontSize:18,fontWeight:700}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textLight}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Badge({text}){
+  const colors={'활성':{bg:'#DCFCE7',fg:'#059669'},'정지':{bg:'#FEE2E2',fg:'#DC2626'},'비활성':{bg:'#FEF3C7',fg:'#D97706'},
+    'Enterprise':{bg:'#EDE9FE',fg:'#7C3AED'},'Business':{bg:'#DBEAFE',fg:'#2563EB'},'Starter':{bg:'#F1F5F9',fg:'#64748B'},
+    'warning':{bg:'#FEF3C7',fg:'#D97706'},'danger':{bg:'#FEE2E2',fg:'#DC2626'},
+  };
+  const c=colors[text]||{bg:'#F1F5F9',fg:'#64748B'};
+  return <span style={{display:'inline-block',padding:'2px 10px',borderRadius:20,fontSize:12,fontWeight:600,background:c.bg,color:c.fg}}>{text}</span>;
+}
+
+function FormField({label,value,type='text',options}){
+  const base={width:'100%',padding:'8px 12px',border:'1px solid '+C.border,borderRadius:12,fontSize:14,fontFamily:'inherit',outline:'none'};
+  return(
+    <div style={{marginBottom:16}}>
+      <label style={{display:'block',fontSize:13,fontWeight:600,color:C.textLight,marginBottom:6}}>{label}</label>
+      {type==='select'?<select style={base} defaultValue={value}>{options?.map(o=><option key={o}>{o}</option>)}</select>
+      :type==='textarea'?<textarea style={{...base,minHeight:80,resize:'vertical'}} defaultValue={value}/>
+      :<input style={base} type={type} defaultValue={value}/>}
+    </div>
+  );
+}
+
+// ─── Navigation ───
+const NAV_ITEMS=[
+  {id:'dashboard',icon:'📊',label:'테넌트 현황판'},
+  {id:'tenant',icon:'🏢',label:'테넌트 관리'},
+  {id:'workflow',icon:'⚡',label:'자동화 워크플로우'},
+  {id:'whitelabel',icon:'🎨',label:'화이트라벨 설정'},
+];
+
+// ─── Sidebar ───
+function SideNav({section,setSection}){
+  return(
+    <nav style={{width:240,background:'#fff',borderRight:'1px solid '+C.border,display:'flex',flexDirection:'column',paddingTop:16,flexShrink:0}}>
+      <div style={{padding:'0 16px 20px',display:'flex',alignItems:'center',gap:10}}>
+        <div style={{width:32,height:32,borderRadius:10,background:'linear-gradient(135deg,#7C3AED,#A78BFA)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:800,fontSize:14}}>A</div>
+        <span style={{fontWeight:700,fontSize:15,color:C.secondary}}>AdminHub</span>
+      </div>
+      <div style={{flex:1,display:'flex',flexDirection:'column',gap:2,padding:'0 8px'}}>
+        {NAV_ITEMS.map(item=>(
+          <button key={item.id} onClick={()=>setSection(item.id)} title={item.label} style={{
+            display:'flex',alignItems:'center',gap:10,width:'100%',padding:'8px 12px',borderRadius:8,border:'none',cursor:'pointer',
+            background:section===item.id?C.primary+'10':'transparent',
+            color:section===item.id?C.primary:C.textLight,
+            borderLeft:section===item.id?'3px solid '+C.primary:'3px solid transparent',
+            fontSize:14,fontWeight:section===item.id?600:400,transition:'all 150ms',fontFamily:'inherit',
+          }}
+            onMouseEnter={e=>{if(section!==item.id)e.currentTarget.style.background='#F5F3FF'}}
+            onMouseLeave={e=>{if(section!==item.id)e.currentTarget.style.background='transparent'}}
+          >
+            <span style={{fontSize:18}}>{item.icon}</span>{item.label}
+          </button>
+        ))}
+      </div>
+      <div style={{padding:'12px 16px',borderTop:'1px solid '+C.border,display:'flex',alignItems:'center',gap:8}}>
+        <div style={{width:28,height:28,borderRadius:'50%',background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:11,fontWeight:700}}>관</div>
+        <div><div style={{fontSize:12,fontWeight:600}}>MSP 관리자</div><div style={{fontSize:10,color:C.textMuted}}>admin@adminhub.io</div></div>
+      </div>
+    </nav>
+  );
+}
+
+// ─── AppBar ───
+function AppBar({section,tabLabel}){
+  const labels={dashboard:'테넌트 현황판',tenant:'테넌트 관리',workflow:'자동화 워크플로우',whitelabel:'화이트라벨 설정'};
+  return(
+    <header style={{height:40,borderBottom:'1px solid '+C.border,display:'flex',alignItems:'center',padding:'0 16px',gap:8,background:C.surface,flexShrink:0}}>
+      <span style={{fontSize:13,color:C.textMuted}}>AdminHub</span>
+      <span style={{fontSize:13,color:C.textMuted}}>/</span>
+      <span style={{fontSize:13,fontWeight:600}}>{labels[section]}</span>
+      {tabLabel&&<><span style={{fontSize:13,color:C.textMuted}}>/</span><span style={{fontSize:13,color:C.textLight}}>{tabLabel}</span></>}
+      <div style={{flex:1}}/>
+      <div style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px',background:C.bg,borderRadius:8,border:'1px solid '+C.border,width:160}}>
+        <span style={{color:C.textMuted,fontSize:12}}>🔍</span>
+        <input placeholder="검색..." style={{border:'none',background:'transparent',outline:'none',fontSize:12,fontFamily:'inherit',flex:1}}/>
+      </div>
+    </header>
+  );
+}
+
+// ─── Dashboard ───
+function DashboardPage(){
+  return(
+    <div style={{padding:20,animation:'fadeIn 300ms ease',overflowY:'auto',height:'100%'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <h2 style={{fontSize:22,fontWeight:700,letterSpacing:'-0.01em'}}>테넌트 전체 현황</h2>
+        <div style={{display:'flex',gap:12}}>
+          {[{l:'전체 테넌트',v:TENANTS.length+'개'},{l:'활성',v:TENANTS.filter(t=>t.status==='활성').length+'개'},{l:'알림',v:ALERTS.length+'건'}].map(k=>(
+            <div key={k.l} style={{background:C.surface,border:'1px solid '+C.border,borderRadius:12,padding:'8px 16px',textAlign:'center'}}>
+              <div style={{fontSize:10,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.06em'}}>{k.l}</div>
+              <div style={{fontSize:18,fontWeight:700,color:C.primary}}>{k.v}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:20}}>
+        {TENANTS.map((t,i)=>(
+          <div key={t.id} style={{background:C.surface,borderRadius:20,padding:20,border:'1px solid '+C.border,boxShadow:'0 1px 4px rgba(0,0,0,0.06)',animation:'slideUp 400ms ease '+(i*80)+'ms both',transition:'all 200ms',cursor:'default'}}
+            onMouseEnter={e=>{e.currentTarget.style.background=C.primary+'08';e.currentTarget.style.borderLeftColor=C.primary;e.currentTarget.style.borderLeftWidth='3px'}}
+            onMouseLeave={e=>{e.currentTarget.style.background=C.surface;e.currentTarget.style.borderLeftColor=C.border;e.currentTarget.style.borderLeftWidth='1px'}}
+          >
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <div style={{width:10,height:10,borderRadius:'50%',background:t.color}}/>
+                <span style={{fontSize:15,fontWeight:700}}>{t.name}</span>
+              </div>
+              <div style={{display:'flex',gap:4}}><Badge text={t.plan}/><Badge text={t.status}/></div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
+              {[{l:'사용자',v:t.users+'명'},{l:'API',v:(t.apiCalls/1000).toFixed(1)+'K'},{l:'스토리지',v:t.storage}].map(s=>(
+                <div key={s.l} style={{textAlign:'center',padding:'6px 0',background:C.bg,borderRadius:8}}>
+                  <div style={{fontSize:10,color:C.textMuted}}>{s.l}</div>
+                  <div style={{fontSize:14,fontWeight:700}}>{s.v}</div>
+                </div>
+              ))}
+            </div>
+            {t.alerts>0&&<div style={{marginTop:8,fontSize:12,color:C.danger,fontWeight:600}}>⚠ {t.alerts}건의 알림</div>}
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+        <div style={{background:C.surface,borderRadius:20,padding:20,border:'1px solid '+C.border,boxShadow:'0 1px 4px rgba(0,0,0,0.06)'}}>
+          <div style={{fontSize:13,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:C.textLight,marginBottom:12}}>API 호출 추이</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={API_TREND}>
+              <defs>
+                <linearGradient id="gP" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#7C3AED" stopOpacity={0.15}/><stop offset="95%" stopColor="#7C3AED" stopOpacity={0}/></linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB"/>
+              <XAxis dataKey="month" tick={{fontSize:11,fill:C.textLight}}/>
+              <YAxis tick={{fontSize:11,fill:C.textLight}} tickFormatter={v=>(v/1000)+'K'}/>
+              <Tooltip contentStyle={{borderRadius:12,fontSize:12}}/>
+              <Area type="monotone" dataKey="넥스테라" stroke="#7C3AED" fill="url(#gP)" strokeWidth={2}/>
+              <Area type="monotone" dataKey="스마트링크" stroke="#10B981" fill="transparent" strokeWidth={2} strokeDasharray="4 4"/>
+              <Area type="monotone" dataKey="데이터플로우" stroke="#06B6D4" fill="transparent" strokeWidth={1.5}/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{background:C.surface,borderRadius:20,padding:20,border:'1px solid '+C.border,boxShadow:'0 1px 4px rgba(0,0,0,0.06)'}}>
+          <div style={{fontSize:13,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:C.textLight,marginBottom:12}}>실시간 알림 피드</div>
+          <div style={{maxHeight:200,overflowY:'auto'}}>
+            {ALERTS.map((a,i)=>(
+              <div key={i} style={{display:'flex',gap:10,padding:'8px 0',borderBottom:'1px solid '+C.border,animation:'slideUp 300ms ease '+(i*50)+'ms both'}}>
+                <span style={{fontSize:16,flexShrink:0}}>{a.level==='danger'?'🔴':'🟡'}</span>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:600}}>{a.tenant} — {a.type}</div>
+                  <div style={{fontSize:12,color:C.textLight}}>{a.msg}</div>
+                </div>
+                <span style={{fontSize:11,color:C.textMuted,whiteSpace:'nowrap',flexShrink:0}}>{a.time}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Tenant Management ───
+function TenantPage({onToast}){
+  const [selected,setSelected]=useState(null);
+  const [detailTab,setDetailTab]=useState(0);
+  const [modal,setModal]=useState(null);
+  const detailTabs=['기본 정보','플랜','사용자','API 키','감사 로그'];
+
+  return(
+    <div style={{display:'flex',flex:1,overflow:'hidden'}}>
+      {/* Master List */}
+      <div style={{width:'42%',borderRight:'1px solid '+C.border,overflowY:'auto'}}>
+        <div style={{padding:'12px 16px',borderBottom:'1px solid '+C.border,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <span style={{fontSize:13,fontWeight:700,color:C.textLight}}>테넌트 {TENANTS.length}개</span>
+          <button onClick={()=>setModal({type:'create'})} style={{padding:'4px 12px',borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:12,fontWeight:600,fontFamily:'inherit'}}>+ 추가</button>
+        </div>
+        {TENANTS.map((t,i)=>(
+          <div key={t.id} onClick={()=>{setSelected(t);setDetailTab(0)}} style={{
+            display:'flex',alignItems:'center',gap:12,padding:'12px 16px',cursor:'pointer',
+            borderBottom:'1px solid '+C.border,borderLeft:selected?.id===t.id?'3px solid '+C.primary:'3px solid transparent',
+            background:selected?.id===t.id?C.primary+'08':'transparent',
+            transition:'all 150ms',animation:'slideUp 300ms ease '+(i*40)+'ms both',
+          }}
+            onMouseEnter={e=>{if(selected?.id!==t.id)e.currentTarget.style.background=C.primary+'04'}}
+            onMouseLeave={e=>{if(selected?.id!==t.id)e.currentTarget.style.background='transparent'}}
+          >
+            <div style={{width:10,height:10,borderRadius:'50%',background:t.color,flexShrink:0}}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:600}}>{t.name}</div>
+              <div style={{fontSize:11,color:C.textMuted}}>{t.users}명 · {t.plan} · {(t.apiCalls/1000).toFixed(1)}K calls</div>
+            </div>
+            <Badge text={t.status}/>
+          </div>
+        ))}
+      </div>
+
+      {/* Detail Panel */}
+      <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column'}}>
+        {selected?(
+          <div style={{animation:'slideInRight 250ms ease'}}>
+            <div style={{padding:'12px 20px',borderBottom:'1px solid '+C.border,display:'flex',gap:0}}>
+              {detailTabs.map((tab,i)=>(
+                <button key={tab} onClick={()=>setDetailTab(i)} style={{
+                  padding:'8px 14px',border:'none',cursor:'pointer',background:'transparent',fontFamily:'inherit',fontSize:13,
+                  color:detailTab===i?C.primary:C.textLight,fontWeight:detailTab===i?600:400,
+                  borderBottom:detailTab===i?'2px solid '+C.primary:'2px solid transparent',marginBottom:-1,
+                }}>{tab}</button>
+              ))}
+            </div>
+            <div style={{padding:20}}>
+              {detailTab===0&&(
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+                  {[{l:'테넌트명',v:selected.name},{l:'플랜',v:selected.plan},{l:'상태',v:selected.status},{l:'도메인',v:selected.domain},{l:'생성일',v:selected.created},{l:'사용자 수',v:selected.users+'명'},{l:'API 호출',v:selected.apiCalls.toLocaleString()+'회'},{l:'스토리지',v:selected.storage}].map(f=>(
+                    <div key={f.l}><div style={{fontSize:12,color:C.textMuted,marginBottom:4}}>{f.l}</div><div style={{fontSize:14,fontWeight:500}}>{f.v}</div></div>
+                  ))}
+                  <div style={{gridColumn:'1/-1',borderTop:'1px solid '+C.border,paddingTop:12}}>
+                    <div style={{fontSize:12,color:C.textMuted,marginBottom:6}}>관리자 메모</div>
+                    <textarea placeholder="메모 입력..." style={{width:'100%',padding:10,border:'1px solid '+C.border,borderRadius:12,fontSize:13,minHeight:50,fontFamily:'inherit',resize:'vertical',outline:'none'}}/>
+                  </div>
+                  <div style={{gridColumn:'1/-1',display:'flex',gap:8}}>
+                    <button onClick={()=>setModal({type:'edit',item:selected})} style={{padding:'6px 16px',borderRadius:8,border:'1px solid '+C.primary,background:'#fff',color:C.primary,cursor:'pointer',fontSize:13,fontFamily:'inherit'}}>편집</button>
+                    <button onClick={()=>onToast(selected.name+' 정보가 저장되었습니다.')} style={{padding:'6px 16px',borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit'}}>저장</button>
+                  </div>
+                </div>
+              )}
+              {detailTab===1&&(
+                <div>
+                  <div style={{background:C.primary+'08',borderRadius:12,padding:16,marginBottom:16}}>
+                    <div style={{fontSize:14,fontWeight:700}}>현재 플랜: {selected.plan}</div>
+                    <div style={{fontSize:12,color:C.textLight,marginTop:4}}>API {selected.plan==='Enterprise'?'무제한':'월 50,000회'} · 스토리지 {selected.plan==='Enterprise'?'무제한':'100GB'}</div>
+                  </div>
+                  {['Starter','Business','Enterprise'].map(p=>(
+                    <div key={p} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 0',borderBottom:'1px solid '+C.border}}>
+                      <div><div style={{fontSize:14,fontWeight:600}}>{p}</div><div style={{fontSize:12,color:C.textMuted}}>월 {p==='Starter'?'49,000':p==='Business'?'149,000':'299,000'}원</div></div>
+                      {selected.plan===p?<Badge text="현재"/>:<button onClick={()=>onToast('플랜이 '+p+'로 변경되었습니다.')} style={{padding:'4px 12px',borderRadius:8,border:'1px solid '+C.primary,background:'#fff',color:C.primary,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>변경</button>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {detailTab===2&&(
+                <div>
+                  {['김민수 (관리자)','이지은 (매니저)','박서진 (뷰어)'].map((u,i)=>(
+                    <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:'1px solid '+C.border}}>
+                      <div style={{width:28,height:28,borderRadius:'50%',background:C.primary+'20',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:C.primary}}>{u[0]}</div>
+                      <span style={{flex:1,fontSize:13}}>{u}</span>
+                      <button style={{background:'none',border:'1px solid '+C.border,borderRadius:6,padding:'2px 8px',cursor:'pointer',fontSize:11,fontFamily:'inherit'}}>편집</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {detailTab===3&&(
+                <div>
+                  <div style={{background:C.bg,borderRadius:12,padding:16}}>
+                    <div style={{fontSize:12,color:C.textLight,marginBottom:6}}>Live API Key</div>
+                    <div style={{display:'flex',gap:8}}>
+                      <code style={{flex:1,padding:'6px 10px',background:'#fff',borderRadius:8,fontSize:12,border:'1px solid '+C.border,fontFamily:'monospace'}}>sk-live-••••••••••••8f3a</code>
+                      <button onClick={()=>onToast('API 키가 복사되었습니다.')} style={{padding:'4px 10px',borderRadius:6,border:'1px solid '+C.border,background:'#fff',cursor:'pointer',fontSize:11,fontFamily:'inherit'}}>복사</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {detailTab===4&&(
+                <div>
+                  {['권한 변경: 이지은 → 매니저 승격 (3시간 전)','API 키 재발급 (1일 전)','플랜 변경: Business → Enterprise (3일 전)','신규 사용자 추가: 박서진 (1주 전)'].map((log,i)=>(
+                    <div key={i} style={{padding:'10px 0',borderBottom:'1px solid '+C.border,fontSize:13,animation:'slideUp 200ms ease '+(i*40)+'ms both'}}>{log}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ):(
+          <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',color:C.textMuted,fontSize:14}}>좌측에서 테넌트를 선택하세요</div>
+        )}
+      </div>
+
+      {modal?.type==='create'&&(
+        <Modal title="신규 테넌트 등록" onClose={()=>setModal(null)}>
+          <FormField label="테넌트명" value=""/>
+          <FormField label="플랜" value="Starter" type="select" options={['Starter','Business','Enterprise']}/>
+          <FormField label="도메인" value="" type="text"/>
+          <FormField label="관리자 이메일" value="" type="email"/>
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
+            <button onClick={()=>setModal(null)} style={{padding:'8px 20px',borderRadius:10,border:'1px solid '+C.border,background:'#fff',color:C.textLight,cursor:'pointer',fontSize:13,fontFamily:'inherit'}}>취소</button>
+            <button onClick={()=>{setModal(null);onToast('테넌트가 등록되었습니다.')}} style={{padding:'8px 20px',borderRadius:10,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit'}}>등록</button>
+          </div>
+        </Modal>
+      )}
+
+      {modal?.type==='edit'&&(
+        <Modal title="테넌트 편집" onClose={()=>setModal(null)}>
+          <FormField label="테넌트명" value={modal.item.name}/>
+          <FormField label="플랜" value={modal.item.plan} type="select" options={['Starter','Business','Enterprise']}/>
+          <FormField label="상태" value={modal.item.status} type="select" options={['활성','정지']}/>
+          <FormField label="도메인" value={modal.item.domain}/>
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
+            <button onClick={()=>setModal(null)} style={{padding:'8px 20px',borderRadius:10,border:'1px solid '+C.border,background:'#fff',color:C.textLight,cursor:'pointer',fontSize:13,fontFamily:'inherit'}}>취소</button>
+            <button onClick={()=>{setModal(null);onToast('테넌트 정보가 수정되었습니다.')}} style={{padding:'8px 20px',borderRadius:10,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit'}}>저장</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Workflow ───
+function WorkflowPage({onToast}){
+  const [selected,setSelected]=useState(null);
+  const [modal,setModal]=useState(null);
+
+  return(
+    <div style={{display:'flex',flex:1,overflow:'hidden'}}>
+      <div style={{width:'42%',borderRight:'1px solid '+C.border,overflowY:'auto'}}>
+        <div style={{padding:'12px 16px',borderBottom:'1px solid '+C.border,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <span style={{fontSize:13,fontWeight:700,color:C.textLight}}>워크플로우 {WORKFLOWS.length}개</span>
+          <button onClick={()=>setModal({type:'create'})} style={{padding:'4px 12px',borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:12,fontWeight:600,fontFamily:'inherit'}}>+ 추가</button>
+        </div>
+        {WORKFLOWS.map((w,i)=>(
+          <div key={w.id} onClick={()=>setSelected(w)} style={{
+            padding:'12px 16px',cursor:'pointer',borderBottom:'1px solid '+C.border,
+            borderLeft:selected?.id===w.id?'3px solid '+C.primary:'3px solid transparent',
+            background:selected?.id===w.id?C.primary+'08':'transparent',transition:'all 150ms',
+            animation:'slideUp 300ms ease '+(i*40)+'ms both',
+          }}
+            onMouseEnter={e=>{if(selected?.id!==w.id)e.currentTarget.style.background=C.primary+'04'}}
+            onMouseLeave={e=>{if(selected?.id!==w.id)e.currentTarget.style.background='transparent'}}
+          >
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+              <span style={{fontSize:14,fontWeight:600}}>{w.name}</span>
+              <Badge text={w.status}/>
+            </div>
+            <div style={{fontSize:12,color:C.textMuted}}>트리거: {w.trigger} · 실행 {w.runs}회</div>
+          </div>
+        ))}
+      </div>
+      <div style={{flex:1,overflowY:'auto',padding:20}}>
+        {selected?(
+          <div style={{animation:'slideInRight 250ms ease'}}>
+            <h3 style={{fontSize:17,fontWeight:700,marginBottom:16}}>{selected.name}</h3>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+              {[{l:'트리거',v:selected.trigger},{l:'상태',v:selected.status},{l:'실행 횟수',v:selected.runs+'회'},{l:'마지막 실행',v:selected.lastRun}].map(f=>(
+                <div key={f.l}><div style={{fontSize:12,color:C.textMuted,marginBottom:4}}>{f.l}</div><div style={{fontSize:14,fontWeight:500}}>{f.v}</div></div>
+              ))}
+            </div>
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:13,fontWeight:700,marginBottom:8,textTransform:'uppercase',letterSpacing:'0.06em',color:C.textLight}}>액션 플로우</div>
+              {selected.actions.map((a,i)=>(
+                <div key={i} style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                  <div style={{width:28,height:28,borderRadius:'50%',background:C.primary+'15',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:C.primary}}>{i+1}</div>
+                  <div style={{flex:1,padding:'8px 14px',background:C.bg,borderRadius:10,border:'1px solid '+C.border,fontSize:13}}>{a}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{borderTop:'1px solid '+C.border,paddingTop:12}}>
+              <div style={{fontSize:12,color:C.textMuted,marginBottom:6}}>메모</div>
+              <textarea placeholder="워크플로우 메모..." style={{width:'100%',padding:10,border:'1px solid '+C.border,borderRadius:12,fontSize:13,minHeight:50,fontFamily:'inherit',resize:'vertical',outline:'none'}}/>
+            </div>
+            <div style={{display:'flex',gap:8,marginTop:12}}>
+              <button onClick={()=>onToast(selected.name+' 워크플로우가 실행되었습니다.')} style={{padding:'6px 16px',borderRadius:8,border:'none',background:C.success,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit'}}>수동 실행</button>
+              <button onClick={()=>onToast('설정이 저장되었습니다.')} style={{padding:'6px 16px',borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit'}}>저장</button>
+            </div>
+          </div>
+        ):(
+          <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',color:C.textMuted,fontSize:14,height:'100%'}}>좌측에서 워크플로우를 선택하세요</div>
+        )}
+      </div>
+
+      {modal?.type==='create'&&(
+        <Modal title="신규 워크플로우 생성" onClose={()=>setModal(null)}>
+          <FormField label="워크플로우명" value=""/>
+          <FormField label="트리거 유형" value="이벤트" type="select" options={['이벤트','스케줄','웹훅']}/>
+          <FormField label="설명" value="" type="textarea"/>
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
+            <button onClick={()=>setModal(null)} style={{padding:'8px 20px',borderRadius:10,border:'1px solid '+C.border,background:'#fff',color:C.textLight,cursor:'pointer',fontSize:13,fontFamily:'inherit'}}>취소</button>
+            <button onClick={()=>{setModal(null);onToast('워크플로우가 생성되었습니다.')}} style={{padding:'8px 20px',borderRadius:10,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit'}}>생성</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Whitelabel ───
+function WhitelabelPage({onToast}){
+  const [preset,setPreset]=useState(WHITELABEL_PRESETS[0]);
+  const [logo,setLogo]=useState('AdminHub');
+
+  return(
+    <div style={{display:'flex',flex:1,overflow:'hidden'}}>
+      <div style={{width:'42%',borderRight:'1px solid '+C.border,overflowY:'auto',padding:20}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>브랜드 설정</h3>
+        <FormField label="서비스명" value={logo}/>
+        <div style={{marginBottom:16}}>
+          <label style={{display:'block',fontSize:13,fontWeight:600,color:C.textLight,marginBottom:8}}>컬러 프리셋</label>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            {WHITELABEL_PRESETS.map(p=>(
+              <button key={p.name} onClick={()=>setPreset(p)} style={{
+                width:40,height:40,borderRadius:10,background:p.primary,border:preset.name===p.name?'3px solid '+C.text:'2px solid '+C.border,
+                cursor:'pointer',transition:'all 150ms',
+              }}/>
+            ))}
+          </div>
+        </div>
+        <FormField label="Primary Color" value={preset.primary}/>
+        <FormField label="커스텀 도메인" value="app.yourcompany.com"/>
+        <div style={{marginBottom:16}}>
+          <label style={{display:'block',fontSize:13,fontWeight:600,color:C.textLight,marginBottom:8}}>DNS 검증 상태</label>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <div style={{width:8,height:8,borderRadius:'50%',background:C.warning}}/>
+            <span style={{fontSize:13,color:C.warning}}>TXT 레코드 검증 대기 중</span>
+          </div>
+          <code style={{display:'block',marginTop:8,padding:'8px 12px',background:C.bg,borderRadius:8,fontSize:11,fontFamily:'monospace',border:'1px solid '+C.border}}>TXT _adminhub-verify.yourcompany.com = ah-verify-a1b2c3d4</code>
+        </div>
+        <button onClick={()=>onToast('브랜드 설정이 저장되었습니다.')} style={{width:'100%',padding:'10px 0',borderRadius:10,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:14,fontWeight:600,fontFamily:'inherit'}}>저장</button>
+      </div>
+      <div style={{flex:1,overflowY:'auto',padding:20}}>
+        <div style={{fontSize:13,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:C.textLight,marginBottom:12}}>실시간 미리보기</div>
+        <div style={{background:preset.bg,borderRadius:20,border:'1px solid '+C.border,overflow:'hidden',boxShadow:'0 1px 4px rgba(0,0,0,0.06)'}}>
+          <div style={{height:36,background:preset.surface,borderBottom:'1px solid '+C.border,display:'flex',alignItems:'center',padding:'0 16px',gap:8}}>
+            <div style={{width:20,height:20,borderRadius:6,background:preset.primary,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:9,fontWeight:800}}>A</div>
+            <span style={{fontSize:12,fontWeight:700,color:preset.primary}}>{logo}</span>
+          </div>
+          <div style={{padding:16}}>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:12}}>
+              {[{l:'사용자',v:'48명'},{l:'API',v:'32.4K'},{l:'스토리지',v:'128GB'}].map(k=>(
+                <div key={k.l} style={{background:preset.surface,borderRadius:12,padding:12,textAlign:'center',border:'1px solid '+C.border}}>
+                  <div style={{fontSize:10,color:C.textMuted}}>{k.l}</div>
+                  <div style={{fontSize:16,fontWeight:700,color:preset.primary}}>{k.v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{background:preset.surface,borderRadius:12,padding:12,border:'1px solid '+C.border}}>
+              <div style={{fontSize:11,fontWeight:600,color:C.textLight,marginBottom:8}}>최근 활동</div>
+              {['김민수님이 설정을 변경했습니다.','API 사용량 80% 도달','신규 사용자 3명 등록'].map((t,i)=>(
+                <div key={i} style={{fontSize:12,color:C.textLight,padding:'4px 0',borderBottom:'1px solid '+C.border}}>{t}</div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── App ───
+function App(){
+  const [section,setSection]=useState('dashboard');
+  const [toast,setToast]=useState(null);
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{setTimeout(()=>setLoading(false),1200)},[]);
+
+  if(loading) return(
+    <div style={{display:'flex',minHeight:'100vh'}}>
+      <div style={{width:240,background:'#fff',borderRight:'1px solid '+C.border}}/>
+      <div style={{flex:1,padding:20}}>
+        {[...Array(6)].map((_,i)=><div key={i} style={{height:100,borderRadius:20,marginBottom:16,background:'linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>)}
+      </div>
+    </div>
+  );
+
+  return(
+    <div style={{display:'flex',minHeight:'100vh',background:C.bg}}>
+      <SideNav section={section} setSection={setSection}/>
+      <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <AppBar section={section}/>
+        {section==='dashboard'?(
+          <DashboardPage/>
+        ):section==='tenant'?(
+          <TenantPage onToast={setToast}/>
+        ):section==='workflow'?(
+          <WorkflowPage onToast={setToast}/>
+        ):(
+          <WhitelabelPage onToast={setToast}/>
+        )}
+      </div>
+      {toast&&<Toast message={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
