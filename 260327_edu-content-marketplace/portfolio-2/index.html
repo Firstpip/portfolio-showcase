@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=1920"/>
+<title>온라인 레시피 마켓플레이스 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net"/>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Pretendard',sans-serif;background:#FFFBF5;color:#1C1917;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-thumb{background:#D6D3D1;border-radius:3px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes drawerIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.6}}
+.fade-in{animation:fadeIn 0.35s ease-out both}
+.slide-up{animation:slideUp 0.4s ease-out both}
+.drawer-in{animation:drawerIn 0.3s ease-out both}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo,useCallback} = React;
+const {AreaChart,Area,BarChart,Bar,PieChart,Pie,Cell,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer} = Recharts;
+
+const C={
+  primary:'#E8621A',primaryLight:'#FFF7ED',primaryDark:'#C2410C',
+  accent:'#16A34A',accentLight:'#DCFCE7',
+  secondary:'#F97316',secondaryLight:'#FFEDD5',
+  success:'#16A34A',successLight:'#DCFCE7',
+  danger:'#DC2626',dangerLight:'#FEE2E2',
+  warning:'#CA8A04',warningLight:'#FEF9C3',
+  bg:'#FFFBF5',surface:'#FFFFFF',
+  text:'#1C1917',textSec:'#78716C',
+  border:'#E7E5E4',borderLight:'#F5F5F4'
+};
+
+const CATEGORIES=['한식','양식','일식','중식','디저트','건강식','베이킹','반찬'];
+const DIFFICULTY=['초급','중급','고급'];
+
+const recipes=Array.from({length:16},(_, i)=>({
+  id:i+1,
+  title:['매콤 떡볶이 황금레시피','크림 파스타 완벽 가이드','연어 포케볼 만들기','마라탕 집에서 쉽게','딸기 티라미수 레시피','두부 샐러드 다이어트식','소보로빵 홈베이킹','깍두기 담그는 법','스테이크 굽기 마스터','일본식 라멘 육수','마카롱 기본 레시피','건강 그래놀라 바','비빔밥 황금비율','감바스 알 아히요','말차 롤케이크','된장찌개 깊은맛'][i],
+  category:CATEGORIES[i%8],difficulty:DIFFICULTY[i%3],
+  chef:['요리하는 민지','셰프 재훈','건강식 수민','베이킹 도윤','한식 지원','양식의 정석','디저트랩','반찬 여왕'][i%8],
+  price:Math.floor(Math.random()*8+3)*1000,
+  rating:(4+Math.random()*0.9).toFixed(1),
+  reviews:Math.floor(Math.random()*200+10),
+  sales:Math.floor(Math.random()*500+50),
+  cookTime:Math.floor(Math.random()*40+10)+'분',
+  ingredients:Math.floor(Math.random()*8+4)+'가지',
+  steps:Math.floor(Math.random()*6+4),
+  preview:['재료 준비: 떡, 어묵, 대파를 손질합니다.','파스타 면을 알데테로 삶아 준비합니다.','신선한 연어를 큐브 모양으로 썰어줍니다.','마라소스 재료를 볶아 향을 냅니다.'][i%4],
+  image:['🍳','🍝','🍣','🥘','🍰','🥗','🍞','🥬','🥩','🍜','🧁','🥣','🍚','🦐','🍵','🍲'][i]
+}));
+
+const creatorSales=[
+  {week:'1주차',매출:128000,건수:32},{week:'2주차',매출:185000,건수:46},
+  {week:'3주차',매출:164000,건수:41},{week:'4주차',매출:221000,건수:55}
+];
+const catRevenue=[
+  {name:'한식',value:32,color:'#E8621A'},{name:'양식',value:24,color:'#F97316'},
+  {name:'디저트',value:20,color:'#EC4899'},{name:'건강식',value:14,color:'#16A34A'},
+  {name:'베이킹',value:10,color:'#CA8A04'}
+];
+
+const earnings=[
+  {month:'2026-01',revenue:412000,fee:41200,net:370800,status:'정산 완료'},
+  {month:'2026-02',revenue:538000,fee:53800,net:484200,status:'정산 완료'},
+  {month:'2026-03',revenue:698000,fee:69800,net:628200,status:'정산 대기'}
+];
+
+/* ─── 공통 컴포넌트 ─── */
+function Badge({children,color,bg}){
+  return <span style={{display:'inline-block',padding:'4px 12px',borderRadius:20,fontSize:12,fontWeight:600,color,background:bg}}>{children}</span>;
+}
+
+function Toast({msg,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,2500);return()=>clearTimeout(t)},[]);
+  return <div className="slide-up" style={{position:'fixed',bottom:32,right:32,background:'#292524',color:'#fff',padding:'14px 24px',borderRadius:12,fontSize:14,fontWeight:500,zIndex:2000,boxShadow:'0 8px 24px rgba(0,0,0,0.2)'}}>{msg}</div>;
+}
+
+function Drawer({open,onClose,title,children}){
+  if(!open) return null;
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.3)',zIndex:1000}}>
+      <div className="drawer-in" onClick={e=>e.stopPropagation()} style={{position:'fixed',top:0,right:0,width:480,height:'100vh',background:C.surface,boxShadow:'-4px 0 24px rgba(0,0,0,0.1)',overflow:'auto'}}>
+        <div style={{padding:'20px 24px',borderBottom:'1px solid '+C.border,display:'flex',justifyContent:'space-between',alignItems:'center',position:'sticky',top:0,background:C.surface,zIndex:1}}>
+          <h3 style={{fontSize:17,fontWeight:700}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSec}}>✕</button>
+        </div>
+        <div style={{padding:24}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── 페이지: 레시피 스토어 ─── */
+function StorePage({onToast}){
+  const [cat,setCat]=useState('전체');
+  const [diff,setDiff]=useState('전체');
+  const [drawer,setDrawer]=useState(null);
+  const [cart,setCart]=useState([]);
+  const filtered=recipes.filter(r=>cat==='전체'||r.category===cat).filter(r=>diff==='전체'||r.difficulty===diff);
+  const addCart=(item)=>{if(!cart.find(c=>c.id===item.id)){setCart([...cart,item]);onToast(item.title+' 장바구니 추가')}};
+  return (
+    <div>
+      {/* 히어로 배너 */}
+      <div style={{background:'linear-gradient(135deg,#E8621A 0%,#F97316 50%,#FB923C 100%)',borderRadius:16,padding:'40px 48px',marginBottom:24,color:'#fff',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:500,opacity:0.9,marginBottom:8}}>오늘의 추천 레시피</div>
+          <h1 style={{fontSize:28,fontWeight:800,marginBottom:8}}>검증된 셰프의 프리미엄 레시피를 만나보세요</h1>
+          <div style={{fontSize:14,opacity:0.9}}>1,200+ 레시피 · 340+ 크리에이터 · 4.8 평균 평점</div>
+        </div>
+        <div style={{display:'flex',gap:16}}>
+          {[{icon:'🔥',label:'인기',value:'1,247'},{icon:'⭐',label:'평점',value:'4.8'},{icon:'👨‍🍳',label:'셰프',value:'342'}].map((k,i)=>(
+            <div key={i} style={{background:'rgba(255,255,255,0.15)',borderRadius:12,padding:'16px 20px',textAlign:'center',backdropFilter:'blur(8px)'}}>
+              <div style={{fontSize:22}}>{k.icon}</div>
+              <div style={{fontSize:18,fontWeight:700,marginTop:4}}>{k.value}</div>
+              <div style={{fontSize:11,opacity:0.8}}>{k.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 필터 */}
+      <div style={{display:'flex',gap:12,marginBottom:20,alignItems:'center',flexWrap:'wrap'}}>
+        <select value={cat} onChange={e=>setCat(e.target.value)} style={{padding:'8px 14px',borderRadius:20,border:'1px solid '+C.border,fontSize:13,fontFamily:'inherit',cursor:'pointer',background:C.surface}}>
+          <option>전체</option>{CATEGORIES.map(c=><option key={c}>{c}</option>)}
+        </select>
+        <select value={diff} onChange={e=>setDiff(e.target.value)} style={{padding:'8px 14px',borderRadius:20,border:'1px solid '+C.border,fontSize:13,fontFamily:'inherit',cursor:'pointer',background:C.surface}}>
+          <option>전체</option>{DIFFICULTY.map(d=><option key={d}>{d}</option>)}
+        </select>
+        <div style={{marginLeft:'auto',fontSize:13,color:C.textSec}}>🛒 {cart.length}건 {cart.length>0 && <button onClick={()=>onToast('결제 진행 (Toss Payments 연동)')} style={{marginLeft:8,padding:'6px 14px',background:C.primary,color:'#fff',border:'none',borderRadius:20,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>결제</button>}</div>
+      </div>
+
+      {/* 레시피 그리드 */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:20}}>
+        {filtered.map((r,i)=>(
+          <div key={r.id} className="fade-in" onClick={()=>setDrawer(r)} style={{background:C.surface,borderRadius:16,overflow:'hidden',cursor:'pointer',transition:'all 0.25s',boxShadow:'0 1px 4px rgba(0,0,0,0.05)',animationDelay:(i*60)+'ms',border:'1px solid '+C.borderLight}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-4px)';e.currentTarget.style.boxShadow='0 12px 32px rgba(232,98,26,0.12)'}} onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 1px 4px rgba(0,0,0,0.05)'}}>
+            <div style={{height:140,background:'linear-gradient(135deg,'+C.primaryLight+','+C.secondaryLight+')',display:'flex',alignItems:'center',justifyContent:'center',fontSize:48}}>{r.image}</div>
+            <div style={{padding:16}}>
+              <div style={{display:'flex',gap:6,marginBottom:8}}>
+                <Badge color={C.primary} bg={C.primaryLight}>{r.category}</Badge>
+                <Badge color={C.accent} bg={C.accentLight}>{r.difficulty}</Badge>
+              </div>
+              <div style={{fontSize:15,fontWeight:700,marginBottom:4,lineHeight:1.4}}>{r.title}</div>
+              <div style={{fontSize:12,color:C.textSec,marginBottom:8}}>{r.chef} · {r.cookTime} · 재료 {r.ingredients}</div>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontSize:17,fontWeight:700,color:C.primary}}>{r.price.toLocaleString()}원</span>
+                <div style={{display:'flex',alignItems:'center',gap:4}}>
+                  <span style={{color:'#F59E0B',fontSize:13}}>★</span>
+                  <span style={{fontSize:13,fontWeight:600}}>{r.rating}</span>
+                  <span style={{fontSize:12,color:C.textSec}}>({r.reviews})</span>
+                </div>
+              </div>
+              <button onClick={e=>{e.stopPropagation();addCart(r)}} style={{width:'100%',marginTop:12,padding:'8px 0',background:C.primary,color:'#fff',border:'none',borderRadius:10,fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit',transition:'background 0.15s'}} onMouseEnter={e=>e.currentTarget.style.background=C.primaryDark} onMouseLeave={e=>e.currentTarget.style.background=C.primary}>장바구니 담기</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <Drawer open={!!drawer} onClose={()=>setDrawer(null)} title="레시피 상세">
+        {drawer && (
+          <div>
+            <div style={{textAlign:'center',fontSize:64,padding:24,background:C.primaryLight,borderRadius:12,marginBottom:20}}>{drawer.image}</div>
+            <div style={{display:'flex',gap:8,marginBottom:12}}>
+              <Badge color={C.primary} bg={C.primaryLight}>{drawer.category}</Badge>
+              <Badge color={C.accent} bg={C.accentLight}>{drawer.difficulty}</Badge>
+            </div>
+            <h3 style={{fontSize:20,fontWeight:800,marginBottom:8}}>{drawer.title}</h3>
+            <div style={{fontSize:13,color:C.textSec,marginBottom:16}}>{drawer.chef} · 소요시간 {drawer.cookTime} · 재료 {drawer.ingredients} · {drawer.steps}단계</div>
+            <div style={{display:'flex',gap:12,marginBottom:20}}>
+              <div style={{flex:1,textAlign:'center',padding:12,background:C.borderLight,borderRadius:10}}>
+                <div style={{color:'#F59E0B'}}>★ {drawer.rating}</div><div style={{fontSize:11,color:C.textSec}}>{drawer.reviews}개 리뷰</div>
+              </div>
+              <div style={{flex:1,textAlign:'center',padding:12,background:C.borderLight,borderRadius:10}}>
+                <div style={{fontWeight:600}}>{drawer.sales}건</div><div style={{fontSize:11,color:C.textSec}}>판매</div>
+              </div>
+            </div>
+            <div style={{marginBottom:20}}>
+              <div style={{fontSize:14,fontWeight:700,marginBottom:12}}>📖 미리보기 (1/{drawer.steps}단계)</div>
+              <div style={{background:C.borderLight,borderRadius:10,padding:16,fontSize:13,lineHeight:1.8,color:C.textSec}}>{drawer.preview}</div>
+              <div style={{background:C.warningLight,borderRadius:10,padding:16,marginTop:8,textAlign:'center',fontSize:13,color:C.warning}}>🔒 나머지 {drawer.steps-1}단계는 구매 후 확인 가능합니다</div>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+              <span style={{fontSize:24,fontWeight:800,color:C.primary}}>{drawer.price.toLocaleString()}원</span>
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>{addCart(drawer);setDrawer(null)}} style={{flex:1,padding:'12px 0',background:C.surface,color:C.primary,border:'2px solid '+C.primary,borderRadius:10,fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>장바구니</button>
+              <button onClick={()=>{onToast('결제 진행 중... (Toss Payments)');setDrawer(null)}} style={{flex:1,padding:'12px 0',background:C.primary,color:'#fff',border:'none',borderRadius:10,fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>바로 구매</button>
+            </div>
+          </div>
+        )}
+      </Drawer>
+    </div>
+  );
+}
+
+/* ─── 페이지: 레시피 상세/미리보기 ─── */
+function RecipeDetailPage({onToast}){
+  const [selected,setSelected]=useState(recipes[0]);
+  const [tab,setTab]=useState('재료');
+  return (
+    <div>
+      <div style={{background:'linear-gradient(135deg,#16A34A 0%,#22C55E 100%)',borderRadius:16,padding:'32px 48px',marginBottom:24,color:'#fff'}}>
+        <div style={{fontSize:14,fontWeight:500,opacity:0.9,marginBottom:6}}>레시피 미리보기</div>
+        <h2 style={{fontSize:24,fontWeight:800}}>구매 전 레시피를 미리 확인해보세요</h2>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+        <div>
+          <div style={{background:C.surface,borderRadius:16,overflow:'hidden',border:'1px solid '+C.border}}>
+            <div style={{textAlign:'center',fontSize:72,padding:40,background:C.primaryLight}}>{selected.image}</div>
+            <div style={{padding:20}}>
+              <div style={{display:'flex',gap:8,marginBottom:8}}>
+                <Badge color={C.primary} bg={C.primaryLight}>{selected.category}</Badge>
+                <Badge color={C.accent} bg={C.accentLight}>{selected.difficulty}</Badge>
+              </div>
+              <h3 style={{fontSize:18,fontWeight:700,marginBottom:6}}>{selected.title}</h3>
+              <div style={{fontSize:13,color:C.textSec}}>{selected.chef} · {selected.cookTime} · {selected.steps}단계</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div style={{background:C.surface,borderRadius:16,padding:20,border:'1px solid '+C.border,marginBottom:16}}>
+            <div style={{display:'flex',gap:4,borderBottom:'2px solid '+C.border,marginBottom:16}}>
+              {['재료','조리 과정','영양 정보','리뷰'].map(t=><button key={t} onClick={()=>setTab(t)} style={{padding:'8px 16px',background:'none',border:'none',borderBottom:tab===t?'2px solid '+C.primary:'2px solid transparent',color:tab===t?C.primary:C.textSec,fontSize:13,fontWeight:tab===t?600:400,cursor:'pointer',fontFamily:'inherit',marginBottom:-2}}>{t}</button>)}
+            </div>
+            {tab==='재료' && (
+              <div>
+                {['주재료 (떡 300g, 어묵 2장, 대파 1대)','양념 (고추장 2큰술, 고춧가루 1큰술)','부재료 (달걀 2개, 양배추 2장)'].map((ing,i)=>(
+                  <div key={i} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:'1px solid '+C.borderLight}}>
+                    <span style={{width:24,height:24,borderRadius:6,background:C.accentLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,color:C.accent,fontWeight:700}}>{i+1}</span>
+                    <span style={{fontSize:13}}>{ing}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {tab==='조리 과정' && (
+              <div>
+                <div style={{padding:12,background:C.accentLight,borderRadius:8,marginBottom:12,fontSize:13}}>
+                  <span style={{fontWeight:600,color:C.accent}}>Step 1.</span> {selected.preview}
+                </div>
+                {[2,3,4].map(n=>(
+                  <div key={n} style={{padding:12,background:C.warningLight,borderRadius:8,marginBottom:8,fontSize:13,textAlign:'center',color:C.warning}}>
+                    🔒 Step {n}. 구매 후 확인 가능합니다
+                  </div>
+                ))}
+              </div>
+            )}
+            {tab==='영양 정보' && (
+              <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12}}>
+                {[{label:'칼로리',value:'385kcal'},{label:'탄수화물',value:'52g'},{label:'단백질',value:'12g'},{label:'지방',value:'8g'}].map((n,i)=>(
+                  <div key={i} style={{textAlign:'center',padding:12,background:C.borderLight,borderRadius:8}}>
+                    <div style={{fontSize:16,fontWeight:700,color:C.primary}}>{n.value}</div>
+                    <div style={{fontSize:11,color:C.textSec,marginTop:4}}>{n.label}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {tab==='리뷰' && (
+              <div>
+                {['정말 맛있어요! 가족들이 좋아했습니다.','레시피대로 하니 식당 맛이 나요.','초보자도 쉽게 따라할 수 있어요.'].map((rv,i)=>(
+                  <div key={i} style={{padding:'12px 0',borderBottom:'1px solid '+C.borderLight}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                      <span style={{color:'#F59E0B'}}>{'★'.repeat(5)}</span>
+                      <span style={{fontSize:12,color:C.textSec}}>· 2026-03-{15+i}</span>
+                    </div>
+                    <div style={{fontSize:13}}>{rv}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:C.surface,borderRadius:16,padding:20,border:'1px solid '+C.border}}>
+            <span style={{fontSize:22,fontWeight:800,color:C.primary}}>{selected.price.toLocaleString()}원</span>
+            <button onClick={()=>onToast('결제 진행 (Toss Payments)')} style={{padding:'12px 32px',background:C.primary,color:'#fff',border:'none',borderRadius:10,fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>구매하기</button>
+          </div>
+        </div>
+      </div>
+      <div style={{marginTop:24}}>
+        <h3 style={{fontSize:16,fontWeight:700,marginBottom:16}}>다른 레시피 둘러보기</h3>
+        <div style={{display:'flex',gap:16,overflow:'auto'}}>
+          {recipes.slice(0,6).map(r=>(
+            <div key={r.id} onClick={()=>setSelected(r)} style={{minWidth:180,background:C.surface,borderRadius:12,padding:12,cursor:'pointer',border:selected.id===r.id?'2px solid '+C.primary:'1px solid '+C.border,transition:'all 0.15s'}}>
+              <div style={{textAlign:'center',fontSize:32,padding:8,background:C.borderLight,borderRadius:8,marginBottom:8}}>{r.image}</div>
+              <div style={{fontSize:13,fontWeight:600}}>{r.title}</div>
+              <div style={{fontSize:12,color:C.textSec}}>{r.price.toLocaleString()}원</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── 페이지: 크리에이터 대시보드 ─── */
+function CreatorDashboardPage({onToast}){
+  const [uploadModal,setUploadModal]=useState(false);
+  const [step,setStep]=useState(1);
+  const myRecipes=recipes.slice(0,5);
+  return (
+    <div>
+      <div style={{background:'linear-gradient(135deg,#7C3AED 0%,#A78BFA 100%)',borderRadius:16,padding:'32px 48px',marginBottom:24,color:'#fff',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div>
+          <div style={{fontSize:14,opacity:0.9,marginBottom:4}}>크리에이터 대시보드</div>
+          <h2 style={{fontSize:24,fontWeight:800}}>요리하는 민지님, 환영합니다!</h2>
+          <div style={{fontSize:14,opacity:0.8,marginTop:4}}>등록 레시피 12개 · 이번 달 판매 55건</div>
+        </div>
+        <button onClick={()=>{setUploadModal(true);setStep(1)}} style={{padding:'12px 28px',background:'rgba(255,255,255,0.2)',color:'#fff',border:'2px solid rgba(255,255,255,0.4)',borderRadius:10,fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit',backdropFilter:'blur(4px)'}}>+ 새 레시피 등록</button>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}}>
+        {[{icon:'📊',label:'총 판매',value:'892건',color:C.primary},{icon:'💰',label:'총 수익',value:'1,648,000원',color:C.accent},{icon:'⭐',label:'평균 평점',value:'4.7',color:'#F59E0B'},{icon:'📚',label:'등록 레시피',value:'12개',color:'#7C3AED'}].map((k,i)=>(
+          <div key={i} className="fade-in" style={{background:C.surface,borderRadius:12,padding:'18px 20px',border:'1px solid '+C.border,display:'flex',alignItems:'center',gap:14,animationDelay:(i*80)+'ms'}}>
+            <div style={{width:44,height:44,borderRadius:10,background:k.color+'18',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}}>{k.icon}</div>
+            <div><div style={{fontSize:12,color:C.textSec}}>{k.label}</div><div style={{fontSize:18,fontWeight:700}}>{k.value}</div></div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1.5fr 1fr',gap:16,marginBottom:24}}>
+        <div style={{background:C.surface,borderRadius:12,padding:20,border:'1px solid '+C.border}}>
+          <div style={{fontSize:15,fontWeight:700,marginBottom:16}}>주간 매출 추이</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={creatorSales}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="week" tick={{fontSize:12}}/><YAxis tick={{fontSize:12}} tickFormatter={v=>(v/10000).toFixed(0)+'만'}/>
+              <Tooltip formatter={v=>v.toLocaleString()+'원'}/><Bar dataKey="매출" fill={C.primary} radius={[6,6,0,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{background:C.surface,borderRadius:12,padding:20,border:'1px solid '+C.border}}>
+          <div style={{fontSize:15,fontWeight:700,marginBottom:16}}>카테고리별 수익</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart><Pie data={catRevenue} cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={3} dataKey="value">
+              {catRevenue.map((e,i)=><Cell key={i} fill={e.color}/>)}
+            </Pie><Tooltip formatter={v=>v+'%'}/></PieChart>
+          </ResponsiveContainer>
+          <div style={{display:'flex',flexWrap:'wrap',gap:8,justifyContent:'center'}}>
+            {catRevenue.map(s=><span key={s.name} style={{fontSize:11,display:'flex',alignItems:'center',gap:4}}><span style={{width:8,height:8,borderRadius:4,background:s.color,display:'inline-block'}}/>{s.name}</span>)}
+          </div>
+        </div>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,padding:20,border:'1px solid '+C.border}}>
+        <div style={{fontSize:15,fontWeight:700,marginBottom:16}}>내 레시피 목록</div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr>{['레시피명','카테고리','가격','판매','평점','상태'].map(h=><th key={h} style={{padding:'10px 14px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textSec,borderBottom:'1px solid '+C.border,background:'#FAFAF9'}}>{h}</th>)}</tr></thead>
+          <tbody>
+            {myRecipes.map((r,i)=><tr key={i} style={{cursor:'pointer'}} onClick={()=>onToast(r.title+' 상세 편집')} onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+              <td style={{padding:'12px 14px',fontSize:13,borderBottom:'1px solid '+C.borderLight,fontWeight:500}}>{r.image} {r.title}</td>
+              <td style={{padding:'12px 14px',fontSize:13,borderBottom:'1px solid '+C.borderLight}}>{r.category}</td>
+              <td style={{padding:'12px 14px',fontSize:13,borderBottom:'1px solid '+C.borderLight}}>{r.price.toLocaleString()}원</td>
+              <td style={{padding:'12px 14px',fontSize:13,borderBottom:'1px solid '+C.borderLight}}>{r.sales}건</td>
+              <td style={{padding:'12px 14px',fontSize:13,borderBottom:'1px solid '+C.borderLight}}>⭐ {r.rating}</td>
+              <td style={{padding:'12px 14px',fontSize:13,borderBottom:'1px solid '+C.borderLight}}><Badge color={C.success} bg={C.successLight}>판매 중</Badge></td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 멀티스텝 업로드 모달 */}
+      {uploadModal && (
+        <div onClick={()=>setUploadModal(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.surface,borderRadius:16,width:600,maxHeight:'85vh',overflow:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.15)'}}>
+            <div style={{padding:'20px 24px',borderBottom:'1px solid '+C.border,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <h3 style={{fontSize:17,fontWeight:700}}>새 레시피 등록 ({step}/3단계)</h3>
+              <button onClick={()=>setUploadModal(false)} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSec}}>✕</button>
+            </div>
+            <div style={{padding:24}}>
+              {/* 스텝 인디케이터 */}
+              <div style={{display:'flex',gap:8,marginBottom:24}}>
+                {['기본 정보','조리 과정','가격/공개'].map((s,i)=>(
+                  <div key={i} style={{flex:1,textAlign:'center'}}>
+                    <div style={{width:28,height:28,borderRadius:14,background:step>i?C.primary:step===i+1?C.primaryLight:C.borderLight,color:step>i?'#fff':step===i+1?C.primary:C.textSec,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,margin:'0 auto 6px'}}>{i+1}</div>
+                    <div style={{fontSize:11,color:step===i+1?C.primary:C.textSec}}>{s}</div>
+                  </div>
+                ))}
+              </div>
+              {step===1 && (
+                <div style={{display:'flex',flexDirection:'column',gap:14}}>
+                  <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>레시피 제목</label><input placeholder="예: 매콤 떡볶이 황금레시피" style={{width:'100%',padding:'10px 14px',borderRadius:8,border:'1px solid '+C.border,fontSize:13,fontFamily:'inherit'}}/></div>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                    <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>카테고리</label><select style={{width:'100%',padding:'10px 14px',borderRadius:8,border:'1px solid '+C.border,fontSize:13,fontFamily:'inherit'}}>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select></div>
+                    <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>난이도</label><select style={{width:'100%',padding:'10px 14px',borderRadius:8,border:'1px solid '+C.border,fontSize:13,fontFamily:'inherit'}}>{DIFFICULTY.map(d=><option key={d}>{d}</option>)}</select></div>
+                  </div>
+                  <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>소요 시간</label><input placeholder="예: 30분" style={{width:'100%',padding:'10px 14px',borderRadius:8,border:'1px solid '+C.border,fontSize:13,fontFamily:'inherit'}}/></div>
+                  <div style={{border:'2px dashed '+C.border,borderRadius:10,padding:24,textAlign:'center',cursor:'pointer'}} onClick={()=>onToast('이미지 파일 선택')}>
+                    <div style={{fontSize:28,marginBottom:8}}>📷</div><div style={{fontSize:13,fontWeight:600}}>대표 이미지 업로드</div>
+                  </div>
+                </div>
+              )}
+              {step===2 && (
+                <div style={{display:'flex',flexDirection:'column',gap:14}}>
+                  <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>재료 목록</label><textarea rows={4} placeholder="재료를 줄바꿈으로 구분하여 입력" style={{width:'100%',padding:'10px 14px',borderRadius:8,border:'1px solid '+C.border,fontSize:13,fontFamily:'inherit',resize:'vertical'}}/></div>
+                  {[1,2,3].map(n=>(
+                    <div key={n}>
+                      <label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>Step {n}</label>
+                      <div style={{display:'flex',gap:8}}>
+                        <textarea rows={2} placeholder={'조리 과정 '+n+'단계를 입력하세요'} style={{flex:1,padding:'10px 14px',borderRadius:8,border:'1px solid '+C.border,fontSize:13,fontFamily:'inherit',resize:'vertical'}}/>
+                        <div style={{width:60,height:60,border:'2px dashed '+C.border,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:18,flexShrink:0}} onClick={()=>onToast('Step '+n+' 이미지 선택')}>📷</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {step===3 && (
+                <div style={{display:'flex',flexDirection:'column',gap:14}}>
+                  <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>판매 가격 (원)</label><input type="number" placeholder="5000" style={{width:'100%',padding:'10px 14px',borderRadius:8,border:'1px solid '+C.border,fontSize:13,fontFamily:'inherit'}}/></div>
+                  <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>무료 미리보기 범위</label><select style={{width:'100%',padding:'10px 14px',borderRadius:8,border:'1px solid '+C.border,fontSize:13,fontFamily:'inherit'}}><option>첫 1단계만 공개</option><option>첫 2단계까지 공개</option><option>재료만 공개</option></select></div>
+                  <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>태그</label><input placeholder="쉼표로 구분 (예: 떡볶이, 간식, 매운맛)" style={{width:'100%',padding:'10px 14px',borderRadius:8,border:'1px solid '+C.border,fontSize:13,fontFamily:'inherit'}}/></div>
+                </div>
+              )}
+              <div style={{display:'flex',justifyContent:'space-between',marginTop:20}}>
+                {step>1?<button onClick={()=>setStep(step-1)} style={{padding:'10px 24px',background:C.borderLight,color:C.text,border:'none',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>이전</button>:<div/>}
+                {step<3?<button onClick={()=>setStep(step+1)} style={{padding:'10px 24px',background:C.primary,color:'#fff',border:'none',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>다음</button>
+                :<button onClick={()=>{onToast('레시피 등록 완료! 검수 후 게시됩니다.');setUploadModal(false)}} style={{padding:'10px 24px',background:C.success,color:'#fff',border:'none',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>등록하기</button>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── 페이지: 정산/수익 관리 ─── */
+function EarningsPage({onToast}){
+  const [drawer,setDrawer]=useState(null);
+  return (
+    <div>
+      <div style={{background:'linear-gradient(135deg,#CA8A04 0%,#EAB308 100%)',borderRadius:16,padding:'32px 48px',marginBottom:24,color:'#fff',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div>
+          <div style={{fontSize:14,opacity:0.9,marginBottom:4}}>정산/수익 관리</div>
+          <h2 style={{fontSize:24,fontWeight:800}}>이번 달 정산 예정: 628,200원</h2>
+        </div>
+        <div style={{display:'flex',gap:16}}>
+          {[{label:'총 누적 수익',value:'1,483,200원'},{label:'정산 완료',value:'855,000원'},{label:'정산 대기',value:'628,200원'}].map((k,i)=>(
+            <div key={i} style={{background:'rgba(255,255,255,0.15)',borderRadius:12,padding:'14px 20px',textAlign:'center',backdropFilter:'blur(4px)'}}>
+              <div style={{fontSize:16,fontWeight:700}}>{k.value}</div>
+              <div style={{fontSize:11,opacity:0.8}}>{k.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,padding:20,border:'1px solid '+C.border,marginBottom:20}}>
+        <div style={{fontSize:15,fontWeight:700,marginBottom:16}}>월별 정산 내역</div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr>{['정산월','총 매출','수수료(10%)','정산 금액','상태',''].map(h=><th key={h} style={{padding:'10px 14px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textSec,borderBottom:'1px solid '+C.border,background:'#FAFAF9'}}>{h}</th>)}</tr></thead>
+          <tbody>
+            {earnings.map((e,i)=><tr key={i} onClick={()=>setDrawer(e)} style={{cursor:'pointer'}} onMouseEnter={ev=>ev.currentTarget.style.background=C.primaryLight} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+              <td style={{padding:'14px',fontSize:13,borderBottom:'1px solid '+C.borderLight,fontWeight:500}}>{e.month}</td>
+              <td style={{padding:'14px',fontSize:13,borderBottom:'1px solid '+C.borderLight}}>{e.revenue.toLocaleString()}원</td>
+              <td style={{padding:'14px',fontSize:13,borderBottom:'1px solid '+C.borderLight,color:C.danger}}>-{e.fee.toLocaleString()}원</td>
+              <td style={{padding:'14px',fontSize:13,borderBottom:'1px solid '+C.borderLight,fontWeight:600,color:C.primary}}>{e.net.toLocaleString()}원</td>
+              <td style={{padding:'14px',fontSize:13,borderBottom:'1px solid '+C.borderLight}}><Badge color={e.status==='정산 완료'?C.success:C.warning} bg={e.status==='정산 완료'?C.successLight:C.warningLight}>{e.status}</Badge></td>
+              <td style={{padding:'14px',fontSize:13,borderBottom:'1px solid '+C.borderLight}}>
+                {e.status==='정산 대기' && <button onClick={ev=>{ev.stopPropagation();onToast('출금 신청 완료')}} style={{padding:'6px 14px',background:C.primary,color:'#fff',border:'none',borderRadius:6,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>출금 신청</button>}
+              </td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,padding:20,border:'1px solid '+C.border}}>
+        <div style={{fontSize:15,fontWeight:700,marginBottom:16}}>계좌 정보</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:16}}>
+          <div><div style={{fontSize:12,color:C.textSec,marginBottom:4}}>은행</div><div style={{fontSize:14,fontWeight:500}}>국민은행</div></div>
+          <div><div style={{fontSize:12,color:C.textSec,marginBottom:4}}>계좌번호</div><div style={{fontSize:14,fontWeight:500}}>123-456-789012</div></div>
+          <div><div style={{fontSize:12,color:C.textSec,marginBottom:4}}>예금주</div><div style={{fontSize:14,fontWeight:500}}>김민지</div></div>
+        </div>
+        <button onClick={()=>onToast('계좌 정보 수정')} style={{marginTop:12,padding:'8px 16px',background:C.borderLight,color:C.text,border:'none',borderRadius:6,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>계좌 변경</button>
+      </div>
+
+      <Drawer open={!!drawer} onClose={()=>setDrawer(null)} title="정산 상세">
+        {drawer && (
+          <div>
+            <div style={{fontSize:22,fontWeight:800,color:C.primary,marginBottom:16}}>{drawer.net.toLocaleString()}원</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
+              <div style={{padding:14,background:C.borderLight,borderRadius:8}}><div style={{fontSize:12,color:C.textSec}}>정산월</div><div style={{fontSize:14,fontWeight:600}}>{drawer.month}</div></div>
+              <div style={{padding:14,background:C.borderLight,borderRadius:8}}><div style={{fontSize:12,color:C.textSec}}>총 매출</div><div style={{fontSize:14,fontWeight:600}}>{drawer.revenue.toLocaleString()}원</div></div>
+              <div style={{padding:14,background:C.borderLight,borderRadius:8}}><div style={{fontSize:12,color:C.textSec}}>수수료</div><div style={{fontSize:14,fontWeight:600,color:C.danger}}>-{drawer.fee.toLocaleString()}원</div></div>
+              <div style={{padding:14,background:C.borderLight,borderRadius:8}}><div style={{fontSize:12,color:C.textSec}}>상태</div><Badge color={drawer.status==='정산 완료'?C.success:C.warning} bg={drawer.status==='정산 완료'?C.successLight:C.warningLight}>{drawer.status}</Badge></div>
+            </div>
+            <button onClick={()=>onToast('CSV 다운로드 시작')} style={{width:'100%',padding:'12px 0',background:C.borderLight,color:C.text,border:'none',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>📥 정산 내역 CSV 다운로드</button>
+          </div>
+        )}
+      </Drawer>
+    </div>
+  );
+}
+
+/* ─── 메인 앱 ─── */
+function App(){
+  const [page,setPage]=useState('레시피 스토어');
+  const [toast,setToast]=useState(null);
+  const onToast=(msg)=>setToast(msg);
+  const pages=['레시피 스토어','레시피 상세/미리보기','크리에이터 대시보드','정산/수익 관리'];
+
+  return (
+    <div style={{minHeight:'100vh',background:C.bg}}>
+      {/* 상단 네비 */}
+      <nav style={{height:60,background:C.surface,borderBottom:'1px solid '+C.border,display:'flex',alignItems:'center',padding:'0 32px',position:'sticky',top:0,zIndex:100}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginRight:40}}>
+          <div style={{width:34,height:34,borderRadius:10,background:'linear-gradient(135deg,'+C.primary+','+C.secondary+')',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:800,fontSize:14}}>R</div>
+          <span style={{fontWeight:700,fontSize:16,color:C.text}}>RecipeMarket</span>
+        </div>
+        <div style={{display:'flex',gap:4}}>
+          {pages.map(p=>(
+            <button key={p} title={p} onClick={()=>setPage(p)} style={{padding:'8px 18px',borderRadius:20,border:'none',cursor:'pointer',background:page===p?C.primary:'transparent',color:page===p?'#fff':C.textSec,fontSize:13,fontWeight:page===p?600:400,transition:'all 0.15s',fontFamily:'inherit'}}>{p}</button>
+          ))}
+        </div>
+        <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:12}}>
+          <input placeholder="레시피 검색..." style={{padding:'7px 16px',borderRadius:20,border:'1px solid '+C.border,fontSize:13,width:200,fontFamily:'inherit',background:C.borderLight}}/>
+          <span style={{cursor:'pointer',fontSize:18}} onClick={()=>onToast('알림 2건')}>🔔</span>
+          <div style={{width:32,height:32,borderRadius:16,background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,fontWeight:700}}>민</div>
+        </div>
+      </nav>
+
+      <main style={{maxWidth:1280,margin:'0 auto',padding:24}}>
+        {page==='레시피 스토어' && <StorePage onToast={onToast}/>}
+        {page==='레시피 상세/미리보기' && <RecipeDetailPage onToast={onToast}/>}
+        {page==='크리에이터 대시보드' && <CreatorDashboardPage onToast={onToast}/>}
+        {page==='정산/수익 관리' && <EarningsPage onToast={onToast}/>}
+      </main>
+      {toast && <Toast msg={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
