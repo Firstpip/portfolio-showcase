@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>인쇄물 제작 외주 의뢰 플랫폼 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:#FAFAF9;color:#1C1917;overflow-x:hidden;}
+::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:#F5F5F4;}::-webkit-scrollbar-thumb{background:#A8A29E;border-radius:3px;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ping{0%{transform:scale(1);opacity:1}75%,100%{transform:scale(1.6);opacity:0}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo,useCallback}=React;
+const {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,CartesianGrid,Legend}=Recharts;
+
+const C={primary:'#7C3AED',primaryLight:'#F5F3FF',secondary:'#EDE9FE',accent:'#EC4899',bg:'#FAFAF9',surface:'#FFFFFF',text:'#1C1917',textSec:'#78716C',border:'#E7E5E4',success:'#059669',successBg:'#D1FAE5',warning:'#D97706',warningBg:'#FEF3C7',danger:'#DC2626',dangerBg:'#FEE2E2',info:'#6366F1',infoBg:'#EEF2FF'};
+
+// ── Data ──
+const printItems=[
+  {id:'명함',icon:'🪪',desc:'90×50mm 양면 컬러'},{id:'배너',icon:'🏷️',desc:'실사 출력 대형'},
+  {id:'리플렛',icon:'📄',desc:'A4 3단접지 양면'},{id:'스티커',icon:'📌',desc:'유광/무광 다이컷'},
+  {id:'포스터',icon:'🖼️',desc:'A2/A1 고해상도'},{id:'카탈로그',icon:'📚',desc:'무선철 16p~'}
+];
+
+const orderRequests=[
+  {id:'PR-2026-001',client:'한솔디자인',item:'프리미엄 명함 세트',qty:'2,000매',amount:'320,000원',status:'시안 검토',stage:2,date:'2026-01-20',file:'명함_시안_v2.ai'},
+  {id:'PR-2026-002',client:'미래건설',item:'현장 안전 배너 5종',qty:'50장',amount:'1,500,000원',status:'인쇄 진행',stage:3,date:'2026-01-19',file:'배너_최종.psd'},
+  {id:'PR-2026-003',client:'그린푸드',item:'식품 라벨 스티커',qty:'10,000매',amount:'480,000원',status:'교정 완료',stage:3,date:'2026-01-18',file:'라벨_교정완료.pdf'},
+  {id:'PR-2026-004',client:'블루오션',item:'회사 소개 리플렛',qty:'5,000부',amount:'2,100,000원',status:'수정 요청',stage:2,date:'2026-01-17',file:'리플렛_수정.ai'},
+  {id:'PR-2026-005',client:'스타트업허브',item:'행사 포스터 A2',qty:'300장',amount:'480,000원',status:'배송 완료',stage:5,date:'2026-01-16',file:'포스터_완성.pdf'},
+  {id:'PR-2026-006',client:'글로벌테크',item:'제품 카탈로그 32p',qty:'1,000부',amount:'5,600,000원',status:'접수',stage:1,date:'2026-01-15',file:'카탈로그_원고.ai'},
+  {id:'PR-2026-007',client:'에코라이프',item:'포장 라벨 3종',qty:'5,000매',amount:'720,000원',status:'시안 검토',stage:2,date:'2026-01-14',file:'라벨_시안.pdf'}
+];
+
+const stages=['접수','시안','교정','인쇄','배송'];
+const stageColors=['#6366F1','#7C3AED','#EC4899','#F59E0B','#059669'];
+const statusMap={접수:{color:C.info,bg:C.infoBg},'시안 검토':{color:C.primary,bg:C.primaryLight},'교정 완료':{color:'#EC4899',bg:'#FCE7F3'},'수정 요청':{color:C.danger,bg:C.dangerBg},'인쇄 진행':{color:C.warning,bg:C.warningBg},'배송 완료':{color:C.success,bg:C.successBg}};
+
+const sizeOptions={명함:[{label:'90×50mm (표준)',rate:1},{label:'90×55mm (슬림)',rate:1.1}],배너:[{label:'1800×600mm',rate:1},{label:'2400×900mm',rate:1.6},{label:'3000×1200mm',rate:2.2}],리플렛:[{label:'A4 3단접지',rate:1},{label:'A4 양면',rate:0.8}],스티커:[{label:'원형 50mm',rate:1},{label:'사각 60×40mm',rate:1.1},{label:'다이컷 (맞춤)',rate:1.5}],포스터:[{label:'A2 (420×594)',rate:1},{label:'A1 (594×841)',rate:1.5}],카탈로그:[{label:'A4 16p',rate:1},{label:'A4 32p',rate:1.8},{label:'A4 48p',rate:2.5}]};
+const finishOptions=[{label:'없음',rate:1},{label:'유광 코팅',rate:1.1},{label:'무광 코팅',rate:1.12},{label:'엠보싱',rate:1.25},{label:'박가공 (금)',rate:1.4}];
+const qtyPresets=[100,200,500,1000,2000,5000,10000];
+const basePrices={명함:150,배너:25000,리플렛:350,스티커:80,포스터:1200,카탈로그:5600};
+const qtyDiscounts=[{min:1,max:199,d:1},{min:200,max:499,d:.9},{min:500,max:1999,d:.78},{min:2000,max:4999,d:.65},{min:5000,max:99999,d:.52}];
+
+const monthlyStats=[
+  {month:'8월',orders:28,amount:12},{month:'9월',orders:35,amount:16},{month:'10월',orders:42,amount:22},
+  {month:'11월',orders:38,amount:19},{month:'12월',orders:52,amount:28},{month:'1월',orders:45,amount:24}
+];
+const itemMix=[{name:'명함',value:25},{name:'스티커',value:22},{name:'리플렛',value:18},{name:'배너',value:15},{name:'포스터',value:12},{name:'카탈로그',value:8}];
+const pieColors=['#7C3AED','#A78BFA','#C4B5FD','#DDD6FE','#EC4899','#F9A8D4'];
+
+const proofComments=[
+  {id:1,x:35,y:22,author:'김태현',text:'로고 크기를 10% 키워주세요',date:'01-20 14:30',resolved:false},
+  {id:2,x:65,y:55,author:'디자이너',text:'배경색 CMYK 값 확인 부탁드립니다',date:'01-20 15:10',resolved:true},
+  {id:3,x:50,y:78,author:'김태현',text:'하단 주소 텍스트 오타 수정 필요',date:'01-20 16:00',resolved:false}
+];
+
+const deliveries=[
+  {id:1,order:'PR-2026-005',client:'스타트업허브',item:'행사 포스터 A2',tracking:'CJ1234567890',carrier:'CJ대한통운',status:'배송완료',date:'2026-01-18'},
+  {id:2,order:'PR-2026-003',client:'그린푸드',item:'식품 라벨 스티커',tracking:'HJ9876543210',carrier:'한진택배',status:'배송중',date:'2026-01-20'},
+  {id:3,order:'PR-2026-002',client:'미래건설',item:'현장 안전 배너',tracking:'',carrier:'',status:'제작중',date:''}
+];
+
+// ── Components ──
+function Badge({children,color=C.primary,bg=C.primaryLight}){
+  return <span style={{display:'inline-block',padding:'3px 10px',borderRadius:12,fontSize:12,fontWeight:600,color,background:bg}}>{children}</span>;
+}
+
+function StepIndicator({current,total=5}){
+  return <div style={{display:'flex',alignItems:'center',gap:4}}>
+    {stages.map((s,i)=><React.Fragment key={i}>
+      <div style={{display:'flex',alignItems:'center',gap:4}}>
+        <div style={{width:22,height:22,borderRadius:'50%',background:i<current?stageColors[i]:i===current?stageColors[i]+'22':C.border,color:i<=current?i<current?'#fff':stageColors[i]:C.textSec,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700,border:i===current?`2px solid ${stageColors[i]}`:'none'}}>{i<current?'✓':i+1}</div>
+        <span style={{fontSize:10,color:i<=current?C.text:C.textSec,fontWeight:i===current?700:400}}>{s}</span>
+      </div>
+      {i<4 && <div style={{width:20,height:2,background:i<current?stageColors[i]:C.border,borderRadius:1}}/>}
+    </React.Fragment>)}
+  </div>;
+}
+
+function Modal({open,onClose,title,children,width=600}){
+  if(!open)return null;
+  return <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.4)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center',animation:'fadeIn .15s'}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:C.surface,borderRadius:16,width,maxHeight:'85vh',overflow:'auto',animation:'slideUp .25s'}}>
+      <div style={{padding:'20px 24px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',position:'sticky',top:0,background:C.surface,zIndex:1,borderRadius:'16px 16px 0 0'}}>
+        <h3 style={{fontSize:18,fontWeight:700}}>{title}</h3>
+        <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSec}}>✕</button>
+      </div>
+      <div style={{padding:24}}>{children}</div>
+    </div>
+  </div>;
+}
+
+// ── Pages ──
+function OrderCenterPage(){
+  const [selected,setSelected]=useState(null);
+  return <div style={{animation:'fadeIn .4s'}}>
+    <div style={{background:'linear-gradient(135deg,#7C3AED 0%,#6D28D9 50%,#5B21B6 100%)',borderRadius:16,padding:'36px 40px',marginBottom:28,color:'#fff'}}>
+      <h1 style={{fontSize:28,fontWeight:800,marginBottom:8}}>주문 센터</h1>
+      <p style={{fontSize:15,opacity:.85,marginBottom:24}}>인쇄물 제작 주문 현황을 실시간으로 확인하세요</p>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:12}}>
+        {stages.map((s,i)=>{const count=orderRequests.filter(o=>o.stage===i+1).length;return <div key={s} style={{background:'rgba(255,255,255,.15)',borderRadius:10,padding:'14px 16px',backdropFilter:'blur(10px)'}}>
+          <div style={{fontSize:11,opacity:.7,marginBottom:4}}>{s}</div>
+          <div style={{fontSize:24,fontWeight:800}}>{count}</div>
+        </div>})}
+      </div>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:20,marginBottom:28}}>
+      <div style={{background:C.surface,borderRadius:12,padding:24,border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>월별 주문량 추이</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={monthlyStats}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="month" tick={{fontSize:12}}/><YAxis tick={{fontSize:12}}/><Tooltip contentStyle={{borderRadius:8}}/><Bar dataKey="orders" name="주문 수" fill={C.primary} radius={[4,4,0,0]}/></BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,padding:24,border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>품목별 비율</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <PieChart><Pie data={itemMix} cx="50%" cy="50%" innerRadius={45} outerRadius={80} dataKey="value" label={({name,value})=>`${name} ${value}%`} labelLine={false}>{itemMix.map((_,i)=><Cell key={i} fill={pieColors[i]}/>)}</Pie><Tooltip/></PieChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+    <div style={{background:C.surface,borderRadius:12,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+      <div style={{padding:'20px 24px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <h3 style={{fontSize:15,fontWeight:700}}>진행중 주문</h3>
+        <span style={{fontSize:12,color:C.textSec}}>{orderRequests.length}건</span>
+      </div>
+      <div style={{overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{borderBottom:`2px solid ${C.border}`}}>
+            {['주문번호','의뢰인','품목','수량','금액','진행 단계','상태'].map(h=><th key={h} style={{padding:'12px 16px',textAlign:'left',fontSize:12,fontWeight:700,color:C.textSec}}>{h}</th>)}
+          </tr></thead>
+          <tbody>{orderRequests.map(o=><tr key={o.id} onClick={()=>setSelected(o)} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background .15s'}} onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+            <td style={{padding:'12px 16px',fontSize:13,fontWeight:600,color:C.primary}}>{o.id}</td>
+            <td style={{padding:'12px 16px',fontSize:13}}>{o.client}</td>
+            <td style={{padding:'12px 16px',fontSize:13}}>{o.item}</td>
+            <td style={{padding:'12px 16px',fontSize:13}}>{o.qty}</td>
+            <td style={{padding:'12px 16px',fontSize:13,fontWeight:600}}>{o.amount}</td>
+            <td style={{padding:'12px 16px'}}><StepIndicator current={o.stage}/></td>
+            <td style={{padding:'12px 16px'}}>{(()=>{const s=statusMap[o.status]||{color:C.textSec,bg:C.border};return <Badge color={s.color} bg={s.bg}>{o.status}</Badge>})()}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>
+    </div>
+    <Modal open={!!selected} onClose={()=>setSelected(null)} title={`주문 상세 — ${selected?.id||''}`}>
+      {selected && <div>
+        <div style={{display:'flex',justifyContent:'center',marginBottom:24}}><StepIndicator current={selected.stage}/></div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+          {[['의뢰인',selected.client],['품목',selected.item],['수량',selected.qty],['금액',selected.amount],['접수일',selected.date],['첨부 파일',selected.file]].map(([k,v])=><div key={k} style={{background:'#FAFAF9',borderRadius:8,padding:12}}><div style={{fontSize:11,color:C.textSec,marginBottom:4}}>{k}</div><div style={{fontSize:14,fontWeight:600}}>{v}</div></div>)}
+        </div>
+      </div>}
+    </Modal>
+  </div>;
+}
+
+function NewRequestPage(){
+  const [step,setStep]=useState(0);
+  const [form,setForm]=useState({item:'명함',size:null,finish:'없음',qty:500});
+  const sizes=sizeOptions[form.item]||[];
+  const selectedSize=sizes.find(s=>s.label===form.size)||sizes[0]||{rate:1};
+  const selectedFinish=finishOptions.find(f=>f.label===form.finish)||{rate:1};
+  const base=basePrices[form.item]||0;
+  const qd=qtyDiscounts.find(d=>form.qty>=d.min&&form.qty<=d.max)||{d:1};
+  const unitPrice=Math.round(base*selectedSize.rate*selectedFinish.rate*qd.d);
+  const total=unitPrice*form.qty;
+
+  useEffect(()=>{if(sizes.length&&!form.size)setForm(f=>({...f,size:sizes[0].label}));},[form.item]);
+
+  const stepLabels=['품목 선택','규격 설정','견적 확인'];
+  return <div style={{animation:'fadeIn .4s'}}>
+    <div style={{background:'linear-gradient(135deg,#EC4899 0%,#DB2777 100%)',borderRadius:16,padding:'32px 40px',marginBottom:28,color:'#fff'}}>
+      <h1 style={{fontSize:28,fontWeight:800,marginBottom:6}}>신규 의뢰</h1>
+      <p style={{fontSize:15,opacity:.85}}>인쇄물 품목을 선택하고 옵션을 설정하세요</p>
+    </div>
+    <div style={{display:'flex',justifyContent:'center',marginBottom:32}}>
+      {stepLabels.map((s,i)=><div key={i} style={{display:'flex',alignItems:'center'}}>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <div style={{width:32,height:32,borderRadius:'50%',background:i<=step?C.primary:C.border,color:i<=step?'#fff':C.textSec,display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:700}}>{i+1}</div>
+          <span style={{fontSize:14,fontWeight:i===step?700:400,color:i<=step?C.text:C.textSec}}>{s}</span>
+        </div>
+        {i<2 && <div style={{width:60,height:2,background:i<step?C.primary:C.border,margin:'0 16px',borderRadius:1}}/>}
+      </div>)}
+    </div>
+    <div style={{maxWidth:700,margin:'0 auto'}}>
+      {step===0 && <div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+          {printItems.map(p=><div key={p.id} onClick={()=>{setForm({...form,item:p.id,size:null});}} style={{background:form.item===p.id?C.primaryLight:C.surface,border:`2px solid ${form.item===p.id?C.primary:C.border}`,borderRadius:12,padding:20,cursor:'pointer',transition:'all .2s',textAlign:'center'}}>
+            <div style={{fontSize:36,marginBottom:8}}>{p.icon}</div>
+            <div style={{fontSize:15,fontWeight:700}}>{p.id}</div>
+            <div style={{fontSize:12,color:C.textSec,marginTop:4}}>{p.desc}</div>
+          </div>)}
+        </div>
+        <div style={{display:'flex',justifyContent:'flex-end',marginTop:24}}>
+          <button onClick={()=>setStep(1)} style={{background:C.primary,color:'#fff',border:'none',borderRadius:8,padding:'12px 32px',fontSize:15,fontWeight:700,cursor:'pointer'}}>다음 →</button>
+        </div>
+      </div>}
+      {step===1 && <div>
+        <div style={{marginBottom:24}}>
+          <label style={{fontSize:14,fontWeight:700,marginBottom:10,display:'block'}}>규격 선택</label>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {sizes.map(s=><label key={s.label} onClick={()=>setForm({...form,size:s.label})} style={{display:'flex',alignItems:'center',gap:12,padding:'14px 18px',borderRadius:10,border:`2px solid ${form.size===s.label?C.primary:C.border}`,background:form.size===s.label?C.primaryLight:'transparent',cursor:'pointer'}}>
+              <div style={{width:18,height:18,borderRadius:'50%',border:`2px solid ${form.size===s.label?C.primary:C.border}`,display:'flex',alignItems:'center',justifyContent:'center'}}>{form.size===s.label && <div style={{width:10,height:10,borderRadius:'50%',background:C.primary}}/>}</div>
+              <span style={{fontSize:14,fontWeight:600}}>{s.label}</span>
+            </label>)}
+          </div>
+        </div>
+        <div style={{marginBottom:24}}>
+          <label style={{fontSize:14,fontWeight:700,marginBottom:10,display:'block'}}>후가공 옵션</label>
+          <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+            {finishOptions.map(f=><button key={f.label} onClick={()=>setForm({...form,finish:f.label})} style={{padding:'8px 18px',borderRadius:20,border:`1px solid ${form.finish===f.label?C.primary:C.border}`,background:form.finish===f.label?C.primary:'transparent',color:form.finish===f.label?'#fff':C.textSec,fontSize:13,fontWeight:600,cursor:'pointer'}}>{f.label}{f.rate>1&&` (+${Math.round((f.rate-1)*100)}%)`}</button>)}
+          </div>
+        </div>
+        <div style={{marginBottom:24}}>
+          <label style={{fontSize:14,fontWeight:700,marginBottom:10,display:'block'}}>수량</label>
+          <div style={{display:'flex',flexWrap:'wrap',gap:8,marginBottom:12}}>
+            {qtyPresets.map(q=><button key={q} onClick={()=>setForm({...form,qty:q})} style={{padding:'8px 16px',borderRadius:8,border:`1px solid ${form.qty===q?C.primary:C.border}`,background:form.qty===q?C.primaryLight:'transparent',color:form.qty===q?C.primary:C.textSec,fontSize:13,fontWeight:600,cursor:'pointer'}}>{q.toLocaleString()}</button>)}
+          </div>
+          <input type="number" min="1" value={form.qty} onChange={e=>setForm({...form,qty:parseInt(e.target.value)||1})} style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:14}}/>
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:24}}>
+          <button onClick={()=>setStep(0)} style={{background:'transparent',color:C.textSec,border:`1px solid ${C.border}`,borderRadius:8,padding:'12px 24px',fontSize:14,fontWeight:600,cursor:'pointer'}}>← 이전</button>
+          <button onClick={()=>setStep(2)} style={{background:C.primary,color:'#fff',border:'none',borderRadius:8,padding:'12px 32px',fontSize:15,fontWeight:700,cursor:'pointer'}}>견적 확인 →</button>
+        </div>
+      </div>}
+      {step===2 && <div>
+        <div style={{background:C.surface,borderRadius:12,border:`1px solid ${C.border}`,overflow:'hidden',marginBottom:24}}>
+          <div style={{background:'linear-gradient(135deg,#7C3AED,#6D28D9)',padding:'24px 28px',color:'#fff'}}>
+            <div style={{fontSize:12,opacity:.7,marginBottom:4}}>실시간 견적</div>
+            <div style={{fontSize:36,fontWeight:800}}>{total.toLocaleString()}원</div>
+          </div>
+          <div style={{padding:24}}>
+            {[['품목',form.item],['규격',form.size],['후가공',form.finish],['수량',`${form.qty.toLocaleString()}개`],['단가',`${unitPrice.toLocaleString()}원`],['수량 할인',`${Math.round((1-qd.d)*100)}%`]].map(([k,v])=><div key={k} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`}}><span style={{color:C.textSec,fontSize:13}}>{k}</span><span style={{fontWeight:600,fontSize:13}}>{v}</span></div>)}
+          </div>
+        </div>
+        <div style={{background:C.primaryLight,borderRadius:12,padding:20,marginBottom:24}}>
+          <div style={{fontSize:14,fontWeight:700,marginBottom:8}}>📁 디자인 파일 업로드</div>
+          <div style={{border:`2px dashed ${C.primary}`,borderRadius:8,padding:'32px 20px',textAlign:'center',background:'rgba(124,58,237,.04)'}}>
+            <div style={{fontSize:28,marginBottom:8}}>📤</div>
+            <div style={{fontSize:14,fontWeight:600,color:C.primary}}>파일을 드래그하거나 클릭하여 업로드</div>
+            <div style={{fontSize:12,color:C.textSec,marginTop:4}}>AI, PSD, PDF, EPS (최대 500MB)</div>
+          </div>
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between'}}>
+          <button onClick={()=>setStep(1)} style={{background:'transparent',color:C.textSec,border:`1px solid ${C.border}`,borderRadius:8,padding:'12px 24px',fontSize:14,fontWeight:600,cursor:'pointer'}}>← 수정</button>
+          <button style={{background:C.primary,color:'#fff',border:'none',borderRadius:8,padding:'12px 32px',fontSize:15,fontWeight:700,cursor:'pointer'}}>결제 진행 →</button>
+        </div>
+      </div>}
+    </div>
+  </div>;
+}
+
+function ProofPage(){
+  const [selected,setSelected]=useState(null);
+  const [activePin,setActivePin]=useState(null);
+  return <div style={{animation:'fadeIn .4s'}}>
+    <div style={{background:'linear-gradient(135deg,#6366F1 0%,#4F46E5 100%)',borderRadius:16,padding:'32px 40px',marginBottom:28,color:'#fff'}}>
+      <h1 style={{fontSize:28,fontWeight:800,marginBottom:6}}>파일 교정</h1>
+      <p style={{fontSize:15,opacity:.85}}>시안을 확인하고 수정 요청을 남기세요</p>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+      <div style={{background:C.surface,borderRadius:12,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <h3 style={{fontSize:15,fontWeight:700}}>교정 요청 목록</h3>
+          <Badge color={C.primary} bg={C.primaryLight}>{orderRequests.filter(o=>o.stage===2).length}건 대기</Badge>
+        </div>
+        <div style={{maxHeight:500,overflow:'auto'}}>
+          {orderRequests.filter(o=>o.stage<=3).map(o=><div key={o.id} onClick={()=>setSelected(o)} style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,cursor:'pointer',background:selected?.id===o.id?C.primaryLight:'transparent',transition:'background .15s'}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+              <span style={{fontSize:14,fontWeight:700}}>{o.id}</span>
+              {(()=>{const s=statusMap[o.status]||{color:C.textSec,bg:C.border};return <Badge color={s.color} bg={s.bg}>{o.status}</Badge>})()}
+            </div>
+            <div style={{fontSize:13,color:C.textSec}}>{o.client} · {o.item}</div>
+            <div style={{fontSize:12,color:C.textSec,marginTop:4}}>📎 {o.file}</div>
+          </div>)}
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:15,fontWeight:700}}>{selected?'시안 뷰어':'시안을 선택하세요'}</h3>
+        </div>
+        {selected ? <div>
+          <div style={{position:'relative',background:'#F5F5F4',height:320,display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden'}}>
+            <div style={{fontSize:64,opacity:.2}}>🖼️</div>
+            <div style={{position:'absolute',top:8,right:8,fontSize:10,background:'rgba(0,0,0,.6)',color:'#fff',padding:'4px 8px',borderRadius:4}}>라운드 2</div>
+            {proofComments.map(c=><div key={c.id} onClick={()=>setActivePin(activePin===c.id?null:c.id)} style={{position:'absolute',left:`${c.x}%`,top:`${c.y}%`,cursor:'pointer'}}>
+              <div style={{width:24,height:24,borderRadius:'50%',background:c.resolved?C.success:C.danger,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,boxShadow:'0 2px 8px rgba(0,0,0,.2)'}}>{c.id}</div>
+              {activePin===c.id && <div style={{position:'absolute',left:28,top:-8,background:C.surface,borderRadius:8,padding:12,width:220,boxShadow:'0 4px 20px rgba(0,0,0,.15)',zIndex:10,animation:'fadeIn .15s'}}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+                  <span style={{fontSize:12,fontWeight:700}}>{c.author}</span>
+                  <span style={{fontSize:10,color:C.textSec}}>{c.date}</span>
+                </div>
+                <div style={{fontSize:13,lineHeight:1.5}}>{c.text}</div>
+                <div style={{marginTop:8,display:'flex',justifyContent:'flex-end'}}>
+                  <Badge color={c.resolved?C.success:C.danger} bg={c.resolved?C.successBg:C.dangerBg}>{c.resolved?'해결됨':'미해결'}</Badge>
+                </div>
+              </div>}
+            </div>)}
+          </div>
+          <div style={{padding:16}}>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>코멘트 ({proofComments.length})</div>
+            {proofComments.map(c=><div key={c.id} style={{display:'flex',gap:10,padding:'8px 0',borderBottom:`1px solid ${C.border}`}}>
+              <div style={{width:20,height:20,borderRadius:'50%',background:c.resolved?C.successBg:C.dangerBg,color:c.resolved?C.success:C.danger,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700,flexShrink:0}}>{c.id}</div>
+              <div style={{flex:1}}><div style={{fontSize:12}}><b>{c.author}</b> <span style={{color:C.textSec}}>{c.date}</span></div><div style={{fontSize:13,marginTop:2}}>{c.text}</div></div>
+            </div>)}
+            <div style={{display:'flex',gap:8,marginTop:16}}>
+              <button style={{flex:1,padding:'10px',borderRadius:8,background:C.success,color:'#fff',border:'none',fontSize:13,fontWeight:600,cursor:'pointer'}}>최종 승인</button>
+              <button style={{flex:1,padding:'10px',borderRadius:8,background:C.surface,color:C.danger,border:`1px solid ${C.danger}`,fontSize:13,fontWeight:600,cursor:'pointer'}}>수정 요청</button>
+            </div>
+          </div>
+        </div> : <div style={{padding:40,textAlign:'center',color:C.textSec}}><div style={{fontSize:48,marginBottom:12}}>📋</div><div style={{fontSize:14}}>좌측에서 교정할 주문을 선택하세요</div></div>}
+      </div>
+    </div>
+  </div>;
+}
+
+function DeliveryPage(){
+  const statusColors2={배송완료:{color:C.success,bg:C.successBg},배송중:{color:C.info,bg:C.infoBg},제작중:{color:C.warning,bg:C.warningBg}};
+  return <div style={{animation:'fadeIn .4s'}}>
+    <div style={{background:'linear-gradient(135deg,#059669 0%,#047857 100%)',borderRadius:16,padding:'32px 40px',marginBottom:28,color:'#fff'}}>
+      <h1 style={{fontSize:28,fontWeight:800,marginBottom:6}}>완성본 수령</h1>
+      <p style={{fontSize:15,opacity:.85}}>완성된 파일을 다운로드하고 배송 상태를 확인하세요</p>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:28}}>
+      {deliveries.map(d=><div key={d.id} style={{background:C.surface,borderRadius:12,border:`1px solid ${C.border}`,overflow:'hidden',animation:'fadeIn .4s'}}>
+        <div style={{padding:'20px 24px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+            <span style={{fontSize:14,fontWeight:700}}>{d.order}</span>
+            {(()=>{const s=statusColors2[d.status]||{};return <Badge color={s.color} bg={s.bg}>{d.status}</Badge>})()}
+          </div>
+          <div style={{fontSize:15,fontWeight:600,marginBottom:4}}>{d.item}</div>
+          <div style={{fontSize:13,color:C.textSec,marginBottom:16}}>{d.client}</div>
+          {d.tracking && <div style={{background:'#F5F5F4',borderRadius:8,padding:12,marginBottom:12}}>
+            <div style={{fontSize:11,color:C.textSec,marginBottom:4}}>운송장 번호</div>
+            <div style={{fontSize:14,fontWeight:600,fontFamily:'monospace'}}>{d.tracking}</div>
+            <div style={{fontSize:12,color:C.textSec,marginTop:2}}>{d.carrier}</div>
+          </div>}
+          <div style={{display:'flex',gap:8}}>
+            <button style={{flex:1,padding:'10px',borderRadius:8,background:d.status==='배송완료'?C.primary:C.border,color:d.status==='배송완료'?'#fff':C.textSec,border:'none',fontSize:13,fontWeight:600,cursor:d.status==='배송완료'?'pointer':'default'}}>📥 파일 다운로드</button>
+            {d.tracking && <button style={{padding:'10px 16px',borderRadius:8,background:'transparent',color:C.primary,border:`1px solid ${C.primary}`,fontSize:13,fontWeight:600,cursor:'pointer'}}>🚛 배송조회</button>}
+          </div>
+        </div>
+      </div>)}
+    </div>
+    <div style={{background:C.surface,borderRadius:12,border:`1px solid ${C.border}`,padding:24}}>
+      <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>다운로드 이력</h3>
+      <div style={{overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{borderBottom:`2px solid ${C.border}`}}>
+            {['주문번호','품목','파일','다운로드 일시','상태'].map(h=><th key={h} style={{padding:'10px 14px',textAlign:'left',fontSize:12,fontWeight:700,color:C.textSec}}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {deliveries.filter(d=>d.status==='배송완료').map(d=><tr key={d.id} style={{borderBottom:`1px solid ${C.border}`}}>
+              <td style={{padding:'10px 14px',fontSize:13,fontWeight:600,color:C.primary}}>{d.order}</td>
+              <td style={{padding:'10px 14px',fontSize:13}}>{d.item}</td>
+              <td style={{padding:'10px 14px',fontSize:13}}>{d.item.replace(/ /g,'_')}_final.pdf</td>
+              <td style={{padding:'10px 14px',fontSize:13}}>{d.date} 10:30</td>
+              <td style={{padding:'10px 14px'}}><Badge color={C.success} bg={C.successBg}>다운로드 완료</Badge></td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>;
+}
+
+// ── App ──
+function App(){
+  const [page,setPage]=useState('주문 센터');
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{setTimeout(()=>setLoading(false),500);},[]);
+  const tabs=[
+    {name:'주문 센터',icon:'📋'},
+    {name:'신규 의뢰',icon:'✏️'},
+    {name:'파일 교정',icon:'🔍'},
+    {name:'완성본 수령',icon:'📦'}
+  ];
+  if(loading)return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{textAlign:'center'}}><div style={{fontSize:48,marginBottom:12}}>🖨️</div><div style={{fontSize:16,color:C.textSec}}>로딩 중...</div></div></div>;
+  return <div style={{minHeight:'100vh'}}>
+    <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,position:'sticky',top:0,zIndex:100}}>
+      <div style={{maxWidth:1200,margin:'0 auto',padding:'0 32px'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',height:60}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <div style={{width:34,height:34,borderRadius:8,background:'linear-gradient(135deg,#7C3AED,#EC4899)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>🖨️</div>
+            <span style={{fontWeight:800,fontSize:17,color:C.text}}>PrintFlow</span>
+          </div>
+          <div style={{display:'flex',gap:4}}>
+            {tabs.map(t=><button key={t.name} title={t.name} onClick={()=>setPage(t.name)} style={{padding:'8px 18px',borderRadius:8,border:'none',background:page===t.name?C.primaryLight:'transparent',color:page===t.name?C.primary:C.textSec,fontSize:14,fontWeight:page===t.name?700:500,cursor:'pointer',transition:'all .15s',display:'flex',alignItems:'center',gap:6}}>
+              <span style={{fontSize:14}}>{t.icon}</span>{t.name}
+            </button>)}
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <span style={{fontSize:13,color:C.textSec}}>한솔디자인</span>
+            <div style={{width:32,height:32,borderRadius:'50%',background:C.primaryLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>👤</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style={{maxWidth:1200,margin:'0 auto',padding:'28px 32px'}}>
+      {page==='주문 센터' && <OrderCenterPage/>}
+      {page==='신규 의뢰' && <NewRequestPage/>}
+      {page==='파일 교정' && <ProofPage/>}
+      {page==='완성본 수령' && <DeliveryPage/>}
+    </div>
+  </div>;
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>물류센터 컨베이어 장비 제어 시스템 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:#0F172A;color:#F1F5F9;overflow-x:hidden;}
+::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:#1E293B;}::-webkit-scrollbar-thumb{background:#475569;border-radius:3px;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes glow{0%,100%{box-shadow:0 0 8px rgba(52,211,153,.4)}50%{box-shadow:0 0 16px rgba(52,211,153,.7)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo}=React;
+const {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,LineChart,Line,CartesianGrid,Legend,PieChart,Pie,Cell,AreaChart,Area}=Recharts;
+
+const C={primary:'#059669',primaryLight:'#064E3B',accent:'#34D399',bg:'#0F172A',surface:'#1E293B',surfaceLight:'#334155',text:'#F1F5F9',textSec:'#94A3B8',border:'#334155',success:'#34D399',successBg:'#064E3B',warning:'#FBBF24',warningBg:'#78350F',danger:'#F87171',dangerBg:'#7F1D1D',info:'#60A5FA',infoBg:'#1E3A5F'};
+
+// ── Data ──
+const conveyors=[
+  {id:1,name:'라인 A (입고)',status:'ACTIVE',speed:2.4,pkgs:1245,errors:1,uptime:'99.2%',temp:'42°C'},
+  {id:2,name:'라인 B (분류)',status:'ACTIVE',speed:3.1,pkgs:1876,errors:0,uptime:'99.8%',temp:'38°C'},
+  {id:3,name:'라인 C (출고)',status:'FAULT',speed:0,pkgs:890,errors:8,uptime:'87.5%',temp:'65°C'},
+  {id:4,name:'라인 D (반품)',status:'IDLE',speed:0,pkgs:0,errors:0,uptime:'100%',temp:'24°C'},
+  {id:5,name:'스캐너 A',status:'ACTIVE',speed:null,pkgs:3121,errors:2,uptime:'98.7%',temp:'-'},
+  {id:6,name:'중량센서 A',status:'ACTIVE',speed:null,pkgs:3118,errors:3,uptime:'98.5%',temp:'-'}
+];
+const deviceStatus={IDLE:{color:C.textSec,bg:C.surfaceLight,label:'대기'},ACTIVE:{color:C.success,bg:C.successBg,label:'가동중'},FAULT:{color:C.danger,bg:C.dangerBg,label:'장애'},MAINTENANCE:{color:C.warning,bg:C.warningBg,label:'점검중'}};
+const fsmTransitions=[{from:'IDLE',to:'ACTIVE',label:'가동 시작'},{from:'ACTIVE',to:'FAULT',label:'오류 감지'},{from:'ACTIVE',to:'IDLE',label:'가동 중지'},{from:'FAULT',to:'MAINTENANCE',label:'점검 등록'},{from:'MAINTENANCE',to:'IDLE',label:'점검 완료'}];
+
+const realtimeData=[
+  {t:'14:25',a:82,b:95,c:45,d:0},{t:'14:26',a:85,b:92,c:42,d:0},{t:'14:27',a:88,b:97,c:38,d:0},
+  {t:'14:28',a:84,b:94,c:30,d:0},{t:'14:29',a:90,b:98,c:15,d:0},{t:'14:30',a:86,b:93,c:0,d:0}
+];
+
+const offlineQueue=[
+  {id:1,event:'SCAN',device:'스캐너 A',payload:'PKG-2025-04521',status:'대기',retries:0,created:'14:28:30'},
+  {id:2,event:'WEIGHT',device:'중량센서 A',payload:'1.25kg',status:'전송중',retries:1,created:'14:28:32'},
+  {id:3,event:'SCAN',device:'스캐너 A',payload:'PKG-2025-04522',status:'실패',retries:3,created:'14:25:10'},
+  {id:4,event:'SCAN',device:'스캐너 A',payload:'PKG-2025-04520',status:'완료',retries:0,created:'14:24:50'}
+];
+const queueColor={대기:{c:C.info,bg:C.infoBg},전송중:{c:C.warning,bg:C.warningBg},실패:{c:C.danger,bg:C.dangerBg},완료:{c:C.success,bg:C.successBg}};
+
+const hourlyStats=[
+  {hour:'08',pkgs:420,defect:3},{hour:'09',pkgs:580,defect:5},{hour:'10',pkgs:620,defect:2},
+  {hour:'11',pkgs:590,defect:4},{hour:'12',pkgs:210,defect:1},{hour:'13',pkgs:610,defect:3},{hour:'14',pkgs:380,defect:2}
+];
+const lineMix=[{name:'입고',value:31},{name:'분류',value:42},{name:'출고',value:22},{name:'반품',value:5}];
+const pieColors=[C.success,C.info,C.warning,C.textSec];
+
+function Badge({children,color=C.success,bg=C.successBg}){
+  return <span style={{display:'inline-block',padding:'3px 10px',borderRadius:12,fontSize:11,fontWeight:600,color,background:bg}}>{children}</span>;
+}
+function StatCard({icon,label,value,sub,color=C.success}){
+  return <div style={{background:C.surface,borderRadius:10,padding:'18px 22px',border:`1px solid ${C.border}`,animation:'fadeIn .4s'}}>
+    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+      <span style={{fontSize:18}}>{icon}</span><span style={{fontSize:12,color:C.textSec}}>{label}</span>
+    </div>
+    <div style={{fontSize:26,fontWeight:800,color}}>{value}</div>
+    {sub&&<div style={{fontSize:11,color:C.textSec,marginTop:4}}>{sub}</div>}
+  </div>;
+}
+function StatusDot({status}){
+  const s=deviceStatus[status]||{};
+  return <span style={{display:'inline-block',width:10,height:10,borderRadius:'50%',background:s.color,animation:status==='ACTIVE'?'glow 2s infinite':'none'}}/>;
+}
+
+// ── Pages ──
+function MonitorPage(){
+  const active=conveyors.filter(c=>c.status==='ACTIVE').length;
+  const totalPkgs=conveyors.reduce((s,c)=>s+c.pkgs,0);
+  return <div style={{animation:'fadeIn .4s'}}>
+    <div style={{background:`linear-gradient(135deg,${C.primaryLight} 0%,${C.bg} 100%)`,borderRadius:16,padding:'36px 40px',marginBottom:28,border:`1px solid ${C.border}`}}>
+      <h1 style={{fontSize:28,fontWeight:800,marginBottom:8}}>컨베이어 라인 모니터링</h1>
+      <p style={{fontSize:15,opacity:.7,marginBottom:24}}>6개 장비 실시간 가동 현황을 확인합니다</p>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12}}>
+        <StatCard icon="🏭" label="가동중" value={`${active}/${conveyors.length}`} color={C.success}/>
+        <StatCard icon="📦" label="오늘 처리량" value={totalPkgs.toLocaleString()} color={C.accent}/>
+        <StatCard icon="⚠️" label="장애" value={`${conveyors.filter(c=>c.status==='FAULT').length}건`} color={C.danger}/>
+        <StatCard icon="📡" label="오프라인 큐" value={`${offlineQueue.filter(q=>q.status!=='완료').length}건`} color={C.warning}/>
+      </div>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginBottom:24}}>
+      {conveyors.slice(0,4).map(c=>{const ds=deviceStatus[c.status]||{};return <div key={c.id} style={{background:C.surface,borderRadius:10,padding:20,border:`1px solid ${c.status==='FAULT'?C.danger:C.border}`,animation:c.status==='FAULT'?'pulse 2s infinite':'none'}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+          <div style={{display:'flex',alignItems:'center',gap:8}}><StatusDot status={c.status}/><span style={{fontWeight:700}}>{c.name}</span></div>
+          <Badge color={ds.color} bg={ds.bg}>{ds.label}</Badge>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+          <div><div style={{fontSize:11,color:C.textSec}}>처리량</div><div style={{fontSize:18,fontWeight:800}}>{c.pkgs.toLocaleString()}</div></div>
+          <div><div style={{fontSize:11,color:C.textSec}}>속도</div><div style={{fontSize:18,fontWeight:800}}>{c.speed?`${c.speed}m/s`:'-'}</div></div>
+          <div><div style={{fontSize:11,color:C.textSec}}>가동률</div><div style={{fontSize:14,fontWeight:600,color:parseFloat(c.uptime)<90?C.danger:C.success}}>{c.uptime}</div></div>
+          <div><div style={{fontSize:11,color:C.textSec}}>온도</div><div style={{fontSize:14,fontWeight:600,color:parseInt(c.temp)>60?C.danger:C.text}}>{c.temp}</div></div>
+        </div>
+      </div>})}
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:16}}>
+      <div style={{background:C.surface,borderRadius:10,padding:24,border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>라인별 처리량 (실시간)</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <LineChart data={realtimeData}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="t" tick={{fontSize:11,fill:C.textSec}}/><YAxis tick={{fontSize:11,fill:C.textSec}}/><Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8}}/><Legend iconType="circle" wrapperStyle={{fontSize:11}}/><Line type="monotone" dataKey="a" name="라인A" stroke={C.success} strokeWidth={2}/><Line type="monotone" dataKey="b" name="라인B" stroke={C.info} strokeWidth={2}/><Line type="monotone" dataKey="c" name="라인C" stroke={C.danger} strokeWidth={2}/></LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{background:C.surface,borderRadius:10,padding:24,border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>라인별 비율</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <PieChart><Pie data={lineMix} cx="50%" cy="50%" innerRadius={45} outerRadius={80} dataKey="value" label={({name,value})=>`${name} ${value}%`} labelLine={false}>{lineMix.map((_,i)=><Cell key={i} fill={pieColors[i]}/>)}</Pie><Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8}}/></PieChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  </div>;
+}
+
+function DeviceStatusPage(){
+  const [selected,setSelected]=useState(null);
+  return <div style={{animation:'fadeIn .4s'}}>
+    <div style={{background:`linear-gradient(135deg,#1E3A5F 0%,${C.bg} 100%)`,borderRadius:16,padding:'32px 40px',marginBottom:28,border:`1px solid ${C.border}`}}>
+      <h1 style={{fontSize:28,fontWeight:800,marginBottom:6}}>장비 상태 전이 관리</h1>
+      <p style={{fontSize:15,opacity:.7}}>FSM 기반 장비 상태 추적 및 이력 관리</p>
+    </div>
+    <div style={{background:C.surface,borderRadius:10,padding:24,border:`1px solid ${C.border}`,marginBottom:24}}>
+      <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>상태 전이 다이어그램</h3>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:12,flexWrap:'wrap',padding:'16px 0'}}>
+        {Object.entries(deviceStatus).map(([key,val],i)=><React.Fragment key={key}>
+          <div style={{textAlign:'center',padding:'12px 20px',borderRadius:10,background:val.bg,border:`2px solid ${val.color}`,minWidth:90}}>
+            <div style={{fontSize:14,fontWeight:700,color:val.color}}>{val.label}</div>
+            <div style={{fontSize:10,color:C.textSec,marginTop:2}}>{key}</div>
+          </div>
+          {i<3&&<div style={{color:C.textSec,fontSize:18}}>→</div>}
+        </React.Fragment>)}
+      </div>
+      <div style={{display:'flex',gap:8,justifyContent:'center',flexWrap:'wrap'}}>
+        {fsmTransitions.map((t,i)=><span key={i} style={{background:C.surfaceLight,borderRadius:4,padding:'4px 10px',fontSize:10,color:C.textSec}}>{t.from} → {t.to}: {t.label}</span>)}
+      </div>
+    </div>
+    <div style={{background:C.surface,borderRadius:10,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+      <table style={{width:'100%',borderCollapse:'collapse'}}>
+        <thead><tr style={{borderBottom:`2px solid ${C.border}`}}>
+          {['장비','상태','처리량','오류','가동률','온도','액션'].map(h=><th key={h} style={{padding:'10px 14px',textAlign:'left',fontSize:11,fontWeight:700,color:C.textSec}}>{h}</th>)}
+        </tr></thead>
+        <tbody>{conveyors.map(c=>{const ds=deviceStatus[c.status]||{};return <tr key={c.id} onClick={()=>setSelected(c)} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background .15s'}} onMouseEnter={e=>e.currentTarget.style.background=C.surfaceLight} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+          <td style={{padding:'10px 14px'}}><div style={{display:'flex',alignItems:'center',gap:8}}><StatusDot status={c.status}/><span style={{fontWeight:600}}>{c.name}</span></div></td>
+          <td style={{padding:'10px 14px'}}><Badge color={ds.color} bg={ds.bg}>{ds.label}</Badge></td>
+          <td style={{padding:'10px 14px',fontSize:13}}>{c.pkgs.toLocaleString()}</td>
+          <td style={{padding:'10px 14px',fontSize:13,color:c.errors>0?C.danger:C.success}}>{c.errors}</td>
+          <td style={{padding:'10px 14px',fontSize:13}}>{c.uptime}</td>
+          <td style={{padding:'10px 14px',fontSize:13}}>{c.temp}</td>
+          <td style={{padding:'10px 14px'}}>
+            {c.status==='FAULT'&&<button style={{padding:'4px 12px',borderRadius:6,background:C.warning,color:'#000',border:'none',fontSize:11,fontWeight:600,cursor:'pointer'}}>점검 등록</button>}
+            {c.status==='IDLE'&&<button style={{padding:'4px 12px',borderRadius:6,background:C.success,color:'#000',border:'none',fontSize:11,fontWeight:600,cursor:'pointer'}}>가동 시작</button>}
+          </td>
+        </tr>})}</tbody>
+      </table>
+    </div>
+  </div>;
+}
+
+function OfflineQueuePage(){
+  return <div style={{animation:'fadeIn .4s'}}>
+    <div style={{background:`linear-gradient(135deg,${C.warningBg} 0%,${C.bg} 100%)`,borderRadius:16,padding:'32px 40px',marginBottom:28,border:`1px solid ${C.border}`}}>
+      <h1 style={{fontSize:28,fontWeight:800,marginBottom:6}}>오프라인 큐 및 동기화</h1>
+      <p style={{fontSize:15,opacity:.7}}>네트워크 단절 시 FIFO 큐 관리 및 동기화 현황</p>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:24}}>
+      <StatCard icon="📡" label="네트워크" value="온라인" color={C.success}/>
+      <StatCard icon="📋" label="큐 대기" value={`${offlineQueue.filter(q=>q.status==='대기'||q.status==='전송중').length}건`} color={C.warning}/>
+      <StatCard icon="❌" label="실패" value={`${offlineQueue.filter(q=>q.status==='실패').length}건`} color={C.danger}/>
+      <StatCard icon="✅" label="완료" value={`${offlineQueue.filter(q=>q.status==='완료').length}건`} color={C.success}/>
+    </div>
+    <div style={{background:C.surface,borderRadius:10,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+      <table style={{width:'100%',borderCollapse:'collapse'}}>
+        <thead><tr style={{borderBottom:`2px solid ${C.border}`}}>
+          {['#','이벤트','장비','페이로드','상태','재시도','시각'].map(h=><th key={h} style={{padding:'10px 14px',textAlign:'left',fontSize:11,fontWeight:700,color:C.textSec}}>{h}</th>)}
+        </tr></thead>
+        <tbody>{offlineQueue.map(q=>{const qc=queueColor[q.status]||{};return <tr key={q.id} style={{borderBottom:`1px solid ${C.border}`}}>
+          <td style={{padding:'10px 14px',fontSize:12,fontWeight:600}}>{q.id}</td>
+          <td style={{padding:'10px 14px'}}><span style={{background:C.surfaceLight,padding:'2px 8px',borderRadius:4,fontSize:11,fontFamily:'monospace'}}>{q.event}</span></td>
+          <td style={{padding:'10px 14px',fontSize:12}}>{q.device}</td>
+          <td style={{padding:'10px 14px',fontSize:12,fontFamily:'monospace'}}>{q.payload}</td>
+          <td style={{padding:'10px 14px'}}><Badge color={qc.c} bg={qc.bg}>{q.status}</Badge></td>
+          <td style={{padding:'10px 14px',fontSize:12,color:q.retries>=3?C.danger:C.textSec}}>{q.retries}/3</td>
+          <td style={{padding:'10px 14px',fontSize:12,fontFamily:'monospace'}}>{q.created}</td>
+        </tr>})}</tbody>
+      </table>
+    </div>
+  </div>;
+}
+
+function AnalyticsPage(){
+  return <div style={{animation:'fadeIn .4s'}}>
+    <div style={{background:`linear-gradient(135deg,${C.successBg} 0%,${C.bg} 100%)`,borderRadius:16,padding:'32px 40px',marginBottom:28,border:`1px solid ${C.border}`}}>
+      <h1 style={{fontSize:28,fontWeight:800,marginBottom:6}}>처리량 분석 리포트</h1>
+      <p style={{fontSize:15,opacity:.7}}>시간대별 처리량, 불량률, 가동률 분석</p>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:24}}>
+      <div style={{background:C.surface,borderRadius:10,padding:24,border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>시간대별 처리량</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={hourlyStats}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="hour" tick={{fontSize:11,fill:C.textSec}} tickFormatter={v=>`${v}시`}/><YAxis tick={{fontSize:11,fill:C.textSec}}/><Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8}}/><Bar dataKey="pkgs" name="처리량" fill={C.success} radius={[4,4,0,0]}/></BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{background:C.surface,borderRadius:10,padding:24,border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>시간대별 불량 건수</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={hourlyStats}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="hour" tick={{fontSize:11,fill:C.textSec}} tickFormatter={v=>`${v}시`}/><YAxis tick={{fontSize:11,fill:C.textSec}}/><Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8}}/><Bar dataKey="defect" name="불량" fill={C.danger} radius={[4,4,0,0]}/></BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+    <div style={{background:C.surface,borderRadius:10,padding:24,border:`1px solid ${C.border}`}}>
+      <div style={{display:'flex',justifyContent:'space-between',marginBottom:16}}>
+        <h3 style={{fontSize:15,fontWeight:700}}>라인별 성과 요약</h3>
+        <button style={{padding:'6px 14px',borderRadius:6,background:C.primary,color:'#fff',border:'none',fontSize:12,fontWeight:600,cursor:'pointer'}}>CSV 내보내기</button>
+      </div>
+      <table style={{width:'100%',borderCollapse:'collapse'}}>
+        <thead><tr style={{borderBottom:`2px solid ${C.border}`}}>
+          {['라인','처리량','불량','불량률','가동률','평균 속도'].map(h=><th key={h} style={{padding:'10px 14px',textAlign:'left',fontSize:11,fontWeight:700,color:C.textSec}}>{h}</th>)}
+        </tr></thead>
+        <tbody>{conveyors.filter(c=>c.speed!==null).map(c=><tr key={c.id} style={{borderBottom:`1px solid ${C.border}`}}>
+          <td style={{padding:'10px 14px',fontWeight:600,fontSize:13}}>{c.name}</td>
+          <td style={{padding:'10px 14px',fontSize:13}}>{c.pkgs.toLocaleString()}</td>
+          <td style={{padding:'10px 14px',fontSize:13,color:c.errors>0?C.danger:C.success}}>{c.errors}</td>
+          <td style={{padding:'10px 14px',fontSize:13}}>{c.pkgs>0?(c.errors/c.pkgs*100).toFixed(2):'0.00'}%</td>
+          <td style={{padding:'10px 14px',fontSize:13}}>{c.uptime}</td>
+          <td style={{padding:'10px 14px',fontSize:13}}>{c.speed?`${c.speed}m/s`:'-'}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+  </div>;
+}
+
+// ── App ──
+function App(){
+  const [page,setPage]=useState('컨베이어 라인 모니터링');
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{setTimeout(()=>setLoading(false),500);},[]);
+  const tabs=[
+    {name:'컨베이어 라인 모니터링',icon:'🏭'},
+    {name:'장비 상태 전이 관리',icon:'🔧'},
+    {name:'오프라인 큐 및 동기화',icon:'📡'},
+    {name:'처리량 분석 리포트',icon:'📊'}
+  ];
+  if(loading)return <div style={{minHeight:'100vh',background:C.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{textAlign:'center'}}><div style={{fontSize:48,marginBottom:12}}>🏭</div><div style={{color:C.textSec}}>로딩 중...</div></div></div>;
+  return <div style={{minHeight:'100vh'}}>
+    <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,position:'sticky',top:0,zIndex:100}}>
+      <div style={{maxWidth:1200,margin:'0 auto',padding:'0 32px'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',height:60}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <div style={{width:34,height:34,borderRadius:8,background:`linear-gradient(135deg,${C.primary},${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>🏭</div>
+            <span style={{fontWeight:800,fontSize:17}}>ConveyorHub</span>
+          </div>
+          <div style={{display:'flex',gap:4}}>
+            {tabs.map(t=><button key={t.name} title={t.name} onClick={()=>setPage(t.name)} style={{padding:'8px 16px',borderRadius:8,border:'none',background:page===t.name?C.primaryLight:'transparent',color:page===t.name?C.accent:C.textSec,fontSize:13,fontWeight:page===t.name?700:500,cursor:'pointer',transition:'all .15s',display:'flex',alignItems:'center',gap:6}}>
+              <span style={{fontSize:14}}>{t.icon}</span>{t.name}
+            </button>)}
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <StatusDot status="ACTIVE"/><span style={{fontSize:12,color:C.success}}>실시간</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style={{maxWidth:1200,margin:'0 auto',padding:'28px 32px'}}>
+      {page==='컨베이어 라인 모니터링'&&<MonitorPage/>}
+      {page==='장비 상태 전이 관리'&&<DeviceStatusPage/>}
+      {page==='오프라인 큐 및 동기화'&&<OfflineQueuePage/>}
+      {page==='처리량 분석 리포트'&&<AnalyticsPage/>}
+    </div>
+  </div>;
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
