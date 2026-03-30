@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>스마트 현장 점검 플랫폼 — 실시간 현황판 & 분석</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" />
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Pretendard', -apple-system, sans-serif; background: #F0FDF4; color: #064E3B; }
+#root { display: flex; height: 100vh; overflow: hidden; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { AreaChart, Area, BarChart, Bar, ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } = Recharts;
+
+const C = {
+  primary: '#059669', secondary: '#064E3B', accent: '#34D399',
+  bg: '#F0FDF4', surface: '#FFFFFF', border: '#A7F3D0',
+  text: '#064E3B', textSec: '#4B7A65',
+  warning: '#D97706', danger: '#DC2626', info: '#0891B2',
+};
+
+// Heatmap data (7 days x 24 hours, but display 7x12 for space)
+const heatmapData = Array.from({ length: 7 }, (_, day) =>
+  Array.from({ length: 12 }, (_, hour) => ({
+    day, hour: hour * 2,
+    value: Math.max(0, Math.round(Math.random() * 8 + (day < 5 && hour >= 4 && hour <= 8 ? 4 : 0))),
+  }))
+);
+
+const dayLabels = ['월', '화', '수', '목', '금', '토', '일'];
+const hourLabels = Array.from({ length: 12 }, (_, i) => `${i * 2}시`);
+
+const trendData = [
+  { month: '10월', completed: 58, target: 65 },
+  { month: '11월', completed: 62, target: 65 },
+  { month: '12월', completed: 71, target: 70 },
+  { month: '1월', completed: 65, target: 70 },
+  { month: '2월', completed: 78, target: 75 },
+  { month: '3월', completed: 82, target: 80 },
+];
+
+const workerRanking = [
+  { rank: 1, name: '최민준', region: '강남', count: 42, rate: 98 },
+  { rank: 2, name: '정다은', region: '마포', count: 38, rate: 95 },
+  { rank: 3, name: '오준혁', region: '용산', count: 36, rate: 94 },
+  { rank: 4, name: '한지수', region: '마포', count: 33, rate: 91 },
+  { rank: 5, name: '이소연', region: '강남', count: 29, rate: 88 },
+];
+
+const alertRules = [
+  { id: 1, name: '점검 미완료 72시간 초과', condition: '예정 점검 후 72시간 경과 & 완료 미확인', channel: 'FCM + 이메일', severity: '긴급', active: true, triggered: 3 },
+  { id: 2, name: '동일 부스 이상 3회 반복', condition: '30일 내 동일 부스 수리 접수 3건 이상', channel: 'FCM', severity: '경고', active: true, triggered: 1 },
+  { id: 3, name: '작업자 미접속 3일', condition: '담당 작업자 앱 로그인 3일 이상 없음', channel: '이메일', severity: '정보', active: true, triggered: 0 },
+  { id: 4, name: '지역 이상 집중 발생', condition: '7일 내 동일 지역 이상 5건 이상', channel: 'FCM + 이메일', severity: '경고', active: false, triggered: 0 },
+];
+
+const alertHistory = [
+  { time: '09:42', rule: '점검 미완료 72시간 초과', target: '강남역 1번 출구', channel: 'FCM', sent: true },
+  { time: '11:15', rule: '점검 미완료 72시간 초과', target: '선릉역 2번 출구', channel: 'FCM + 이메일', sent: true },
+  { time: '14:30', rule: '동일 부스 이상 3회 반복', target: '홍대입구역 9번 출구', channel: 'FCM', sent: true },
+  { time: '어제 16:20', rule: '점검 미완료 72시간 초과', target: '합정역 7번 출구', channel: '이메일', sent: true },
+];
+
+const severityColors = { '긴급': C.danger, '경고': C.warning, '정보': C.info };
+
+function Badge({ label, color }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', padding: '2px 10px',
+      borderRadius: 99, fontSize: 12, fontWeight: 600,
+      background: color + '20', color,
+    }}>{label}</span>
+  );
+}
+
+// Map visualization (simulated with positioned dots)
+const boothLocations = [
+  { id: 'SB-001', name: '강남역', x: 62, y: 58, status: '정상' },
+  { id: 'SB-002', name: '선릉역', x: 68, y: 54, status: '점검필요' },
+  { id: 'SB-003', name: '역삼역', x: 65, y: 57, status: '수리중' },
+  { id: 'SB-004', name: '삼성역', x: 71, y: 52, status: '정상' },
+  { id: 'SB-005', name: '홍대', x: 34, y: 40, status: '정상' },
+  { id: 'SB-006', name: '합정', x: 32, y: 43, status: '점검필요' },
+  { id: 'SB-007', name: '신촌', x: 38, y: 38, status: '정상' },
+  { id: 'SB-008', name: '이태원', x: 52, y: 55, status: '정상' },
+  { id: 'SB-009', name: '광화문', x: 47, y: 38, status: '정상' },
+  { id: 'SB-010', name: '종로', x: 49, y: 36, status: '정상' },
+];
+
+const statusMapColors = { '정상': C.primary, '점검필요': C.warning, '수리중': C.danger };
+
+function Sidebar({ active, onNav }) {
+  const nav = [
+    { key: 'main', label: '실시간 현황', icon: '🗺' },
+    { key: 'analytics', label: '통계 분석', icon: '📊' },
+    { key: 'alert-rules', label: '알림 관리', icon: '🔔' },
+    { key: 'report-export', label: '리포트', icon: '📄' },
+  ];
+
+  return (
+    <div style={{ width: 220, background: C.secondary, display: 'flex', flexDirection: 'column', height: '100vh', flexShrink: 0 }}>
+      <div style={{ padding: '24px 20px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', letterSpacing: 2, marginBottom: 6 }}>SMARTCHECK</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: '#fff' }}>스마트 점검 플랫폼</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
+          <div style={{ width: 6, height: 6, borderRadius: 99, background: C.accent }} />
+          <span style={{ fontSize: 11, color: C.accent }}>SSE 연결됨</span>
+        </div>
+      </div>
+      <nav style={{ flex: 1, padding: '16px 12px' }}>
+        {nav.map(item => (
+          <button key={item.key} title={item.label} onClick={() => onNav(item.key)} style={{
+            display: 'flex', alignItems: 'center', gap: 12, width: '100%',
+            padding: '11px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
+            marginBottom: 4, fontSize: 14, fontWeight: active === item.key ? 600 : 400,
+            background: active === item.key ? 'rgba(52,211,153,0.2)' : 'transparent',
+            color: active === item.key ? C.accent : 'rgba(255,255,255,0.7)',
+          }}>
+            <span style={{ fontSize: 16 }}>{item.icon}</span>
+            {item.label}
+          </button>
+        ))}
+      </nav>
+      <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)' }}>관리자</div>
+        <div style={{ fontSize: 14, color: '#fff', fontWeight: 600 }}>김운영자</div>
+      </div>
+    </div>
+  );
+}
+
+function RealtimeMap() {
+  const [selected, setSelected] = useState(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const t = setInterval(() => setTick(p => p + 1), 3000);
+    return () => clearInterval(t);
+  }, []);
+
+  const statusSummary = { '정상': 7, '점검필요': 2, '수리중': 1 };
+
+  return (
+    <div style={{ padding: 32 }}>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 700 }}>실시간 현황판</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.accent + '20', padding: '4px 12px', borderRadius: 99 }}>
+            <div style={{ width: 6, height: 6, borderRadius: 99, background: C.accent, animation: 'pulse 1s infinite' }} />
+            <span style={{ fontSize: 12, color: C.primary, fontWeight: 600 }}>LIVE</span>
+          </div>
+        </div>
+        <p style={{ fontSize: 13, color: C.textSec, marginTop: 4 }}>Kakao Maps + SSE 실시간 상태 푸시 구조</p>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 20 }}>
+        {[['정상', '7', C.primary], ['점검필요', '2', C.warning], ['수리중', '1', C.danger]].map(([label, val, color]) => (
+          <div key={label} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+            <div style={{ width: 12, height: 12, borderRadius: 99, background: color }} />
+            <div>
+              <div style={{ fontSize: 12, color: C.textSec }}>{label}</div>
+              <div style={{ fontSize: 24, fontWeight: 700 }}>{val}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20 }}>
+        {/* Map simulation */}
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', position: 'relative' }}>
+          <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>서울 흡연부스 위치 현황</span>
+            <span style={{ fontSize: 12, color: C.textSec }}>Kakao Maps API</span>
+          </div>
+          <div style={{ position: 'relative', height: 360, background: 'linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 50%, #a5d6a7 100%)' }}>
+            {/* Grid lines for map feel */}
+            {Array.from({length: 8}).map((_, i) => (
+              <div key={'h'+i} style={{ position: 'absolute', left: 0, right: 0, top: `${(i+1)*12.5}%`, height: 1, background: 'rgba(0,100,0,0.08)' }} />
+            ))}
+            {Array.from({length: 8}).map((_, i) => (
+              <div key={'v'+i} style={{ position: 'absolute', top: 0, bottom: 0, left: `${(i+1)*12.5}%`, width: 1, background: 'rgba(0,100,0,0.08)' }} />
+            ))}
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ fontSize: 11, color: 'rgba(0,80,0,0.3)', letterSpacing: 2 }}>서울특별시</div>
+            </div>
+            {boothLocations.map(b => (
+              <div
+                key={b.id}
+                onClick={() => setSelected(selected === b.id ? null : b.id)}
+                style={{
+                  position: 'absolute',
+                  left: `${b.x}%`, top: `${b.y}%`,
+                  transform: 'translate(-50%, -50%)',
+                  cursor: 'pointer', zIndex: selected === b.id ? 10 : 1,
+                }}
+              >
+                <div style={{
+                  width: selected === b.id ? 22 : 16, height: selected === b.id ? 22 : 16,
+                  borderRadius: 99, background: statusMapColors[b.status],
+                  border: `3px solid ${C.surface}`, boxShadow: `0 2px 8px ${statusMapColors[b.status]}60`,
+                  transition: 'all 0.2s',
+                }} />
+                {selected === b.id && (
+                  <div style={{
+                    position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)',
+                    background: C.secondary, color: '#fff', borderRadius: 6, padding: '6px 10px',
+                    fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', marginBottom: 4,
+                  }}>
+                    {b.name} · <span style={{ color: statusMapColors[b.status] }}>{b.status}</span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div style={{ padding: '12px 20px', borderTop: `1px solid ${C.border}`, display: 'flex', gap: 16 }}>
+            {Object.entries(statusMapColors).map(([label, color]) => (
+              <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.textSec }}>
+                <div style={{ width: 10, height: 10, borderRadius: 99, background: color }} />
+                {label}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>실시간 이벤트</div>
+            {[
+              { time: '방금', event: '최민준 → SB-004 점검 완료', type: 'success' },
+              { time: '3분 전', event: 'SB-002 점검 요청 알림 발송', type: 'warning' },
+              { time: '12분 전', event: '정다은 → SB-005 점검 시작', type: 'info' },
+              { time: '25분 전', event: 'SB-003 AS 기사 배치 완료', type: 'info' },
+              { time: '1시간 전', event: '김현수 → SB-001 점검 완료', type: 'success' },
+            ].map((ev, i) => (
+              <div key={i} style={{ display: 'flex', gap: 10, padding: '8px 0', borderBottom: i < 4 ? `1px solid ${C.border}` : 'none' }}>
+                <div style={{ width: 8, height: 8, borderRadius: 99, flexShrink: 0, marginTop: 4, background: ev.type === 'success' ? C.primary : ev.type === 'warning' ? C.warning : C.info }} />
+                <div>
+                  <div style={{ fontSize: 12 }}>{ev.event}</div>
+                  <div style={{ fontSize: 11, color: C.textSec }}>{ev.time}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: C.primary + '15', border: `1px solid ${C.border}`, borderRadius: 12, padding: 16 }}>
+            <div style={{ fontSize: 12, color: C.textSec, marginBottom: 4 }}>SSE 기술 구조</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 6 }}>Node.js SSE → 클라이언트 실시간 푸시</div>
+            <div style={{ fontSize: 12, color: C.textSec }}>점검 완료/이상 발생 시 서버에서 EventSource로 상태 변경 이벤트 푸시 → 지도 마커 실시간 업데이트</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Analytics() {
+  // Heatmap: day x hour grid
+  const maxVal = 12;
+
+  return (
+    <div style={{ padding: 32 }}>
+      <div style={{ marginBottom: 28 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700 }}>통계 분석</h1>
+        <p style={{ fontSize: 13, color: C.textSec, marginTop: 4 }}>PostgreSQL Materialized View + D3.js 히트맵</p>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 20 }}>월별 점검 완료 추이 (목표 vs 실적)</div>
+          <ResponsiveContainer width="100%" height={180}>
+            <ComposedChart data={trendData}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="month" tick={{ fontSize: 12, fill: C.textSec }} />
+              <YAxis tick={{ fontSize: 12, fill: C.textSec }} />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey="completed" fill={C.primary} name="완료 건수" radius={[4,4,0,0]} barSize={24} />
+              <Line type="monotone" dataKey="target" stroke={C.warning} strokeWidth={2} strokeDasharray="5 5" name="목표 건수" dot={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>작업자별 완료 건수 (이번 달)</div>
+          <div>
+            {workerRanking.map((w, i) => (
+              <div key={w.rank} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                <div style={{
+                  width: 24, height: 24, borderRadius: 99, flexShrink: 0,
+                  background: i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : C.border,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700,
+                  color: i < 3 ? '#fff' : C.textSec,
+                }}>{w.rank}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{w.name}</span>
+                    <span style={{ fontSize: 13, color: C.primary, fontWeight: 700 }}>{w.count}건</span>
+                  </div>
+                  <div style={{ height: 5, background: C.bg, borderRadius: 99, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${(w.count / 42) * 100}%`, background: i === 0 ? C.primary : C.accent, borderRadius: 99 }} />
+                  </div>
+                </div>
+                <span style={{ fontSize: 12, color: C.textSec, width: 40, textAlign: 'right' }}>{w.rate}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>시간대별 점검 활동 히트맵 (D3.js 시각화)</div>
+        <div style={{ overflowX: 'auto' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '40px repeat(12, 1fr)', gap: 3, minWidth: 600 }}>
+            <div />
+            {hourLabels.map(h => (
+              <div key={h} style={{ fontSize: 10, color: C.textSec, textAlign: 'center' }}>{h}</div>
+            ))}
+            {heatmapData.map((row, di) => (
+              <React.Fragment key={di}>
+                <div style={{ fontSize: 12, color: C.textSec, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: 6 }}>{dayLabels[di]}</div>
+                {row.map((cell, hi) => {
+                  const intensity = cell.value / maxVal;
+                  const alpha = Math.round(intensity * 200 + 30);
+                  const bg = `rgba(5, 150, 105, ${intensity * 0.85 + 0.1})`;
+                  return (
+                    <div
+                      key={hi}
+                      title={`${dayLabels[di]} ${cell.hour}시: ${cell.value}건`}
+                      style={{
+                        height: 28, borderRadius: 4, background: bg,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 10, color: intensity > 0.5 ? '#fff' : C.textSec,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {cell.value > 0 ? cell.value : ''}
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+            <span style={{ fontSize: 12, color: C.textSec }}>적음</span>
+            {[0.1, 0.3, 0.5, 0.7, 0.9].map((v, i) => (
+              <div key={i} style={{ width: 20, height: 14, borderRadius: 3, background: `rgba(5,150,105,${v})` }} />
+            ))}
+            <span style={{ fontSize: 12, color: C.textSec }}>많음</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AlertRules() {
+  const [rules, setRules] = useState(alertRules);
+  const [showBuilder, setShowBuilder] = useState(false);
+
+  const toggle = (id) => setRules(prev => prev.map(r => r.id === id ? { ...r, active: !r.active } : r));
+
+  return (
+    <div style={{ padding: 32 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 28 }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 700 }}>알림 관리</h1>
+          <p style={{ fontSize: 13, color: C.textSec, marginTop: 4 }}>node-cron 규칙 평가 스케줄러 + FCM/이메일 복합 채널</p>
+        </div>
+        <button onClick={() => setShowBuilder(true)} style={{
+          padding: '9px 20px', borderRadius: 8, border: 'none',
+          background: C.primary, color: '#fff', fontWeight: 600, cursor: 'pointer', fontSize: 13,
+        }}>+ 규칙 추가</button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 24 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, color: C.textSec }}>등록된 알림 규칙 ({rules.length}개)</div>
+          {rules.map(rule => (
+            <div key={rule.id} style={{
+              background: C.surface, border: `1px solid ${rule.active ? C.border : '#E5E7EB'}`,
+              borderRadius: 12, padding: '20px 24px', marginBottom: 12,
+              boxShadow: '0 1px 4px rgba(0,0,0,0.06)', opacity: rule.active ? 1 : 0.6,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                    <span style={{ fontSize: 15, fontWeight: 700 }}>{rule.name}</span>
+                    <Badge label={rule.severity} color={severityColors[rule.severity]} />
+                  </div>
+                  <div style={{ fontSize: 13, color: C.textSec, marginBottom: 8 }}>{rule.condition}</div>
+                  <div style={{ display: 'flex', gap: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: C.textSec }}>
+                      <span>📣</span> {rule.channel}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: rule.triggered > 0 ? C.warning : C.textSec }}>
+                      <span>⚡</span> 이번 달 발송 {rule.triggered}건
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginLeft: 16 }}>
+                  <div
+                    onClick={() => toggle(rule.id)}
+                    style={{
+                      width: 44, height: 24, borderRadius: 99, cursor: 'pointer',
+                      background: rule.active ? C.primary : '#D1D5DB',
+                      position: 'relative', transition: 'background 0.2s',
+                    }}
+                  >
+                    <div style={{
+                      position: 'absolute', width: 18, height: 18, borderRadius: 99, background: '#fff',
+                      top: 3, left: rule.active ? 23 : 3, transition: 'left 0.2s',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                    }} />
+                  </div>
+                  <button style={{ padding: '5px 12px', borderRadius: 6, border: `1px solid ${C.border}`, background: C.surface, fontSize: 12, cursor: 'pointer' }}>수정</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>최근 알림 발송 이력</div>
+            {alertHistory.map((h, i) => (
+              <div key={i} style={{ display: 'flex', gap: 10, padding: '10px 0', borderBottom: i < alertHistory.length - 1 ? `1px solid ${C.border}` : 'none' }}>
+                <div style={{ width: 8, height: 8, borderRadius: 99, background: C.primary, flexShrink: 0, marginTop: 4 }} />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{h.target}</div>
+                  <div style={{ fontSize: 12, color: C.textSec, marginBottom: 2 }}>{h.rule}</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <span style={{ fontSize: 11, color: C.textSec }}>{h.channel}</span>
+                    <span style={{ fontSize: 11, color: C.textSec }}>{h.time}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {showBuilder && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }}>
+          <div style={{ background: C.surface, borderRadius: 16, padding: 32, width: 480, boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 24 }}>알림 규칙 추가</div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>규칙 이름</label>
+              <input placeholder="규칙 이름 입력" style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 14, fontFamily: 'inherit', outline: 'none' }} />
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>조건 빌더</label>
+              <div style={{ background: C.bg, borderRadius: 8, padding: 16, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <select style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13, fontFamily: 'inherit' }}>
+                  <option>미완료 경과 시간</option>
+                  <option>이상 발생 횟수</option>
+                  <option>미접속 일수</option>
+                </select>
+                <select style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13, fontFamily: 'inherit' }}>
+                  <option>이상</option>
+                  <option>이하</option>
+                  <option>동일</option>
+                </select>
+                <input type="number" defaultValue={72} style={{ width: 70, padding: '6px 10px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13, fontFamily: 'inherit' }} />
+                <span style={{ fontSize: 13, color: C.textSec }}>시간</span>
+              </div>
+            </div>
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>알림 채널</label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {['FCM 푸시', '이메일', '둘 다'].map(ch => (
+                  <button key={ch} style={{ padding: '7px 16px', borderRadius: 8, border: `1px solid ${C.border}`, background: ch === 'FCM 푸시' ? C.primary : C.surface, color: ch === 'FCM 푸시' ? '#fff' : C.text, fontSize: 13, cursor: 'pointer' }}>{ch}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setShowBuilder(false)} style={{ flex: 1, padding: '11px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>취소</button>
+              <button onClick={() => setShowBuilder(false)} style={{ flex: 1, padding: '11px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>저장</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReportExport() {
+  const [generating, setGenerating] = useState(false);
+  const [generated, setGenerated] = useState(false);
+
+  const handleGenerate = () => {
+    setGenerating(true);
+    setTimeout(() => { setGenerating(false); setGenerated(true); }, 1500);
+  };
+
+  const monthlyData = [
+    { month: '1월', booths: 18, completed: 65, issues: 4 },
+    { month: '2월', booths: 18, completed: 78, issues: 3 },
+    { month: '3월', booths: 18, completed: 82, issues: 2 },
+  ];
+
+  return (
+    <div style={{ padding: 32 }}>
+      <div style={{ marginBottom: 28 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700 }}>리포트</h1>
+        <p style={{ fontSize: 13, color: C.textSec, marginTop: 4 }}>Puppeteer PDF 렌더링 + ExcelJS 서식 내보내기</p>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 24 }}>
+        <div>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 16 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 20 }}>리포트 생성</div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>리포트 기간</label>
+              <select style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 14, fontFamily: 'inherit', outline: 'none' }}>
+                <option>2026년 3월 (월별)</option>
+                <option>2026년 1분기 (분기별)</option>
+                <option>2025년 연간</option>
+              </select>
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}>포함 항목</label>
+              {['점검 완료 현황', '이상 발생 내역', '작업자 실적', '사진 요약'].map(item => (
+                <label key={item} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, cursor: 'pointer' }}>
+                  <input type="checkbox" defaultChecked style={{ accentColor: C.primary, width: 16, height: 16 }} />
+                  <span style={{ fontSize: 13 }}>{item}</span>
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={handleGenerate}
+                disabled={generating}
+                style={{
+                  flex: 1, padding: '10px', borderRadius: 8, border: 'none',
+                  background: generating ? C.border : C.primary, color: generating ? C.textSec : '#fff',
+                  fontWeight: 600, cursor: generating ? 'not-allowed' : 'pointer', fontSize: 13,
+                }}
+              >
+                {generating ? '생성 중...' : 'PDF 생성'}
+              </button>
+              <button style={{ flex: 1, padding: '10px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, fontWeight: 600, cursor: 'pointer', fontSize: 13 }}>
+                엑셀 내보내기
+              </button>
+            </div>
+          </div>
+
+          <div style={{ background: C.primary + '12', border: `1px solid ${C.border}`, borderRadius: 12, padding: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 8 }}>기술 구조</div>
+            <div style={{ fontSize: 12, color: C.textSec, lineHeight: 1.6 }}>
+              <div>• Puppeteer headless Chrome PDF 렌더링</div>
+              <div>• ExcelJS 셀 서식 + 조건부 색상</div>
+              <div>• Node.js worker_thread 비동기 처리</div>
+              <div>• S3 presigned URL 다운로드 링크</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          <div style={{ padding: '16px 24px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#FAFAFA' }}>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>📄 2026년 3월 점검 현황 리포트 — PDF 미리보기</span>
+            {generated && <Badge label="생성 완료" color={C.primary} />}
+          </div>
+          <div style={{ padding: 28, background: generated ? C.surface : C.bg, minHeight: 480, opacity: generating ? 0.5 : 1, transition: 'opacity 0.3s' }}>
+            {/* Report preview */}
+            <div style={{ maxWidth: 560, margin: '0 auto' }}>
+              <div style={{ textAlign: 'center', marginBottom: 32, padding: '24px', background: `linear-gradient(135deg, ${C.secondary}, ${C.primary})`, borderRadius: 12 }}>
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', letterSpacing: 2, marginBottom: 4 }}>SMARTCHECK PLATFORM</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: '#fff', marginBottom: 4 }}>흡연부스 점검 현황 리포트</div>
+                <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)' }}>2026년 3월 1일 ~ 3월 31일</div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+                {[['총 점검', '82건'], ['완료율', '91%'], ['이상 발생', '2건'], ['작업자', '8명']].map(([label, val]) => (
+                  <div key={label} style={{ textAlign: 'center', padding: '14px 8px', background: C.bg, borderRadius: 10, border: `1px solid ${C.border}` }}>
+                    <div style={{ fontSize: 11, color: C.textSec, marginBottom: 4 }}>{label}</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: C.primary }}>{val}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ marginBottom: 24 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>월별 점검 현황 비교</div>
+                <ResponsiveContainer width="100%" height={150}>
+                  <BarChart data={monthlyData} barSize={28}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                    <XAxis dataKey="month" tick={{ fontSize: 12, fill: C.textSec }} />
+                    <YAxis tick={{ fontSize: 12, fill: C.textSec }} />
+                    <Tooltip />
+                    <Bar dataKey="completed" fill={C.primary} name="완료 건수" radius={[4,4,0,0]} />
+                    <Bar dataKey="issues" fill={C.warning} name="이상 건수" radius={[4,4,0,0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>작업자별 실적</div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: C.secondary, color: '#fff' }}>
+                      {['순위', '작업자', '지역', '완료 건수', '완료율'].map(h => (
+                        <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 12 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {workerRanking.map((w, i) => (
+                      <tr key={w.rank} style={{ borderBottom: `1px solid ${C.border}`, background: i % 2 === 0 ? C.surface : C.bg }}>
+                        <td style={{ padding: '8px 12px', fontWeight: 700, color: i === 0 ? '#D97706' : C.text }}>{w.rank}</td>
+                        <td style={{ padding: '8px 12px', fontWeight: 600 }}>{w.name}</td>
+                        <td style={{ padding: '8px 12px', color: C.textSec }}>{w.region}</td>
+                        <td style={{ padding: '8px 12px', fontWeight: 600, color: C.primary }}>{w.count}건</td>
+                        <td style={{ padding: '8px 12px' }}>{w.rate}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [page, setPage] = useState('main');
+
+  const renderPage = () => {
+    switch (page) {
+      case 'main': return <RealtimeMap />;
+      case 'analytics': return <Analytics />;
+      case 'alert-rules': return <AlertRules />;
+      case 'report-export': return <ReportExport />;
+      default: return <RealtimeMap />;
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      <Sidebar active={page} onNav={setPage} />
+      <main style={{ flex: 1, overflowY: 'auto', background: C.bg }}>
+        {renderPage()}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
