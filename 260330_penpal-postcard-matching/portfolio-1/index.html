@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>아날로그 펜팔 매칭 & 구독 서비스 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:#FFF8F0;color:#1A1A2E;overflow-x:hidden;}
+::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:#FDE8D8;}::-webkit-scrollbar-thumb{background:#D4A574;border-radius:3px;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideIn{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:translateX(0)}}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo,useCallback}=React;
+const {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,LineChart,Line,CartesianGrid,Legend,AreaChart,Area}=Recharts;
+
+// ── Design Tokens ──
+const C={primary:'#FF6B35',secondary:'#004E64',accent:'#25A18E',bg:'#FFF8F0',surface:'#FFFFFF',text:'#1A1A2E',textSec:'#6B7280',border:'#F3E8DE',success:'#059669',warning:'#D97706',danger:'#DC2626',sidebarBg:'#2D1B0E',sidebarHover:'#3D2A1A',sidebarActive:'#FF6B35'};
+
+// ── Mock Data ──
+const matchProfiles=[
+  {id:1,nick:'따뜻한달빛',age:'20대 후반',tags:['여행','소설','사진'],score:94,avatar:'🌙',bio:'손편지와 엽서를 좋아하는 감성파입니다',status:'매칭가능',letters:0},
+  {id:2,nick:'책읽는곰',age:'30대 초반',tags:['독서','음악','요리'],score:88,avatar:'🐻',bio:'매달 한 권의 책과 함께 엽서를 보내요',status:'매칭가능',letters:0},
+  {id:3,nick:'바다향기',age:'20대 중반',tags:['바다','그림','영화'],score:85,avatar:'🌊',bio:'수채화로 그린 엽서를 교환하고 싶어요',status:'매칭중',letters:3},
+  {id:4,nick:'밤하늘별',age:'30대 중반',tags:['천문','글쓰기','산책'],score:82,avatar:'⭐',bio:'계절마다 다른 엽서를 모으고 있어요',status:'매칭가능',letters:0},
+  {id:5,nick:'풀내음',age:'20대 초반',tags:['식물','카페','손글씨'],score:79,avatar:'🌿',bio:'캘리그라피 엽서를 즐겨 쓰는 초보 펜팔러',status:'매칭가능',letters:0},
+  {id:6,nick:'가을단풍',age:'30대 후반',tags:['등산','사진','커피'],score:76,avatar:'🍂',bio:'여행지에서 보내는 엽서가 취미입니다',status:'매칭중',letters:5}
+];
+
+const myMatches=[
+  {id:101,partner:'바다향기',avatar:'🌊',status:'엽서 교환 중',lastLetter:'2일 전',count:3,startDate:'2025-01-08'},
+  {id:102,partner:'가을단풍',avatar:'🍂',status:'오프라인 전환 제안',lastLetter:'5일 전',count:5,startDate:'2024-12-20'}
+];
+
+const postcards=[
+  {id:1,from:'바다향기',avatar:'🌊',theme:'ocean',preview:'안녕하세요! 첫 엽서를 보내요. 요즘 바다가 보고 싶어서...',date:'2025-01-15',read:true,bg:'#E0F2FE'},
+  {id:2,from:'가을단풍',avatar:'🍂',theme:'autumn',preview:'새해 복 많이 받으세요! 올해도 좋은 엽서 교환해요 😊',date:'2025-01-12',read:true,bg:'#FEF3C7'},
+  {id:3,from:'바다향기',avatar:'🌊',theme:'sunset',preview:'오늘 본 석양이 너무 예뻐서 사진 찍었어요. 엽서로...',date:'2025-01-10',read:false,bg:'#FCE7F3'},
+  {id:4,from:'가을단풍',avatar:'🍂',theme:'mountain',preview:'주말에 등산 다녀왔는데, 정상에서 보낸 엽서예요!',date:'2025-01-05',read:true,bg:'#D1FAE5'},
+  {id:5,from:'바다향기',avatar:'🌊',theme:'night',preview:'밤하늘이 예쁜 날이면 항상 편지를 쓰고 싶어져요...',date:'2024-12-28',read:true,bg:'#E0E7FF'}
+];
+
+const themes=[
+  {id:'classic',name:'클래식 편지지',emoji:'📜',bg:'#FFFBF0',border:'#D4A574'},
+  {id:'ocean',name:'바다 물결',emoji:'🌊',bg:'#E0F2FE',border:'#38BDF8'},
+  {id:'autumn',name:'가을 단풍',emoji:'🍂',bg:'#FEF3C7',border:'#F59E0B'},
+  {id:'sunset',name:'노을 하늘',emoji:'🌅',bg:'#FCE7F3',border:'#EC4899'},
+  {id:'forest',name:'숲속 편지',emoji:'🌲',bg:'#D1FAE5',border:'#059669'},
+  {id:'night',name:'밤하늘 별',emoji:'✨',bg:'#E0E7FF',border:'#6366F1'}
+];
+
+const stickers=['💌','🌸','☕','🎵','📷','🌈','🦋','🌻','🍀','❤️','⭐','🎀','🐾','🌙','🎨','✏️'];
+
+const kits=[
+  {id:1,name:'베이직 키트',desc:'엽서 5장 + 스티커 시트 1장',price:12900,badge:'인기',emoji:'📮'},
+  {id:2,name:'프리미엄 키트',desc:'엽서 10장 + 스티커 2장 + 우표 세트',price:24900,badge:'추천',emoji:'💎'},
+  {id:3,name:'시즌 스페셜',desc:'한정판 엽서 8장 + 씰 스탬프 + 왁스',price:34900,badge:'한정',emoji:'🎁'},
+  {id:4,name:'미니 키트',desc:'엽서 3장 + 미니 스티커',price:7900,badge:'',emoji:'📝'}
+];
+
+const subscriptionPlans=[
+  {id:'monthly',name:'월간 구독',price:19900,period:'월',features:['매월 프리미엄 키트 배송','월 3회 무료 대화 주제','광고 제거'],popular:false},
+  {id:'quarterly',name:'분기 구독',price:49900,period:'3개월',features:['매월 프리미엄 키트 배송','무제한 대화 주제','광고 제거','전용 스티커 세트'],popular:true},
+  {id:'annual',name:'연간 구독',price:179900,period:'연',features:['매월 시즌 스페셜 키트','무제한 대화 주제','광고 제거','전용 스티커+씰 세트','우선 매칭'],popular:false}
+];
+
+const matchingWeekly=[
+  {week:'1주차',new:45,active:128,complete:12},
+  {week:'2주차',new:52,active:135,complete:18},
+  {week:'3주차',new:38,active:142,complete:15},
+  {week:'4주차',new:61,active:156,complete:22}
+];
+
+const tagDistribution=[
+  {name:'여행',value:24},{name:'독서',value:21},{name:'음악',value:18},
+  {name:'사진',value:15},{name:'요리',value:12},{name:'기타',value:10}
+];
+const pieColors=['#FF6B35','#004E64','#25A18E','#D97706','#7C3AED','#94A3B8'];
+
+const notifications=[
+  {id:1,type:'match',text:'따뜻한달빛님이 매칭을 신청했어요!',time:'10분 전',icon:'💌'},
+  {id:2,type:'letter',text:'바다향기님이 새 엽서를 보냈어요',time:'2시간 전',icon:'📬'},
+  {id:3,type:'delivery',text:'프리미엄 키트가 배송 출발했어요',time:'오늘',icon:'📦'},
+  {id:4,type:'mission',text:'출석 미션 완료! 코인 50개 획득',time:'어제',icon:'🎯'},
+  {id:5,type:'system',text:'2월 시즌 스페셜 키트가 출시되었어요',time:'2일 전',icon:'🎁'}
+];
+
+const deliveryTimeline=[
+  {step:'주문 완료',date:'01/10',done:true,icon:'✅'},
+  {step:'제작 시작',date:'01/11',done:true,icon:'🎨'},
+  {step:'중개소 도착',date:'01/13',done:true,icon:'📮'},
+  {step:'발송 완료',date:'01/14',done:false,icon:'🚚'},
+  {step:'수신 확인',date:'-',done:false,icon:'📬'}
+];
+
+// ── Components ──
+function Badge({text,color}){
+  const colors={
+    '매칭가능':{bg:'#D1FAE5',text:'#065F46'},'매칭중':{bg:'#DBEAFE',text:'#1D4ED8'},
+    '엽서 교환 중':{bg:'#FEF3C7',text:'#92400E'},'오프라인 전환 제안':{bg:'#EDE9FE',text:'#5B21B6'},
+    '인기':{bg:'#FFEDD5',text:'#C2410C'},'추천':{bg:'#DBEAFE',text:'#1D4ED8'},
+    '한정':{bg:'#FCE7F3',text:'#BE185D'},'월간':{bg:'#F1F5F9',text:'#475569'},
+    '구독중':{bg:'#D1FAE5',text:'#065F46'}
+  };
+  const c=colors[text]||{bg:'#F1F5F9',text:'#475569'};
+  return <span style={{padding:'4px 10px',borderRadius:20,fontSize:11,fontWeight:600,background:c.bg,color:c.text}}>{text}</span>;
+}
+
+function StatCard({icon,label,value,sub,color}){
+  return(<div style={{background:C.surface,borderRadius:14,padding:'20px 22px',boxShadow:'0 2px 12px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`,animation:'fadeIn .5s'}}>
+    <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+      <span style={{fontSize:22,width:40,height:40,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',background:color+'18'}}>{icon}</span>
+      <span style={{fontSize:13,color:C.textSec,fontWeight:500}}>{label}</span>
+    </div>
+    <div style={{fontSize:26,fontWeight:700,color:C.text}}>{value}</div>
+    {sub&&<div style={{fontSize:12,color:C.textSec,marginTop:4}}>{sub}</div>}
+  </div>);
+}
+
+function Modal({open,onClose,title,children}){
+  if(!open)return null;
+  return(<div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000,animation:'fadeIn .2s'}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:C.surface,borderRadius:16,width:'90%',maxWidth:560,maxHeight:'85vh',overflow:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.15)'}}>
+      <div style={{padding:'20px 24px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <h3 style={{fontSize:17,fontWeight:700}}>{title}</h3>
+        <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSec}}>✕</button>
+      </div>
+      <div style={{padding:24}}>{children}</div>
+    </div>
+  </div>);
+}
+
+// ── Pages ──
+function DashboardPage(){
+  return(<div style={{display:'flex',flexDirection:'column',gap:24,animation:'fadeIn .4s'}}>
+    <div>
+      <h2 style={{fontSize:22,fontWeight:700,marginBottom:4}}>안녕하세요, 윤서님 💌</h2>
+      <p style={{color:C.textSec,fontSize:14}}>오늘도 따뜻한 엽서를 교환해보세요</p>
+    </div>
+
+    <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16}}>
+      <StatCard icon="💌" label="진행 중 매칭" value="2건" sub="엽서 교환 활발" color={C.primary}/>
+      <StatCard icon="📬" label="받은 엽서" value="8통" sub="읽지 않은 1통" color={C.accent}/>
+      <StatCard icon="📦" label="배송 중 키트" value="1건" sub="1/14 도착 예정" color={C.warning}/>
+      <StatCard icon="🎯" label="보유 코인" value="350" sub="출석 미션 +50" color={C.secondary}/>
+    </div>
+
+    <div style={{display:'grid',gridTemplateColumns:'1.2fr 0.8fr',gap:20}}>
+      <div style={{background:C.surface,borderRadius:14,padding:24,boxShadow:'0 2px 12px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>주간 매칭 현황</h3>
+        <ResponsiveContainer width="100%" height={200}>
+          <BarChart data={matchingWeekly} barSize={20}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#F3E8DE"/>
+            <XAxis dataKey="week" fontSize={12} tick={{fill:C.textSec}}/>
+            <YAxis fontSize={12} tick={{fill:C.textSec}}/>
+            <Tooltip contentStyle={{borderRadius:10,border:'none',boxShadow:'0 4px 20px rgba(0,0,0,0.1)'}}/>
+            <Bar dataKey="new" fill={C.primary} name="신규 매칭" radius={[4,4,0,0]}/>
+            <Bar dataKey="active" fill={C.accent} name="활성 매칭" radius={[4,4,0,0]}/>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:14,padding:24,boxShadow:'0 2px 12px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>인기 성향 태그</h3>
+        <ResponsiveContainer width="100%" height={200}>
+          <PieChart>
+            <Pie data={tagDistribution} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value">
+              {tagDistribution.map((d,i)=><Cell key={i} fill={pieColors[i%pieColors.length]}/>)}
+            </Pie>
+            <Tooltip contentStyle={{borderRadius:10,border:'none',boxShadow:'0 4px 20px rgba(0,0,0,0.1)'}}/>
+          </PieChart>
+        </ResponsiveContainer>
+        <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:8}}>
+          {tagDistribution.map((t,i)=>(
+            <span key={i} style={{fontSize:11,padding:'3px 8px',borderRadius:10,background:pieColors[i%pieColors.length]+'18',color:pieColors[i%pieColors.length],fontWeight:500}}>
+              {t.name} {t.value}%
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+      <div style={{background:C.surface,borderRadius:14,padding:24,boxShadow:'0 2px 12px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>나의 매칭 현황</h3>
+        {myMatches.map(m=>(
+          <div key={m.id} style={{display:'flex',alignItems:'center',gap:14,padding:'12px 0',borderBottom:`1px solid ${C.border}`}}>
+            <span style={{fontSize:28}}>{m.avatar}</span>
+            <div style={{flex:1}}>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <span style={{fontWeight:600,fontSize:14}}>{m.partner}</span>
+                <Badge text={m.status}/>
+              </div>
+              <div style={{fontSize:12,color:C.textSec,marginTop:2}}>엽서 {m.count}통 · 마지막 {m.lastLetter}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{background:C.surface,borderRadius:14,padding:24,boxShadow:'0 2px 12px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>최근 알림</h3>
+        {notifications.slice(0,4).map(n=>(
+          <div key={n.id} style={{display:'flex',alignItems:'flex-start',gap:10,padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
+            <span style={{fontSize:18}}>{n.icon}</span>
+            <div style={{flex:1}}>
+              <div style={{fontSize:13,fontWeight:500}}>{n.text}</div>
+              <div style={{fontSize:11,color:C.textSec,marginTop:2}}>{n.time}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    <div style={{background:`linear-gradient(135deg, ${C.primary}18, ${C.accent}18)`,borderRadius:14,padding:24,border:`1px solid ${C.border}`}}>
+      <h3 style={{fontSize:15,fontWeight:700,marginBottom:12}}>📦 키트 배송 트래킹</h3>
+      <div style={{display:'flex',alignItems:'center',gap:0}}>
+        {deliveryTimeline.map((t,i)=>(
+          <React.Fragment key={i}>
+            <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:6,flex:'0 0 auto'}}>
+              <span style={{fontSize:20,opacity:t.done?1:0.4}}>{t.icon}</span>
+              <span style={{fontSize:12,fontWeight:t.done?600:400,color:t.done?C.text:C.textSec}}>{t.step}</span>
+              <span style={{fontSize:11,color:C.textSec}}>{t.date}</span>
+            </div>
+            {i<deliveryTimeline.length-1&&(
+              <div style={{flex:1,height:2,background:t.done?C.primary:C.border,margin:'0 8px',marginBottom:30,borderRadius:1}}/>
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  </div>);
+}
+
+function MatchingPage(){
+  const [selected,setSelected]=useState(null);
+  const [survey,setSurvey]=useState(false);
+  const [step,setStep]=useState(0);
+  const surveyQ=['좋아하는 취미를 선택하세요','선호하는 엽서 스타일은?','글쓰기 빈도는?','어떤 주제로 대화하고 싶나요?'];
+  const surveyOpts=[
+    ['여행','독서','음악','사진','요리','그림'],
+    ['감성적','유머러스','일상적','철학적'],
+    ['매주 1회','2주 1회','월 1회','자유롭게'],
+    ['일상 이야기','취미 공유','고민 상담','계절 소식']
+  ];
+  const [answers,setAnswers]=useState({});
+
+  return(<div style={{display:'flex',flexDirection:'column',gap:24,animation:'fadeIn .4s'}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+      <div>
+        <h2 style={{fontSize:22,fontWeight:700}}>매칭 큐레이션 💕</h2>
+        <p style={{color:C.textSec,fontSize:14,marginTop:4}}>성향이 맞는 펜팔 파트너를 찾아보세요</p>
+      </div>
+      <button onClick={()=>setSurvey(true)} style={{padding:'10px 20px',borderRadius:10,background:C.primary,color:'#fff',border:'none',fontWeight:600,fontSize:13,cursor:'pointer'}}>
+        성향 재설정 ✏️
+      </button>
+    </div>
+
+    <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+      {['전체','여행','독서','음악','사진','요리','그림'].map(tag=>(
+        <button key={tag} style={{padding:'7px 16px',borderRadius:20,fontSize:13,fontWeight:500,border:`1px solid ${tag==='전체'?C.primary:C.border}`,background:tag==='전체'?C.primary+'15':'transparent',color:tag==='전체'?C.primary:C.textSec,cursor:'pointer'}}>
+          {tag}
+        </button>
+      ))}
+    </div>
+
+    <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:16}}>
+      {matchProfiles.map(p=>(
+        <div key={p.id} onClick={()=>setSelected(p)} style={{background:C.surface,borderRadius:14,padding:22,boxShadow:'0 2px 12px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`,cursor:'pointer',transition:'all .2s',':hover':{transform:'translateY(-2px)'}}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+            <div style={{display:'flex',alignItems:'center',gap:12}}>
+              <span style={{fontSize:36,animation:'float 3s ease-in-out infinite'}}>{p.avatar}</span>
+              <div>
+                <div style={{fontWeight:700,fontSize:15}}>{p.nick}</div>
+                <div style={{fontSize:12,color:C.textSec}}>{p.age}</div>
+              </div>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <Badge text={p.status}/>
+              <div style={{fontSize:20,fontWeight:700,color:C.primary,marginTop:6}}>{p.score}%</div>
+            </div>
+          </div>
+          <p style={{fontSize:13,color:C.textSec,marginBottom:12,lineHeight:1.5}}>{p.bio}</p>
+          <div style={{display:'flex',gap:6}}>
+            {p.tags.map(t=>(
+              <span key={t} style={{padding:'4px 10px',borderRadius:12,fontSize:11,background:C.primary+'12',color:C.primary,fontWeight:500}}>#{t}</span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <Modal open={!!selected} onClose={()=>setSelected(null)} title={selected?`${selected.nick} 프로필`:''}>
+      {selected&&(
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{textAlign:'center'}}>
+            <span style={{fontSize:52}}>{selected.avatar}</span>
+            <h3 style={{fontSize:18,fontWeight:700,marginTop:8}}>{selected.nick}</h3>
+            <p style={{color:C.textSec,fontSize:13}}>{selected.age} · 매칭 점수 {selected.score}%</p>
+          </div>
+          <p style={{fontSize:14,lineHeight:1.6,color:C.text,textAlign:'center'}}>{selected.bio}</p>
+          <div style={{display:'flex',justifyContent:'center',gap:8}}>
+            {selected.tags.map(t=><span key={t} style={{padding:'5px 12px',borderRadius:16,fontSize:12,background:C.primary+'12',color:C.primary,fontWeight:500}}>#{t}</span>)}
+          </div>
+          <div style={{display:'flex',gap:12,marginTop:8}}>
+            <button style={{flex:1,padding:'12px',borderRadius:10,background:C.primary,color:'#fff',border:'none',fontWeight:600,cursor:'pointer'}}>매칭 신청하기 💌</button>
+            <button style={{flex:1,padding:'12px',borderRadius:10,background:'transparent',color:C.textSec,border:`1px solid ${C.border}`,fontWeight:600,cursor:'pointer'}}>다음에</button>
+          </div>
+        </div>
+      )}
+    </Modal>
+
+    <Modal open={survey} onClose={()=>{setSurvey(false);setStep(0);}} title="성향 설문">
+      <div>
+        <div style={{display:'flex',gap:4,marginBottom:20}}>
+          {surveyQ.map((_,i)=>(
+            <div key={i} style={{flex:1,height:4,borderRadius:2,background:i<=step?C.primary:C.border}}/>
+          ))}
+        </div>
+        <h4 style={{fontSize:15,fontWeight:600,marginBottom:16}}>{surveyQ[step]}</h4>
+        <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+          {surveyOpts[step].map(opt=>(
+            <button key={opt} onClick={()=>{setAnswers({...answers,[step]:opt});if(step<3)setStep(step+1);else{setSurvey(false);setStep(0);}}}
+              style={{padding:'10px 18px',borderRadius:20,border:`1px solid ${answers[step]===opt?C.primary:C.border}`,background:answers[step]===opt?C.primary+'15':'transparent',color:answers[step]===opt?C.primary:C.text,fontWeight:500,fontSize:13,cursor:'pointer'}}>
+              {opt}
+            </button>
+          ))}
+        </div>
+        {step>0&&<button onClick={()=>setStep(step-1)} style={{marginTop:16,background:'none',border:'none',color:C.textSec,fontSize:13,cursor:'pointer'}}>← 이전</button>}
+      </div>
+    </Modal>
+  </div>);
+}
+
+function PostcardPage(){
+  const [composing,setComposing]=useState(false);
+  const [selectedTheme,setSelectedTheme]=useState(themes[0]);
+  const [text,setText]=useState('');
+  const [activeStickers,setActiveStickers]=useState([]);
+  const [viewCard,setViewCard]=useState(null);
+
+  return(<div style={{display:'flex',flexDirection:'column',gap:24,animation:'fadeIn .4s'}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+      <div>
+        <h2 style={{fontSize:22,fontWeight:700}}>온라인 엽서 ✉️</h2>
+        <p style={{color:C.textSec,fontSize:14,marginTop:4}}>소중한 마음을 엽서에 담아 보내세요</p>
+      </div>
+      <button onClick={()=>setComposing(true)} style={{padding:'10px 20px',borderRadius:10,background:C.primary,color:'#fff',border:'none',fontWeight:600,fontSize:13,cursor:'pointer'}}>
+        엽서 쓰기 ✏️
+      </button>
+    </div>
+
+    <div style={{display:'flex',gap:8}}>
+      {['전체','받은 엽서','보낸 엽서','임시저장'].map((t,i)=>(
+        <button key={t} style={{padding:'7px 16px',borderRadius:20,fontSize:13,fontWeight:500,border:`1px solid ${i===0?C.primary:C.border}`,background:i===0?C.primary+'15':'transparent',color:i===0?C.primary:C.textSec,cursor:'pointer'}}>{t}</button>
+      ))}
+    </div>
+
+    <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      {postcards.map(pc=>(
+        <div key={pc.id} onClick={()=>setViewCard(pc)} style={{background:C.surface,borderRadius:14,padding:20,boxShadow:'0 2px 12px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`,cursor:'pointer',display:'flex',gap:16,alignItems:'center',position:'relative'}}>
+          {!pc.read&&<div style={{position:'absolute',top:10,right:10,width:8,height:8,borderRadius:'50%',background:C.primary}}/>}
+          <div style={{width:60,height:60,borderRadius:12,background:pc.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:28}}>
+            {pc.avatar}
+          </div>
+          <div style={{flex:1}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+              <span style={{fontWeight:600,fontSize:14}}>{pc.from}</span>
+              <span style={{fontSize:12,color:C.textSec}}>{pc.date}</span>
+            </div>
+            <p style={{fontSize:13,color:C.textSec,lineHeight:1.5,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:400}}>{pc.preview}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <Modal open={!!viewCard} onClose={()=>setViewCard(null)} title={viewCard?`${viewCard.from}님의 엽서`:''}>
+      {viewCard&&(
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{background:viewCard.bg,borderRadius:14,padding:28,minHeight:200,border:`2px dashed ${C.border}`}}>
+            <div style={{textAlign:'right',fontSize:12,color:C.textSec,marginBottom:12}}>{viewCard.date}</div>
+            <p style={{fontSize:15,lineHeight:1.8,color:C.text}}>{viewCard.preview}</p>
+            <div style={{textAlign:'right',marginTop:20,fontSize:14,fontWeight:600}}>— {viewCard.from} {viewCard.avatar}</div>
+          </div>
+          <button style={{padding:'12px',borderRadius:10,background:C.primary,color:'#fff',border:'none',fontWeight:600,cursor:'pointer'}}>답장 쓰기 💌</button>
+        </div>
+      )}
+    </Modal>
+
+    <Modal open={composing} onClose={()=>setComposing(false)} title="엽서 쓰기">
+      <div style={{display:'flex',flexDirection:'column',gap:16}}>
+        <div>
+          <label style={{fontSize:13,fontWeight:600,marginBottom:8,display:'block'}}>받는 사람</label>
+          <select style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:14,outline:'none'}}>
+            <option>바다향기 🌊</option>
+            <option>가을단풍 🍂</option>
+          </select>
+        </div>
+        <div>
+          <label style={{fontSize:13,fontWeight:600,marginBottom:8,display:'block'}}>배경 테마</label>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            {themes.map(t=>(
+              <button key={t.id} onClick={()=>setSelectedTheme(t)} style={{padding:'8px 14px',borderRadius:10,border:`2px solid ${selectedTheme.id===t.id?t.border:C.border}`,background:t.bg,fontSize:12,cursor:'pointer',fontWeight:500}}>
+                {t.emoji} {t.name}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{background:selectedTheme.bg,borderRadius:14,padding:20,border:`2px solid ${selectedTheme.border}`,minHeight:160}}>
+          <textarea value={text} onChange={e=>setText(e.target.value)} placeholder="따뜻한 마음을 담아 엽서를 작성해주세요..." maxLength={500}
+            style={{width:'100%',minHeight:120,background:'transparent',border:'none',outline:'none',fontSize:14,lineHeight:1.8,resize:'none',fontFamily:'Pretendard'}}/>
+          <div style={{textAlign:'right',fontSize:12,color:C.textSec}}>{text.length}/500</div>
+        </div>
+        <div>
+          <label style={{fontSize:13,fontWeight:600,marginBottom:8,display:'block'}}>스티커</label>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            {stickers.map(s=>(
+              <button key={s} onClick={()=>setActiveStickers([...activeStickers,s])} style={{width:36,height:36,borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,fontSize:16,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                {s}
+              </button>
+            ))}
+          </div>
+          {activeStickers.length>0&&(
+            <div style={{marginTop:8,display:'flex',gap:4}}>
+              {activeStickers.map((s,i)=><span key={i} style={{fontSize:20}}>{s}</span>)}
+              <button onClick={()=>setActiveStickers([])} style={{fontSize:11,color:C.textSec,background:'none',border:'none',cursor:'pointer'}}>초기화</button>
+            </div>
+          )}
+        </div>
+        <div style={{display:'flex',gap:12}}>
+          <button style={{flex:1,padding:'12px',borderRadius:10,background:C.border,color:C.textSec,border:'none',fontWeight:600,cursor:'pointer'}}>임시저장</button>
+          <button style={{flex:1,padding:'12px',borderRadius:10,background:C.primary,color:'#fff',border:'none',fontWeight:600,cursor:'pointer'}}>보내기 💌</button>
+        </div>
+      </div>
+    </Modal>
+  </div>);
+}
+
+function ShopPage(){
+  const [tab,setTab]=useState('kit');
+  const [cart,setCart]=useState([]);
+  const [checkout,setCheckout]=useState(false);
+
+  return(<div style={{display:'flex',flexDirection:'column',gap:24,animation:'fadeIn .4s'}}>
+    <div>
+      <h2 style={{fontSize:22,fontWeight:700}}>키트 구매 / 결제 🎁</h2>
+      <p style={{color:C.textSec,fontSize:14,marginTop:4}}>아날로그 감성을 담은 펜팔 키트를 만나보세요</p>
+    </div>
+
+    <div style={{display:'flex',gap:0,borderBottom:`2px solid ${C.border}`}}>
+      {[{key:'kit',label:'📦 키트 상품'},{key:'sub',label:'🔄 구독 서비스'},{key:'order',label:'📋 주문 내역'}].map(t=>(
+        <button key={t.key} onClick={()=>setTab(t.key)}
+          style={{padding:'12px 24px',border:'none',borderBottom:tab===t.key?`2px solid ${C.primary}`:'2px solid transparent',background:'none',fontWeight:tab===t.key?600:400,color:tab===t.key?C.primary:C.textSec,cursor:'pointer',fontSize:14,marginBottom:-2}}>
+          {t.label}
+        </button>
+      ))}
+    </div>
+
+    {tab==='kit'&&(
+      <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:16}}>
+        {kits.map(k=>(
+          <div key={k.id} style={{background:C.surface,borderRadius:14,padding:24,boxShadow:'0 2px 12px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`,position:'relative'}}>
+            {k.badge&&<div style={{position:'absolute',top:12,right:12}}><Badge text={k.badge}/></div>}
+            <span style={{fontSize:40,display:'block',marginBottom:12}}>{k.emoji}</span>
+            <h3 style={{fontSize:16,fontWeight:700,marginBottom:6}}>{k.name}</h3>
+            <p style={{fontSize:13,color:C.textSec,marginBottom:12,lineHeight:1.5}}>{k.desc}</p>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span style={{fontSize:20,fontWeight:700,color:C.primary}}>{k.price.toLocaleString()}원</span>
+              <button onClick={()=>setCart([...cart,k])} style={{padding:'8px 16px',borderRadius:8,background:C.primary,color:'#fff',border:'none',fontWeight:600,fontSize:12,cursor:'pointer'}}>담기</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {tab==='sub'&&(
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+        {subscriptionPlans.map(p=>(
+          <div key={p.id} style={{background:C.surface,borderRadius:14,padding:24,boxShadow:p.popular?'0 4px 24px rgba(255,107,53,0.15)':'0 2px 12px rgba(0,0,0,0.04)',border:p.popular?`2px solid ${C.primary}`:`1px solid ${C.border}`,position:'relative'}}>
+            {p.popular&&<div style={{position:'absolute',top:-10,left:'50%',transform:'translateX(-50)',background:C.primary,color:'#fff',padding:'3px 14px',borderRadius:12,fontSize:11,fontWeight:600}}>BEST</div>}
+            <h3 style={{fontSize:16,fontWeight:700,marginBottom:4}}>{p.name}</h3>
+            <div style={{marginBottom:16}}>
+              <span style={{fontSize:24,fontWeight:700,color:C.primary}}>{p.price.toLocaleString()}</span>
+              <span style={{fontSize:13,color:C.textSec}}>원/{p.period}</span>
+            </div>
+            <ul style={{listStyle:'none',marginBottom:20}}>
+              {p.features.map((f,i)=>(
+                <li key={i} style={{fontSize:13,color:C.text,padding:'6px 0',display:'flex',alignItems:'center',gap:8}}>
+                  <span style={{color:C.success}}>✓</span>{f}
+                </li>
+              ))}
+            </ul>
+            <button style={{width:'100%',padding:'12px',borderRadius:10,background:p.popular?C.primary:'transparent',color:p.popular?'#fff':C.primary,border:p.popular?'none':`1px solid ${C.primary}`,fontWeight:600,cursor:'pointer'}}>
+              구독하기
+            </button>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {tab==='order'&&(
+      <div style={{background:C.surface,borderRadius:14,overflow:'hidden',border:`1px solid ${C.border}`}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:'#FFF4ED'}}>
+              {['주문번호','상품','수량','금액','상태','일자'].map(h=>(
+                <th key={h} style={{padding:'12px 16px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textSec}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {[
+              {id:'ORD-001',product:'프리미엄 키트',qty:1,total:'24,900',status:'배송완료',date:'01/10'},
+              {id:'ORD-002',product:'베이직 키트',qty:2,total:'25,800',status:'배송중',date:'01/14'},
+              {id:'ORD-003',product:'시즌 스페셜',qty:1,total:'34,900',status:'결제완료',date:'01/15'}
+            ].map(o=>(
+              <tr key={o.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                <td style={{padding:'14px 16px',fontSize:13,fontWeight:600}}>{o.id}</td>
+                <td style={{padding:'14px 16px',fontSize:13}}>{o.product}</td>
+                <td style={{padding:'14px 16px',fontSize:13}}>{o.qty}개</td>
+                <td style={{padding:'14px 16px',fontSize:13,fontWeight:600}}>{o.total}원</td>
+                <td style={{padding:'14px 16px'}}><Badge text={o.status}/></td>
+                <td style={{padding:'14px 16px',fontSize:13,color:C.textSec}}>{o.date}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+
+    {cart.length>0&&!checkout&&(
+      <div style={{position:'fixed',bottom:24,right:24,background:C.primary,color:'#fff',padding:'14px 24px',borderRadius:14,boxShadow:'0 8px 30px rgba(255,107,53,0.3)',cursor:'pointer',display:'flex',alignItems:'center',gap:10,animation:'fadeIn .3s'}} onClick={()=>setCheckout(true)}>
+        <span style={{fontSize:18}}>🛒</span>
+        <span style={{fontWeight:600}}>장바구니 ({cart.length})</span>
+        <span style={{fontWeight:700}}>{cart.reduce((s,i)=>s+i.price,0).toLocaleString()}원</span>
+      </div>
+    )}
+
+    <Modal open={checkout} onClose={()=>setCheckout(false)} title="주문서 작성">
+      <div style={{display:'flex',flexDirection:'column',gap:16}}>
+        {cart.map((item,i)=>(
+          <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 0',borderBottom:`1px solid ${C.border}`}}>
+            <span style={{fontSize:14}}>{item.emoji} {item.name}</span>
+            <span style={{fontWeight:600}}>{item.price.toLocaleString()}원</span>
+          </div>
+        ))}
+        <div style={{padding:'12px 16px',background:'#FFF4ED',borderRadius:10}}>
+          <div style={{display:'flex',justifyContent:'space-between'}}>
+            <span style={{fontWeight:600}}>합계</span>
+            <span style={{fontSize:18,fontWeight:700,color:C.primary}}>{cart.reduce((s,i)=>s+i.price,0).toLocaleString()}원</span>
+          </div>
+        </div>
+        <div>
+          <label style={{fontSize:13,fontWeight:600,marginBottom:6,display:'block'}}>배송지</label>
+          <input placeholder="주소를 입력하세요" style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:14,outline:'none'}}/>
+        </div>
+        <div>
+          <label style={{fontSize:13,fontWeight:600,marginBottom:6,display:'block'}}>결제 수단</label>
+          <div style={{display:'flex',gap:8}}>
+            {['토스페이','카카오페이','신용카드'].map(m=>(
+              <button key={m} style={{flex:1,padding:'10px',borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,fontSize:13,cursor:'pointer',fontWeight:500}}>{m}</button>
+            ))}
+          </div>
+        </div>
+        <button style={{padding:'14px',borderRadius:10,background:C.primary,color:'#fff',border:'none',fontWeight:700,fontSize:15,cursor:'pointer'}}>
+          결제하기 💳
+        </button>
+      </div>
+    </Modal>
+  </div>);
+}
+
+// ── Main App ──
+function App(){
+  const [page,setPage]=useState('홈 대시보드');
+  const [sideOpen,setSideOpen]=useState(true);
+  const menus=[
+    {name:'홈 대시보드',icon:'🏠'},
+    {name:'매칭 큐레이션',icon:'💕'},
+    {name:'온라인 엽서',icon:'✉️'},
+    {name:'키트 구매/결제',icon:'🎁'}
+  ];
+
+  const renderPage=()=>{
+    switch(page){
+      case '홈 대시보드': return <DashboardPage/>;
+      case '매칭 큐레이션': return <MatchingPage/>;
+      case '온라인 엽서': return <PostcardPage/>;
+      case '키트 구매/결제': return <ShopPage/>;
+      default: return <DashboardPage/>;
+    }
+  };
+
+  return(<div style={{display:'flex',minHeight:'100vh'}}>
+    {/* Sidebar */}
+    <aside style={{width:sideOpen?260:64,background:C.sidebarBg,transition:'width .3s',display:'flex',flexDirection:'column',flexShrink:0}}>
+      <div style={{padding:sideOpen?'24px 20px':'24px 12px',borderBottom:'1px solid rgba(255,255,255,0.08)',display:'flex',alignItems:'center',gap:12}}>
+        <span style={{fontSize:24}}>💌</span>
+        {sideOpen&&<span style={{color:'#fff',fontWeight:700,fontSize:16}}>펜팔 서비스</span>}
+      </div>
+      <nav style={{flex:1,padding:'12px 8px'}}>
+        {menus.map(m=>(
+          <button key={m.name} onClick={()=>setPage(m.name)} title={m.name}
+            style={{width:'100%',display:'flex',alignItems:'center',gap:12,padding:sideOpen?'12px 14px':'12px 0',borderRadius:10,border:'none',background:page===m.name?C.sidebarActive:'transparent',color:page===m.name?'#fff':'rgba(255,255,255,0.6)',cursor:'pointer',fontSize:14,fontWeight:page===m.name?600:400,marginBottom:4,justifyContent:sideOpen?'flex-start':'center',transition:'all .2s'}}>
+            <span style={{fontSize:18}}>{m.icon}</span>
+            {sideOpen&&m.name}
+          </button>
+        ))}
+      </nav>
+      <div style={{padding:'16px 12px',borderTop:'1px solid rgba(255,255,255,0.08)'}}>
+        <button onClick={()=>setSideOpen(!sideOpen)} style={{width:'100%',padding:'8px',borderRadius:8,border:'none',background:'rgba(255,255,255,0.06)',color:'rgba(255,255,255,0.5)',cursor:'pointer',fontSize:13}}>
+          {sideOpen?'◀ 접기':'▶'}
+        </button>
+      </div>
+    </aside>
+
+    {/* Main */}
+    <main style={{flex:1,display:'flex',flexDirection:'column',minWidth:0}}>
+      <header style={{height:60,padding:'0 32px',display:'flex',alignItems:'center',justifyContent:'space-between',background:C.surface,borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <span style={{fontSize:13,color:C.textSec}}>홈</span>
+          <span style={{color:C.border}}>/</span>
+          <span style={{fontSize:13,fontWeight:600}}>{page}</span>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:16}}>
+          <span style={{position:'relative',cursor:'pointer',fontSize:18}}>🔔<span style={{position:'absolute',top:-4,right:-6,width:8,height:8,borderRadius:'50%',background:C.danger}}></span></span>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <div style={{width:32,height:32,borderRadius:'50%',background:`linear-gradient(135deg, ${C.primary}, ${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:600}}>윤</div>
+            <span style={{fontSize:13,fontWeight:500}}>윤서</span>
+          </div>
+        </div>
+      </header>
+      <div style={{flex:1,padding:32,overflow:'auto'}}>
+        {renderPage()}
+      </div>
+    </main>
+  </div>);
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

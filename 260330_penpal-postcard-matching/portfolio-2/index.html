@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>취향 기반 독서 모임 매칭 플랫폼 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:#FAF5FF;color:#1E1B4B;overflow-x:hidden;}
+::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:#EDE9FE;}::-webkit-scrollbar-thumb{background:#A78BFA;border-radius:3px;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes glow{0%,100%{box-shadow:0 0 20px rgba(124,58,237,0.15)}50%{box-shadow:0 0 30px rgba(124,58,237,0.25)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo,useCallback}=React;
+const {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,LineChart,Line,CartesianGrid,Legend,RadarChart,Radar,PolarGrid,PolarAngleAxis,PolarRadiusAxis}=Recharts;
+
+const C={primary:'#7C3AED',secondary:'#1E1B4B',accent:'#A78BFA',bg:'#FAF5FF',surface:'#FFFFFF',text:'#1E1B4B',textSec:'#6D28D9',border:'#EDE9FE',success:'#059669',warning:'#D97706',danger:'#DC2626'};
+
+// ── Data ──
+const clubs=[
+  {id:1,name:'밤의 도서관',genre:'문학·소설',members:28,capacity:30,frequency:'격주 토요일',mode:'오프라인',location:'서울 마포',img:'📚',rating:4.8,desc:'소설과 에세이를 깊이 나누는 감성 독서 모임',tags:['감성','소설','에세이'],nextMeet:'2월 8일'},
+  {id:2,name:'테크북 라운지',genre:'IT·기술',members:22,capacity:25,frequency:'매주 수요일',mode:'온라인',location:'Zoom',img:'💻',rating:4.6,desc:'최신 기술 서적을 함께 읽고 토론하는 개발자 모임',tags:['개발','AI','스타트업'],nextMeet:'2월 5일'},
+  {id:3,name:'아침 페이지',genre:'자기계발',members:15,capacity:20,frequency:'매주 월요일',mode:'하이브리드',location:'서울 강남',img:'🌅',rating:4.9,desc:'아침 30분, 성장을 위한 독서 습관 만들기',tags:['습관','성장','아침루틴'],nextMeet:'2월 3일'},
+  {id:4,name:'여행 서재',genre:'여행·에세이',members:19,capacity:20,frequency:'월 2회 일요일',mode:'오프라인',location:'서울 종로',img:'✈️',rating:4.7,desc:'세계 여행 에세이와 가이드를 함께 읽는 모임',tags:['여행','사진','에세이'],nextMeet:'2월 9일'},
+  {id:5,name:'그림책 살롱',genre:'그림책·일러스트',members:12,capacity:15,frequency:'격주 금요일',mode:'오프라인',location:'서울 성수',img:'🎨',rating:4.5,desc:'어른을 위한 그림책 감상과 일러스트 워크숍',tags:['그림책','아트','힐링'],nextMeet:'2월 7일'},
+  {id:6,name:'미스터리 클럽',genre:'추리·미스터리',members:24,capacity:25,frequency:'매주 목요일',mode:'온라인',location:'Discord',img:'🔍',rating:4.4,desc:'추리 소설 범인 맞추기 + 토론 모임',tags:['추리','미스터리','토론'],nextMeet:'2월 6일'}
+];
+
+const quizSteps=[
+  {q:'주로 읽는 장르를 선택하세요 (복수 선택)',opts:['문학·소설','IT·기술','자기계발','에세이','여행','그림책','추리','역사'],multi:true},
+  {q:'일주일에 독서 시간은 얼마나 되나요?',opts:['30분 미만','30분~1시간','1~3시간','3시간 이상'],multi:false},
+  {q:'선호하는 모임 방식은?',opts:['오프라인','온라인','하이브리드','상관없음'],multi:false},
+  {q:'토론 스타일은?',opts:['자유 토론','주제 중심','발표+질의','조용한 감상 공유'],multi:false},
+  {q:'모임에서 기대하는 것은?',opts:['새로운 책 발견','사람들과 교류','깊은 토론','동기 부여'],multi:true}
+];
+
+const radarData=[
+  {axis:'문학',me:85,avg:60},{axis:'기술',me:40,avg:55},{axis:'자기계발',me:65,avg:70},
+  {axis:'에세이',me:90,avg:50},{axis:'추리',me:30,avg:45},{axis:'여행',me:75,avg:40}
+];
+
+const membershipPlans=[
+  {id:'free',name:'Free',price:0,features:['월 1회 모임 참여','기본 추천 알고리즘','커뮤니티 게시판'],limit:'모임 1개'},
+  {id:'basic',name:'Basic',price:9900,features:['월 3회 모임 참여','정밀 취향 매칭','전체 토론방 접근','할인 쿠폰 월 1장'],limit:'모임 3개'},
+  {id:'premium',name:'Premium',price:19900,features:['무제한 모임 참여','AI 추천 고도화','모든 토론방+아카이브','할인 쿠폰 월 3장','우선 모임 생성'],limit:'무제한'}
+];
+
+const discussions=[
+  {id:1,club:'밤의 도서관',book:'달러구트 꿈 백화점',author:'이미예',threads:42,latest:'소원 상점 에피소드가 가장 인상 깊었어요',time:'3시간 전',emoji:'📚',unread:5},
+  {id:2,club:'테크북 라운지',book:'클린 코드',author:'로버트 마틴',threads:38,latest:'10장 클래스 부분 같이 정리해봐요',time:'5시간 전',emoji:'💻',unread:2},
+  {id:3,club:'아침 페이지',book:'아주 작은 습관의 힘',author:'제임스 클리어',threads:31,latest:'해빗 트래커 만들어서 공유합니다!',time:'어제',emoji:'🌅',unread:0},
+  {id:4,club:'여행 서재',book:'나미야 잡화점의 기적',author:'히가시노 게이고',threads:27,latest:'실제 나미야 모델 장소 가보신 분?',time:'어제',emoji:'✈️',unread:3}
+];
+
+const threadMessages=[
+  {id:1,user:'민지',avatar:'🌸',text:'소원 상점 에피소드가 가장 인상 깊었어요. 꿈에서도 소원을 빌 수 있다는 발상이 너무 좋았습니다.',time:'3시간 전',reactions:{'❤️':5,'💡':3}},
+  {id:2,user:'준혁',avatar:'📖',text:'저도요! 특히 마지막에 달러구트가 한 말이 여운이 길게 남았어요. "모든 꿈에는 값이 있습니다"',time:'2시간 전',reactions:{'❤️':8,'👏':2}},
+  {id:3,user:'서윤',avatar:'🦋',text:'> "모든 꿈에는 값이 있습니다"\n\n이 부분 저도 밑줄 쫙! 다음 모임 때 이 주제로 더 이야기해요 😊',time:'1시간 전',reactions:{'❤️':4}},
+  {id:4,user:'하은',avatar:'☕',text:'2편에서 이어지는 이야기도 기대돼요. 혹시 읽으신 분 계신가요?',time:'30분 전',reactions:{'🙋':6}}
+];
+
+// ── Components ──
+function Badge({text,variant}){
+  const styles={
+    popular:{bg:C.primary,text:'#fff'},
+    online:{bg:'#D1FAE5',text:'#065F46'},
+    offline:{bg:'#DBEAFE',text:'#1D4ED8'},
+    hybrid:{bg:'#FEF3C7',text:'#92400E'},
+    genre:{bg:C.primary+'15',text:C.primary},
+    unread:{bg:C.danger,text:'#fff'}
+  };
+  const s=styles[variant]||styles.genre;
+  return <span style={{padding:'4px 10px',borderRadius:20,fontSize:11,fontWeight:600,background:s.bg,color:s.text}}>{text}</span>;
+}
+
+function Modal({open,onClose,title,children}){
+  if(!open)return null;
+  return(<div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000,animation:'fadeIn .2s'}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:C.surface,borderRadius:20,width:'90%',maxWidth:600,maxHeight:'85vh',overflow:'auto',boxShadow:'0 20px 60px rgba(124,58,237,0.15)'}}>
+      <div style={{padding:'20px 24px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <h3 style={{fontSize:17,fontWeight:700}}>{title}</h3>
+        <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSec}}>✕</button>
+      </div>
+      <div style={{padding:24}}>{children}</div>
+    </div>
+  </div>);
+}
+
+// ── Pages ──
+function ExplorePage(){
+  const [filter,setFilter]=useState('전체');
+  const [selected,setSelected]=useState(null);
+  const modeMap={'오프라인':'offline','온라인':'online','하이브리드':'hybrid'};
+  const filtered=filter==='전체'?clubs:clubs.filter(c=>c.mode===filter);
+
+  return(<div style={{animation:'fadeIn .4s'}}>
+    {/* Hero */}
+    <div style={{background:`linear-gradient(135deg, ${C.primary}, #4C1D95)`,borderRadius:24,padding:'48px 40px',marginBottom:32,color:'#fff',position:'relative',overflow:'hidden'}}>
+      <div style={{position:'absolute',top:-40,right:-40,width:200,height:200,borderRadius:'50%',background:'rgba(255,255,255,0.06)'}}/>
+      <div style={{position:'absolute',bottom:-60,right:80,width:160,height:160,borderRadius:'50%',background:'rgba(255,255,255,0.04)'}}/>
+      <h1 style={{fontSize:28,fontWeight:800,marginBottom:8}}>나만의 독서 모임을 찾아보세요 📖</h1>
+      <p style={{fontSize:15,opacity:.85,maxWidth:500,lineHeight:1.6}}>취향 분석 기반으로 딱 맞는 모임을 추천해 드릴게요. 이미 150+개 모임이 활동 중!</p>
+      <div style={{display:'flex',gap:24,marginTop:24}}>
+        <div><span style={{fontSize:24,fontWeight:700}}>152</span><span style={{fontSize:13,opacity:.7,marginLeft:4}}>활성 모임</span></div>
+        <div><span style={{fontSize:24,fontWeight:700}}>3,847</span><span style={{fontSize:13,opacity:.7,marginLeft:4}}>멤버</span></div>
+        <div><span style={{fontSize:24,fontWeight:700}}>12,300+</span><span style={{fontSize:13,opacity:.7,marginLeft:4}}>토론 스레드</span></div>
+      </div>
+    </div>
+
+    <div style={{display:'flex',gap:8,marginBottom:24}}>
+      {['전체','오프라인','온라인','하이브리드'].map(f=>(
+        <button key={f} onClick={()=>setFilter(f)} style={{padding:'8px 20px',borderRadius:24,fontSize:13,fontWeight:filter===f?600:400,border:`1px solid ${filter===f?C.primary:C.border}`,background:filter===f?C.primary+'15':'transparent',color:filter===f?C.primary:C.textSec,cursor:'pointer'}}>{f}</button>
+      ))}
+    </div>
+
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:20}}>
+      {filtered.map(club=>(
+        <div key={club.id} onClick={()=>setSelected(club)} style={{background:C.surface,borderRadius:20,padding:24,boxShadow:'0 4px 24px rgba(124,58,237,0.06)',border:`1px solid ${C.border}`,cursor:'pointer',transition:'all .2s'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14}}>
+            <span style={{fontSize:40}}>{club.img}</span>
+            <Badge text={club.mode} variant={modeMap[club.mode]}/>
+          </div>
+          <h3 style={{fontSize:16,fontWeight:700,marginBottom:4}}>{club.name}</h3>
+          <p style={{fontSize:12,color:C.textSec,marginBottom:10}}>{club.genre}</p>
+          <p style={{fontSize:13,color:C.text,lineHeight:1.5,marginBottom:14,minHeight:40}}>{club.desc}</p>
+          <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+            {club.tags.map(t=><Badge key={t} text={`#${t}`} variant="genre"/>)}
+          </div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+            <span style={{fontSize:12,color:C.textSec}}>👥 {club.members}/{club.capacity}명</span>
+            <span style={{fontSize:12,color:C.warning,fontWeight:600}}>⭐ {club.rating}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <Modal open={!!selected} onClose={()=>setSelected(null)} title={selected?.name||''}>
+      {selected&&(
+        <div style={{display:'flex',flexDirection:'column',gap:18}}>
+          <div style={{display:'flex',alignItems:'center',gap:16}}>
+            <span style={{fontSize:56}}>{selected.img}</span>
+            <div>
+              <h3 style={{fontSize:20,fontWeight:700}}>{selected.name}</h3>
+              <p style={{color:C.textSec,fontSize:13}}>{selected.genre} · {selected.mode} · {selected.location}</p>
+              <div style={{display:'flex',gap:6,marginTop:6}}>{selected.tags.map(t=><Badge key={t} text={`#${t}`} variant="genre"/>)}</div>
+            </div>
+          </div>
+          <p style={{fontSize:14,lineHeight:1.7}}>{selected.desc}</p>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+            <div style={{background:C.border,borderRadius:12,padding:14,textAlign:'center'}}>
+              <div style={{fontSize:18,fontWeight:700}}>{selected.members}</div>
+              <div style={{fontSize:11,color:C.textSec}}>멤버</div>
+            </div>
+            <div style={{background:C.border,borderRadius:12,padding:14,textAlign:'center'}}>
+              <div style={{fontSize:18,fontWeight:700}}>{selected.frequency}</div>
+              <div style={{fontSize:11,color:C.textSec}}>주기</div>
+            </div>
+            <div style={{background:C.border,borderRadius:12,padding:14,textAlign:'center'}}>
+              <div style={{fontSize:18,fontWeight:700}}>{selected.nextMeet}</div>
+              <div style={{fontSize:11,color:C.textSec}}>다음 모임</div>
+            </div>
+          </div>
+          <button style={{padding:'14px',borderRadius:12,background:C.primary,color:'#fff',border:'none',fontWeight:700,fontSize:15,cursor:'pointer'}}>모임 가입 신청 📖</button>
+        </div>
+      )}
+    </Modal>
+  </div>);
+}
+
+function QuizPage(){
+  const [step,setStep]=useState(0);
+  const [answers,setAnswers]=useState({});
+  const [done,setDone]=useState(false);
+  const [selected,setSelected]=useState({});
+
+  const handleSelect=(opt)=>{
+    if(quizSteps[step].multi){
+      const cur=selected[step]||[];
+      const next=cur.includes(opt)?cur.filter(o=>o!==opt):[...cur,opt];
+      setSelected({...selected,[step]:next});
+    } else {
+      setAnswers({...answers,[step]:opt});
+      if(step<quizSteps.length-1) setStep(step+1); else setDone(true);
+    }
+  };
+
+  const proceed=()=>{
+    if(quizSteps[step].multi){
+      setAnswers({...answers,[step]:selected[step]});
+      if(step<quizSteps.length-1) setStep(step+1); else setDone(true);
+    }
+  };
+
+  if(done) return(
+    <div style={{animation:'fadeIn .4s'}}>
+      <div style={{background:`linear-gradient(135deg, ${C.primary}, #4C1D95)`,borderRadius:24,padding:'40px',color:'#fff',marginBottom:32,textAlign:'center'}}>
+        <h2 style={{fontSize:24,fontWeight:800,marginBottom:8}}>취향 분석 완료! 🎉</h2>
+        <p style={{opacity:.85}}>당신만의 독서 DNA를 확인하세요</p>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24,marginBottom:32}}>
+        <div style={{background:C.surface,borderRadius:20,padding:28,boxShadow:'0 4px 24px rgba(124,58,237,0.06)',border:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:16,fontWeight:700,marginBottom:20}}>나의 독서 취향 레이더</h3>
+          <ResponsiveContainer width="100%" height={280}>
+            <RadarChart data={radarData}>
+              <PolarGrid stroke={C.border}/>
+              <PolarAngleAxis dataKey="axis" fontSize={12} tick={{fill:C.text}}/>
+              <PolarRadiusAxis angle={30} domain={[0,100]} fontSize={10} tick={{fill:C.textSec}}/>
+              <Radar name="나" dataKey="me" stroke={C.primary} fill={C.primary} fillOpacity={0.3}/>
+              <Radar name="평균" dataKey="avg" stroke={C.accent} fill={C.accent} fillOpacity={0.15}/>
+              <Legend/>
+            </RadarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{background:C.surface,borderRadius:20,padding:24,boxShadow:'0 4px 24px rgba(124,58,237,0.06)',border:`1px solid ${C.border}`}}>
+            <h3 style={{fontSize:16,fontWeight:700,marginBottom:12}}>분석 요약</h3>
+            <div style={{display:'flex',flexDirection:'column',gap:10}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontSize:13}}>📚 선호 장르</span>
+                <span style={{fontWeight:600,color:C.primary}}>문학·에세이</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontSize:13}}>⏰ 독서 빈도</span>
+                <span style={{fontWeight:600,color:C.primary}}>1~3시간/주</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontSize:13}}>🏠 모임 방식</span>
+                <span style={{fontWeight:600,color:C.primary}}>오프라인</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontSize:13}}>💬 토론 스타일</span>
+                <span style={{fontWeight:600,color:C.primary}}>자유 토론</span>
+              </div>
+            </div>
+          </div>
+          <div style={{background:C.surface,borderRadius:20,padding:24,boxShadow:'0 4px 24px rgba(124,58,237,0.06)',border:`1px solid ${C.border}`}}>
+            <h3 style={{fontSize:16,fontWeight:700,marginBottom:12}}>추천 모임 TOP 3</h3>
+            {[clubs[0],clubs[3],clubs[4]].map((c,i)=>(
+              <div key={c.id} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 0',borderBottom:i<2?`1px solid ${C.border}`:'none'}}>
+                <span style={{fontSize:24}}>{c.img}</span>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600,fontSize:13}}>{c.name}</div>
+                  <div style={{fontSize:11,color:C.textSec}}>{c.genre}</div>
+                </div>
+                <span style={{fontSize:14,fontWeight:700,color:C.primary}}>{[95,89,84][i]}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <button onClick={()=>{setDone(false);setStep(0);setAnswers({});setSelected({});}} style={{padding:'12px 24px',borderRadius:12,background:C.border,color:C.text,border:'none',fontWeight:600,cursor:'pointer'}}>다시 분석하기</button>
+    </div>
+  );
+
+  return(
+    <div style={{animation:'fadeIn .4s',maxWidth:640,margin:'0 auto'}}>
+      <div style={{background:`linear-gradient(135deg, ${C.primary}, #4C1D95)`,borderRadius:24,padding:'40px',color:'#fff',marginBottom:32,textAlign:'center'}}>
+        <h2 style={{fontSize:24,fontWeight:800,marginBottom:8}}>독서 취향 분석 📊</h2>
+        <p style={{opacity:.85}}>5단계 설문으로 딱 맞는 모임을 찾아드려요</p>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:20,padding:32,boxShadow:'0 4px 24px rgba(124,58,237,0.06)',border:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',gap:4,marginBottom:28}}>
+          {quizSteps.map((_,i)=>(
+            <div key={i} style={{flex:1,height:6,borderRadius:3,background:i<=step?C.primary:C.border,transition:'all .3s'}}/>
+          ))}
+        </div>
+        <div style={{fontSize:12,color:C.textSec,marginBottom:8}}>STEP {step+1}/{quizSteps.length}</div>
+        <h3 style={{fontSize:18,fontWeight:700,marginBottom:20}}>{quizSteps[step].q}</h3>
+        <div style={{display:'flex',flexWrap:'wrap',gap:10}}>
+          {quizSteps[step].opts.map(opt=>{
+            const isSelected=quizSteps[step].multi?(selected[step]||[]).includes(opt):answers[step]===opt;
+            return(
+              <button key={opt} onClick={()=>handleSelect(opt)}
+                style={{padding:'12px 22px',borderRadius:24,border:`2px solid ${isSelected?C.primary:C.border}`,background:isSelected?C.primary+'15':'transparent',color:isSelected?C.primary:C.text,fontWeight:isSelected?600:400,fontSize:14,cursor:'pointer',transition:'all .2s'}}>
+                {opt}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:28}}>
+          {step>0?<button onClick={()=>setStep(step-1)} style={{padding:'10px 20px',borderRadius:10,background:C.border,color:C.text,border:'none',fontWeight:600,cursor:'pointer'}}>← 이전</button>:<div/>}
+          {quizSteps[step].multi&&<button onClick={proceed} style={{padding:'10px 20px',borderRadius:10,background:C.primary,color:'#fff',border:'none',fontWeight:600,cursor:'pointer'}}>{step<quizSteps.length-1?'다음 →':'분석하기 🔍'}</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MembershipPage(){
+  const [plan,setPlan]=useState('basic');
+  const [tab,setTab]=useState('plan');
+
+  return(<div style={{animation:'fadeIn .4s'}}>
+    <div style={{background:`linear-gradient(135deg, ${C.primary}, #4C1D95)`,borderRadius:24,padding:'40px',color:'#fff',marginBottom:32,textAlign:'center'}}>
+      <h2 style={{fontSize:24,fontWeight:800,marginBottom:8}}>구독 멤버십 💎</h2>
+      <p style={{opacity:.85}}>더 많은 모임, 더 깊은 토론을 만나보세요</p>
+    </div>
+
+    <div style={{display:'flex',gap:0,borderBottom:`2px solid ${C.border}`,marginBottom:28}}>
+      {[{key:'plan',label:'💎 플랜 비교'},{key:'status',label:'📋 내 구독'},{key:'coupon',label:'🎟️ 쿠폰'}].map(t=>(
+        <button key={t.key} onClick={()=>setTab(t.key)} style={{padding:'12px 24px',border:'none',borderBottom:tab===t.key?`2px solid ${C.primary}`:'2px solid transparent',background:'none',fontWeight:tab===t.key?600:400,color:tab===t.key?C.primary:C.textSec,cursor:'pointer',fontSize:14,marginBottom:-2}}>{t.label}</button>
+      ))}
+    </div>
+
+    {tab==='plan'&&(
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:20}}>
+        {membershipPlans.map(p=>(
+          <div key={p.id} style={{background:C.surface,borderRadius:20,padding:28,boxShadow:plan===p.id?'0 8px 32px rgba(124,58,237,0.15)':'0 4px 24px rgba(124,58,237,0.06)',border:plan===p.id?`2px solid ${C.primary}`:`1px solid ${C.border}`,position:'relative',cursor:'pointer',transition:'all .2s'}} onClick={()=>setPlan(p.id)}>
+            {p.id==='basic'&&<div style={{position:'absolute',top:-10,left:'50%',transform:'translateX(-50%)',background:C.primary,color:'#fff',padding:'3px 14px',borderRadius:12,fontSize:11,fontWeight:600}}>BEST</div>}
+            <h3 style={{fontSize:18,fontWeight:700,marginBottom:6}}>{p.name}</h3>
+            <div style={{marginBottom:4}}>
+              <span style={{fontSize:28,fontWeight:800,color:C.primary}}>{p.price===0?'무료':p.price.toLocaleString()}</span>
+              {p.price>0&&<span style={{fontSize:13,color:C.textSec}}>원/월</span>}
+            </div>
+            <div style={{fontSize:12,color:C.accent,fontWeight:500,marginBottom:18}}>{p.limit}</div>
+            <ul style={{listStyle:'none'}}>
+              {p.features.map((f,i)=>(
+                <li key={i} style={{fontSize:13,padding:'7px 0',display:'flex',alignItems:'center',gap:8,color:C.text}}>
+                  <span style={{color:C.success}}>✓</span>{f}
+                </li>
+              ))}
+            </ul>
+            <button style={{width:'100%',padding:'12px',borderRadius:12,marginTop:16,background:plan===p.id?C.primary:'transparent',color:plan===p.id?'#fff':C.primary,border:plan===p.id?'none':`1px solid ${C.primary}`,fontWeight:600,cursor:'pointer'}}>
+              {plan===p.id?'선택됨 ✓':'선택하기'}
+            </button>
+          </div>
+        ))}
+      </div>
+    )}
+
+    {tab==='status'&&(
+      <div style={{background:C.surface,borderRadius:20,padding:32,boxShadow:'0 4px 24px rgba(124,58,237,0.06)',border:`1px solid ${C.border}`,maxWidth:480}}>
+        <div style={{display:'flex',alignItems:'center',gap:16,marginBottom:24}}>
+          <div style={{width:56,height:56,borderRadius:16,background:`linear-gradient(135deg, ${C.primary}, #4C1D95)`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:24,color:'#fff'}}>B</div>
+          <div>
+            <h3 style={{fontWeight:700}}>Basic 플랜</h3>
+            <p style={{fontSize:13,color:C.textSec}}>2025.01.15 ~ 2025.02.14</p>
+          </div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:20}}>
+          <div style={{background:C.border,borderRadius:12,padding:14,textAlign:'center'}}>
+            <div style={{fontSize:18,fontWeight:700}}>2/3</div><div style={{fontSize:11,color:C.textSec}}>모임 참여</div>
+          </div>
+          <div style={{background:C.border,borderRadius:12,padding:14,textAlign:'center'}}>
+            <div style={{fontSize:18,fontWeight:700}}>1장</div><div style={{fontSize:11,color:C.textSec}}>쿠폰 남음</div>
+          </div>
+          <div style={{background:C.border,borderRadius:12,padding:14,textAlign:'center'}}>
+            <div style={{fontSize:18,fontWeight:700}}>15일</div><div style={{fontSize:11,color:C.textSec}}>남은 기간</div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:12}}>
+          <button style={{flex:1,padding:'12px',borderRadius:10,background:C.primary,color:'#fff',border:'none',fontWeight:600,cursor:'pointer'}}>플랜 업그레이드</button>
+          <button style={{flex:1,padding:'12px',borderRadius:10,background:'transparent',color:C.danger,border:`1px solid ${C.danger}`,fontWeight:600,cursor:'pointer'}}>구독 해지</button>
+        </div>
+      </div>
+    )}
+
+    {tab==='coupon'&&(
+      <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:16}}>
+        {[{name:'10% 할인 쿠폰',desc:'모든 도서 구매 시',expires:'2025.02.28',used:false},{name:'모임 1회 무료',desc:'Basic 멤버 전용',expires:'2025.03.15',used:false},{name:'15% 할인 쿠폰',desc:'첫 구독 시 적용',expires:'2025.01.31',used:true}].map((c,i)=>(
+          <div key={i} style={{background:c.used?'#F9FAFB':C.surface,borderRadius:16,padding:20,border:`1px dashed ${c.used?'#D1D5DB':C.primary}`,opacity:c.used?.5:1}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <span style={{fontSize:20}}>🎟️</span>
+              {c.used&&<span style={{fontSize:11,color:C.textSec,fontWeight:600}}>사용완료</span>}
+            </div>
+            <h4 style={{fontSize:15,fontWeight:700,marginBottom:4}}>{c.name}</h4>
+            <p style={{fontSize:12,color:C.textSec}}>{c.desc}</p>
+            <p style={{fontSize:11,color:C.textSec,marginTop:8}}>유효기간: {c.expires}</p>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>);
+}
+
+function DiscussionPage(){
+  const [active,setActive]=useState(null);
+
+  return(<div style={{animation:'fadeIn .4s'}}>
+    <div style={{background:`linear-gradient(135deg, ${C.primary}, #4C1D95)`,borderRadius:24,padding:'40px',color:'#fff',marginBottom:32}}>
+      <h2 style={{fontSize:24,fontWeight:800,marginBottom:8}}>온라인 토론방 💬</h2>
+      <p style={{opacity:.85}}>책에 대한 생각을 자유롭게 나누어보세요</p>
+    </div>
+
+    {!active?(
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        {discussions.map(d=>(
+          <div key={d.id} onClick={()=>setActive(d)} style={{background:C.surface,borderRadius:16,padding:22,boxShadow:'0 4px 24px rgba(124,58,237,0.06)',border:`1px solid ${C.border}`,cursor:'pointer',display:'flex',gap:16,alignItems:'center'}}>
+            <span style={{fontSize:36}}>{d.emoji}</span>
+            <div style={{flex:1}}>
+              <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                <span style={{fontWeight:700,fontSize:15}}>{d.club}</span>
+                {d.unread>0&&<Badge text={`${d.unread} new`} variant="unread"/>}
+              </div>
+              <div style={{fontSize:13,color:C.text,marginBottom:4}}>📖 {d.book} — {d.author}</div>
+              <p style={{fontSize:13,color:C.textSec,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:400}}>{d.latest}</p>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontSize:13,fontWeight:600}}>{d.threads}개 스레드</div>
+              <div style={{fontSize:11,color:C.textSec}}>{d.time}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    ):(
+      <div>
+        <button onClick={()=>setActive(null)} style={{background:'none',border:'none',color:C.primary,fontWeight:600,cursor:'pointer',marginBottom:20,fontSize:14}}>← 토론방 목록</button>
+        <div style={{background:C.surface,borderRadius:20,padding:24,boxShadow:'0 4px 24px rgba(124,58,237,0.06)',border:`1px solid ${C.border}`,marginBottom:20}}>
+          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8}}>
+            <span style={{fontSize:28}}>{active.emoji}</span>
+            <div>
+              <h3 style={{fontSize:17,fontWeight:700}}>{active.club}</h3>
+              <p style={{fontSize:13,color:C.textSec}}>📖 {active.book} — {active.author}</p>
+            </div>
+          </div>
+        </div>
+
+        <div style={{display:'flex',flexDirection:'column',gap:14,marginBottom:20}}>
+          {threadMessages.map(m=>(
+            <div key={m.id} style={{background:C.surface,borderRadius:16,padding:20,border:`1px solid ${C.border}`}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+                <span style={{fontSize:22}}>{m.avatar}</span>
+                <span style={{fontWeight:600,fontSize:14}}>{m.user}</span>
+                <span style={{fontSize:11,color:C.textSec}}>{m.time}</span>
+              </div>
+              <p style={{fontSize:14,lineHeight:1.7,color:C.text,whiteSpace:'pre-wrap'}}>{m.text}</p>
+              <div style={{display:'flex',gap:8,marginTop:10}}>
+                {Object.entries(m.reactions).map(([emoji,count])=>(
+                  <span key={emoji} style={{padding:'3px 10px',borderRadius:16,background:C.border,fontSize:12,cursor:'pointer'}}>{emoji} {count}</span>
+                ))}
+                <span style={{padding:'3px 10px',borderRadius:16,background:C.border,fontSize:12,cursor:'pointer'}}>+ 반응</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{background:C.surface,borderRadius:16,padding:18,border:`1px solid ${C.border}`,display:'flex',gap:12,alignItems:'flex-end'}}>
+          <div style={{flex:1}}>
+            <textarea placeholder="의견을 남겨보세요..." rows={3} style={{width:'100%',border:'none',outline:'none',fontSize:14,lineHeight:1.6,resize:'none',fontFamily:'Pretendard'}}/>
+            <div style={{display:'flex',gap:8,marginTop:8}}>
+              <button style={{padding:'4px 10px',borderRadius:8,border:`1px solid ${C.border}`,background:'transparent',fontSize:12,cursor:'pointer'}}>📎 파일</button>
+              <button style={{padding:'4px 10px',borderRadius:8,border:`1px solid ${C.border}`,background:'transparent',fontSize:12,cursor:'pointer'}}>❝ 인용</button>
+            </div>
+          </div>
+          <button style={{padding:'10px 20px',borderRadius:10,background:C.primary,color:'#fff',border:'none',fontWeight:600,cursor:'pointer',flexShrink:0}}>보내기</button>
+        </div>
+      </div>
+    )}
+  </div>);
+}
+
+// ── Main App ──
+function App(){
+  const [page,setPage]=useState('모임 탐색');
+  const tabs=[
+    {name:'모임 탐색',icon:'📖'},
+    {name:'취향 매칭',icon:'📊'},
+    {name:'구독 멤버십',icon:'💎'},
+    {name:'온라인 토론방',icon:'💬'}
+  ];
+
+  const renderPage=()=>{
+    switch(page){
+      case '모임 탐색': return <ExplorePage/>;
+      case '취향 매칭': return <QuizPage/>;
+      case '구독 멤버십': return <MembershipPage/>;
+      case '온라인 토론방': return <DiscussionPage/>;
+      default: return <ExplorePage/>;
+    }
+  };
+
+  return(<div style={{minHeight:'100vh',display:'flex',flexDirection:'column'}}>
+    {/* Top Nav */}
+    <header style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:'0 40px',display:'flex',alignItems:'center',justifyContent:'space-between',height:64,flexShrink:0,position:'sticky',top:0,zIndex:100}}>
+      <div style={{display:'flex',alignItems:'center',gap:12}}>
+        <span style={{fontSize:24}}>📖</span>
+        <span style={{fontWeight:800,fontSize:18,color:C.secondary}}>북클럽</span>
+      </div>
+      <nav style={{display:'flex',gap:0}}>
+        {tabs.map(t=>(
+          <button key={t.name} onClick={()=>setPage(t.name)} title={t.name}
+            style={{padding:'20px 24px',border:'none',borderBottom:page===t.name?`3px solid ${C.primary}`:'3px solid transparent',background:'none',color:page===t.name?C.primary:C.textSec,fontWeight:page===t.name?600:400,cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',gap:6}}>
+            <span>{t.icon}</span>{t.name}
+          </button>
+        ))}
+      </nav>
+      <div style={{display:'flex',alignItems:'center',gap:14}}>
+        <span style={{cursor:'pointer',fontSize:18}}>🔔</span>
+        <div style={{width:34,height:34,borderRadius:'50%',background:`linear-gradient(135deg, ${C.primary}, #4C1D95)`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:600}}>지</div>
+      </div>
+    </header>
+
+    {/* Content */}
+    <main style={{flex:1,padding:'32px 40px',maxWidth:1200,margin:'0 auto',width:'100%'}}>
+      {renderPage()}
+    </main>
+  </div>);
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
