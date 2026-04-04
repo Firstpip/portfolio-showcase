@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>건설 자재 단가 AI 자동 산출 시스템</title>
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Pretendard',sans-serif;background:#F0F9FF;color:#0F172A;overflow:hidden}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:translate(-50%,-50%) scale(0.95)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes barGrow{from{width:0}to{width:var(--target-width)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.skeleton{background:linear-gradient(90deg,#E0F2FE 25%,#BAE6FD 50%,#E0F2FE 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:8px}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#94A3B8}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// ── Design Tokens (sidebar-classic / corporate-clean / Ocean Trust) ──
+const C = {
+  primary:'#0066CC', primaryDark:'#004FA3', primaryLight:'#E0F2FE',
+  secondary:'#1A365D', accent:'#38BDF8',
+  bg:'#F0F9FF', surface:'#FFFFFF',
+  sidebar:'#0F172A', sidebarHover:'#1E293B', sidebarActive:'#0066CC',
+  border:'#E2E8F0', text:'#0F172A', textSub:'#475569', textLight:'#94A3B8',
+  success:'#059669', warning:'#D97706', danger:'#DC2626', info:'#0284C7',
+  card:{ borderRadius:12, boxShadow:'0 1px 3px rgba(0,0,0,0.08)', padding:24 },
+};
+const inputStyle = {
+  width:'100%', padding:'10px 14px', border:`1px solid ${C.border}`, borderRadius:8,
+  fontSize:14, fontFamily:'inherit', outline:'none', background:'#fff', color:C.text,
+};
+const btnPrimary = {
+  padding:'10px 20px', background:C.primary, color:'#fff', border:'none',
+  borderRadius:8, fontSize:14, fontWeight:600, cursor:'pointer', fontFamily:'inherit',
+};
+const btnSecondary = {
+  ...btnPrimary, background:'transparent', color:C.primary, border:`1px solid ${C.primary}`,
+};
+
+// ── Dummy Data ──
+const ITEMS_RAW = [
+  {id:1,name:'합성수지관(PVC) 75mm',category:'배관',matchedName:'경질비닐관 75mm',matchRate:92,qty:'12.5m',unit:'m',page:142,status:'matched'},
+  {id:2,name:'무수축 몰탈 25kg',category:'콘크리트',matchedName:'무수축 그라우트재',matchRate:88,qty:'4포',unit:'포',page:267,status:'matched'},
+  {id:3,name:'스텐파이프 100A',category:'배관',matchedName:'스테인리스강관 100A',matchRate:95,qty:'8.0m',unit:'m',page:158,status:'matched'},
+  {id:4,name:'전산볼트 M12×150',category:'철물',matchedName:'앵커볼트 M12',matchRate:72,qty:'48개',unit:'개',page:312,status:'review'},
+  {id:5,name:'에폭시 도장',category:'도장',matchedName:'에폭시 수지 도료 1종',matchRate:85,qty:'35㎡',unit:'㎡',page:423,status:'matched'},
+  {id:6,name:'FRP 그레이팅 T30',category:'기타',matchedName:'강화플라스틱 격자판',matchRate:68,qty:'15.0㎡',unit:'㎡',page:89,status:'review'},
+  {id:7,name:'보온재 글라스울 50T',category:'단열',matchedName:'유리면 보온재 50mm',matchRate:91,qty:'120m',unit:'m',page:375,status:'matched'},
+  {id:8,name:'가스켓 150A EPDM',category:'실링',matchedName:'고무가스켓 150A',matchRate:87,qty:'24매',unit:'매',page:198,status:'matched'},
+  {id:9,name:'전선관 28C',category:'전기',matchedName:'금속제 가요전선관 28mm',matchRate:78,qty:'200m',unit:'m',page:510,status:'review'},
+  {id:10,name:'후렉시블 조인트 100A',category:'배관',matchedName:'신축이음쇠 100A',matchRate:83,qty:'6개',unit:'개',page:175,status:'matched'},
+  {id:11,name:'우레탄 방수재',category:'방수',matchedName:'우레탄계 도막방수재',matchRate:94,qty:'280㎡',unit:'㎡',page:401,status:'confirmed'},
+  {id:12,name:'경량 천장재 T-BAR',category:'인테리어',matchedName:'경량 철골 천장틀',matchRate:76,qty:'150㎡',unit:'㎡',page:445,status:'review'},
+  {id:13,name:'내화충전재',category:'방화',matchedName:'내화충전 구조체',matchRate:90,qty:'32개소',unit:'개소',page:388,status:'confirmed'},
+  {id:14,name:'PVC 배수트랩',category:'배관',matchedName:'배수트랩 50mm',matchRate:89,qty:'18개',unit:'개',page:165,status:'matched'},
+  {id:15,name:'플렉시블 덕트 250Φ',category:'공조',matchedName:'가요성 덕트 250mm',matchRate:86,qty:'45m',unit:'m',page:492,status:'matched'},
+  {id:16,name:'비계 파이프 48.6Φ',category:'가설',matchedName:'강관비계 48.6mm',matchRate:97,qty:'500m',unit:'m',page:52,status:'confirmed'},
+  {id:17,name:'콘크리트 타설',category:'콘크리트',matchedName:'레미콘 타설 25-21-15',matchRate:93,qty:'85㎥',unit:'㎥',page:231,status:'confirmed'},
+  {id:18,name:'철근 가공조립 HD13',category:'철근',matchedName:'이형철근 가공 D13',matchRate:96,qty:'4,200kg',unit:'kg',page:215,status:'confirmed'},
+];
+
+const RECENT_JOBS = [
+  {id:'JOB-0024',name:'부천 P3 유틸리티 배관 견적',items:342,matched:328,date:'2026-02-25',status:'검수중'},
+  {id:'JOB-0023',name:'여수 CR2 정비 자재 산출',items:189,matched:185,date:'2026-02-23',status:'완료'},
+  {id:'JOB-0022',name:'화성 신축동 소방설비 견적',items:567,matched:551,date:'2026-02-20',status:'완료'},
+  {id:'JOB-0021',name:'구미 전기배관 자재 산출',items:124,matched:118,date:'2026-02-18',status:'완료'},
+  {id:'JOB-0020',name:'인천 물류센터 HVAC 견적',items:278,matched:265,date:'2026-02-15',status:'완료'},
+];
+
+const INDEXING_DOCS = [
+  {id:1,name:'2024 건설공사 표준품셈',pages:620,items:4280,indexed:'2026-02-01',status:'완료'},
+  {id:2,name:'2024 기계설비공사 표준품셈',pages:384,items:2150,indexed:'2026-02-01',status:'완료'},
+  {id:3,name:'2024 전기공사 표준품셈',pages:296,items:1830,indexed:'2026-02-05',status:'완료'},
+  {id:4,name:'2024 정보통신 표준품셈',pages:210,items:1240,indexed:'2026-02-10',status:'완료'},
+];
+
+const CATEGORIES_DIST = [
+  {name:'배관',count:892,pct:28},
+  {name:'전기',count:634,pct:20},
+  {name:'철물/철근',count:508,pct:16},
+  {name:'콘크리트',count:445,pct:14},
+  {name:'도장/방수',count:317,pct:10},
+  {name:'기타',count:380,pct:12},
+];
+
+const MATCH_DIST = [{label:'90%+',count:2840,color:C.success},{label:'80-89%',count:980,color:C.info},{label:'70-79%',count:320,color:C.warning},{label:'70% 미만',count:140,color:C.danger}];
+
+const PER_PAGE = 8;
+
+// ── Utility Components ──
+function Badge({children,color=C.primary,bg}){
+  return <span style={{display:'inline-flex',alignItems:'center',gap:4,padding:'2px 10px',borderRadius:20,fontSize:12,fontWeight:600,color,background:bg||color+'18'}}>{children}</span>;
+}
+function StatusBadge({status}){
+  const map = {
+    matched:{color:C.success,bg:'#D1FAE5',label:'매칭완료'},
+    review:{color:C.warning,bg:'#FEF3C7',label:'검토필요'},
+    confirmed:{color:C.info,bg:'#DBEAFE',label:'확정'},
+    '검수중':{color:C.warning,bg:'#FEF3C7'},
+    '완료':{color:C.success,bg:'#D1FAE5'},
+    '인덱싱중':{color:C.info,bg:'#E0F2FE'},
+  };
+  const s = map[status]||{color:C.textSub,bg:'#F1F5F9'};
+  return <Badge color={s.color} bg={s.bg}>{s.label||status}</Badge>;
+}
+function CountUp({end,suffix='',prefix=''}){
+  const [val,setVal]=useState(0);
+  useEffect(()=>{
+    let s=0;const step=end/50;
+    const t=setInterval(()=>{s+=step;if(s>=end){setVal(end);clearInterval(t);}else setVal(Math.floor(s));},24);
+    return()=>clearInterval(t);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{prefix}{val.toLocaleString()}{suffix}</span>;
+}
+function Toast({message,type='success',onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  const colors={success:'#059669',error:'#DC2626',info:'#0066CC'};
+  return(
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:'#0F172A',color:'#fff',padding:'12px 20px',borderRadius:10,animation:'slideUp 300ms ease',boxShadow:'0 4px 20px rgba(0,0,0,0.25)',display:'flex',alignItems:'center',gap:10,minWidth:240,borderLeft:`4px solid ${colors[type]}`}}>
+      <span style={{fontSize:16}}>{type==='success'?'✓':type==='error'?'✕':'ℹ'}</span>
+      <span style={{fontSize:14}}>{message}</span>
+    </div>
+  );
+}
+function Modal({title,onClose,children,width=560}){
+  return(
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.45)',zIndex:300}}/>
+      <div style={{position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',zIndex:301,background:C.surface,borderRadius:16,width,maxWidth:'95vw',maxHeight:'90vh',overflow:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.2)',animation:'fadeInScale 200ms ease'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'20px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <span style={{fontSize:16,fontWeight:700}}>{title}</span>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:20,color:C.textSub,lineHeight:1}}>×</button>
+        </div>
+        <div style={{padding:24}}>{children}</div>
+      </div>
+    </>
+  );
+}
+function FormField({label,children,required}){
+  return(
+    <div style={{marginBottom:16}}>
+      <label style={{display:'block',fontSize:13,fontWeight:600,color:C.textSub,marginBottom:6}}>{label}{required&&<span style={{color:C.danger,marginLeft:2}}>*</span>}</label>
+      {children}
+    </div>
+  );
+}
+function Card({children,style={},hover=true,...props}){
+  const [h,setH]=useState(false);
+  return(
+    <div onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)}
+      style={{background:C.surface,borderRadius:C.card.borderRadius,boxShadow:h&&hover?'0 4px 12px rgba(0,0,0,0.12)':C.card.boxShadow,padding:C.card.padding,transition:'all 200ms ease',transform:h&&hover?'translateY(-2px)':'none',...style}} {...props}>
+      {children}
+    </div>
+  );
+}
+function ConfidenceBar({rate}){
+  const color = rate>=90?C.success:rate>=80?C.info:rate>=70?C.warning:C.danger;
+  return(
+    <div style={{display:'flex',alignItems:'center',gap:8}}>
+      <div style={{flex:1,height:6,borderRadius:3,background:'#E2E8F0'}}>
+        <div style={{height:'100%',borderRadius:3,background:color,width:`${rate}%`,animation:'barGrow 800ms ease',['--target-width']:`${rate}%`}}/>
+      </div>
+      <span style={{fontSize:12,fontWeight:600,color,minWidth:36}}>{rate}%</span>
+    </div>
+  );
+}
+function Pagination({current,total,onChange}){
+  return(
+    <div style={{display:'flex',alignItems:'center',gap:4,justifyContent:'center',marginTop:16}}>
+      <button onClick={()=>onChange(Math.max(1,current-1))} disabled={current===1}
+        style={{...btnSecondary,padding:'6px 10px',fontSize:12,opacity:current===1?0.4:1}}>‹ 이전</button>
+      {Array.from({length:total},(_,i)=>i+1).map(p=>
+        <button key={p} onClick={()=>onChange(p)} style={{...btnSecondary,padding:'6px 12px',fontSize:12,
+          background:p===current?C.primary:'transparent',color:p===current?'#fff':C.primary}}>{p}</button>
+      )}
+      <button onClick={()=>onChange(Math.min(total,current+1))} disabled={current===total}
+        style={{...btnSecondary,padding:'6px 10px',fontSize:12,opacity:current===total?0.4:1}}>다음 ›</button>
+    </div>
+  );
+}
+
+// ── Sidebar ──
+const NAV = [
+  {id:'dashboard',icon:'📊',label:'대시보드'},
+  {id:'item-input',icon:'📝',label:'품목 입력'},
+  {id:'match-result',icon:'🔍',label:'매칭 결과'},
+  {id:'review',icon:'✅',label:'검수 확정'},
+];
+function Sidebar({page,setPage}){
+  return(
+    <aside style={{width:260,background:C.sidebar,display:'flex',flexDirection:'column',flexShrink:0,minHeight:'100vh'}}>
+      <div style={{padding:'24px 20px 20px',borderBottom:'1px solid rgba(255,255,255,0.08)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:36,height:36,borderRadius:10,background:`linear-gradient(135deg,${C.primary},${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>🏗</div>
+          <div>
+            <div style={{color:'#fff',fontWeight:700,fontSize:15}}>CostAI</div>
+            <div style={{color:C.textLight,fontSize:11}}>자재 단가 자동 산출</div>
+          </div>
+        </div>
+      </div>
+      <nav style={{flex:1,padding:'12px 8px',display:'flex',flexDirection:'column',gap:2}}>
+        {NAV.map(n=>{
+          const active=page===n.id;
+          return(
+            <button key={n.id} onClick={()=>setPage(n.id)} style={{
+              display:'flex',alignItems:'center',gap:12,width:'100%',padding:'11px 16px',
+              borderRadius:10,border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:14,
+              background:active?C.sidebarActive:'transparent',
+              color:active?'#fff':'#94A3B8',fontWeight:active?600:400,
+              transition:'all 150ms',
+            }}>
+              <span style={{fontSize:17}}>{n.icon}</span>{n.label}
+            </button>
+          );
+        })}
+      </nav>
+      <div style={{padding:'16px 20px',borderTop:'1px solid rgba(255,255,255,0.08)',display:'flex',alignItems:'center',gap:10}}>
+        <div style={{width:32,height:32,borderRadius:'50%',background:'#334155',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:600}}>김</div>
+        <div><div style={{color:'#fff',fontSize:13,fontWeight:500}}>김민수</div><div style={{color:'#64748B',fontSize:11}}>예산기획팀</div></div>
+      </div>
+    </aside>
+  );
+}
+
+// ── TopBar ──
+function TopBar({title}){
+  const [search,setSearch]=useState('');
+  return(
+    <header style={{height:56,borderBottom:`1px solid ${C.border}`,background:C.surface,display:'flex',alignItems:'center',padding:'0 24px',gap:16,flexShrink:0}}>
+      <h1 style={{fontSize:18,fontWeight:700,letterSpacing:'-0.02em',flex:1}}>{title}</h1>
+      <div style={{position:'relative',width:260}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="품목명 검색..."
+          style={{...inputStyle,paddingLeft:36,height:36,fontSize:13}}/>
+        <span style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',fontSize:14,color:C.textLight}}>🔍</span>
+      </div>
+      <div style={{position:'relative'}}>
+        <span style={{fontSize:18,cursor:'pointer'}}>🔔</span>
+        <span style={{position:'absolute',top:-4,right:-4,width:8,height:8,borderRadius:'50%',background:C.danger}}/>
+      </div>
+    </header>
+  );
+}
+
+// ── Dashboard Page ──
+function DashboardPage(){
+  const kpis = [
+    {label:'총 처리 품목',value:4280,suffix:'건',icon:'📦',color:C.primary},
+    {label:'AI 매칭 완료',value:3960,suffix:'건',icon:'🎯',color:C.success},
+    {label:'검수 대기',value:186,suffix:'건',icon:'⏳',color:C.warning},
+    {label:'평균 매칭률',value:89,suffix:'%',icon:'📈',color:C.info},
+  ];
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:20,marginBottom:24}}>
+        {kpis.map((k,i)=>(
+          <Card key={i} style={{animation:`slideUp 400ms ease ${i*80}ms both`}}>
+            <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between'}}>
+              <div>
+                <div style={{fontSize:13,color:C.textSub,marginBottom:8}}>{k.label}</div>
+                <div style={{fontSize:28,fontWeight:800,color:k.color}}><CountUp end={k.value} suffix={k.suffix}/></div>
+              </div>
+              <div style={{width:44,height:44,borderRadius:12,background:k.color+'12',display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>{k.icon}</div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,marginBottom:24}}>
+        <Card style={{animation:'slideUp 400ms ease 320ms both'}}>
+          <div style={{fontSize:16,fontWeight:700,marginBottom:16}}>매칭 신뢰도 분포</div>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {MATCH_DIST.map((m,i)=>(
+              <div key={i} style={{display:'flex',alignItems:'center',gap:12}}>
+                <span style={{fontSize:13,color:C.textSub,width:70}}>{m.label}</span>
+                <div style={{flex:1,height:10,borderRadius:5,background:'#E2E8F0'}}>
+                  <div style={{height:'100%',borderRadius:5,background:m.color,['--target-width']:`${(m.count/4280*100).toFixed(0)}%`,animation:`barGrow 800ms ease ${i*150}ms both`,width:`${(m.count/4280*100).toFixed(0)}%`}}/>
+                </div>
+                <span style={{fontSize:13,fontWeight:600,color:m.color,minWidth:50}}>{m.count.toLocaleString()}건</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card style={{animation:'slideUp 400ms ease 400ms both'}}>
+          <div style={{fontSize:16,fontWeight:700,marginBottom:16}}>품셈집 카테고리별 분포</div>
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {CATEGORIES_DIST.map((c,i)=>(
+              <div key={i} style={{display:'flex',alignItems:'center',gap:12}}>
+                <span style={{fontSize:13,color:C.textSub,width:70,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{c.name}</span>
+                <div style={{flex:1,height:10,borderRadius:5,background:'#E2E8F0'}}>
+                  <div style={{height:'100%',borderRadius:5,background:C.primary,opacity:1-i*0.12,['--target-width']:`${c.pct}%`,animation:`barGrow 800ms ease ${i*120}ms both`,width:`${c.pct}%`}}/>
+                </div>
+                <span style={{fontSize:12,color:C.textSub,minWidth:65}}>{c.count}건 ({c.pct}%)</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr',gap:20}}>
+        <Card style={{animation:'slideUp 400ms ease 480ms both'}}>
+          <div style={{fontSize:16,fontWeight:700,marginBottom:16}}>최근 작업 목록</div>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`2px solid ${C.border}`}}>
+                {['작업 ID','견적명','품목 수','매칭','일자','상태'].map(h=><th key={h} style={{padding:'10px 8px',fontSize:12,fontWeight:600,color:C.textSub,textAlign:'left'}}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {RECENT_JOBS.map((j,i)=>(
+                <tr key={j.id} style={{borderBottom:`1px solid ${C.border}`,transition:'background 150ms',cursor:'pointer'}}
+                  onMouseEnter={e=>e.currentTarget.style.background=C.primary+'06'}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <td style={{padding:'12px 8px',fontSize:13,fontWeight:500,color:C.primary}}>{j.id}</td>
+                  <td style={{padding:'12px 8px',fontSize:13}}>{j.name}</td>
+                  <td style={{padding:'12px 8px',fontSize:13}}>{j.items}건</td>
+                  <td style={{padding:'12px 8px',fontSize:13,color:C.success}}>{j.matched}건</td>
+                  <td style={{padding:'12px 8px',fontSize:12,color:C.textSub}}>{j.date}</td>
+                  <td style={{padding:'12px 8px'}}><StatusBadge status={j.status}/></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+
+        <Card style={{animation:'slideUp 400ms ease 560ms both'}}>
+          <div style={{fontSize:16,fontWeight:700,marginBottom:16}}>인덱싱된 품셈집</div>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {INDEXING_DOCS.map((d,i)=>(
+              <div key={d.id} style={{padding:14,borderRadius:10,border:`1px solid ${C.border}`,transition:'background 150ms',cursor:'pointer'}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                  <span style={{fontSize:13,fontWeight:600}}>{d.name}</span>
+                  <StatusBadge status={d.status}/>
+                </div>
+                <div style={{display:'flex',gap:16,fontSize:12,color:C.textSub}}>
+                  <span>📄 {d.pages}페이지</span>
+                  <span>📋 {d.items.toLocaleString()}항목</span>
+                  <span>📅 {d.indexed}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ── Item Input Page ──
+function ItemInputPage({toast}){
+  const [text,setText]=useState('');
+  const [parsed,setParsed]=useState([]);
+  const [processing,setProcessing]=useState(false);
+  const [progress,setProgress]=useState(0);
+  const [done,setDone]=useState(false);
+
+  const sampleText = "합성수지관(PVC) 75mm\n무수축 몰탈 25kg\n스텐파이프 100A\n전산볼트 M12×150\n에폭시 도장\nFRP 그레이팅 T30\n보온재 글라스울 50T\n가스켓 150A EPDM\n전선관 28C\n후렉시블 조인트 100A";
+
+  const handlePaste = () => {
+    setText(sampleText);
+    const lines = sampleText.split('\n').filter(l=>l.trim());
+    setParsed(lines.map((l,i)=>({id:i+1,name:l.trim(),valid:true})));
+  };
+
+  const handleParse = () => {
+    if(!text.trim()) return;
+    const lines = text.split('\n').filter(l=>l.trim());
+    setParsed(lines.map((l,i)=>({id:i+1,name:l.trim(),valid:l.trim().length>1})));
+  };
+
+  const handleSubmit = () => {
+    if(parsed.length===0) return;
+    setProcessing(true);setProgress(0);setDone(false);
+    const interval = setInterval(()=>{
+      setProgress(p=>{
+        if(p>=100){clearInterval(interval);setProcessing(false);setDone(true);toast('AI 매칭 처리가 완료되었습니다. 매칭 결과 탭에서 확인하세요.','success');return 100;}
+        return p+2;
+      });
+    },60);
+  };
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+        <Card>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+            <div style={{fontSize:16,fontWeight:700}}>품목명 입력</div>
+            <button onClick={handlePaste} style={{...btnSecondary,padding:'6px 14px',fontSize:12}}>샘플 데이터 붙여넣기</button>
+          </div>
+          <FormField label="품목명 리스트" required>
+            <textarea value={text} onChange={e=>{setText(e.target.value);setParsed([]);setDone(false);}}
+              placeholder="엑셀에서 복사한 품목명을 여기에 붙여넣으세요.&#10;한 줄에 하나의 품목명을 입력합니다.&#10;최대 3,000건까지 처리 가능합니다."
+              style={{...inputStyle,height:280,resize:'none',lineHeight:1.7}}/>
+          </FormField>
+          <div style={{display:'flex',gap:12}}>
+            <button onClick={handleParse} style={{...btnSecondary,flex:1}} disabled={!text.trim()}>📋 파싱 미리보기</button>
+            <button onClick={handleSubmit} style={{...btnPrimary,flex:1,opacity:parsed.length?1:0.5}} disabled={parsed.length===0||processing}>🚀 AI 매칭 시작</button>
+          </div>
+          {text.trim() && <div style={{marginTop:12,fontSize:12,color:C.textSub}}>입력된 라인 수: {text.split('\n').filter(l=>l.trim()).length}건</div>}
+        </Card>
+
+        <Card>
+          <div style={{fontSize:16,fontWeight:700,marginBottom:16}}>파싱 미리보기</div>
+          {processing && (
+            <div style={{marginBottom:20}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+                <span style={{fontSize:13,fontWeight:600,color:C.primary}}>AI 매칭 처리 중...</span>
+                <span style={{fontSize:13,fontWeight:700,color:C.primary}}>{progress}%</span>
+              </div>
+              <div style={{height:8,borderRadius:4,background:'#E2E8F0'}}>
+                <div style={{height:'100%',borderRadius:4,background:`linear-gradient(90deg,${C.primary},${C.accent})`,width:`${progress}%`,transition:'width 100ms'}}/>
+              </div>
+              <div style={{marginTop:8,fontSize:12,color:C.textSub}}>품셈집 4종 대상 벡터 유사도 검색 진행 중</div>
+            </div>
+          )}
+          {done && (
+            <div style={{padding:14,borderRadius:10,background:'#D1FAE5',marginBottom:16,display:'flex',alignItems:'center',gap:10}}>
+              <span style={{fontSize:18}}>✅</span>
+              <div>
+                <div style={{fontSize:14,fontWeight:600,color:'#065F46'}}>매칭 완료</div>
+                <div style={{fontSize:12,color:'#047857'}}>총 {parsed.length}건 처리 · 평균 매칭률 86%</div>
+              </div>
+            </div>
+          )}
+          {parsed.length > 0 ? (
+            <div style={{maxHeight:done?340:400,overflowY:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse'}}>
+                <thead>
+                  <tr style={{borderBottom:`2px solid ${C.border}`,position:'sticky',top:0,background:C.surface}}>
+                    <th style={{padding:'8px',fontSize:12,fontWeight:600,color:C.textSub,textAlign:'left',width:40}}>#</th>
+                    <th style={{padding:'8px',fontSize:12,fontWeight:600,color:C.textSub,textAlign:'left'}}>품목명</th>
+                    <th style={{padding:'8px',fontSize:12,fontWeight:600,color:C.textSub,textAlign:'center',width:60}}>상태</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parsed.map(p=>(
+                    <tr key={p.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                      <td style={{padding:'8px',fontSize:12,color:C.textSub}}>{p.id}</td>
+                      <td style={{padding:'8px',fontSize:13}}>{p.name}</td>
+                      <td style={{padding:'8px',textAlign:'center'}}>
+                        {p.valid?<span style={{color:C.success,fontSize:14}}>✓</span>:<span style={{color:C.danger,fontSize:14}}>✕</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:300,color:C.textLight}}>
+              <span style={{fontSize:48,marginBottom:12}}>📋</span>
+              <span style={{fontSize:14}}>좌측에서 품목명을 입력하고 파싱 미리보기를 클릭하세요</span>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <Card style={{marginTop:24}}>
+        <div style={{fontSize:16,fontWeight:700,marginBottom:12}}>입력 가이드</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:20}}>
+          {[
+            {icon:'📝',title:'텍스트 붙여넣기',desc:'엑셀에서 품목명 열을 복사하여 입력란에 붙여넣기합니다. 한 줄에 하나의 품목명이 입력됩니다.'},
+            {icon:'🔍',title:'AI 자동 매칭',desc:'입력된 품목명을 정부 품셈집 4종의 벡터 인덱스에서 의미론적으로 검색하여 가장 유사한 항목을 매핑합니다.'},
+            {icon:'✅',title:'결과 검수',desc:'AI 매칭 결과를 검토하고 필요시 수치를 수정한 뒤 확정 저장합니다. PDF 원본 페이지를 함께 참조할 수 있습니다.'},
+          ].map((g,i)=>(
+            <div key={i} style={{display:'flex',gap:12}}>
+              <span style={{fontSize:28}}>{g.icon}</span>
+              <div>
+                <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>{g.title}</div>
+                <div style={{fontSize:12,color:C.textSub,lineHeight:1.6}}>{g.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ── Match Result Page ──
+function MatchResultPage({toast}){
+  const [items,setItems]=useState(ITEMS_RAW);
+  const [filter,setFilter]=useState('all');
+  const [currentPage,setCurrentPage]=useState(1);
+  const [detailItem,setDetailItem]=useState(null);
+  const [editItem,setEditItem]=useState(null);
+  const [sortCol,setSortCol]=useState(null);
+  const [sortDir,setSortDir]=useState('asc');
+
+  const filtered = useMemo(()=>{
+    let f = filter==='all'?items:items.filter(i=>i.status===filter);
+    if(sortCol){
+      f=[...f].sort((a,b)=>{
+        const va=a[sortCol],vb=b[sortCol];
+        if(typeof va==='number') return sortDir==='asc'?va-vb:vb-va;
+        return sortDir==='asc'?String(va).localeCompare(String(vb)):String(vb).localeCompare(String(va));
+      });
+    }
+    return f;
+  },[items,filter,sortCol,sortDir]);
+
+  const totalPages = Math.ceil(filtered.length/PER_PAGE);
+  const paged = filtered.slice((currentPage-1)*PER_PAGE, currentPage*PER_PAGE);
+
+  const handleSort=(col)=>{
+    if(sortCol===col) setSortDir(d=>d==='asc'?'desc':'asc');
+    else{setSortCol(col);setSortDir('asc');}
+  };
+
+  const handleEdit=(item)=>{
+    setEditItem({...item});
+  };
+  const handleSaveEdit=()=>{
+    setItems(prev=>prev.map(i=>i.id===editItem.id?editItem:i));
+    setEditItem(null);
+    toast('매칭 결과가 수정되었습니다.','success');
+  };
+
+  const tabs = [{id:'all',label:'전체',count:items.length},{id:'matched',label:'매칭완료',count:items.filter(i=>i.status==='matched').length},{id:'review',label:'검토필요',count:items.filter(i=>i.status==='review').length},{id:'confirmed',label:'확정',count:items.filter(i=>i.status==='confirmed').length}];
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <Card>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+          <div style={{display:'flex',gap:8}}>
+            {tabs.map(t=>(
+              <button key={t.id} onClick={()=>{setFilter(t.id);setCurrentPage(1);}}
+                style={{padding:'8px 16px',borderRadius:8,border:`1px solid ${filter===t.id?C.primary:C.border}`,background:filter===t.id?C.primary:'transparent',color:filter===t.id?'#fff':C.textSub,fontSize:13,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>
+                {t.label} <span style={{fontWeight:700,marginLeft:4}}>{t.count}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',minWidth:900}}>
+            <thead>
+              <tr style={{borderBottom:`2px solid ${C.border}`}}>
+                {[{key:'id',label:'#',w:50},{key:'name',label:'입력 품목명',w:180},{key:'category',label:'분류',w:80},{key:'matchedName',label:'매칭 품셈 항목',w:200},{key:'matchRate',label:'매칭률',w:120},{key:'qty',label:'공량',w:80},{key:'page',label:'참조 페이지',w:80},{key:'status',label:'상태',w:90},{key:'action',label:'',w:80}].map(h=>(
+                  <th key={h.key} onClick={()=>h.key!=='action'&&handleSort(h.key)}
+                    style={{padding:'10px 8px',fontSize:12,fontWeight:600,color:C.textSub,textAlign:'left',width:h.w,cursor:h.key!=='action'?'pointer':'default',userSelect:'none'}}>
+                    {h.label}{sortCol===h.key&&(sortDir==='asc'?' ▲':' ▼')}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {paged.map((item,i)=>(
+                <tr key={item.id} style={{borderBottom:`1px solid ${C.border}`,animation:`slideInRight 300ms ease ${i*40}ms both`,transition:'background 150ms'}}
+                  onMouseEnter={e=>e.currentTarget.style.background=C.primary+'06'}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <td style={{padding:'12px 8px',fontSize:12,color:C.textSub}}>{item.id}</td>
+                  <td style={{padding:'12px 8px',fontSize:13,fontWeight:500}}>{item.name}</td>
+                  <td style={{padding:'12px 8px'}}><Badge>{item.category}</Badge></td>
+                  <td style={{padding:'12px 8px',fontSize:13,color:C.primary,cursor:'pointer',fontWeight:500}} onClick={()=>setDetailItem(item)}>{item.matchedName}</td>
+                  <td style={{padding:'12px 8px',width:120}}><ConfidenceBar rate={item.matchRate}/></td>
+                  <td style={{padding:'12px 8px',fontSize:13,fontWeight:600}}>{item.qty}</td>
+                  <td style={{padding:'12px 8px',fontSize:13,color:C.primary,cursor:'pointer'}} onClick={()=>setDetailItem(item)}>p.{item.page}</td>
+                  <td style={{padding:'12px 8px'}}><StatusBadge status={item.status}/></td>
+                  <td style={{padding:'12px 8px'}}>
+                    <button onClick={()=>handleEdit(item)} style={{background:'none',border:'none',cursor:'pointer',fontSize:14,color:C.primary}} title="수정">✏️</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {totalPages>1 && <Pagination current={currentPage} total={totalPages} onChange={setCurrentPage}/>}
+      </Card>
+
+      {detailItem && (
+        <Modal title="매칭 상세 정보" onClose={()=>setDetailItem(null)} width={640}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:8}}>입력 품목명</div>
+              <div style={{fontSize:15,fontWeight:600,marginBottom:20}}>{detailItem.name}</div>
+              <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:8}}>매칭 품셈 항목</div>
+              <div style={{fontSize:15,fontWeight:600,color:C.primary,marginBottom:20}}>{detailItem.matchedName}</div>
+              <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:8}}>매칭 신뢰도</div>
+              <ConfidenceBar rate={detailItem.matchRate}/>
+            </div>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:8}}>공량</div>
+              <div style={{fontSize:22,fontWeight:800,color:C.text,marginBottom:20}}>{detailItem.qty}</div>
+              <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:8}}>참조 PDF 페이지</div>
+              <div style={{padding:12,borderRadius:8,background:C.bg,border:`1px solid ${C.border}`}}>
+                <div style={{fontSize:14,fontWeight:600,color:C.primary}}>📄 2024 건설공사 표준품셈</div>
+                <div style={{fontSize:13,color:C.textSub,marginTop:4}}>p.{detailItem.page} — {detailItem.category} 섹션</div>
+              </div>
+              <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginTop:16,marginBottom:8}}>분류</div>
+              <Badge>{detailItem.category}</Badge>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {editItem && (
+        <Modal title="매칭 결과 수정" onClose={()=>setEditItem(null)}>
+          <FormField label="입력 품목명">
+            <input value={editItem.name} readOnly style={{...inputStyle,background:'#F8FAFC'}}/>
+          </FormField>
+          <FormField label="매칭 품셈 항목" required>
+            <input value={editItem.matchedName} onChange={e=>setEditItem({...editItem,matchedName:e.target.value})} style={inputStyle}/>
+          </FormField>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+            <FormField label="공량" required>
+              <input value={editItem.qty} onChange={e=>setEditItem({...editItem,qty:e.target.value})} style={inputStyle}/>
+            </FormField>
+            <FormField label="참조 페이지">
+              <input type="number" value={editItem.page} onChange={e=>setEditItem({...editItem,page:Number(e.target.value)})} style={inputStyle}/>
+            </FormField>
+          </div>
+          <FormField label="매칭 신뢰도">
+            <div style={{display:'flex',alignItems:'center',gap:12}}>
+              <input type="range" min={0} max={100} value={editItem.matchRate} onChange={e=>setEditItem({...editItem,matchRate:Number(e.target.value)})} style={{flex:1}}/>
+              <span style={{fontSize:14,fontWeight:600,minWidth:40}}>{editItem.matchRate}%</span>
+            </div>
+          </FormField>
+          <div style={{display:'flex',gap:12,marginTop:8}}>
+            <button onClick={()=>setEditItem(null)} style={{...btnSecondary,flex:1}}>취소</button>
+            <button onClick={handleSaveEdit} style={{...btnPrimary,flex:1}}>저장</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Review Page ──
+function ReviewPage({toast}){
+  const [items,setItems]=useState(ITEMS_RAW);
+  const [filter,setFilter]=useState('all');
+  const [currentPage,setCurrentPage]=useState(1);
+  const [selectedIds,setSelectedIds]=useState(new Set());
+  const [confirmModal,setConfirmModal]=useState(false);
+  const [historyModal,setHistoryModal]=useState(null);
+
+  const filtered = filter==='all'?items:items.filter(i=>i.status===filter);
+  const totalPages = Math.ceil(filtered.length/PER_PAGE);
+  const paged = filtered.slice((currentPage-1)*PER_PAGE,currentPage*PER_PAGE);
+
+  const pending = items.filter(i=>i.status==='matched'||i.status==='review');
+  const confirmed = items.filter(i=>i.status==='confirmed');
+
+  const toggleSelect=(id)=>{
+    setSelectedIds(prev=>{const next=new Set(prev);next.has(id)?next.delete(id):next.add(id);return next;});
+  };
+  const toggleAll=()=>{
+    if(selectedIds.size===paged.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(paged.map(i=>i.id)));
+  };
+
+  const handleConfirmSelected=()=>{
+    if(selectedIds.size===0) return;
+    setConfirmModal(true);
+  };
+  const doConfirm=()=>{
+    setItems(prev=>prev.map(i=>selectedIds.has(i.id)?{...i,status:'confirmed'}:i));
+    setSelectedIds(new Set());
+    setConfirmModal(false);
+    toast(`${selectedIds.size}건이 확정되었습니다.`,'success');
+  };
+
+  const handleConfirmSingle=(id)=>{
+    setItems(prev=>prev.map(i=>i.id===id?{...i,status:'confirmed'}:i));
+    toast('해당 항목이 확정되었습니다.','success');
+  };
+  const handleReject=(id)=>{
+    setItems(prev=>prev.map(i=>i.id===id?{...i,status:'review'}:i));
+    toast('해당 항목이 반려되었습니다.','info');
+  };
+
+  const history = [
+    {date:'2026-02-25 14:32',user:'김민수',action:'확정',from:'매칭완료',to:'확정',note:'단가 확인 완료'},
+    {date:'2026-02-25 11:15',user:'이준호',action:'수정',from:'4포',to:'5포',note:'현장 확인 후 수량 변경'},
+    {date:'2026-02-24 16:48',user:'AI 엔진',action:'매칭',from:'-',to:'매칭완료',note:'매칭률 92%'},
+  ];
+
+  const tabs = [{id:'all',label:'전체',count:items.length},{id:'review',label:'미검수',count:pending.length},{id:'confirmed',label:'확정완료',count:confirmed.length}];
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:20,marginBottom:24}}>
+        <Card style={{animation:'slideUp 400ms ease 0ms both'}}>
+          <div style={{fontSize:13,color:C.textSub,marginBottom:6}}>미검수 항목</div>
+          <div style={{fontSize:28,fontWeight:800,color:C.warning}}><CountUp end={pending.length} suffix="건"/></div>
+        </Card>
+        <Card style={{animation:'slideUp 400ms ease 80ms both'}}>
+          <div style={{fontSize:13,color:C.textSub,marginBottom:6}}>확정 완료</div>
+          <div style={{fontSize:28,fontWeight:800,color:C.success}}><CountUp end={confirmed.length} suffix="건"/></div>
+        </Card>
+        <Card style={{animation:'slideUp 400ms ease 160ms both'}}>
+          <div style={{fontSize:13,color:C.textSub,marginBottom:6}}>전체 진행률</div>
+          <div style={{fontSize:28,fontWeight:800,color:C.primary}}><CountUp end={Math.round(confirmed.length/items.length*100)} suffix="%"/></div>
+          <div style={{height:6,borderRadius:3,background:'#E2E8F0',marginTop:8}}>
+            <div style={{height:'100%',borderRadius:3,background:C.primary,width:`${confirmed.length/items.length*100}%`,transition:'width 300ms'}}/>
+          </div>
+        </Card>
+      </div>
+
+      <Card>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+          <div style={{display:'flex',gap:8}}>
+            {tabs.map(t=>(
+              <button key={t.id} onClick={()=>{setFilter(t.id);setCurrentPage(1);setSelectedIds(new Set());}}
+                style={{padding:'8px 16px',borderRadius:8,border:`1px solid ${filter===t.id?C.primary:C.border}`,background:filter===t.id?C.primary:'transparent',color:filter===t.id?'#fff':C.textSub,fontSize:13,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>
+                {t.label} ({t.count})
+              </button>
+            ))}
+          </div>
+          <button onClick={handleConfirmSelected} style={{...btnPrimary,opacity:selectedIds.size>0?1:0.5}} disabled={selectedIds.size===0}>
+            ✅ 선택 항목 일괄 확정 ({selectedIds.size}건)
+          </button>
+        </div>
+
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{borderBottom:`2px solid ${C.border}`}}>
+              <th style={{padding:'10px 8px',width:36}}><input type="checkbox" onChange={toggleAll} checked={selectedIds.size===paged.length&&paged.length>0}/></th>
+              {['#','입력 품목명','매칭 품셈 항목','매칭률','공량','상태','작업'].map(h=><th key={h} style={{padding:'10px 8px',fontSize:12,fontWeight:600,color:C.textSub,textAlign:'left'}}>{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {paged.map((item,i)=>(
+              <tr key={item.id} style={{borderBottom:`1px solid ${C.border}`,background:selectedIds.has(item.id)?C.primary+'08':'transparent',transition:'background 150ms'}}>
+                <td style={{padding:'12px 8px'}}><input type="checkbox" checked={selectedIds.has(item.id)} onChange={()=>toggleSelect(item.id)}/></td>
+                <td style={{padding:'12px 8px',fontSize:12,color:C.textSub}}>{item.id}</td>
+                <td style={{padding:'12px 8px',fontSize:13,fontWeight:500}}>{item.name}</td>
+                <td style={{padding:'12px 8px',fontSize:13,color:C.primary}}>{item.matchedName}</td>
+                <td style={{padding:'12px 8px',width:110}}><ConfidenceBar rate={item.matchRate}/></td>
+                <td style={{padding:'12px 8px',fontSize:13,fontWeight:600}}>{item.qty}</td>
+                <td style={{padding:'12px 8px'}}><StatusBadge status={item.status}/></td>
+                <td style={{padding:'12px 8px',display:'flex',gap:4}}>
+                  {item.status!=='confirmed'&&<button onClick={()=>handleConfirmSingle(item.id)} style={{background:'none',border:'none',cursor:'pointer',fontSize:16}} title="확정">✅</button>}
+                  {item.status==='confirmed'&&<button onClick={()=>handleReject(item.id)} style={{background:'none',border:'none',cursor:'pointer',fontSize:16}} title="반려">↩️</button>}
+                  <button onClick={()=>setHistoryModal(item)} style={{background:'none',border:'none',cursor:'pointer',fontSize:16}} title="이력">📜</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {totalPages>1 && <Pagination current={currentPage} total={totalPages} onChange={setCurrentPage}/>}
+      </Card>
+
+      {confirmModal && (
+        <Modal title="일괄 확정 확인" onClose={()=>setConfirmModal(false)} width={440}>
+          <div style={{textAlign:'center',padding:'16px 0'}}>
+            <span style={{fontSize:48}}>✅</span>
+            <div style={{fontSize:16,fontWeight:600,marginTop:12}}>선택한 {selectedIds.size}건을 확정하시겠습니까?</div>
+            <div style={{fontSize:13,color:C.textSub,marginTop:8}}>확정 후에도 반려 처리가 가능합니다.</div>
+          </div>
+          <div style={{display:'flex',gap:12,marginTop:16}}>
+            <button onClick={()=>setConfirmModal(false)} style={{...btnSecondary,flex:1}}>취소</button>
+            <button onClick={doConfirm} style={{...btnPrimary,flex:1}}>확정</button>
+          </div>
+        </Modal>
+      )}
+
+      {historyModal && (
+        <Modal title={`변경 이력 — ${historyModal.name}`} onClose={()=>setHistoryModal(null)} width={580}>
+          <div style={{display:'flex',flexDirection:'column',gap:0}}>
+            {history.map((h,i)=>(
+              <div key={i} style={{display:'flex',gap:16,padding:'16px 0',borderBottom:i<history.length-1?`1px solid ${C.border}`:'none'}}>
+                <div style={{display:'flex',flexDirection:'column',alignItems:'center',minWidth:20}}>
+                  <div style={{width:10,height:10,borderRadius:'50%',background:i===0?C.primary:C.border,flexShrink:0}}/>
+                  {i<history.length-1&&<div style={{width:2,flex:1,background:C.border,marginTop:4}}/>}
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <span style={{fontSize:14,fontWeight:600}}>{h.action}</span>
+                    <span style={{fontSize:12,color:C.textSub}}>{h.date}</span>
+                  </div>
+                  <div style={{fontSize:13,color:C.textSub,marginTop:4}}>{h.user} · {h.note}</div>
+                  <div style={{fontSize:12,color:C.textLight,marginTop:2}}>{h.from} → {h.to}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Skeleton ──
+function SkeletonLoader(){
+  return(
+    <div style={{display:'flex',minHeight:'100vh'}}>
+      <div style={{width:260,background:C.sidebar}}>
+        <div style={{padding:24}}><div className="skeleton" style={{height:36,width:160,background:'rgba(255,255,255,0.05)'}}/></div>
+        {[1,2,3,4].map(i=><div key={i} style={{padding:'8px 20px'}}><div className="skeleton" style={{height:40,background:'rgba(255,255,255,0.05)'}}/></div>)}
+      </div>
+      <div style={{flex:1,padding:24}}>
+        <div className="skeleton" style={{height:56,marginBottom:24}}/>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:20,marginBottom:24}}>
+          {[1,2,3,4].map(i=><div key={i} className="skeleton" style={{height:100}}/>)}
+        </div>
+        <div className="skeleton" style={{height:300}}/>
+      </div>
+    </div>
+  );
+}
+
+// ── App ──
+function App(){
+  const [loading,setLoading]=useState(true);
+  const [page,setPage]=useState('dashboard');
+  const [toasts,setToasts]=useState([]);
+
+  useEffect(()=>{setTimeout(()=>setLoading(false),1500);},[]);
+
+  const addToast=(msg,type='success')=>{
+    const id=Date.now();
+    setToasts(prev=>[...prev,{id,message:msg,type}]);
+  };
+  const removeToast=(id)=>setToasts(prev=>prev.filter(t=>t.id!==id));
+
+  if(loading) return <SkeletonLoader/>;
+
+  const PAGE_TITLES = {'dashboard':'대시보드','item-input':'품목 입력','match-result':'매칭 결과','review':'검수 확정'};
+
+  const renderPage=()=>{
+    switch(page){
+      case 'dashboard': return <DashboardPage/>;
+      case 'item-input': return <ItemInputPage toast={addToast}/>;
+      case 'match-result': return <MatchResultPage toast={addToast}/>;
+      case 'review': return <ReviewPage toast={addToast}/>;
+      default: return <DashboardPage/>;
+    }
+  };
+
+  return(
+    <div style={{display:'flex',minHeight:'100vh'}}>
+      <Sidebar page={page} setPage={setPage}/>
+      <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <TopBar title={PAGE_TITLES[page]}/>
+        <main style={{flex:1,overflow:'auto',padding:24}}>
+          {renderPage()}
+        </main>
+      </div>
+      {toasts.map(t=><Toast key={t.id} message={t.message} type={t.type} onClose={()=>removeToast(t.id)}/>)}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
