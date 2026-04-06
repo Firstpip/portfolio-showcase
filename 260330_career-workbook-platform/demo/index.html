@@ -859,26 +859,10 @@ let myAnswers = {};
 let myQ5Scales = {};
 let revealedStudentIds = new Set(); // student.id 기준
 let focusedStudentId = null;        // 스포트라이트 포커스 대상
-let spotlightQ = 1;                 // 스포트라이트 대상 문항 번호
 let focusMode = false;              // 집중 화면 활성 여부
 let saveTimer = null;
 let toastTimer = null;
 let isOnline = false;
-
-// ─── 크로스탭 통신 (BroadcastChannel) ─────────────────────
-const crossTab = new BroadcastChannel('career-workbook-spotlight');
-crossTab.onmessage = (e) => {
-  const { type, studentId, q } = e.data;
-  if (type === 'spotlight') {
-    focusedStudentId = studentId || null;
-    if (q) spotlightQ = q;
-    renderSBResponses();
-    if (ROLE === 'smartboard') {
-      if (focusedStudentId) showAnswerSpotlight(focusedStudentId);
-      else hideAnswerSpotlight();
-    }
-  }
-};
 
 // ─── Supabase Init ────────────────────────────────────────
 async function init() {
@@ -906,9 +890,7 @@ async function init() {
     if (sessionRes.data) {
       activeQ = sessionRes.data.active_question;
       focusMode = !!sessionRes.data.focus_mode;
-      const decodedInit = decodeSpotlight(sessionRes.data.focused_student_id);
-      focusedStudentId = decodedInit.studentId;
-      if (decodedInit.q) spotlightQ = decodedInit.q;
+      focusedStudentId = sessionRes.data.focused_student_id || null;
     }
 
     if (studentsRes.data) {
@@ -944,17 +926,6 @@ async function init() {
   updateFocusModeBtn();
   if (focusMode && ROLE === 'smartboard') enterFocus();
   if (focusedStudentId && ROLE === 'smartboard') showAnswerSpotlight(focusedStudentId);
-}
-
-// ─── 학생 상태: 현재 활성 문항 기준 판단 ─────────────────
-function hasAnswered(student, qNum) {
-  const val = student[`q${qNum}`];
-  if (Array.isArray(val)) return val.length > 0;
-  return !!val && val !== '작성중...' && val !== '';
-}
-function effectiveStatus(student) {
-  if (student.status === 'absent') return 'absent';
-  return hasAnswered(student, activeQ) ? 'done' : 'writing';
 }
 
 // 폴백: Supabase 연결 실패 시 하드코딩 데이터
@@ -1029,9 +1000,7 @@ function setupRealtime() {
       if (!payload.new.focus_mode && ROLE === 'smartboard' && overlay.classList.contains('active')) exitFocus();
       // 스포트라이트 포커스 변경 → 전자칠판 응답 카드 재렌더 + 전체화면 답변 표시
       if ('focused_student_id' in payload.new) {
-        const decoded = decodeSpotlight(payload.new.focused_student_id);
-        focusedStudentId = decoded.studentId;
-        if (decoded.q) spotlightQ = decoded.q;
+        focusedStudentId = payload.new.focused_student_id || null;
         renderSBResponses();
         if (ROLE === 'smartboard') {
           if (focusedStudentId) showAnswerSpotlight(focusedStudentId);
@@ -1542,9 +1511,6 @@ async function activateQuestion(n) {
   renderQControl();
   renderSBBars();
   renderResponseTable();
-  renderSBResponses();
-  renderStudentGrid();
-  updateCounts();
   showToast(`Q${n} 활성화 — 학생 화면에 즉시 반영됩니다`);
   if (n > 1) simulateStudentAnswers(n); // Q2 이상부터 응답 시뮬레이션 시작
 
@@ -1580,30 +1546,20 @@ function updateActiveQDisplay() {
   if (nextBtn) nextBtn.textContent = activeQ < 5 ? `Q${activeQ+1} 활성화 →` : '마지막 문항';
 }
 
-// ─── 스포트라이트 인코딩: "studentId::qNum" → DB 컬럼 추가 없이 문항 번호 전달 ──
-function encodeSpotlight(studentId, qNum) {
-  return studentId ? `${studentId}::${qNum}` : null;
-}
-function decodeSpotlight(val) {
-  if (!val) return { studentId: null, q: null };
-  const parts = val.split('::');
-  return { studentId: parts[0], q: parts.length > 1 ? parseInt(parts[1]) : null };
-}
-
 // ─── 칠판 공개 토글 (교사) ───────────────────────────────
 async function setSpotlight(studentId) {
   const nextId = focusedStudentId === studentId ? null : studentId;
   focusedStudentId = nextId;
-  spotlightQ = viewQ;
   renderResponseTable();
   renderSBResponses();
-  // 크로스탭 통신 (같은 기기 탭 간)
-  crossTab.postMessage({ type: 'spotlight', studentId: nextId, q: nextId ? viewQ : null });
-  // DB 업데이트 (다른 기기 전달 — postgres_changes로 수신)
+  // 교사 본인이 smartboard 탭도 열어둔 경우 로컬 즉시 반영
+  if (ROLE === 'smartboard' || ROLE === 'all') {
+    if (nextId) showAnswerSpotlight(nextId); else hideAnswerSpotlight();
+  }
   if (db && isOnline) {
     try {
       await db.from('class_sessions')
-        .update({ focused_student_id: encodeSpotlight(nextId, viewQ) })
+        .update({ focused_student_id: nextId })
         .eq('id', SESSION_ID);
     } catch(e) { console.warn('스포트라이트 업데이트 실패:', e); }
   }
@@ -1720,9 +1676,8 @@ function renderStudentGrid() {
   const grid = document.getElementById('studentGrid');
   if (!grid) return;
   grid.innerHTML = students.map(s => {
-    const eff = effectiveStatus(s);
-    const cls = eff==='done'?'done':eff==='writing'?'writing':'absent';
-    const icon = eff==='done'?'✓':eff==='writing'?'✏':'—';
+    const cls = s.status==='done'?'done':s.status==='writing'?'writing':'absent';
+    const icon = s.status==='done'?'✓':s.status==='writing'?'✏':'—';
     return `<div class="student-chip ${cls}" data-student-id="${s.id}" onclick="openStudentModal('${s.id}')" title="${s.name} 답변 보기">
       <div class="student-num">${icon} ${s.no}</div>
       <div class="student-name">${s.name}</div>
@@ -1733,21 +1688,20 @@ function renderStudentGrid() {
 function renderQControl() {
   const el = document.getElementById('questionControl');
   if (!el) return;
+  const doneCount = students.filter(s=>s.status==='done').length;
   const total = students.length || 28;
-  const present = students.filter(s=>s.status!=='absent').length;
   el.innerHTML = questions.map((q,i) => {
     const n = i+1;
-    const answered = students.filter(s=>s.status!=='absent' && hasAnswered(s, n)).length;
     let style, label;
     if (n < activeQ) {
       style = 'border:2px solid var(--success);background:#D1FAE5;';
-      label = `<div style="font-size:11px;color:#065F46;font-weight:700;">Q${n} 완료</div><div style="font-size:13px;font-weight:700;margin-top:4px;color:#065F46;">${answered}/${present}</div>`;
+      label = `<div style="font-size:11px;color:#065F46;font-weight:700;">Q${n} 완료</div><div style="font-size:13px;font-weight:700;margin-top:4px;color:#065F46;">${total}/${total}</div>`;
     } else if (n === activeQ) {
       style = 'border:2px solid var(--primary);background:var(--primary-light);';
-      label = `<div style="font-size:11px;color:var(--primary);font-weight:700;">Q${n} 활성 ▶</div><div style="font-size:13px;font-weight:700;margin-top:4px;color:var(--primary);">${answered}/${present}</div>`;
+      label = `<div style="font-size:11px;color:var(--primary);font-weight:700;">Q${n} 활성 ▶</div><div style="font-size:13px;font-weight:700;margin-top:4px;color:var(--primary);">${doneCount}/${total}</div>`;
     } else {
       style = 'border:2px solid var(--border);background:#F8FAFC;opacity:0.5;';
-      label = `<div style="font-size:11px;color:var(--text-secondary);font-weight:700;">Q${n} 잠금</div><div style="font-size:13px;font-weight:700;margin-top:4px;color:var(--text-secondary);">0/${present}</div>`;
+      label = `<div style="font-size:11px;color:var(--text-secondary);font-weight:700;">Q${n} 잠금</div><div style="font-size:13px;font-weight:700;margin-top:4px;color:var(--text-secondary);">0/${total}</div>`;
     }
     return `<div style="border-radius:10px;padding:14px;${style}cursor:pointer;text-align:center;" onclick="activateQuestion(${n})">${label}</div>`;
   }).join('');
@@ -1756,17 +1710,17 @@ function renderQControl() {
 function renderSBBars() {
   const el = document.getElementById('sbQBars');
   if (!el) return;
+  const done = students.filter(s=>s.status==='done').length;
   const total = students.length || 28;
   el.innerHTML = questions.map((q,i) => {
     const n = i+1;
-    const answered = students.filter(s=>s.status!=='absent' && hasAnswered(s, n)).length;
     let bg, label, count, w;
     if (n < activeQ) {
       bg='rgba(16,185,129,0.15)'; label=`<div style="font-size:10px;color:#6EE7B7;font-weight:700;">Q${n}</div>`;
-      count=`<div style="font-size:18px;font-weight:800;color:#10B981;">${answered}</div>`; w=`${total>0?Math.round(answered/total*100):0}%`;
+      count=`<div style="font-size:18px;font-weight:800;color:#10B981;">${total}</div>`; w='100%';
     } else if (n === activeQ) {
       bg='rgba(56,189,248,0.15)'; label=`<div style="font-size:10px;color:#38BDF8;font-weight:700;">Q${n} ▶</div>`;
-      count=`<div style="font-size:18px;font-weight:800;color:#38BDF8;">${answered}</div>`; w=`${total>0?Math.round(answered/total*100):0}%`;
+      count=`<div style="font-size:18px;font-weight:800;color:#38BDF8;">${done}</div>`; w=`${Math.round(done/total*100)}%`;
     } else {
       bg='rgba(255,255,255,0.04)'; label=`<div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:700;">Q${n}</div>`;
       count=`<div style="font-size:18px;font-weight:800;color:rgba(255,255,255,0.2);">—</div>`; w='0%';
@@ -1822,7 +1776,7 @@ function renderResponseTable() {
   const tbody = document.getElementById('responseTable');
   if (!tbody) return;
   const qKey = `q${viewQ}`;
-  const doneStudents = students.filter(s => s.status!=='absent' && hasAnswered(s, viewQ)).slice().reverse().slice(0, 8);
+  const doneStudents = students.filter(s => s.status==='done' && s[qKey]).slice().reverse().slice(0, 8);
 
   // Q 탭 + 질문 텍스트 업데이트
   renderResponseQTabs();
@@ -1845,9 +1799,9 @@ function renderResponseTable() {
 }
 
 function updateCounts() {
-  const done = students.filter(s=>effectiveStatus(s)==='done').length;
-  const writing = students.filter(s=>effectiveStatus(s)==='writing').length;
-  const absent = students.filter(s=>effectiveStatus(s)==='absent').length;
+  const done = students.filter(s=>s.status==='done').length;
+  const writing = students.filter(s=>s.status==='writing').length;
+  const absent = students.filter(s=>s.status==='absent').length;
   const total = students.length || 28;
   const pct = total > 0 ? Math.round(done/total*100) : 0;
 
@@ -1922,30 +1876,10 @@ async function openStudentModal(studentId) {
 function showAnswerSpotlight(studentId) {
   const s = students.find(st => st.id === studentId);
   if (!s) return;
-  const q = questions[spotlightQ-1];
   const el = document.getElementById('answerSpotlight');
-  const answerEl = document.getElementById('spotlightAnswer');
   document.getElementById('spotlightName').textContent = `${s.name} (${s.no}번)`;
-  document.getElementById('spotlightQuestion').textContent = `Q${spotlightQ}. ${q?.text || ''}`;
-
-  const val = s[`q${spotlightQ}`];
-  if (q?.type === 'scale' && Array.isArray(val) && val.length) {
-    const scaleLabels = ['전혀 아니다','아니다','보통이다','그렇다','매우 그렇다'];
-    answerEl.innerHTML = (q.scaleItems || []).map((item, i) => {
-      const score = val[i] || 0;
-      const label = scaleLabels[score - 1] || '';
-      const dots = [1,2,3,4,5].map(n =>
-        `<span style="display:inline-block;width:${n===score?'14px':'10px'};height:${n===score?'14px':'10px'};border-radius:50%;background:${n===score?'#a78bfa':'#334155'};margin:0 3px;vertical-align:middle;transition:all .2s;"></span>`
-      ).join('');
-      return `<div style="display:flex;align-items:center;gap:16px;padding:12px 20px;background:#0f172a;border-radius:10px;border:1px solid #1e293b;">
-        <div style="flex:1;font-size:clamp(14px,1.8vw,18px);color:#cbd5e1;text-align:left;">${item}</div>
-        <div style="display:flex;align-items:center;gap:2px;">${dots}</div>
-        <div style="min-width:90px;font-size:clamp(13px,1.5vw,16px);font-weight:700;color:#a78bfa;text-align:right;">${label}</div>
-      </div>`;
-    }).join('');
-  } else {
-    answerEl.textContent = val || '';
-  }
+  document.getElementById('spotlightQuestion').textContent = `Q${activeQ}. ${questions[activeQ-1]?.text || ''}`;
+  document.getElementById('spotlightAnswer').textContent = s[`q${activeQ}`] || '';
   el.style.display = 'flex';
 }
 
