@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>핀테크 결제 SDK 통합 시뮬레이터</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Pretendard', -apple-system, sans-serif; background: #0F172A; color: #F1F5F9; }
+::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #1E293B; } ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+.badge { display:inline-flex;align-items:center;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600; }
+.toast { position:fixed;bottom:28px;right:28px;background:#6366F1;color:#fff;padding:12px 20px;border-radius:10px;font-size:13px;z-index:2000;box-shadow:0 8px 24px rgba(99,102,241,.4);animation:slideUp .3s ease; }
+.drawer-overlay { position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000; }
+.drawer { position:fixed;right:0;top:0;bottom:0;width:420px;background:#1E293B;z-index:1001;border-left:1px solid #334155;overflow-y:auto;animation:slideIn .25s ease; }
+@keyframes slideUp { from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)} }
+@keyframes slideIn { from{transform:translateX(100%)}to{transform:translateX(0)} }
+.modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;align-items:center;justify-content:center;padding:24px; }
+.modal-box { background:#1E293B;border:1px solid #334155;border-radius:14px;max-width:540px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.5); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { AreaChart, Area, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } = Recharts;
+
+const C = {
+  primary: '#6366F1', primaryHover: '#4F46E5', primaryLight: 'rgba(99,102,241,.15)',
+  secondary: '#8B5CF6', accent: '#06B6D4', accentLight: 'rgba(6,182,212,.15)',
+  bg: '#0F172A', surface: '#1E293B', surfaceHigh: '#263348',
+  tp: '#F1F5F9', ts: '#94A3B8', tm: '#64748B',
+  border: '#334155', borderLight: '#1E293B',
+  err: '#F43F5E', warn: '#F59E0B', ok: '#10B981', info: '#06B6D4',
+};
+
+const TABS = ['결제 흐름 시뮬레이터', '거래 이력 관리', 'WebView 브릿지 데모', '결제 상태 추적'];
+
+const transactions = [
+  { id:'TXN-2843', amount:35000, method:'카카오페이', status:'completed', ts:'14:31:02', sdk:'kakao-v3', detail:'환승할인 적용 완료', steps: ['pending','processing','authorized','completed'] },
+  { id:'TXN-2842', amount:12500, method:'신용카드', status:'failed', ts:'14:28:45', sdk:'kg-inicis', detail:'SDK_TIMEOUT 발생 (5000ms 초과)', steps: ['pending','processing','failed'] },
+  { id:'TXN-2841', amount:50000, method:'계좌이체', status:'completed', ts:'14:25:11', sdk:'toss-pay', detail:'정상 처리', steps: ['pending','processing','authorized','completed'] },
+  { id:'TXN-2840', amount:8900, method:'카카오페이', status:'cancelled', ts:'14:21:33', sdk:'kakao-v3', detail:'사용자 취소', steps: ['pending','cancelled'] },
+  { id:'TXN-2839', amount:27000, method:'네이버페이', status:'completed', ts:'14:18:52', sdk:'naver-pay', detail:'정상 처리', steps: ['pending','processing','authorized','completed'] },
+  { id:'TXN-2838', amount:15000, method:'신용카드', status:'failed', ts:'14:15:27', sdk:'kg-inicis', detail:'인증 실패 (카드 유효기간 오류)', steps: ['pending','failed'] },
+  { id:'TXN-2837', amount:42000, method:'토스페이', status:'completed', ts:'14:11:04', sdk:'toss-pay', detail:'정상 처리', steps: ['pending','processing','authorized','completed'] },
+  { id:'TXN-2836', amount:19500, method:'계좌이체', status:'pending', ts:'14:08:39', sdk:'toss-pay', detail:'처리 중…', steps: ['pending','processing'] },
+];
+
+const statusTrend = [
+  { time:'09:00', 성공:245, 실패:12, 취소:8 },
+  { time:'10:00', 성공:312, 실패:18, 취소:11 },
+  { time:'11:00', 성공:289, 실패:9, 취소:6 },
+  { time:'12:00', 성공:438, 실패:31, 취소:19 },
+  { time:'13:00', 성공:387, 실패:22, 취소:14 },
+  { time:'14:00', 성공:201, 실패:45, 취소:17 },
+];
+
+const bridgeMsgTypes = [
+  { type:'결제 요청', payload: { action:'pay', amount:35000, method:'card', merchantId:'MCHT-001' } },
+  { type:'인증 요청', payload: { action:'auth', userId:'usr_abc123', token:'eyJhbGciOiJS...' } },
+  { type:'상태 조회', payload: { action:'status', txId:'TXN-2843' } },
+  { type:'결제 취소', payload: { action:'cancel', txId:'TXN-2843', reason:'user_request' } },
+  { type:'환불 요청', payload: { action:'refund', txId:'TXN-2843', amount:35000 } },
+  { type:'알림 수신', payload: { action:'notify', type:'payment_complete', txId:'TXN-2843' } },
+];
+
+const paymentSteps = [
+  { key:'pending', label:'대기', color:'#64748B', icon:'⏳' },
+  { key:'processing', label:'처리 중', color:'#06B6D4', icon:'⚙️' },
+  { key:'authorized', label:'승인', color:'#F59E0B', icon:'🔐' },
+  { key:'completed', label:'완료', color:'#10B981', icon:'✅' },
+  { key:'failed', label:'실패', color:'#F43F5E', icon:'❌' },
+  { key:'cancelled', label:'취소', color:'#8B5CF6', icon:'🚫' },
+];
+
+function Toast({ msg, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 2800); return () => clearTimeout(t); }, []);
+  return <div className="toast">{msg}</div>;
+}
+
+function Modal({ title, onClose, children, actions }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={e => e.stopPropagation()}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px', borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ fontWeight:700, fontSize:15, color:C.tp }}>{title}</span>
+          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', fontSize:20, color:C.ts }}>×</button>
+        </div>
+        <div style={{ padding:'24px' }}>{children}</div>
+        {actions && <div style={{ display:'flex', gap:8, justifyContent:'flex-end', padding:'16px 24px', borderTop:`1px solid ${C.border}` }}>{actions}</div>}
+      </div>
+    </div>
+  );
+}
+
+function Btn({ children, variant='primary', onClick, small }) {
+  const s = {
+    primary: { background:C.primary, color:'#fff', border:'none', boxShadow:`0 0 12px rgba(99,102,241,.4)` },
+    secondary: { background:'transparent', color:C.ts, border:`1px solid ${C.border}` },
+    danger: { background:'rgba(244,63,94,.15)', color:C.err, border:`1px solid rgba(244,63,94,.3)` },
+  };
+  return <button onClick={onClick} style={{ ...s[variant], padding:small?'5px 12px':'8px 16px', borderRadius:8, cursor:'pointer', fontFamily:'inherit', fontSize:small?11:13, fontWeight:600, transition:'all .15s' }}>{children}</button>;
+}
+
+// ── 탑바
+function TopBar({ activeTab, setTab }) {
+  return (
+    <header style={{ background:C.surface, borderBottom:`1px solid ${C.border}`, position:'sticky', top:0, zIndex:100 }}>
+      <div style={{ padding:'0 32px', display:'flex', alignItems:'center', justifyContent:'space-between', height:56 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <div style={{ width:30, height:30, background:`linear-gradient(135deg,${C.primary},${C.secondary})`, borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14 }}>💳</div>
+          <span style={{ fontWeight:800, fontSize:14, background:`linear-gradient(135deg,${C.primary},${C.accent})`, WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent' }}>PaySDK Simulator</span>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:16 }}>
+          <div style={{ width:8, height:8, borderRadius:'50%', background:C.ok, boxShadow:`0 0 8px ${C.ok}`, animation:'pulse 2s infinite' }} />
+          <span style={{ fontSize:12, color:C.ts }}>시뮬레이터 실행 중</span>
+          <div style={{ width:32, height:32, borderRadius:'50%', background:`linear-gradient(135deg,${C.primary},${C.secondary})`, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:700, fontSize:12 }}>K</div>
+        </div>
+      </div>
+      <div style={{ display:'flex', padding:'0 32px', gap:4, overflowX:'auto' }}>
+        {TABS.map(tab => (
+          <button key={tab} onClick={() => setTab(tab)} style={{
+            padding:'12px 20px', border:'none', background:'none', cursor:'pointer', fontFamily:'inherit',
+            fontSize:13, fontWeight:activeTab===tab?700:400,
+            color:activeTab===tab?C.primary:C.ts,
+            borderBottom:`2px solid ${activeTab===tab?C.primary:'transparent'}`,
+            transition:'all .15s', whiteSpace:'nowrap',
+          }}>{tab}</button>
+        ))}
+      </div>
+    </header>
+  );
+}
+
+// ── 페이지별 히어로 배너
+function HeroBanner({ tab }) {
+  const info = {
+    '결제 흐름 시뮬레이터': { icon:'🔬', title:'결제 흐름 시뮬레이터', desc:'SDK 결제 요청부터 완료까지 모든 단계를 시뮬레이션하고 실패 시나리오를 직접 주입해보세요.', color: C.primary },
+    '거래 이력 관리': { icon:'📊', title:'거래 이력 관리', desc:'결제 수단·상태별 거래 이력을 조회하고 SDK 호출 체인을 드릴다운으로 탐색합니다.', color: C.accent },
+    'WebView 브릿지 데모': { icon:'🔗', title:'WebView 브릿지 데모', desc:'WebView→Native 브릿지 메시지를 직접 편집하고 응답 지연·실패 조건을 설정하여 통신 패턴을 검증합니다.', color: C.secondary },
+    '결제 상태 추적': { icon:'📡', title:'결제 상태 추적', desc:'진행 중인 결제의 상태 전이를 실시간 타임라인으로 추적하고 SDK 콜백 로그를 확인합니다.', color: C.ok },
+  };
+  const i = info[tab];
+  return (
+    <div style={{ background:`linear-gradient(135deg, ${i.color}20, ${i.color}08)`, border:`1px solid ${i.color}30`, borderRadius:12, padding:'20px 24px', marginBottom:24, display:'flex', alignItems:'center', gap:16 }}>
+      <div style={{ fontSize:32 }}>{i.icon}</div>
+      <div>
+        <div style={{ fontWeight:800, fontSize:18, color:C.tp, marginBottom:4 }}>{i.title}</div>
+        <div style={{ fontSize:13, color:C.ts }}>{i.desc}</div>
+      </div>
+    </div>
+  );
+}
+
+function KpiCard({ label, value, sub, icon, color }) {
+  return (
+    <div style={{ background:C.surface, borderRadius:12, padding:'18px 20px', border:`1px solid ${C.border}` }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+        <span style={{ fontSize:16 }}>{icon}</span>
+        <span style={{ fontSize:11, color:C.ts, fontWeight:500 }}>{label}</span>
+      </div>
+      <div style={{ fontSize:26, fontWeight:800, color:C.tp, marginBottom:3 }}>{value}</div>
+      <div style={{ fontSize:11, color:C.ts }}>{sub}</div>
+    </div>
+  );
+}
+
+// ── P2-1: 결제 흐름 시뮬레이터
+function PaymentSimPage() {
+  const [method, setMethod] = useState('toss');
+  const [scenario, setScenario] = useState('success');
+  const [running, setRunning] = useState(false);
+  const [step, setStep] = useState(-1);
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const methods = [
+    { id:'toss', name:'토스페이', icon:'💙', sdk:'toss-pay' },
+    { id:'kakao', name:'카카오페이', icon:'💛', sdk:'kakao-v3' },
+    { id:'card', name:'신용카드', icon:'💳', sdk:'kg-inicis' },
+    { id:'bank', name:'계좌이체', icon:'🏦', sdk:'toss-pay' },
+  ];
+
+  const scenarios = [
+    { id:'success', label:'성공 시나리오', color:C.ok },
+    { id:'timeout', label:'타임아웃 실패', color:C.err },
+    { id:'auth_fail', label:'인증 실패', color:C.warn },
+  ];
+
+  const simSteps = scenario === 'success' ? [
+    { label:'결제 요청 초기화', detail:'SDK 인스턴스 생성, 결제 파라미터 검증', ms:42, ok:true },
+    { label:'WebView→Native 브릿지 전송', detail:'postMessage({action:"pay", amount:35000})', ms:18, ok:true },
+    { label:'Native SDK 호출', detail:'PaySDK.requestPayment(txParams)', ms:95, ok:true },
+    { label:'결제 서버 인증 요청', detail:'POST /v1/payments/authorize', ms:312, ok:true },
+    { label:'PG사 결제 승인', detail:'3DS 인증 + 카드사 승인', ms:1240, ok:true },
+    { label:'완료 콜백 수신', detail:'onPaymentComplete({txId, status:"completed"})', ms:28, ok:true },
+    { label:'WebView 결과 전달', detail:'postMessage({result:"success", txId:...})', ms:15, ok:true },
+  ] : scenario === 'timeout' ? [
+    { label:'결제 요청 초기화', detail:'SDK 인스턴스 생성, 결제 파라미터 검증', ms:42, ok:true },
+    { label:'WebView→Native 브릿지 전송', detail:'postMessage({action:"pay", amount:35000})', ms:18, ok:true },
+    { label:'Native SDK 호출', detail:'PaySDK.requestPayment(txParams)', ms:95, ok:true },
+    { label:'결제 서버 인증 요청', detail:'POST /v1/payments/authorize', ms:5000, ok:false },
+    { label:'SDK_TIMEOUT 에러 발생', detail:'Error: gateway response timeout (5000ms)', ms:null, ok:false },
+    { label:'에러 콜백 전달', detail:'onPaymentError({code:"SDK_TIMEOUT"})', ms:null, ok:false },
+  ] : [
+    { label:'결제 요청 초기화', detail:'SDK 인스턴스 생성, 결제 파라미터 검증', ms:42, ok:true },
+    { label:'WebView→Native 브릿지 전송', detail:'postMessage({action:"pay", amount:35000})', ms:18, ok:true },
+    { label:'Native SDK 호출', detail:'PaySDK.requestPayment(txParams)', ms:95, ok:true },
+    { label:'사용자 인증 시도', detail:'3DS 인증 카드번호 불일치', ms:280, ok:false },
+    { label:'AUTH_FAIL 에러 발생', detail:'Error: authentication failed (invalid card)', ms:null, ok:false },
+  ];
+
+  function runSim() {
+    setRunning(true); setStep(0);
+    let s = 0;
+    const next = () => {
+      s++;
+      if (s < simSteps.length) { setStep(s); setTimeout(next, 600 + (simSteps[s]?.ms || 0) * 0.15); }
+      else { setRunning(false); }
+    };
+    setTimeout(next, 800);
+  }
+
+  const payloadPreview = `{
+  "action": "pay",
+  "amount": 35000,
+  "method": "${methods.find(m=>m.id===method)?.sdk}",
+  "txId": "TXN-${Math.floor(Math.random()*9000+1000)}",
+  "scenario": "${scenario}",
+  "errorCode": ${scenario==='success'?'null':scenario==='timeout'?'"SDK_TIMEOUT"':'"AUTH_FAIL"'}
+}`;
+
+  return (
+    <div>
+      <HeroBanner tab="결제 흐름 시뮬레이터" />
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:24 }}>
+        <KpiCard icon="✅" label="오늘 성공 거래" value="1,872건" sub="성공률 94.2%" color={C.ok} />
+        <KpiCard icon="❌" label="실패 거래" value="108건" sub="SDK_TIMEOUT 67%" color={C.err} />
+        <KpiCard icon="⏱" label="평균 처리 시간" value="1,840ms" sub="목표 2,000ms 이내" color={C.accent} />
+        <KpiCard icon="🔁" label="자동 재시도" value="43건" sub="복구 성공 29건" color={C.secondary} />
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }}>
+        <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}` }}>
+          <div style={{ fontWeight:700, fontSize:14, color:C.tp, marginBottom:16 }}>결제 수단 선택</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:20 }}>
+            {methods.map(m => (
+              <button key={m.id} onClick={() => setMethod(m.id)} style={{
+                padding:'14px', borderRadius:10, cursor:'pointer', textAlign:'left', fontFamily:'inherit',
+                background: method===m.id ? C.primaryLight : C.surfaceHigh,
+                border: `2px solid ${method===m.id?C.primary:C.border}`,
+                transition:'all .15s',
+              }}>
+                <div style={{ fontSize:22, marginBottom:6 }}>{m.icon}</div>
+                <div style={{ fontSize:13, fontWeight:600, color:C.tp }}>{m.name}</div>
+                <div style={{ fontSize:10, color:C.ts, marginTop:2 }}>{m.sdk}</div>
+              </button>
+            ))}
+          </div>
+          <div style={{ fontWeight:700, fontSize:13, color:C.tp, marginBottom:10 }}>시나리오 선택</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:20 }}>
+            {scenarios.map(s => (
+              <label key={s.id} onClick={() => setScenario(s.id)} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 14px', borderRadius:8, cursor:'pointer', background:scenario===s.id?`${s.color}18`:C.surfaceHigh, border:`1px solid ${scenario===s.id?s.color:C.border}`, transition:'all .15s' }}>
+                <input type="radio" readOnly checked={scenario===s.id} style={{ accentColor:s.color }} />
+                <span style={{ fontSize:13, fontWeight:600, color:scenario===s.id?s.color:C.ts }}>{s.label}</span>
+              </label>
+            ))}
+          </div>
+          <Btn onClick={running ? undefined : runSim} variant={running?'secondary':'primary'}>{running ? '실행 중…' : '▶ 시뮬레이션 실행'}</Btn>
+        </div>
+
+        <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}` }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+            <div style={{ fontWeight:700, fontSize:14, color:C.tp }}>단계별 진행 상태</div>
+            <Btn small variant="secondary" onClick={() => { setStep(-1); setRunning(false); }}>초기화</Btn>
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {simSteps.map((s, i) => {
+              const done = i <= step;
+              const active = i === step;
+              return (
+                <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:12, opacity: done ? 1 : 0.35, transition:'opacity .3s' }}>
+                  <div style={{ width:28, height:28, borderRadius:'50%', background: done ? (s.ok?C.ok:C.err) : C.border, display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, flexShrink:0, boxShadow: active ? `0 0 12px ${s.ok?C.ok:C.err}` : 'none', transition:'all .3s' }}>
+                    {done ? (s.ok ? '✓' : '✗') : i+1}
+                  </div>
+                  <div style={{ flex:1, paddingTop:3 }}>
+                    <div style={{ fontSize:12, fontWeight:600, color:done?(s.ok?C.tp:C.err):C.ts }}>{s.label}</div>
+                    <div style={{ fontSize:11, color:C.ts, marginTop:2 }}>{s.detail}</div>
+                    {done && s.ms && <div style={{ fontSize:10, color:s.ms>3000?C.err:C.ts, marginTop:2, fontFamily:'monospace' }}>{s.ms.toLocaleString()}ms</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ marginTop:16, background:C.bg, borderRadius:8, padding:'12px 14px', border:`1px solid ${C.border}` }}>
+            <div style={{ fontSize:11, color:C.ts, marginBottom:6 }}>요청 페이로드 (JSON)</div>
+            <pre style={{ color:'#A5F3FC', fontSize:11, margin:0, lineHeight:1.5 }}>{payloadPreview}</pre>
+          </div>
+        </div>
+      </div>
+      {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+// ── P2-2: 거래 이력 관리
+function TransactionPage() {
+  const [activeStatus, setActiveStatus] = useState('all');
+  const [drawer, setDrawer] = useState(null);
+
+  const statusTabs = ['all','completed','failed','cancelled','pending'];
+  const statusLabel = { all:'전체', completed:'완료', failed:'실패', cancelled:'취소', pending:'처리 중' };
+  const statusColor = { completed:C.ok, failed:C.err, cancelled:'#8B5CF6', pending:C.accent };
+
+  const filtered = activeStatus === 'all' ? transactions : transactions.filter(t => t.status === activeStatus);
+
+  return (
+    <div>
+      <HeroBanner tab="거래 이력 관리" />
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:24 }}>
+        <KpiCard icon="✅" label="완료" value={transactions.filter(t=>t.status==='completed').length+'건'} sub="정상 처리됨" />
+        <KpiCard icon="❌" label="실패" value={transactions.filter(t=>t.status==='failed').length+'건'} sub="에러 발생" />
+        <KpiCard icon="🚫" label="취소" value={transactions.filter(t=>t.status==='cancelled').length+'건'} sub="사용자 취소" />
+        <KpiCard icon="⏳" label="처리 중" value={transactions.filter(t=>t.status==='pending').length+'건'} sub="진행 중" />
+      </div>
+
+      <div style={{ background:C.surface, borderRadius:12, border:`1px solid ${C.border}` }}>
+        <div style={{ display:'flex', gap:4, padding:'16px 20px', borderBottom:`1px solid ${C.border}` }}>
+          {statusTabs.map(s => (
+            <button key={s} onClick={() => setActiveStatus(s)} style={{ padding:'6px 14px', borderRadius:20, border:`1px solid ${activeStatus===s?statusColor[s]||C.primary:C.border}`, background:activeStatus===s?`${statusColor[s]||C.primary}20`:'transparent', color:activeStatus===s?statusColor[s]||C.primary:C.ts, fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit', transition:'all .15s' }}>
+              {statusLabel[s]}
+            </button>
+          ))}
+          <div style={{ flex:1 }} />
+          <input placeholder="거래 ID 검색…" style={{ padding:'6px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, fontSize:12, color:C.tp, fontFamily:'inherit', width:160 }} />
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+          <thead>
+            <tr style={{ background:'#1A2535' }}>
+              {['거래 ID','결제 수단','금액','상태','SDK','시간','상세'].map(h => <th key={h} style={{ padding:'10px 16px', textAlign:'left', fontSize:11, fontWeight:600, color:C.ts, borderBottom:`1px solid ${C.border}` }}>{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(tx => (
+              <tr key={tx.id} onClick={() => setDrawer(tx)} style={{ borderBottom:`1px solid ${C.border}20`, cursor:'pointer', transition:'background .1s' }} onMouseEnter={e=>e.currentTarget.style.background=C.surfaceHigh} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{ padding:'12px 16px', fontFamily:'monospace', fontSize:11, color:C.primary, fontWeight:600 }}>{tx.id}</td>
+                <td style={{ padding:'12px 16px', color:C.tp }}>{tx.method}</td>
+                <td style={{ padding:'12px 16px', color:C.tp, fontWeight:700 }}>₩{tx.amount.toLocaleString()}</td>
+                <td style={{ padding:'12px 16px' }}>
+                  <span className="badge" style={{ background:`${statusColor[tx.status]||C.ts}20`, color:statusColor[tx.status]||C.ts }}>{statusLabel[tx.status]}</span>
+                </td>
+                <td style={{ padding:'12px 16px', fontFamily:'monospace', fontSize:11, color:C.ts }}>{tx.sdk}</td>
+                <td style={{ padding:'12px 16px', fontFamily:'monospace', fontSize:11, color:C.ts }}>{tx.ts}</td>
+                <td style={{ padding:'12px 16px', color:C.primary, fontSize:12 }}>상세 →</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 통계 차트 */}
+      <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}`, marginTop:20 }}>
+        <div style={{ fontWeight:700, fontSize:14, color:C.tp, marginBottom:16 }}>시간대별 결제 현황</div>
+        <ResponsiveContainer width="100%" height={200}>
+          <AreaChart data={statusTrend}>
+            <defs>
+              <linearGradient id="gok" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={C.ok} stopOpacity={0.3}/><stop offset="95%" stopColor={C.ok} stopOpacity={0}/></linearGradient>
+              <linearGradient id="gerr" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={C.err} stopOpacity={0.3}/><stop offset="95%" stopColor={C.err} stopOpacity={0}/></linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+            <XAxis dataKey="time" tick={{ fontSize:11, fill:C.ts }} />
+            <YAxis tick={{ fontSize:11, fill:C.ts }} />
+            <Tooltip contentStyle={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, color:C.tp }} />
+            <Legend />
+            <Area type="monotone" dataKey="성공" stroke={C.ok} fill="url(#gok)" />
+            <Area type="monotone" dataKey="실패" stroke={C.err} fill="url(#gerr)" />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Drawer */}
+      {drawer && (
+        <>
+          <div className="drawer-overlay" onClick={() => setDrawer(null)} />
+          <div className="drawer">
+            <div style={{ padding:'20px 24px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <span style={{ fontWeight:700, fontSize:15, color:C.tp }}>거래 상세 — {drawer.id}</span>
+              <button onClick={() => setDrawer(null)} style={{ background:'none', border:'none', cursor:'pointer', color:C.ts, fontSize:20 }}>×</button>
+            </div>
+            <div style={{ padding:'20px 24px' }}>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+                {[['결제 수단',drawer.method],['금액','₩'+drawer.amount.toLocaleString()],['SDK',drawer.sdk],['시간',drawer.ts]].map(([k,v])=>(
+                  <div key={k} style={{ background:C.bg, borderRadius:8, padding:'12px' }}><div style={{ fontSize:10, color:C.ts, marginBottom:4 }}>{k}</div><strong style={{ color:C.tp, fontSize:13 }}>{v}</strong></div>
+                ))}
+              </div>
+              <div style={{ background:C.bg, borderRadius:8, padding:12, marginBottom:16 }}>
+                <div style={{ fontSize:10, color:C.ts, marginBottom:6 }}>SDK 호출 체인</div>
+                {drawer.steps.map((s,i) => {
+                  const sc = paymentSteps.find(p=>p.key===s);
+                  return (
+                    <div key={i} style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}>
+                      <span style={{ fontSize:14 }}>{sc?.icon}</span>
+                      <span style={{ fontSize:12, color:sc?.color || C.ts, fontWeight:600 }}>{sc?.label}</span>
+                      {i < drawer.steps.length-1 && <span style={{ color:C.ts }}>→</span>}
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ background:C.bg, borderRadius:8, padding:12, marginBottom:16 }}>
+                <div style={{ fontSize:10, color:C.ts, marginBottom:6 }}>비고</div>
+                <p style={{ fontSize:12, color:C.tp }}>{drawer.detail}</p>
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:C.ts }}>담당자 메모</label>
+                <textarea rows={3} style={{ width:'100%', marginTop:6, padding:'8px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, color:C.tp, fontSize:12, fontFamily:'inherit', resize:'vertical' }} placeholder="분석 내용 입력…" />
+              </div>
+              <div style={{ display:'flex', gap:8, marginTop:16 }}>
+                <Btn variant="secondary" onClick={() => setDrawer(null)}>닫기</Btn>
+                <Btn>이슈 등록</Btn>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── P2-3: WebView 브릿지 데모
+function BridgeDemoPage() {
+  const [selType, setSelType] = useState(0);
+  const [delay, setDelay] = useState(200);
+  const [failRate, setFailRate] = useState(0);
+  const [sending, setSending] = useState(false);
+  const [response, setResponse] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const msg = bridgeMsgTypes[selType];
+
+  function sendMsg() {
+    setSending(true); setResponse(null);
+    setTimeout(() => {
+      const failed = Math.random() * 100 < failRate;
+      setResponse(failed
+        ? { ok:false, payload: { error:'BRIDGE_TIMEOUT', code:504, msg:'네이티브 응답 없음 (타임아웃)' }, ms:delay }
+        : { ok:true, payload: { status:'success', txId:'TXN-'+Math.floor(Math.random()*9999), ts:new Date().toISOString() }, ms:delay }
+      );
+      setSending(false);
+    }, delay + 200);
+  }
+
+  return (
+    <div>
+      <HeroBanner tab="WebView 브릿지 데모" />
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 }}>
+        <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}` }}>
+          <div style={{ fontWeight:700, fontSize:14, color:C.tp, marginBottom:16 }}>메시지 유형 선택</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:20 }}>
+            {bridgeMsgTypes.map((m,i) => (
+              <button key={i} onClick={() => { setSelType(i); setResponse(null); }} style={{ padding:'10px 14px', borderRadius:8, cursor:'pointer', textAlign:'left', fontFamily:'inherit', background:selType===i?C.primaryLight:C.surfaceHigh, border:`1px solid ${selType===i?C.primary:C.border}`, color:selType===i?C.primary:C.ts, fontSize:13, fontWeight:selType===i?600:400, transition:'all .15s' }}>
+                {m.type}
+              </button>
+            ))}
+          </div>
+          <div style={{ fontWeight:700, fontSize:13, color:C.tp, marginBottom:12 }}>응답 조건 설정</div>
+          <div style={{ marginBottom:14 }}>
+            <div style={{ fontSize:11, color:C.ts, marginBottom:6 }}>응답 지연 시간: <strong style={{ color:C.tp }}>{delay}ms</strong></div>
+            <input type="range" min={50} max={5000} step={50} value={delay} onChange={e=>setDelay(+e.target.value)} style={{ width:'100%', accentColor:C.primary }} />
+            {delay > 3000 && <div style={{ fontSize:11, color:C.warn, marginTop:4 }}>⚠️ 3000ms 초과 — 타임아웃 발생 가능</div>}
+          </div>
+          <div style={{ marginBottom:20 }}>
+            <div style={{ fontSize:11, color:C.ts, marginBottom:6 }}>실패율 주입: <strong style={{ color:C.tp }}>{failRate}%</strong></div>
+            <input type="range" min={0} max={100} step={5} value={failRate} onChange={e=>setFailRate(+e.target.value)} style={{ width:'100%', accentColor:C.err }} />
+          </div>
+          <Btn onClick={sending ? undefined : sendMsg}>{sending ? `전송 중 (${delay}ms)…` : '▶ 브릿지 메시지 전송'}</Btn>
+        </div>
+
+        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+          <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}` }}>
+            <div style={{ fontWeight:700, fontSize:14, color:C.tp, marginBottom:12 }}>전송 메시지 페이로드</div>
+            <div style={{ background:C.bg, borderRadius:8, padding:'14px', border:`1px solid ${C.border}` }}>
+              <div style={{ fontSize:10, color:C.ts, marginBottom:6 }}>WebView → Native</div>
+              <pre style={{ color:'#A5F3FC', fontSize:11, margin:0, lineHeight:1.6 }}>{JSON.stringify(msg.payload, null, 2)}</pre>
+            </div>
+          </div>
+
+          <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}`, flex:1 }}>
+            <div style={{ fontWeight:700, fontSize:14, color:C.tp, marginBottom:12 }}>네이티브 응답</div>
+            {!response && !sending && (
+              <div style={{ textAlign:'center', padding:'30px 0', color:C.ts, fontSize:13 }}>메시지를 전송하면 응답이 표시됩니다</div>
+            )}
+            {sending && (
+              <div style={{ textAlign:'center', padding:'30px 0' }}>
+                <div style={{ color:C.primary, fontSize:13, marginBottom:8 }}>전송 중…</div>
+                <div style={{ width:40, height:4, background:C.border, borderRadius:4, margin:'0 auto', overflow:'hidden' }}>
+                  <div style={{ width:'40%', height:'100%', background:C.primary, borderRadius:4, animation:'slide 1s infinite' }} />
+                </div>
+              </div>
+            )}
+            {response && (
+              <div>
+                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12 }}>
+                  <span className="badge" style={{ background:response.ok?`${C.ok}20`:`${C.err}20`, color:response.ok?C.ok:C.err }}>{response.ok?'응답 수신':'응답 실패'}</span>
+                  <span style={{ fontSize:11, color:C.ts }}>응답 시간: {response.ms}ms</span>
+                </div>
+                <div style={{ background:C.bg, borderRadius:8, padding:'14px', border:`1px solid ${response.ok?C.ok+'40':C.err+'40'}` }}>
+                  <div style={{ fontSize:10, color:C.ts, marginBottom:6 }}>Native → WebView</div>
+                  <pre style={{ color: response.ok?'#A5F3FC':'#FCA5A5', fontSize:11, margin:0, lineHeight:1.6 }}>{JSON.stringify(response.payload, null, 2)}</pre>
+                </div>
+                {!response.ok && <div style={{ background:`${C.err}15`, borderRadius:8, padding:'10px 12px', marginTop:10, fontSize:12, color:C.err }}>❌ Retry 로직 트리거 — 자동 재시도 ({delay > 3000 ? 'SDK_TIMEOUT':'BRIDGE_ERROR'})</div>}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+// ── P2-4: 결제 상태 추적
+function PaymentStatusPage() {
+  const [selected, setSelected] = useState(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const t = setInterval(() => setTick(p=>p+1), 3000);
+    return () => clearInterval(t);
+  }, []);
+
+  const liveItems = transactions.map((tx, i) => ({
+    ...tx,
+    currentStep: tx.status === 'pending' ? Math.min(1+(tick%2), tx.steps.length-1) : tx.steps.length-1,
+  }));
+
+  return (
+    <div>
+      <HeroBanner tab="결제 상태 추적" />
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+        <div>
+          <div style={{ fontWeight:700, fontSize:14, color:C.tp, marginBottom:14 }}>진행 중인 결제 ({liveItems.length}건)</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {liveItems.map(tx => {
+              const curStep = paymentSteps.find(s => s.key === tx.steps[tx.currentStep]) || paymentSteps[0];
+              return (
+                <div key={tx.id} onClick={() => setSelected(tx)} style={{ background:C.surface, borderRadius:10, padding:'14px 16px', border:`1px solid ${selected?.id===tx.id?C.primary:C.border}`, cursor:'pointer', transition:'all .15s' }} onMouseEnter={e=>e.currentTarget.style.borderColor=C.primary} onMouseLeave={e=>e.currentTarget.style.borderColor=selected?.id===tx.id?C.primary:C.border}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+                    <span style={{ fontFamily:'monospace', fontSize:11, color:C.primary, fontWeight:700 }}>{tx.id}</span>
+                    <span className="badge" style={{ background:`${curStep.color}25`, color:curStep.color }}>{curStep.icon} {curStep.label}</span>
+                  </div>
+                  <div style={{ display:'flex', alignItems:'center', gap:10, fontSize:12 }}>
+                    <span style={{ color:C.ts }}>{tx.method}</span>
+                    <span style={{ color:C.tp, fontWeight:600 }}>₩{tx.amount.toLocaleString()}</span>
+                    <span style={{ color:C.ts, marginLeft:'auto', fontSize:11 }}>{tx.ts}</span>
+                  </div>
+                  {/* 진행 바 */}
+                  <div style={{ marginTop:10, display:'flex', gap:4 }}>
+                    {tx.steps.map((s,i) => {
+                      const sc = paymentSteps.find(p=>p.key===s);
+                      return <div key={i} style={{ flex:1, height:3, borderRadius:4, background:i<=tx.currentStep?sc?.color||C.primary:C.border, transition:'background .3s' }} />;
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          {selected ? (
+            <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}`, position:'sticky', top:80 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+                <div style={{ fontWeight:700, fontSize:15, color:C.tp }}>상태 전이 타임라인</div>
+                <span style={{ fontFamily:'monospace', fontSize:11, color:C.primary }}>{selected.id}</span>
+              </div>
+              <div style={{ position:'relative', paddingLeft:24 }}>
+                <div style={{ position:'absolute', left:10, top:0, bottom:0, width:2, background:C.border }} />
+                {selected.steps.map((s, i) => {
+                  const sc = paymentSteps.find(p=>p.key===s);
+                  const isLast = i === selected.steps.length - 1;
+                  return (
+                    <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:14, marginBottom:20, position:'relative' }}>
+                      <div style={{ position:'absolute', left:-18, width:20, height:20, borderRadius:'50%', background:sc?.color||C.border, display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, boxShadow:`0 0 10px ${sc?.color||'transparent'}50`, zIndex:1 }}>{sc?.icon}</div>
+                      <div>
+                        <div style={{ fontWeight:600, fontSize:13, color:sc?.color||C.ts }}>{sc?.label}</div>
+                        <div style={{ fontSize:11, color:C.ts, marginTop:2 }}>SDK: {selected.sdk}</div>
+                        {isLast && <div style={{ background:`${sc?.color||C.primary}20`, borderRadius:6, padding:'6px 10px', marginTop:8, fontSize:11, color:sc?.color||C.primary }}>{selected.detail}</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ background:C.bg, borderRadius:8, padding:'12px', marginTop:4 }}>
+                <div style={{ fontSize:10, color:C.ts, marginBottom:8 }}>SDK 콜백 로그</div>
+                {['SDK init', 'requestPayment()', 'onStatusChange(processing)', selected.status==='completed'?'onComplete()':'onError('+selected.detail+')'].map((l,i) => (
+                  <div key={i} style={{ fontSize:11, fontFamily:'monospace', color: l.includes('Error')||l.includes('error')?C.err:C.ts, marginBottom:4 }}>
+                    <span style={{ color:C.ts, marginRight:8 }}>{'>'}</span>{l}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div style={{ background:C.surface, borderRadius:12, padding:'40px', border:`1px solid ${C.border}`, textAlign:'center', color:C.ts }}>
+              <div style={{ fontSize:32, marginBottom:12 }}>📡</div>
+              <div style={{ fontSize:14 }}>왼쪽에서 거래를 선택하면<br />상태 타임라인이 표시됩니다</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 메인 앱
+function App() {
+  const [tab, setTab] = useState('결제 흐름 시뮬레이터');
+
+  const render = () => {
+    switch(tab) {
+      case '결제 흐름 시뮬레이터': return <PaymentSimPage />;
+      case '거래 이력 관리': return <TransactionPage />;
+      case 'WebView 브릿지 데모': return <BridgeDemoPage />;
+      case '결제 상태 추적': return <PaymentStatusPage />;
+      default: return null;
+    }
+  };
+
+  return (
+    <div style={{ minHeight:'100vh', background:C.bg }}>
+      <TopBar activeTab={tab} setTab={setTab} />
+      <main style={{ padding:'24px 32px', maxWidth:1280, margin:'0 auto' }}>
+        {render()}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

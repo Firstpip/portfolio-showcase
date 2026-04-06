@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>하이브리드 앱 결제 SDK 모니터링 대시보드</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Pretendard', -apple-system, sans-serif; background: #F0F4F8; }
+::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #f1f1f1; } ::-webkit-scrollbar-thumb { background: #c1c9d4; border-radius: 3px; }
+.modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;display:flex;align-items:center;justify-content:center;padding:24px; }
+.modal-box { background:#fff;border-radius:12px;max-width:560px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2); }
+.badge { display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600; }
+.toast { position:fixed;bottom:28px;right:28px;background:#0F172A;color:#fff;padding:12px 20px;border-radius:8px;font-size:13px;z-index:2000;box-shadow:0 8px 24px rgba(0,0,0,.2);animation:slideUp .3s ease; }
+@keyframes slideUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } = Recharts;
+
+// ── 디자인 토큰
+const C = {
+  primary: '#1B4FD8', primaryHover: '#1540B8', primaryLight: '#EEF2FF',
+  secondary: '#0EA5E9', accent: '#F59E0B', accentLight: '#FEF3C7',
+  bg: '#F0F4F8', surface: '#FFFFFF',
+  tp: '#0F172A', ts: '#475569', tm: '#94A3B8',
+  border: '#E2E8F0', sidebar: '#0F172A',
+  err: '#EF4444', warn: '#F59E0B', ok: '#10B981', info: '#0EA5E9',
+};
+
+// ── 더미 데이터
+const errorLogs = [
+  { id:'ERR-001', ts:'14:32:18', platform:'iOS', level:'ERROR', code:'SDK_TIMEOUT', msg:'레일플러스 SDK 응답 타임아웃 (5000ms 초과)', session:'sess_a1b2c3' },
+  { id:'ERR-002', ts:'14:28:45', platform:'Android', level:'WARN', code:'BRIDGE_RETRY', msg:'WebView→Native 브릿지 메시지 재전송 (1회)', session:'sess_d4e5f6' },
+  { id:'ERR-003', ts:'14:25:09', platform:'iOS', level:'ERROR', code:'CHARGE_FAILED', msg:'교통카드 충전 실패 — 잔액 부족 아님 (SDK 오류)', session:'sess_g7h8i9' },
+  { id:'ERR-004', ts:'14:21:33', platform:'iOS', level:'ERROR', code:'NFC_TAG_LOST', msg:'NFC 태깅 중 연결 단절 감지', session:'sess_j1k2l3' },
+  { id:'ERR-005', ts:'14:18:52', platform:'Android', level:'INFO', code:'SDK_INIT_OK', msg:'레일플러스 SDK 초기화 완료 (v2.4.1)', session:'sess_m4n5o6' },
+  { id:'ERR-006', ts:'14:15:27', platform:'iOS', level:'ERROR', code:'SDK_TIMEOUT', msg:'결제 승인 요청 타임아웃 — 재시도 없이 실패', session:'sess_p7q8r9' },
+  { id:'ERR-007', ts:'14:11:04', platform:'Android', level:'WARN', code:'BRIDGE_DELAY', msg:'Native→WebView 응답 지연 830ms (임계값 500ms)', session:'sess_s1t2u3' },
+  { id:'ERR-008', ts:'14:08:39', platform:'iOS', level:'ERROR', code:'CHARGE_FAILED', msg:'충전 요청 중 SDK 내부 예외 발생 (IllegalState)', session:'sess_v4w5x6' },
+  { id:'ERR-009', ts:'14:05:11', platform:'Android', level:'ERROR', code:'AUTH_FAIL', msg:'사용자 인증 토큰 만료 — SDK 재인증 미처리', session:'sess_y7z8a9' },
+  { id:'ERR-010', ts:'14:01:58', platform:'iOS', level:'WARN', code:'SDK_SLOW', msg:'SDK 초기화 지연 2,340ms (정상 범위 800ms 이내)', session:'sess_b1c2d3' },
+];
+
+const failureStats = [
+  { hour: '09시', ios: 12, android: 5 },
+  { hour: '10시', ios: 8, android: 7 },
+  { hour: '11시', ios: 18, android: 3 },
+  { hour: '12시', ios: 25, android: 11 },
+  { hour: '13시', ios: 15, android: 8 },
+  { hour: '14시', ios: 31, android: 14 },
+  { hour: '15시', ios: 22, android: 9 },
+];
+
+const errTypes = [
+  { name: 'SDK 타임아웃', value: 38, color: C.err },
+  { name: '충전 실패', value: 27, color: C.accent },
+  { name: '브릿지 오류', value: 19, color: C.secondary },
+  { name: 'NFC 단절', value: 10, color: '#8B5CF6' },
+  { name: '인증 실패', value: 6, color: C.ts },
+];
+
+const bridgeMessages = [
+  { step: 1, from: 'WebView', to: 'Native', msg: 'requestPayment', payload: '{"amount":15000,"type":"charge"}', ms: 12, ok: true },
+  { step: 2, from: 'Native', to: 'SDK', msg: 'initTransaction', payload: '{"txId":"tx_abc123","amount":15000}', ms: 45, ok: true },
+  { step: 3, from: 'SDK', to: '서버', msg: 'POST /charge', payload: '{"cardId":"RP-xxx","amount":15000}', ms: 4820, ok: false },
+  { step: 4, from: '서버', to: 'SDK', msg: '504 Timeout', payload: '{"error":"GATEWAY_TIMEOUT"}', ms: null, ok: false },
+  { step: 5, from: 'SDK', to: 'Native', msg: 'onError(SDK_TIMEOUT)', payload: '{"code":"SDK_TIMEOUT","msg":"..."}', ms: null, ok: false },
+  { step: 6, from: 'Native', to: 'WebView', msg: 'paymentFailed', payload: '{"error":"SDK_TIMEOUT"}', ms: null, ok: false },
+];
+
+// ── 공통 컴포넌트
+function Toast({ msg, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 2800); return () => clearTimeout(t); }, []);
+  return <div className="toast">{msg}</div>;
+}
+
+function Modal({ title, onClose, children, actions }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={e => e.stopPropagation()}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px', borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ fontWeight:700, fontSize:16, color:C.tp }}>{title}</span>
+          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', fontSize:20, color:C.ts, lineHeight:1 }}>×</button>
+        </div>
+        <div style={{ padding:'24px' }}>{children}</div>
+        {actions && <div style={{ display:'flex', gap:8, justifyContent:'flex-end', padding:'16px 24px', borderTop:`1px solid ${C.border}`, background:'#F8FAFC', borderRadius:'0 0 12px 12px' }}>{actions}</div>}
+      </div>
+    </div>
+  );
+}
+
+function Btn({ children, variant='primary', onClick, small }) {
+  const styles = {
+    primary: { background:C.primary, color:'#fff', border:`1px solid ${C.primary}` },
+    secondary: { background:'#fff', color:C.tp, border:`1px solid ${C.border}` },
+    danger: { background:'#FEE2E2', color:C.err, border:`1px solid #FECACA` },
+  };
+  return (
+    <button onClick={onClick} style={{ ...styles[variant], padding: small ? '6px 12px' : '8px 16px', borderRadius:8, cursor:'pointer', fontFamily:'inherit', fontSize: small ? 12 : 13, fontWeight:600, transition:'all .15s' }}>
+      {children}
+    </button>
+  );
+}
+
+// ── 사이드바
+const MENUS = [
+  { key:'dashboard', icon:'📊', label:'대시보드' },
+  { key:'결제 실패 분석', icon:'⚠️', label:'결제 실패 분석' },
+  { key:'에러 로그 뷰어', icon:'📋', label:'에러 로그 뷰어' },
+  { key:'브릿지 통신 흐름', icon:'🔗', label:'브릿지 통신 흐름' },
+  { key:'Retry 정책 설정', icon:'🔄', label:'Retry 정책 설정' },
+];
+
+function Sidebar({ page, onNav }) {
+  return (
+    <aside style={{ width:260, background:C.sidebar, flexShrink:0, display:'flex', flexDirection:'column', minHeight:'100vh', position:'sticky', top:0, height:'100vh' }}>
+      <div style={{ padding:'24px 20px 16px', borderBottom:'1px solid rgba(255,255,255,.08)' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:34, height:34, background:C.primary, borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center', fontSize:16 }}>🚌</div>
+          <div>
+            <div style={{ color:'#fff', fontWeight:700, fontSize:14 }}>SDK Monitor</div>
+            <div style={{ color:'#64748B', fontSize:11 }}>레일플러스 교통카드</div>
+          </div>
+        </div>
+      </div>
+      <div style={{ padding:'12px 12px', flex:1 }}>
+        {MENUS.map(m => (
+          <button key={m.key} onClick={() => onNav(m.key)} style={{
+            width:'100%', display:'flex', alignItems:'center', gap:10, padding:'10px 12px', borderRadius:8,
+            background: page === m.key ? C.primary : 'transparent',
+            color: page === m.key ? '#fff' : '#94A3B8',
+            border:'none', cursor:'pointer', textAlign:'left', fontSize:13, fontFamily:'inherit',
+            fontWeight: page === m.key ? 600 : 400, marginBottom:2, transition:'all .15s',
+          }}>
+            <span style={{ fontSize:15 }}>{m.icon}</span>
+            <span>{m.label}</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ padding:'16px 20px', borderTop:'1px solid rgba(255,255,255,.08)' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:32, height:32, borderRadius:'50%', background:'#1B4FD8', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:700, fontSize:13 }}>K</div>
+          <div>
+            <div style={{ color:'#E2E8F0', fontSize:12, fontWeight:600 }}>최기용</div>
+            <div style={{ color:'#64748B', fontSize:11 }}>개발 담당자</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+// ── TopBar
+function TopBar({ title, children }) {
+  return (
+    <header style={{ background:C.surface, borderBottom:`1px solid ${C.border}`, padding:'0 24px', height:60, display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0 }}>
+      <h1 style={{ fontSize:16, fontWeight:700, color:C.tp }}>{title}</h1>
+      <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+        {children}
+        <div style={{ background:C.primaryLight, color:C.primary, borderRadius:6, padding:'4px 10px', fontSize:12, fontWeight:600 }}>🟢 SDK v2.4.1 연결됨</div>
+      </div>
+    </header>
+  );
+}
+
+// ── KPI 카드
+function KpiCard({ icon, label, value, sub, color }) {
+  return (
+    <div style={{ background:C.surface, borderRadius:12, padding:'20px', boxShadow:'0 1px 4px rgba(0,0,0,.06)', border:`1px solid ${C.border}` }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12 }}>
+        <div style={{ width:38, height:38, borderRadius:10, background: color+'18', display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>{icon}</div>
+        <span style={{ fontSize:12, color:C.ts, fontWeight:500 }}>{label}</span>
+      </div>
+      <div style={{ fontSize:28, fontWeight:800, color:C.tp, marginBottom:4 }}>{value}</div>
+      <div style={{ fontSize:12, color:C.ts }}>{sub}</div>
+    </div>
+  );
+}
+
+// ── 대시보드 홈
+function DashboardPage({ onNav }) {
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:16, marginBottom:24 }}>
+        <KpiCard icon="⚠️" label="오늘 총 에러" value="147" sub="어제 대비 +23건" color={C.err} />
+        <KpiCard icon="✅" label="결제 성공률" value="94.2%" sub="iOS 91.8% / Android 96.7%" color={C.ok} />
+        <KpiCard icon="⏱" label="SDK 평균 응답" value="1,240ms" sub="목표: 800ms 이하" color={C.accent} />
+        <KpiCard icon="🔁" label="Retry 발생" value="38건" sub="자동 복구 29건 (76%)" color={C.secondary} />
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:16, marginBottom:24 }}>
+        <div style={{ background:C.surface, borderRadius:12, padding:'20px', boxShadow:'0 1px 4px rgba(0,0,0,.06)', border:`1px solid ${C.border}` }}>
+          <div style={{ fontWeight:700, fontSize:14, color:C.tp, marginBottom:16 }}>시간대별 결제 실패 추이</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={failureStats}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="hour" tick={{ fontSize:11, fill:C.ts }} />
+              <YAxis tick={{ fontSize:11, fill:C.ts }} />
+              <Tooltip contentStyle={{ borderRadius:8, border:`1px solid ${C.border}` }} />
+              <Legend iconSize={10} />
+              <Bar dataKey="ios" fill={C.err} name="iOS 실패" radius={[3,3,0,0]} />
+              <Bar dataKey="android" fill={C.accent} name="Android 실패" radius={[3,3,0,0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{ background:C.surface, borderRadius:12, padding:'20px', boxShadow:'0 1px 4px rgba(0,0,0,.06)', border:`1px solid ${C.border}` }}>
+          <div style={{ fontWeight:700, fontSize:14, color:C.tp, marginBottom:16 }}>에러 유형 분포</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart>
+              <Pie data={errTypes} cx="50%" cy="50%" outerRadius={75} dataKey="value" label={({ name, percent }) => `${(percent*100).toFixed(0)}%`} labelLine={false} fontSize={10}>
+                {errTypes.map((e, i) => <Cell key={i} fill={e.color} />)}
+              </Pie>
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+            {errTypes.map((e,i) => (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:6, fontSize:11 }}>
+                <div style={{ width:8, height:8, borderRadius:'50%', background:e.color, flexShrink:0 }} />
+                <span style={{ color:C.ts, flex:1 }}>{e.name}</span>
+                <span style={{ color:C.tp, fontWeight:600 }}>{e.value}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div style={{ background:C.surface, borderRadius:12, padding:'20px', boxShadow:'0 1px 4px rgba(0,0,0,.06)', border:`1px solid ${C.border}` }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+          <div style={{ fontWeight:700, fontSize:14, color:C.tp }}>최근 에러 로그</div>
+          <button onClick={() => onNav('에러 로그 뷰어')} style={{ background:'none', border:'none', cursor:'pointer', color:C.primary, fontSize:12, fontWeight:600 }}>전체 보기 →</button>
+        </div>
+        {errorLogs.slice(0,4).map(log => (
+          <div key={log.id} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 0', borderBottom:`1px solid ${C.border}` }}>
+            <span className="badge" style={{ background: log.level==='ERROR'?'#FEE2E2': log.level==='WARN'?C.accentLight:'#DCFCE7', color: log.level==='ERROR'?C.err:log.level==='WARN'?'#92400E':C.ok }}>{log.level}</span>
+            <span style={{ fontSize:11, color:C.ts, flexShrink:0 }}>{log.ts}</span>
+            <span className="badge" style={{ background:'#F1F5F9', color:C.ts }}>{log.platform}</span>
+            <span style={{ fontSize:12, color:C.tp, flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{log.msg}</span>
+            <span style={{ fontSize:11, color:C.ts, flexShrink:0 }}>{log.code}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── 결제 실패 분석
+function FailureAnalysisPage() {
+  const [modal, setModal] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const platforms = ['all','iOS','Android'];
+
+  const filtered = filter === 'all' ? failureStats : failureStats.map(d => ({
+    hour: d.hour, [filter.toLowerCase()]: d[filter.toLowerCase()] ?? 0
+  }));
+
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:16, marginBottom:24 }}>
+        <KpiCard icon="❌" label="총 실패 건수 (오늘)" value="147건" sub="iOS 108건 / Android 39건" color={C.err} />
+        <KpiCard icon="📱" label="최다 에러 코드" value="SDK_TIMEOUT" sub="전체 실패의 38% 차지" color={C.accent} />
+        <KpiCard icon="🕐" label="주요 실패 시간대" value="14시" sub="오늘 31건 발생 (최다)" color={C.secondary} />
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:16, marginBottom:24 }}>
+        <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}`, boxShadow:'0 1px 4px rgba(0,0,0,.06)' }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+            <div style={{ fontWeight:700, fontSize:14, color:C.tp }}>시간대별 결제 실패 건수</div>
+            <div style={{ display:'flex', gap:6 }}>
+              {platforms.map(p => (
+                <button key={p} onClick={() => setFilter(p)} style={{ padding:'4px 12px', borderRadius:20, border:`1px solid ${filter===p?C.primary:C.border}`, background:filter===p?C.primary:'#fff', color:filter===p?'#fff':C.ts, fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>{p}</button>
+              ))}
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={failureStats}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="hour" tick={{ fontSize:11, fill:C.ts }} />
+              <YAxis tick={{ fontSize:11, fill:C.ts }} />
+              <Tooltip contentStyle={{ borderRadius:8 }} />
+              {(filter==='all'||filter==='iOS') && <Bar dataKey="ios" fill={C.err} name="iOS" radius={[3,3,0,0]} />}
+              {(filter==='all'||filter==='Android') && <Bar dataKey="android" fill={C.accent} name="Android" radius={[3,3,0,0]} />}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}`, boxShadow:'0 1px 4px rgba(0,0,0,.06)' }}>
+          <div style={{ fontWeight:700, fontSize:14, color:C.tp, marginBottom:16 }}>에러 코드별 분류</div>
+          <ResponsiveContainer width="100%" height={220}>
+            <PieChart>
+              <Pie data={errTypes} cx="50%" cy="50%" outerRadius={80} dataKey="value" fontSize={10}>
+                {errTypes.map((e, i) => <Cell key={i} fill={e.color} />)}
+              </Pie>
+              <Tooltip formatter={(v) => `${v}%`} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}`, boxShadow:'0 1px 4px rgba(0,0,0,.06)' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+          <div style={{ fontWeight:700, fontSize:14, color:C.tp }}>에러 코드 상세 테이블</div>
+          <Btn small onClick={() => setModal('export')}>데이터 내보내기</Btn>
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+          <thead>
+            <tr style={{ background:'#F8FAFC' }}>
+              {['에러 코드','발생 플랫폼','오늘 건수','비율','평균 발생 시간','조치 상태'].map(h => (
+                <th key={h} style={{ padding:'10px 12px', textAlign:'left', fontWeight:600, color:C.ts, borderBottom:`1px solid ${C.border}`, fontSize:11 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {[
+              ['SDK_TIMEOUT','iOS 주요','56건','38%','12:00~16:00','🔴 조사 중'],
+              ['CHARGE_FAILED','iOS','40건','27%','전 시간대','🟡 원인 파악 중'],
+              ['BRIDGE_RETRY','양 플랫폼','28건','19%','트래픽 집중 시','🟢 Retry 로직 적용'],
+              ['NFC_TAG_LOST','iOS','15건','10%','출퇴근 시간대','🔴 SDK 버그 의심'],
+              ['AUTH_FAIL','Android','8건','6%','새벽 시간대','🟢 토큰 갱신 로직 추가'],
+            ].map((row, i) => (
+              <tr key={i} onClick={() => setModal({type:'err', code: row[0]})} style={{ borderBottom:`1px solid ${C.border}`, cursor:'pointer', transition:'background .1s' }} onMouseEnter={e => e.currentTarget.style.background='#F8FAFC'} onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                {row.map((cell, j) => (
+                  <td key={j} style={{ padding:'11px 12px', color: j===0?C.primary:C.tp, fontWeight: j===0?600:400 }}>{cell}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {modal === 'export' && (
+        <Modal title="데이터 내보내기" onClose={() => setModal(null)} actions={[<Btn key="c" variant="secondary" onClick={() => setModal(null)}>취소</Btn>, <Btn key="ok" onClick={() => setModal(null)}>내보내기</Btn>]}>
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>기간 선택</label>
+              <select style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }}>
+                <option>오늘 (2026-04-06)</option><option>최근 7일</option><option>최근 30일</option>
+              </select>
+            </div>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>형식</label>
+              <div style={{ display:'flex', gap:10, marginTop:6 }}>
+                {['CSV','JSON','Excel'].map(f => <label key={f} style={{ display:'flex', alignItems:'center', gap:6, fontSize:13, cursor:'pointer' }}><input type="radio" name="fmt" defaultChecked={f==='CSV'} />{f}</label>)}
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {modal && modal.type === 'err' && (
+        <Modal title={`에러 상세: ${modal.code}`} onClose={() => setModal(null)} actions={[<Btn key="c" variant="secondary" onClick={() => setModal(null)}>닫기</Btn>, <Btn key="ok">이슈 등록</Btn>]}>
+          <div style={{ display:'flex', flexDirection:'column', gap:12, fontSize:13, color:C.tp }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              <div style={{ background:'#F8FAFC', borderRadius:8, padding:12 }}><div style={{ fontSize:11, color:C.ts, marginBottom:4 }}>에러 코드</div><strong>{modal.code}</strong></div>
+              <div style={{ background:'#F8FAFC', borderRadius:8, padding:12 }}><div style={{ fontSize:11, color:C.ts, marginBottom:4 }}>오늘 발생</div><strong style={{ color:C.err }}>56건</strong></div>
+            </div>
+            <div style={{ background:'#FEF3C7', borderRadius:8, padding:12, fontSize:12 }}>⚠️ 레일플러스 SDK 서버 응답 지연으로 추정. SDK 팀에 문의 필요.</div>
+            <div><label style={{ fontSize:11, color:C.ts }}>담당자 메모</label>
+              <textarea rows={3} style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:12, fontFamily:'inherit', resize:'vertical' }} placeholder="조치 내용을 입력하세요..." />
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── 에러 로그 뷰어
+function ErrorLogPage() {
+  const [selected, setSelected] = useState(null);
+  const [filters, setFilters] = useState({ platform:'all', level:'all', keyword:'' });
+
+  const filtered = errorLogs.filter(l =>
+    (filters.platform === 'all' || l.platform === filters.platform) &&
+    (filters.level === 'all' || l.level === filters.level) &&
+    (filters.keyword === '' || l.msg.includes(filters.keyword) || l.code.includes(filters.keyword))
+  );
+
+  const levelColor = { ERROR:C.err, WARN:C.accent, INFO:C.ok };
+  const levelBg = { ERROR:'#FEE2E2', WARN:C.accentLight, INFO:'#DCFCE7' };
+
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ background:C.surface, borderRadius:12, padding:'16px 20px', border:`1px solid ${C.border}`, boxShadow:'0 1px 4px rgba(0,0,0,.06)', marginBottom:16 }}>
+        <div style={{ display:'flex', gap:12, flexWrap:'wrap', alignItems:'center' }}>
+          <input placeholder="키워드 검색 (에러 코드, 메시지…)" value={filters.keyword} onChange={e => setFilters(f => ({...f, keyword:e.target.value}))}
+            style={{ flex:1, minWidth:200, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }} />
+          <select value={filters.platform} onChange={e => setFilters(f => ({...f, platform:e.target.value}))}
+            style={{ padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }}>
+            <option value="all">모든 플랫폼</option><option value="iOS">iOS</option><option value="Android">Android</option>
+          </select>
+          <select value={filters.level} onChange={e => setFilters(f => ({...f, level:e.target.value}))}
+            style={{ padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }}>
+            <option value="all">모든 레벨</option><option value="ERROR">ERROR</option><option value="WARN">WARN</option><option value="INFO">INFO</option>
+          </select>
+          <Btn small variant="secondary" onClick={() => setFilters({ platform:'all', level:'all', keyword:'' })}>초기화</Btn>
+        </div>
+      </div>
+
+      <div style={{ background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, boxShadow:'0 1px 4px rgba(0,0,0,.06)', overflow:'hidden' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'14px 20px', borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ fontWeight:700, fontSize:14, color:C.tp }}>에러 로그 ({filtered.length}건)</span>
+          <span style={{ fontSize:12, color:C.ts }}>실시간 업데이트 중 🟢</span>
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+          <thead>
+            <tr style={{ background:'#F8FAFC' }}>
+              {['ID','시간','레벨','플랫폼','에러 코드','메시지'].map(h => (
+                <th key={h} style={{ padding:'9px 12px', textAlign:'left', fontWeight:600, color:C.ts, borderBottom:`1px solid ${C.border}`, fontSize:11 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(log => (
+              <tr key={log.id} onClick={() => setSelected(log)} style={{ borderBottom:`1px solid ${C.border}`, cursor:'pointer', transition:'background .1s', background: selected?.id===log.id ? C.primaryLight : 'transparent' }}
+                onMouseEnter={e => { if(selected?.id!==log.id) e.currentTarget.style.background='#F8FAFC'; }}
+                onMouseLeave={e => { if(selected?.id!==log.id) e.currentTarget.style.background='transparent'; }}>
+                <td style={{ padding:'10px 12px', color:C.ts, fontSize:11 }}>{log.id}</td>
+                <td style={{ padding:'10px 12px', fontFamily:'monospace', fontSize:11, color:C.ts }}>{log.ts}</td>
+                <td style={{ padding:'10px 12px' }}>
+                  <span className="badge" style={{ background:levelBg[log.level], color:levelColor[log.level] }}>{log.level}</span>
+                </td>
+                <td style={{ padding:'10px 12px' }}>
+                  <span className="badge" style={{ background:log.platform==='iOS'?'#EDE9FE':'#DCFCE7', color:log.platform==='iOS'?'#7C3AED':'#166534' }}>{log.platform}</span>
+                </td>
+                <td style={{ padding:'10px 12px', fontFamily:'monospace', fontSize:11, color:C.primary, fontWeight:600 }}>{log.code}</td>
+                <td style={{ padding:'10px 12px', color:C.tp, maxWidth:300, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{log.msg}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {selected && (
+        <Modal title={`로그 상세 — ${selected.id}`} onClose={() => setSelected(null)} actions={[<Btn key="c" variant="secondary" onClick={() => setSelected(null)}>닫기</Btn>, <Btn key="ok">이슈 등록</Btn>]}>
+          <div style={{ display:'flex', flexDirection:'column', gap:12, fontSize:13 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              {[['발생 시간', selected.ts], ['레벨', selected.level], ['플랫폼', selected.platform], ['에러 코드', selected.code]].map(([k,v]) => (
+                <div key={k} style={{ background:'#F8FAFC', borderRadius:8, padding:'10px 12px' }}>
+                  <div style={{ fontSize:11, color:C.ts, marginBottom:4 }}>{k}</div>
+                  <strong style={{ color: k==='레벨'&&selected.level==='ERROR'?C.err:C.tp }}>{v}</strong>
+                </div>
+              ))}
+            </div>
+            <div style={{ background:'#F8FAFC', borderRadius:8, padding:'10px 12px' }}>
+              <div style={{ fontSize:11, color:C.ts, marginBottom:4 }}>메시지</div>
+              <p style={{ color:C.tp, lineHeight:1.5 }}>{selected.msg}</p>
+            </div>
+            <div style={{ background:'#F8FAFC', borderRadius:8, padding:'10px 12px' }}>
+              <div style={{ fontSize:11, color:C.ts, marginBottom:4 }}>세션 ID</div>
+              <code style={{ fontSize:12, color:C.primary }}>{selected.session}</code>
+            </div>
+            <div>
+              <label style={{ fontSize:11, color:C.ts }}>담당자 노트</label>
+              <textarea rows={3} style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:12, fontFamily:'inherit', resize:'vertical' }} placeholder="분석 내용을 입력하세요..." />
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── 브릿지 통신 흐름
+function BridgePage() {
+  const [selected, setSelected] = useState(null);
+  const [animating, setAnimating] = useState(false);
+  const [activeStep, setActiveStep] = useState(0);
+
+  const actors = ['WebView', 'Native', 'SDK', '서버'];
+  const actorColor = { 'WebView': '#6366F1', 'Native': '#0EA5E9', 'SDK': '#10B981', '서버': '#F59E0B' };
+
+  function startAnimation() {
+    setAnimating(true); setActiveStep(0);
+    let step = 0;
+    const interval = setInterval(() => {
+      step++;
+      setActiveStep(step);
+      if (step >= bridgeMessages.length) { clearInterval(interval); setAnimating(false); }
+    }, 900);
+  }
+
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}`, boxShadow:'0 1px 4px rgba(0,0,0,.06)', marginBottom:20 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+          <div>
+            <div style={{ fontWeight:700, fontSize:15, color:C.tp, marginBottom:4 }}>WebView → Native → SDK 통신 흐름</div>
+            <div style={{ fontSize:12, color:C.ts }}>교통카드 충전 요청 실패 시나리오 — SDK_TIMEOUT 발생 경로</div>
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <Btn onClick={startAnimation} variant={animating ? 'secondary' : 'primary'}>{animating ? '재생 중…' : '▶ 시뮬레이션 실행'}</Btn>
+            <Btn variant="secondary" onClick={() => setActiveStep(0)}>초기화</Btn>
+          </div>
+        </div>
+
+        {/* 액터 헤더 */}
+        <div style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr', gap:0, marginBottom:16 }}>
+          <div />
+          {actors.map(a => (
+            <div key={a} style={{ textAlign:'center' }}>
+              <div style={{ display:'inline-flex', alignItems:'center', gap:6, background:actorColor[a]+'18', border:`2px solid ${actorColor[a]}`, borderRadius:8, padding:'6px 14px', fontSize:12, fontWeight:700, color:actorColor[a] }}>{a}</div>
+              <div style={{ width:2, height:16, background:actorColor[a]+'40', margin:'0 auto' }} />
+            </div>
+          ))}
+        </div>
+
+        {/* 시퀀스 */}
+        {bridgeMessages.map((msg, idx) => {
+          const fromIdx = actors.indexOf(msg.from);
+          const toIdx = actors.indexOf(msg.to);
+          const isActive = idx < activeStep;
+          const isRight = toIdx > fromIdx;
+
+          return (
+            <div key={idx} onClick={() => setSelected(msg)} style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr', alignItems:'center', marginBottom:4, cursor:'pointer', opacity: isActive ? 1 : 0.25, transition:'opacity .3s' }}>
+              <div style={{ fontSize:11, color:C.ts, textAlign:'right', paddingRight:12 }}>Step {msg.step}</div>
+              {actors.map((a, ai) => {
+                const isFrom = ai === fromIdx, isTo = ai === toIdx;
+                const inRange = isRight ? (ai >= fromIdx && ai <= toIdx) : (ai >= toIdx && ai <= fromIdx);
+                return (
+                  <div key={ai} style={{ position:'relative', height:44, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                    {/* 수직선 */}
+                    <div style={{ position:'absolute', top:0, bottom:0, left:'50%', width:2, background:actorColor[a]+'30', transform:'translateX(-50%)' }} />
+                    {/* 화살표 라인 */}
+                    {inRange && !isFrom && !isTo && (
+                      <div style={{ position:'absolute', left:0, right:0, height:2, background: msg.ok?C.ok:C.err, top:'50%', zIndex:1 }} />
+                    )}
+                    {isFrom && (
+                      <div style={{ position:'absolute', [isRight?'right':'left']:0, height:2, background:msg.ok?C.ok:C.err, [isRight?'left':'right']:'50%', top:'50%', zIndex:1 }}>
+                        <div style={{ background:msg.ok?C.ok:C.err, borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:600, color:'#fff', whiteSpace:'nowrap', position:'absolute', top:-12, [isRight?'right':'left']:-4 }}>{msg.msg}</div>
+                      </div>
+                    )}
+                    {isTo && (
+                      <div style={{ width:10, height:10, borderRadius:'50%', background:msg.ok?C.ok:C.err, position:'relative', zIndex:2 }} />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+
+        {/* 범례 */}
+        <div style={{ display:'flex', gap:20, marginTop:12, padding:'12px 16px', background:'#F8FAFC', borderRadius:8, fontSize:11 }}>
+          <span style={{ color:C.ok, fontWeight:600 }}>● 정상</span>
+          <span style={{ color:C.err, fontWeight:600 }}>● 실패</span>
+          <span style={{ color:C.ts }}>• Step 3에서 SDK→서버 응답 4,820ms 발생 → SDK_TIMEOUT 트리거</span>
+        </div>
+      </div>
+
+      {/* 구간별 응답 시간 테이블 */}
+      <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}`, boxShadow:'0 1px 4px rgba(0,0,0,.06)' }}>
+        <div style={{ fontWeight:700, fontSize:14, color:C.tp, marginBottom:14 }}>구간별 응답 시간</div>
+        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+          <thead>
+            <tr style={{ background:'#F8FAFC' }}>
+              {['Step','발신','수신','메시지','응답 시간','상태'].map(h => (
+                <th key={h} style={{ padding:'9px 12px', textAlign:'left', fontWeight:600, color:C.ts, borderBottom:`1px solid ${C.border}`, fontSize:11 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {bridgeMessages.map((m, i) => (
+              <tr key={i} onClick={() => setSelected(m)} style={{ borderBottom:`1px solid ${C.border}`, cursor:'pointer' }} onMouseEnter={e => e.currentTarget.style.background='#F8FAFC'} onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                <td style={{ padding:'10px 12px', color:C.ts, fontSize:11 }}>{m.step}</td>
+                <td style={{ padding:'10px 12px', color: actorColor[m.from], fontWeight:600 }}>{m.from}</td>
+                <td style={{ padding:'10px 12px', color: actorColor[m.to], fontWeight:600 }}>{m.to}</td>
+                <td style={{ padding:'10px 12px', fontFamily:'monospace', fontSize:11, color:C.primary }}>{m.msg}</td>
+                <td style={{ padding:'10px 12px', fontWeight:600, color: m.ms && m.ms > 3000 ? C.err : C.ok }}>{m.ms ? `${m.ms.toLocaleString()}ms` : '—'}</td>
+                <td style={{ padding:'10px 12px' }}>
+                  <span className="badge" style={{ background:m.ok?'#DCFCE7':'#FEE2E2', color:m.ok?C.ok:C.err }}>{m.ok?'정상':'실패'}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {selected && (
+        <Modal title={`Step ${selected.step} — ${selected.msg}`} onClose={() => setSelected(null)} actions={[<Btn key="c" variant="secondary" onClick={() => setSelected(null)}>닫기</Btn>]}>
+          <div style={{ display:'flex', flexDirection:'column', gap:12, fontSize:13 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10 }}>
+              <div style={{ background:'#F8FAFC', borderRadius:8, padding:'10px 12px' }}><div style={{ fontSize:11, color:C.ts }}>발신</div><strong style={{ color:actorColor[selected.from] }}>{selected.from}</strong></div>
+              <div style={{ background:'#F8FAFC', borderRadius:8, padding:'10px 12px' }}><div style={{ fontSize:11, color:C.ts }}>수신</div><strong style={{ color:actorColor[selected.to] }}>{selected.to}</strong></div>
+              <div style={{ background:'#F8FAFC', borderRadius:8, padding:'10px 12px' }}><div style={{ fontSize:11, color:C.ts }}>응답 시간</div><strong style={{ color:selected.ms&&selected.ms>3000?C.err:C.ok }}>{selected.ms?`${selected.ms}ms`:'타임아웃'}</strong></div>
+            </div>
+            <div style={{ background:'#0F172A', borderRadius:8, padding:'12px 14px' }}>
+              <div style={{ fontSize:11, color:'#64748B', marginBottom:6 }}>페이로드 (JSON)</div>
+              <pre style={{ color:'#A5F3FC', fontSize:12, margin:0 }}>{JSON.stringify(JSON.parse(selected.payload),null,2)}</pre>
+            </div>
+            {!selected.ok && <div style={{ background:'#FEE2E2', borderRadius:8, padding:'10px 12px', fontSize:12, color:C.err }}>❌ 이 구간에서 타임아웃 발생 — SDK_TIMEOUT 에러가 상위 레이어로 전파됩니다.</div>}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Retry 정책 설정
+function RetryPage() {
+  const [policy, setPolicy] = useState({ maxRetry:3, initDelay:500, backoffType:'exponential', multiplier:2, jitter:true, cbThreshold:5 });
+  const [toast, setToast] = useState(null);
+  const [modalType, setModalType] = useState(null);
+
+  // 시뮬레이션 데이터 계산
+  const simData = Array.from({length: policy.maxRetry+1}, (_, i) => {
+    let delay = 0;
+    if (i === 0) delay = 0;
+    else if (policy.backoffType === 'exponential') delay = policy.initDelay * Math.pow(policy.multiplier, i-1);
+    else delay = policy.initDelay * i;
+    if (policy.jitter && i > 0) delay = delay * (0.8 + Math.random()*0.4);
+    return { retry: `재시도 ${i}`, delay: Math.round(delay), cumulative: 0 };
+  });
+  let cum = 0;
+  simData.forEach(d => { cum += d.delay; d.cumulative = cum; });
+
+  const policies = [
+    { id:'p1', name:'기본 Retry 정책', sdk:'레일플러스 전체', maxRetry:3, type:'지수 백오프', status:'활성' },
+    { id:'p2', name:'충전 요청 전용', sdk:'충전 API', maxRetry:5, type:'선형 대기', status:'활성' },
+    { id:'p3', name:'NFC 태깅 정책', sdk:'NFC 모듈', maxRetry:2, type:'고정 대기', status:'비활성' },
+  ];
+
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginBottom:20 }}>
+        <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}`, boxShadow:'0 1px 4px rgba(0,0,0,.06)' }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+            <div style={{ fontWeight:700, fontSize:14, color:C.tp }}>Retry 정책 시뮬레이터</div>
+            <Btn small onClick={() => { setModalType('policy'); }}>정책 추가</Btn>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+            <div>
+              <label style={{ fontSize:11, color:C.ts, fontWeight:600 }}>최대 재시도 횟수</label>
+              <input type="range" min={1} max={10} value={policy.maxRetry} onChange={e => setPolicy(p=>({...p,maxRetry:+e.target.value}))} style={{ width:'100%', marginTop:6 }} />
+              <span style={{ fontSize:12, color:C.primary, fontWeight:700 }}>{policy.maxRetry}회</span>
+            </div>
+            <div>
+              <label style={{ fontSize:11, color:C.ts, fontWeight:600 }}>초기 대기 시간</label>
+              <input type="range" min={100} max={2000} step={100} value={policy.initDelay} onChange={e => setPolicy(p=>({...p,initDelay:+e.target.value}))} style={{ width:'100%', marginTop:6 }} />
+              <span style={{ fontSize:12, color:C.primary, fontWeight:700 }}>{policy.initDelay}ms</span>
+            </div>
+            <div>
+              <label style={{ fontSize:11, color:C.ts, fontWeight:600 }}>백오프 전략</label>
+              <select value={policy.backoffType} onChange={e => setPolicy(p=>({...p,backoffType:e.target.value}))}
+                style={{ width:'100%', marginTop:6, padding:'7px 10px', border:`1px solid ${C.border}`, borderRadius:6, fontSize:12, fontFamily:'inherit' }}>
+                <option value="exponential">지수 백오프</option><option value="linear">선형 대기</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize:11, color:C.ts, fontWeight:600 }}>Multiplier</label>
+              <input type="range" min={1.5} max={4} step={0.5} value={policy.multiplier} onChange={e => setPolicy(p=>({...p,multiplier:+e.target.value}))} style={{ width:'100%', marginTop:6 }} />
+              <span style={{ fontSize:12, color:C.primary, fontWeight:700 }}>×{policy.multiplier}</span>
+            </div>
+          </div>
+          <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, cursor:'pointer', marginBottom:16 }}>
+            <input type="checkbox" checked={policy.jitter} onChange={e => setPolicy(p=>({...p,jitter:e.target.checked}))} />
+            Jitter 적용 (±20% 무작위 편차)
+          </label>
+          <div>
+            <label style={{ fontSize:11, color:C.ts, fontWeight:600 }}>Circuit Breaker 임계값</label>
+            <input type="range" min={3} max={20} value={policy.cbThreshold} onChange={e => setPolicy(p=>({...p,cbThreshold:+e.target.value}))} style={{ width:'100%', marginTop:6 }} />
+            <span style={{ fontSize:12, color:C.primary, fontWeight:700 }}>{policy.cbThreshold}회 연속 실패 시 차단</span>
+          </div>
+        </div>
+
+        <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}`, boxShadow:'0 1px 4px rgba(0,0,0,.06)' }}>
+          <div style={{ fontWeight:700, fontSize:14, color:C.tp, marginBottom:16 }}>대기 시간 시뮬레이션 결과</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={simData}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="retry" tick={{ fontSize:11, fill:C.ts }} />
+              <YAxis tick={{ fontSize:11, fill:C.ts }} unit="ms" />
+              <Tooltip formatter={(v) => `${v}ms`} contentStyle={{ borderRadius:8 }} />
+              <Bar dataKey="delay" fill={C.primary} name="대기 시간" radius={[4,4,0,0]} />
+            </BarChart>
+          </ResponsiveContainer>
+          <div style={{ background:'#F8FAFC', borderRadius:8, padding:'12px', marginTop:12, fontSize:12, color:C.ts }}>
+            최대 누적 대기: <strong style={{ color:C.tp }}>{simData[simData.length-1]?.cumulative?.toLocaleString()}ms</strong> / 총 재시도 {policy.maxRetry}회
+          </div>
+        </div>
+      </div>
+
+      <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}`, boxShadow:'0 1px 4px rgba(0,0,0,.06)' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+          <div style={{ fontWeight:700, fontSize:14, color:C.tp }}>등록된 Retry 정책</div>
+          <Btn small onClick={() => setToast('정책이 저장되었습니다.')}>현재 정책 저장</Btn>
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+          <thead>
+            <tr style={{ background:'#F8FAFC' }}>
+              {['정책명','적용 SDK','최대 재시도','전략','상태','액션'].map(h => <th key={h} style={{ padding:'9px 12px', textAlign:'left', fontWeight:600, color:C.ts, borderBottom:`1px solid ${C.border}`, fontSize:11 }}>{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {policies.map(p => (
+              <tr key={p.id} style={{ borderBottom:`1px solid ${C.border}` }}>
+                <td style={{ padding:'11px 12px', fontWeight:600, color:C.tp }}>{p.name}</td>
+                <td style={{ padding:'11px 12px', color:C.ts }}>{p.sdk}</td>
+                <td style={{ padding:'11px 12px', color:C.tp }}>{p.maxRetry}회</td>
+                <td style={{ padding:'11px 12px', color:C.ts }}>{p.type}</td>
+                <td style={{ padding:'11px 12px' }}>
+                  <span className="badge" style={{ background:p.status==='활성'?'#DCFCE7':'#F1F5F9', color:p.status==='활성'?C.ok:C.ts }}>{p.status}</span>
+                </td>
+                <td style={{ padding:'11px 12px' }}>
+                  <button onClick={() => setModalType({type:'edit', policy:p})} style={{ background:'none', border:`1px solid ${C.border}`, borderRadius:6, padding:'4px 10px', fontSize:11, cursor:'pointer', fontFamily:'inherit', color:C.ts }}>편집</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+      {modalType === 'policy' && (
+        <Modal title="Retry 정책 추가" onClose={() => setModalType(null)} actions={[<Btn key="c" variant="secondary" onClick={() => setModalType(null)}>취소</Btn>, <Btn key="ok" onClick={() => { setModalType(null); setToast('정책이 추가되었습니다.'); }}>저장</Btn>]}>
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>정책명</label><input placeholder="예: 결제 API Retry 정책" style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }} /></div>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>적용 SDK</label>
+              <select style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }}>
+                <option>레일플러스 전체</option><option>충전 API</option><option>NFC 모듈</option>
+              </select>
+            </div>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>최대 재시도 횟수</label><input type="number" defaultValue={3} min={1} max={10} style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }} /></div>
+          </div>
+        </Modal>
+      )}
+      {modalType && modalType.type === 'edit' && (
+        <Modal title={`정책 편집 — ${modalType.policy.name}`} onClose={() => setModalType(null)} actions={[<Btn key="c" variant="secondary" onClick={() => setModalType(null)}>취소</Btn>, <Btn key="ok" onClick={() => { setModalType(null); setToast('정책이 수정되었습니다.'); }}>저장</Btn>]}>
+          <div style={{ display:'flex', flexDirection:'column', gap:14, fontSize:13 }}>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>정책명</label><input defaultValue={modalType.policy.name} style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }} /></div>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>최대 재시도 횟수</label><input type="number" defaultValue={modalType.policy.maxRetry} style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }} /></div>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>상태</label>
+              <select defaultValue={modalType.policy.status} style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }}>
+                <option>활성</option><option>비활성</option>
+              </select>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── 메인 앱
+function App() {
+  const [page, setPage] = useState('dashboard');
+  const pageTitles = {
+    dashboard: '대시보드',
+    '결제 실패 분석': '결제 실패 분석',
+    '에러 로그 뷰어': '에러 로그 뷰어',
+    '브릿지 통신 흐름': '브릿지 통신 흐름',
+    'Retry 정책 설정': 'Retry 정책 설정',
+  };
+
+  const renderPage = () => {
+    switch(page) {
+      case 'dashboard': return <DashboardPage onNav={setPage} />;
+      case '결제 실패 분석': return <FailureAnalysisPage />;
+      case '에러 로그 뷰어': return <ErrorLogPage />;
+      case '브릿지 통신 흐름': return <BridgePage />;
+      case 'Retry 정책 설정': return <RetryPage />;
+      default: return null;
+    }
+  };
+
+  return (
+    <div style={{ display:'flex', minHeight:'100vh' }}>
+      <Sidebar page={page} onNav={setPage} />
+      <div style={{ flex:1, display:'flex', flexDirection:'column', minWidth:0 }}>
+        <TopBar title={pageTitles[page]} />
+        <main style={{ flex:1, overflow:'auto' }}>
+          {renderPage()}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

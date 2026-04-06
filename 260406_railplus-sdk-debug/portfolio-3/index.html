@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>멀티 SDK 통합 품질 관리 플랫폼</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Pretendard', -apple-system, sans-serif; background: #F8FAFC; }
+::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #F1F5F9; } ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+.badge { display:inline-flex;align-items:center;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600; }
+.toast { position:fixed;bottom:28px;right:28px;background:#059669;color:#fff;padding:12px 20px;border-radius:10px;font-size:13px;z-index:2000;box-shadow:0 8px 24px rgba(5,150,105,.3);animation:slideUp .3s ease; }
+@keyframes slideUp { from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)} }
+.modal-overlay { position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:24px; }
+.modal-box { background:#fff;border-radius:14px;max-width:580px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.15); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+const { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } = Recharts;
+
+const C = {
+  primary: '#059669', primaryHover: '#047857', primaryLight: '#ECFDF5',
+  secondary: '#10B981', accent: '#F97316', accentLight: '#FFF7ED',
+  bg: '#F8FAFC', surface: '#FFFFFF',
+  tp: '#1E293B', ts: '#64748B', tm: '#94A3B8',
+  border: '#E2E8F0', borderHover: '#CBD5E1',
+  sidebar: '#FFFFFF', sidebarBorder: '#E2E8F0',
+  err: '#EF4444', warn: '#F59E0B', ok: '#10B981', info: '#3B82F6',
+};
+
+const MENUS = [
+  { key:'SDK 통합 현황판', icon:'🌐', label:'SDK 통합 현황판' },
+  { key:'알림 규칙 설정', icon:'🔔', label:'알림 규칙 설정' },
+  { key:'이슈 트래킹', icon:'🎯', label:'이슈 트래킹' },
+  { key:'팀 협업 관리', icon:'👥', label:'팀 협업 관리' },
+];
+
+const sdks = [
+  { id:'s1', name:'레일플러스', category:'교통카드', version:'v2.4.1', successRate:94.2, avgMs:1240, errCount:147, status:'warning', color:'#F97316' },
+  { id:'s2', name:'티머니 SDK', category:'교통카드', version:'v5.1.0', successRate:98.7, avgMs:820, errCount:12, status:'ok', color:'#3B82F6' },
+  { id:'s3', name:'카카오페이', category:'간편결제', version:'v3.2.0', successRate:99.1, avgMs:680, errCount:7, status:'ok', color:'#FBBF24' },
+  { id:'s4', name:'토스페이먼츠', category:'PG사', version:'v2.0.3', successRate:97.8, avgMs:940, errCount:28, status:'warn', color:'#06B6D4' },
+  { id:'s5', name:'KG이니시스', category:'PG사', version:'v4.3.1', successRate:91.5, avgMs:1680, errCount:203, status:'critical', color:'#8B5CF6' },
+  { id:'s6', name:'네이버페이', category:'간편결제', version:'v2.8.0', successRate:99.4, avgMs:560, errCount:4, status:'ok', color:'#22C55E' },
+];
+
+const sdkTrend = [
+  { dt:'03-31', rp:93, tm:99, kk:99, tp:98 },
+  { dt:'04-01', rp:92, tm:98, kk:99, tp:97 },
+  { dt:'04-02', rp:95, tm:99, kk:100, tp:98 },
+  { dt:'04-03', rp:91, tm:97, kk:99, tp:96 },
+  { dt:'04-04', rp:93, tm:98, kk:99, tp:97 },
+  { dt:'04-05', rp:90, tm:99, kk:99, tp:98 },
+  { dt:'04-06', rp:94, tm:99, kk:99, tp:98 },
+];
+
+const alertRules = [
+  { id:'r1', name:'레일플러스 성공률 임계값', sdk:'레일플러스', condition:'성공률 < 95%', action:'Slack #alerts', status:'active', triggered: 3 },
+  { id:'r2', name:'KG이니시스 응답 지연', sdk:'KG이니시스', condition:'평균 응답 > 1500ms', action:'이메일 + Slack', status:'active', triggered: 8 },
+  { id:'r3', name:'에러 급증 감지', sdk:'전체', condition:'5분간 에러 > 50건', action:'웹훅 + 이메일', status:'active', triggered: 1 },
+  { id:'r4', name:'NFC 연속 실패', sdk:'레일플러스', condition:'연속 실패 5회 이상', action:'Slack #critical', status:'paused', triggered: 0 },
+];
+
+const issues = [
+  { id:'ISS-041', title:'레일플러스 iOS SDK_TIMEOUT 반복 발생', sdk:'레일플러스', priority:'critical', status:'분석 중', assignee:'최기용', errCount:147, created:'04-04', tags:['iOS','SDK_TIMEOUT','타임아웃'] },
+  { id:'ISS-040', title:'KG이니시스 응답 지연 (1.6초 평균)', sdk:'KG이니시스', priority:'high', status:'신규', assignee:'박지수', errCount:203, created:'04-05', tags:['Android','지연','PG'] },
+  { id:'ISS-039', title:'토스페이먼츠 간헐적 인증 실패', sdk:'토스페이먼츠', priority:'medium', status:'해결', assignee:'이승민', errCount:28, created:'04-02', tags:['인증','간헐적'] },
+  { id:'ISS-038', title:'WebView 브릿지 메시지 누락 (출퇴근 시간대)', sdk:'레일플러스', priority:'high', status:'분석 중', assignee:'최기용', errCount:34, created:'04-03', tags:['브릿지','누락','피크타임'] },
+  { id:'ISS-037', title:'티머니 SDK 메모리 누수 의심', sdk:'티머니 SDK', priority:'low', status:'신규', assignee:'김하나', errCount:12, created:'04-06', tags:['메모리','Android'] },
+  { id:'ISS-036', title:'NFC 태깅 후 충전 실패 (iOS 17.x)', sdk:'레일플러스', priority:'critical', status:'종료', assignee:'최기용', errCount:56, created:'03-30', tags:['NFC','iOS17','충전'] },
+];
+
+const team = [
+  { id:'t1', name:'최기용', role:'풀스택 개발', sdks:['레일플러스','티머니 SDK'], avatar:'K', color:'#059669', recentActivity:'SDK_TIMEOUT 원인 분석 중', openIssues:2 },
+  { id:'t2', name:'박지수', role:'Android 개발', sdks:['KG이니시스','카카오페이'], avatar:'J', color:'#6366F1', recentActivity:'KG이니시스 응답 지연 패치 작성', openIssues:1 },
+  { id:'t3', name:'이승민', role:'iOS 개발', sdks:['토스페이먼츠','네이버페이'], avatar:'S', color:'#F97316', recentActivity:'토스페이 인증 이슈 해결 완료', openIssues:0 },
+  { id:'t4', name:'김하나', role:'QA 엔지니어', sdks:['티머니 SDK'], avatar:'H', color:'#8B5CF6', recentActivity:'회귀 테스트 시나리오 작성 중', openIssues:1 },
+];
+
+const comments = [
+  { id:'c1', author:'박지수', ts:'14:28', msg:'@최기용 KG이니시스 측에서 응답 지연 원인이 새 방화벽 정책 때문이라고 답변 왔어요. 임시 우회 방법 검토 중입니다.', avatar:'J', color:'#6366F1' },
+  { id:'c2', author:'최기용', ts:'14:31', msg:'오케이. 레일플러스 이슈도 비슷한 패턴인데 SDK 팀에 연락해봤어요. @이승민 iOS 쪽 추가 로그 캡처해줄 수 있나요?', avatar:'K', color:'#059669' },
+  { id:'c3', author:'이승민', ts:'14:35', msg:'네! Crashlytics 리포트 보니까 iOS 17.4 이상에서만 발생하는 패턴이에요. SDK 버전 이슈 가능성 높아 보입니다.', avatar:'S', color:'#F97316' },
+  { id:'c4', author:'김하나', ts:'14:40', msg:'테스트 기기 3개에서 재현 성공했습니다. 재현 케이스 Jira에 올려놓을게요. @최기용', avatar:'H', color:'#8B5CF6' },
+];
+
+function Toast({ msg, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 2800); return () => clearTimeout(t); }, []);
+  return <div className="toast">{msg}</div>;
+}
+
+function Modal({ title, onClose, children, actions }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={e => e.stopPropagation()}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px', borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ fontWeight:700, fontSize:15, color:C.tp }}>{title}</span>
+          <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', fontSize:20, color:C.ts }}>×</button>
+        </div>
+        <div style={{ padding:'24px' }}>{children}</div>
+        {actions && <div style={{ display:'flex', gap:8, justifyContent:'flex-end', padding:'16px 24px', borderTop:`1px solid ${C.border}`, background:'#F8FAFC', borderRadius:'0 0 14px 14px' }}>{actions}</div>}
+      </div>
+    </div>
+  );
+}
+
+function Btn({ children, variant='primary', onClick, small }) {
+  const s = {
+    primary: { background:C.primary, color:'#fff', border:'none' },
+    secondary: { background:'#fff', color:C.ts, border:`1px solid ${C.border}` },
+    danger: { background:'#FEE2E2', color:C.err, border:`1px solid #FECACA` },
+    outline: { background:'transparent', color:C.primary, border:`1px solid ${C.primary}` },
+  };
+  return <button onClick={onClick} style={{ ...s[variant], padding:small?'5px 12px':'8px 16px', borderRadius:8, cursor:'pointer', fontFamily:'inherit', fontSize:small?11:13, fontWeight:600, transition:'all .15s' }}>{children}</button>;
+}
+
+// ── 밝은 사이드바
+function Sidebar({ page, onNav }) {
+  return (
+    <aside style={{ width:240, background:C.surface, borderRight:`1px solid ${C.border}`, flexShrink:0, display:'flex', flexDirection:'column', minHeight:'100vh', position:'sticky', top:0, height:'100vh' }}>
+      <div style={{ padding:'20px 16px 14px', borderBottom:`1px solid ${C.border}` }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:34, height:34, background:`linear-gradient(135deg,${C.primary},${C.secondary})`, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', fontSize:16 }}>🔧</div>
+          <div>
+            <div style={{ fontWeight:800, fontSize:13, color:C.tp }}>SDK Quality</div>
+            <div style={{ fontSize:10, color:C.ts }}>통합 품질 관리 플랫폼</div>
+          </div>
+        </div>
+      </div>
+      <div style={{ padding:'10px 10px', flex:1 }}>
+        <div style={{ fontSize:10, color:C.ts, fontWeight:600, padding:'8px 10px 4px', letterSpacing:'0.05em' }}>메뉴</div>
+        {MENUS.map(m => (
+          <button key={m.key} onClick={() => onNav(m.key)} style={{
+            width:'100%', display:'flex', alignItems:'center', gap:10, padding:'9px 10px',
+            borderRadius:9, border:'none', cursor:'pointer', textAlign:'left', fontFamily:'inherit',
+            background: page === m.key ? C.primaryLight : 'transparent',
+            color: page === m.key ? C.primary : C.ts,
+            fontSize:13, fontWeight: page === m.key ? 600 : 400, marginBottom:2, transition:'all .15s',
+          }}>
+            <span style={{ fontSize:15, width:20, textAlign:'center' }}>{m.icon}</span>
+            <span>{m.label}</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ padding:'14px 16px', borderTop:`1px solid ${C.border}` }}>
+        <div style={{ display:'flex', gap:8, marginBottom:8 }}>
+          <div style={{ width:10, height:10, borderRadius:'50%', background:C.err, marginTop:2, flexShrink:0 }} />
+          <div style={{ fontSize:11, color:C.ts }}>KG이니시스 임계값 초과</div>
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          <div style={{ width:10, height:10, borderRadius:'50%', background:C.warn, marginTop:2, flexShrink:0 }} />
+          <div style={{ fontSize:11, color:C.ts }}>레일플러스 성공률 ↓</div>
+        </div>
+      </div>
+      <div style={{ padding:'12px 16px', borderTop:`1px solid ${C.border}` }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:32, height:32, borderRadius:'50%', background:`linear-gradient(135deg,${C.primary},${C.secondary})`, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:700, fontSize:13 }}>K</div>
+          <div>
+            <div style={{ fontSize:12, fontWeight:600, color:C.tp }}>최기용</div>
+            <div style={{ fontSize:10, color:C.ts }}>플랫폼 관리자</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function TopBar({ title }) {
+  return (
+    <header style={{ background:C.surface, borderBottom:`1px solid ${C.border}`, padding:'0 24px', height:56, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+      <h1 style={{ fontSize:15, fontWeight:700, color:C.tp }}>{title}</h1>
+      <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+        <div style={{ fontSize:11, color:C.ts }}>최종 갱신: 14:40:12</div>
+        <div style={{ background:C.primaryLight, color:C.primary, borderRadius:6, padding:'4px 10px', fontSize:11, fontWeight:600 }}>SDK 6개 모니터링 중</div>
+      </div>
+    </header>
+  );
+}
+
+// ── 탭 인라인
+function InlineTabs({ tabs, active, onChange }) {
+  return (
+    <div style={{ display:'flex', gap:2, background:'#F1F5F9', borderRadius:8, padding:3, marginBottom:20 }}>
+      {tabs.map(t => (
+        <button key={t} onClick={() => onChange(t)} style={{ flex:1, padding:'7px 12px', borderRadius:6, border:'none', cursor:'pointer', fontFamily:'inherit', fontSize:12, fontWeight:600, background:active===t?'#fff':' transparent', color:active===t?C.tp:C.ts, boxShadow:active===t?'0 1px 3px rgba(0,0,0,.1)':'none', transition:'all .15s' }}>{t}</button>
+      ))}
+    </div>
+  );
+}
+
+// ── P3-1: SDK 통합 현황판
+function SdkOverviewPage() {
+  const [selected, setSelected] = useState(null);
+  const [modal, setModal] = useState(null);
+  const statusColor = { ok:C.ok, warn:C.warn, warning:C.warn, critical:C.err };
+  const statusLabel = { ok:'정상', warn:'주의', warning:'경고', critical:'위험' };
+
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:24 }}>
+        {[
+          { label:'모니터링 SDK', value:'6개', sub:'교통카드 2, PG사 2, 간편결제 2', icon:'🌐', color:C.primary },
+          { label:'정상 SDK', value:'4개', sub:'성공률 97% 이상', icon:'✅', color:C.ok },
+          { label:'주의 SDK', value:'2개', sub:'임계값 근접', icon:'⚠️', color:C.warn },
+          { label:'위험 SDK', value:'1개', sub:'즉각 조치 필요', icon:'🚨', color:C.err },
+        ].map((k,i) => (
+          <div key={i} style={{ background:C.surface, borderRadius:12, padding:'16px 18px', border:`1px solid ${C.border}`, boxShadow:'0 1px 3px rgba(0,0,0,.05)' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+              <span>{k.icon}</span><span style={{ fontSize:11, color:C.ts, fontWeight:500 }}>{k.label}</span>
+            </div>
+            <div style={{ fontSize:24, fontWeight:800, color:C.tp, marginBottom:2 }}>{k.value}</div>
+            <div style={{ fontSize:11, color:C.ts }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* SDK 카드 그리드 */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14, marginBottom:24 }}>
+        {sdks.map(sdk => (
+          <div key={sdk.id} onClick={() => setSelected(sdk)} style={{
+            background:C.surface, borderRadius:12, padding:'16px 18px',
+            border:`2px solid ${sdk.status==='critical'?C.err:sdk.status==='warning'?C.warn:C.border}`,
+            cursor:'pointer', transition:'all .15s', boxShadow:'0 1px 3px rgba(0,0,0,.05)',
+          }} onMouseEnter={e=>e.currentTarget.style.borderColor=sdk.color} onMouseLeave={e=>e.currentTarget.style.borderColor=sdk.status==='critical'?C.err:sdk.status==='warning'?C.warn:C.border}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <div style={{ width:10, height:10, borderRadius:'50%', background:sdk.color, boxShadow:`0 0 8px ${sdk.color}50` }} />
+                <span style={{ fontWeight:700, fontSize:13, color:C.tp }}>{sdk.name}</span>
+              </div>
+              <span className="badge" style={{ background:`${statusColor[sdk.status]}18`, color:statusColor[sdk.status] }}>{statusLabel[sdk.status]}</span>
+            </div>
+            <div style={{ display:'flex', gap:12, marginBottom:12 }}>
+              <div>
+                <div style={{ fontSize:10, color:C.ts }}>성공률</div>
+                <div style={{ fontSize:18, fontWeight:800, color: sdk.successRate < 95 ? C.err : C.tp }}>{sdk.successRate}%</div>
+              </div>
+              <div>
+                <div style={{ fontSize:10, color:C.ts }}>평균 응답</div>
+                <div style={{ fontSize:18, fontWeight:800, color: sdk.avgMs > 1500 ? C.warn : C.tp }}>{sdk.avgMs.toLocaleString()}ms</div>
+              </div>
+              <div>
+                <div style={{ fontSize:10, color:C.ts }}>금일 에러</div>
+                <div style={{ fontSize:18, fontWeight:800, color: sdk.errCount > 50 ? C.err : C.tp }}>{sdk.errCount}건</div>
+              </div>
+            </div>
+            <div style={{ background:'#F1F5F9', borderRadius:6, overflow:'hidden', height:6 }}>
+              <div style={{ width:`${sdk.successRate}%`, height:'100%', background: sdk.successRate < 95 ? C.err : sdk.successRate < 97 ? C.warn : C.ok, borderRadius:6, transition:'width .3s' }} />
+            </div>
+            <div style={{ display:'flex', justifyContent:'space-between', marginTop:6, fontSize:10, color:C.ts }}>
+              <span>{sdk.category}</span><span>{sdk.version}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 성공률 추이 차트 */}
+      <div style={{ background:C.surface, borderRadius:12, padding:'20px', border:`1px solid ${C.border}`, boxShadow:'0 1px 3px rgba(0,0,0,.05)' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+          <div style={{ fontWeight:700, fontSize:14, color:C.tp }}>SDK 성공률 추이 (최근 7일)</div>
+          <Btn small onClick={() => setModal('export')}>리포트 내보내기</Btn>
+        </div>
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart data={sdkTrend}>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+            <XAxis dataKey="dt" tick={{ fontSize:11, fill:C.ts }} />
+            <YAxis tick={{ fontSize:11, fill:C.ts }} domain={[85,101]} unit="%" />
+            <Tooltip formatter={v=>`${v}%`} contentStyle={{ borderRadius:8, border:`1px solid ${C.border}` }} />
+            <Legend />
+            <Line type="monotone" dataKey="rp" stroke="#F97316" name="레일플러스" strokeWidth={2} dot={{ r:3 }} />
+            <Line type="monotone" dataKey="tm" stroke="#3B82F6" name="티머니" strokeWidth={2} dot={{ r:3 }} />
+            <Line type="monotone" dataKey="kk" stroke="#FBBF24" name="카카오페이" strokeWidth={2} dot={{ r:3 }} />
+            <Line type="monotone" dataKey="tp" stroke="#06B6D4" name="토스페이" strokeWidth={2} dot={{ r:3 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {selected && (
+        <Modal title={`${selected.name} 상세`} onClose={() => setSelected(null)} actions={[<Btn key="c" variant="secondary" onClick={() => setSelected(null)}>닫기</Btn>, <Btn key="ok" onClick={() => { setSelected(null); setModal('issue'); }}>이슈 등록</Btn>]}>
+          <div style={{ display:'flex', flexDirection:'column', gap:12, fontSize:13 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
+              {[['성공률', selected.successRate+'%'],['평균 응답',selected.avgMs+'ms'],['금일 에러',selected.errCount+'건'],['카테고리',selected.category],['버전',selected.version],['상태',selected.status]].map(([k,v])=>(
+                <div key={k} style={{ background:'#F8FAFC', borderRadius:8, padding:'10px 12px' }}>
+                  <div style={{ fontSize:10, color:C.ts, marginBottom:4 }}>{k}</div>
+                  <strong style={{ color:C.tp }}>{v}</strong>
+                </div>
+              ))}
+            </div>
+            <div style={{ background: selected.status==='critical'?'#FEE2E2':'#ECFDF5', borderRadius:8, padding:'10px 12px', fontSize:12, color:selected.status==='critical'?C.err:C.ok }}>
+              {selected.status==='critical'?'🚨 즉각 조치 필요 — 성공률 임계값(95%) 미달':'✅ 정상 범위 운영 중'}
+            </div>
+            <div><label style={{ fontSize:11, color:C.ts }}>조치 메모</label>
+              <textarea rows={3} style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:12, fontFamily:'inherit', resize:'vertical' }} placeholder="원인 분석 또는 조치 내용 입력…" />
+            </div>
+          </div>
+        </Modal>
+      )}
+      {modal === 'export' && (
+        <Modal title="리포트 내보내기" onClose={() => setModal(null)} actions={[<Btn key="c" variant="secondary" onClick={() => setModal(null)}>취소</Btn>, <Btn key="ok" onClick={() => setModal(null)}>내보내기</Btn>]}>
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>기간</label>
+              <select style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }}><option>최근 7일</option><option>최근 30일</option></select>
+            </div>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>형식</label>
+              <div style={{ display:'flex', gap:10, marginTop:6 }}>{['PDF','CSV','Excel'].map(f=><label key={f} style={{ display:'flex', alignItems:'center', gap:6, fontSize:13, cursor:'pointer' }}><input type="radio" name="fmt" defaultChecked={f==='PDF'} />{f}</label>)}</div>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── P3-2: 알림 규칙 설정
+function AlertRulesPage() {
+  const [rules, setRules] = useState(alertRules);
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [tab, setTab] = useState('규칙 목록');
+
+  const history = [
+    { ts:'14:38', rule:'레일플러스 성공률 임계값', channel:'Slack', status:'발송 완료' },
+    { ts:'14:21', rule:'KG이니시스 응답 지연', channel:'이메일', status:'발송 완료' },
+    { ts:'14:21', rule:'KG이니시스 응답 지연', channel:'Slack', status:'발송 완료' },
+    { ts:'13:45', rule:'에러 급증 감지', channel:'웹훅', status:'발송 완료' },
+    { ts:'12:30', rule:'레일플러스 성공률 임계값', channel:'Slack', status:'실패 (재시도 중)' },
+  ];
+
+  return (
+    <div style={{ padding:24 }}>
+      <InlineTabs tabs={['규칙 목록','발송 이력']} active={tab} onChange={setTab} />
+
+      {tab === '규칙 목록' && (
+        <>
+          <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:16 }}>
+            <Btn onClick={() => setModal('add')}>+ 규칙 추가</Btn>
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+            {rules.map(rule => (
+              <div key={rule.id} style={{ background:C.surface, borderRadius:12, padding:'16px 20px', border:`1px solid ${C.border}`, boxShadow:'0 1px 3px rgba(0,0,0,.05)', display:'flex', alignItems:'center', gap:16 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:6 }}>
+                    <span style={{ fontWeight:700, fontSize:13, color:C.tp }}>{rule.name}</span>
+                    <span className="badge" style={{ background:rule.status==='active'?C.primaryLight:'#F1F5F9', color:rule.status==='active'?C.primary:C.ts }}>{rule.status==='active'?'활성':'일시정지'}</span>
+                    {rule.triggered > 0 && <span className="badge" style={{ background:'#FEE2E2', color:C.err }}>오늘 {rule.triggered}회 발동</span>}
+                  </div>
+                  <div style={{ display:'flex', gap:16, fontSize:12, color:C.ts }}>
+                    <span>대상: <strong style={{ color:C.tp }}>{rule.sdk}</strong></span>
+                    <span>조건: <strong style={{ color:C.tp }}>{rule.condition}</strong></span>
+                    <span>채널: <strong style={{ color:C.tp }}>{rule.action}</strong></span>
+                  </div>
+                </div>
+                <div style={{ display:'flex', gap:8 }}>
+                  <button onClick={() => { setRules(r => r.map(x => x.id===rule.id?{...x,status:x.status==='active'?'paused':'active'}:x)); setToast('규칙 상태가 변경되었습니다.'); }} style={{ padding:'5px 12px', borderRadius:8, border:`1px solid ${C.border}`, background:'transparent', color:C.ts, fontSize:11, cursor:'pointer', fontFamily:'inherit' }}>
+                    {rule.status==='active'?'일시정지':'활성화'}
+                  </button>
+                  <button onClick={() => setModal({type:'edit',rule})} style={{ padding:'5px 12px', borderRadius:8, border:`1px solid ${C.border}`, background:'transparent', color:C.ts, fontSize:11, cursor:'pointer', fontFamily:'inherit' }}>편집</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {tab === '발송 이력' && (
+        <div style={{ background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8FAFC' }}>{['시간','규칙명','채널','상태'].map(h=><th key={h} style={{ padding:'10px 16px', textAlign:'left', fontSize:11, fontWeight:600, color:C.ts, borderBottom:`1px solid ${C.border}` }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {history.map((h,i) => (
+                <tr key={i} style={{ borderBottom:`1px solid ${C.border}` }}>
+                  <td style={{ padding:'11px 16px', fontFamily:'monospace', fontSize:11, color:C.ts }}>{h.ts}</td>
+                  <td style={{ padding:'11px 16px', color:C.tp, fontWeight:500 }}>{h.rule}</td>
+                  <td style={{ padding:'11px 16px' }}><span className="badge" style={{ background:'#F1F5F9', color:C.ts }}>{h.channel}</span></td>
+                  <td style={{ padding:'11px 16px' }}><span className="badge" style={{ background:h.status.includes('실패')?'#FEE2E2':C.primaryLight, color:h.status.includes('실패')?C.err:C.primary }}>{h.status}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+      {modal === 'add' && (
+        <Modal title="알림 규칙 추가" onClose={() => setModal(null)} actions={[<Btn key="c" variant="secondary" onClick={() => setModal(null)}>취소</Btn>, <Btn key="ok" onClick={() => { setModal(null); setToast('알림 규칙이 추가되었습니다.'); }}>저장</Btn>]}>
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>규칙명</label><input placeholder="예: 레일플러스 성공률 경보" style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }} /></div>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>대상 SDK</label>
+              <select style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }}>
+                <option>전체</option>{sdks.map(s=><option key={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>조건 항목</label>
+                <select style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }}><option>성공률</option><option>평균 응답 시간</option><option>에러 건수</option></select>
+              </div>
+              <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>임계값</label><input placeholder="예: 95%" style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }} /></div>
+            </div>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>알림 채널</label>
+              <div style={{ display:'flex', gap:12, marginTop:6 }}>
+                {['Slack','이메일','웹훅'].map(ch=><label key={ch} style={{ display:'flex', alignItems:'center', gap:6, fontSize:13, cursor:'pointer' }}><input type="checkbox" defaultChecked={ch==='Slack'} />{ch}</label>)}
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {modal && modal.type === 'edit' && (
+        <Modal title={`규칙 편집 — ${modal.rule.name}`} onClose={() => setModal(null)} actions={[<Btn key="c" variant="secondary" onClick={() => setModal(null)}>취소</Btn>, <Btn key="ok" onClick={() => { setModal(null); setToast('규칙이 수정되었습니다.'); }}>저장</Btn>]}>
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>규칙명</label><input defaultValue={modal.rule.name} style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }} /></div>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>조건</label><input defaultValue={modal.rule.condition} style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }} /></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── P3-3: 이슈 트래킹
+function IssueTrackerPage() {
+  const [view, setView] = useState('리스트');
+  const [selected, setSelected] = useState(null);
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const statuses = ['신규','분석 중','해결','종료'];
+  const priorityColor = { critical:C.err, high:C.warn, medium:C.info, low:C.ts };
+  const statusColor = { '신규':'#3B82F6','분석 중':C.warn,'해결':C.ok,'종료':C.ts };
+
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+        <InlineTabs tabs={['리스트','칸반']} active={view} onChange={setView} />
+        <Btn onClick={() => setModal('add')}>+ 이슈 등록</Btn>
+      </div>
+
+      {view === '리스트' && (
+        <div style={{ display:'grid', gridTemplateColumns: selected ? '1fr 380px' : '1fr', gap:16 }}>
+          <div style={{ background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, overflow:'hidden', boxShadow:'0 1px 3px rgba(0,0,0,.05)' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead><tr style={{ background:'#F8FAFC' }}>{['이슈 ID','제목','SDK','우선순위','상태','담당자','에러 수'].map(h=><th key={h} style={{ padding:'10px 14px', textAlign:'left', fontSize:11, fontWeight:600, color:C.ts, borderBottom:`1px solid ${C.border}` }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {issues.map(iss => (
+                  <tr key={iss.id} onClick={() => setSelected(iss)} style={{ borderBottom:`1px solid ${C.border}`, cursor:'pointer', background:selected?.id===iss.id?C.primaryLight:'transparent', transition:'background .1s' }} onMouseEnter={e=>{if(selected?.id!==iss.id)e.currentTarget.style.background='#F8FAFC'}} onMouseLeave={e=>{if(selected?.id!==iss.id)e.currentTarget.style.background='transparent'}}>
+                    <td style={{ padding:'11px 14px', fontFamily:'monospace', fontSize:11, color:C.primary, fontWeight:600 }}>{iss.id}</td>
+                    <td style={{ padding:'11px 14px', color:C.tp, fontWeight:500, maxWidth:220 }}>
+                      <div style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{iss.title}</div>
+                    </td>
+                    <td style={{ padding:'11px 14px' }}><span className="badge" style={{ background:'#F1F5F9', color:C.ts, fontSize:10 }}>{iss.sdk}</span></td>
+                    <td style={{ padding:'11px 14px' }}><span className="badge" style={{ background:`${priorityColor[iss.priority]}18`, color:priorityColor[iss.priority] }}>{iss.priority}</span></td>
+                    <td style={{ padding:'11px 14px' }}><span className="badge" style={{ background:`${statusColor[iss.status]}18`, color:statusColor[iss.status] }}>{iss.status}</span></td>
+                    <td style={{ padding:'11px 14px', color:C.ts }}>{iss.assignee}</td>
+                    <td style={{ padding:'11px 14px', fontWeight:700, color:iss.errCount>50?C.err:C.tp }}>{iss.errCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {selected && (
+            <div style={{ background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, padding:'20px', boxShadow:'0 1px 3px rgba(0,0,0,.05)', position:'sticky', top:80, height:'fit-content' }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+                <span style={{ fontFamily:'monospace', fontSize:11, color:C.primary, fontWeight:700 }}>{selected.id}</span>
+                <button onClick={() => setSelected(null)} style={{ background:'none', border:'none', cursor:'pointer', color:C.ts, fontSize:18 }}>×</button>
+              </div>
+              <div style={{ fontWeight:700, fontSize:13, color:C.tp, marginBottom:12 }}>{selected.title}</div>
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:14 }}>
+                {selected.tags.map(t => <span key={t} className="badge" style={{ background:C.primaryLight, color:C.primary, fontSize:10 }}>{t}</span>)}
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:14 }}>
+                {[['SDK',selected.sdk],['담당자',selected.assignee],['에러 수',selected.errCount+'건'],['생성일',selected.created]].map(([k,v])=>(
+                  <div key={k} style={{ background:'#F8FAFC', borderRadius:8, padding:'8px 10px' }}>
+                    <div style={{ fontSize:10, color:C.ts }}>{k}</div><strong style={{ fontSize:12, color:C.tp }}>{v}</strong>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:C.ts }}>분석 노트</label>
+                <textarea rows={4} style={{ width:'100%', marginTop:6, padding:'8px 10px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:12, fontFamily:'inherit', resize:'vertical' }} placeholder="원인 분석 및 조치 내용을 입력하세요…" />
+              </div>
+              <div style={{ display:'flex', gap:8, marginTop:12 }}>
+                <Btn small variant="outline" onClick={() => { setToast('이슈가 업데이트되었습니다.'); }}>저장</Btn>
+                <Btn small variant="secondary" onClick={() => setSelected(null)}>닫기</Btn>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {view === '칸반' && (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14 }}>
+          {statuses.map(st => (
+            <div key={st} style={{ background:'#F1F5F9', borderRadius:12, padding:'12px', minHeight:300 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+                <span style={{ fontSize:12, fontWeight:700, color:statusColor[st] }}>{st}</span>
+                <span style={{ fontSize:11, color:C.ts, background:'#fff', borderRadius:20, padding:'2px 8px' }}>{issues.filter(i=>i.status===st).length}</span>
+              </div>
+              {issues.filter(i=>i.status===st).map(iss => (
+                <div key={iss.id} onClick={() => { setView('리스트'); setSelected(iss); }} style={{ background:C.surface, borderRadius:10, padding:'12px', marginBottom:8, border:`1px solid ${C.border}`, cursor:'pointer', boxShadow:'0 1px 3px rgba(0,0,0,.05)', transition:'all .15s' }} onMouseEnter={e=>e.currentTarget.style.borderColor=C.primary} onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+                  <div style={{ fontSize:11, fontFamily:'monospace', color:C.primary, marginBottom:5 }}>{iss.id}</div>
+                  <div style={{ fontSize:12, fontWeight:600, color:C.tp, marginBottom:8, lineHeight:1.4 }}>{iss.title}</div>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                    <span className="badge" style={{ background:`${priorityColor[iss.priority]}18`, color:priorityColor[iss.priority], fontSize:10 }}>{iss.priority}</span>
+                    <div style={{ width:22, height:22, borderRadius:'50%', background:`linear-gradient(135deg,${C.primary},${C.secondary})`, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:10, fontWeight:700 }}>{iss.assignee[0]}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+      {modal === 'add' && (
+        <Modal title="이슈 등록" onClose={() => setModal(null)} actions={[<Btn key="c" variant="secondary" onClick={() => setModal(null)}>취소</Btn>, <Btn key="ok" onClick={() => { setModal(null); setToast('이슈가 등록되었습니다.'); }}>등록</Btn>]}>
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>제목</label><input placeholder="이슈 제목 입력…" style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }} /></div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>대상 SDK</label>
+                <select style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }}>{sdks.map(s=><option key={s.id}>{s.name}</option>)}</select>
+              </div>
+              <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>우선순위</label>
+                <select style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }}><option>critical</option><option>high</option><option>medium</option><option>low</option></select>
+              </div>
+            </div>
+            <div><label style={{ fontSize:12, fontWeight:600, color:C.ts }}>설명</label><textarea rows={3} style={{ width:'100%', marginTop:6, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:12, fontFamily:'inherit', resize:'vertical' }} placeholder="이슈 상세 내용 및 재현 방법…" /></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── P3-4: 팀 협업 관리
+function TeamPage() {
+  const [comment, setComment] = useState('');
+  const [commentList, setCommentList] = useState(comments);
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  function addComment() {
+    if (!comment.trim()) return;
+    setCommentList(prev => [...prev, { id:`c${Date.now()}`, author:'최기용', ts:'방금', msg:comment, avatar:'K', color:C.primary }]);
+    setComment('');
+    setToast('코멘트가 등록되었습니다.');
+  }
+
+  return (
+    <div style={{ padding:24 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:24 }}>
+        {team.map(m => (
+          <div key={m.id} onClick={() => setModal(m)} style={{ background:C.surface, borderRadius:12, padding:'16px', border:`1px solid ${C.border}`, cursor:'pointer', transition:'all .15s', boxShadow:'0 1px 3px rgba(0,0,0,.05)' }} onMouseEnter={e=>e.currentTarget.style.borderColor=m.color} onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12 }}>
+              <div style={{ width:38, height:38, borderRadius:'50%', background:`linear-gradient(135deg,${m.color},${m.color}aa)`, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:700, fontSize:16 }}>{m.avatar}</div>
+              <div>
+                <div style={{ fontWeight:700, fontSize:13, color:C.tp }}>{m.name}</div>
+                <div style={{ fontSize:11, color:C.ts }}>{m.role}</div>
+              </div>
+            </div>
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:10, color:C.ts, marginBottom:4 }}>담당 SDK</div>
+              <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+                {m.sdks.map(s => <span key={s} className="badge" style={{ background:C.primaryLight, color:C.primary, fontSize:10 }}>{s}</span>)}
+              </div>
+            </div>
+            <div style={{ fontSize:11, color:C.ts, marginBottom:8 }}>{m.recentActivity}</div>
+            {m.openIssues > 0 && <span className="badge" style={{ background:'#FEE2E2', color:C.err, fontSize:10 }}>열린 이슈 {m.openIssues}건</span>}
+            {m.openIssues === 0 && <span className="badge" style={{ background:C.primaryLight, color:C.primary, fontSize:10 }}>이슈 없음</span>}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+        <div style={{ background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, boxShadow:'0 1px 3px rgba(0,0,0,.05)', display:'flex', flexDirection:'column' }}>
+          <div style={{ padding:'16px 20px', borderBottom:`1px solid ${C.border}`, fontWeight:700, fontSize:14, color:C.tp }}>
+            이슈 코멘트 — ISS-041 레일플러스 SDK 타임아웃
+          </div>
+          <div style={{ flex:1, padding:'16px 20px', overflow:'auto', maxHeight:340 }}>
+            {commentList.map(c => (
+              <div key={c.id} style={{ display:'flex', gap:10, marginBottom:16 }}>
+                <div style={{ width:32, height:32, borderRadius:'50%', background:`linear-gradient(135deg,${c.color},${c.color}aa)`, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:700, fontSize:13, flexShrink:0 }}>{c.avatar}</div>
+                <div style={{ flex:1 }}>
+                  <div style={{ display:'flex', gap:8, marginBottom:4 }}>
+                    <span style={{ fontSize:12, fontWeight:700, color:C.tp }}>{c.author}</span>
+                    <span style={{ fontSize:11, color:C.ts }}>{c.ts}</span>
+                  </div>
+                  <div style={{ background:'#F8FAFC', borderRadius:10, padding:'10px 12px', fontSize:13, color:C.tp, lineHeight:1.5, borderTopLeftRadius:2 }}>
+                    {c.msg.split(/(@\S+)/).map((part,i) => part.startsWith('@') ? <strong key={i} style={{ color:C.primary }}>{part}</strong> : part)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ padding:'12px 16px', borderTop:`1px solid ${C.border}`, display:'flex', gap:10 }}>
+            <input value={comment} onChange={e=>setComment(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!e.shiftKey&&addComment()} placeholder="@멘션으로 팀원 알림 가능 — Enter로 전송" style={{ flex:1, padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, fontFamily:'inherit' }} />
+            <Btn small onClick={addComment}>전송</Btn>
+          </div>
+        </div>
+
+        <div style={{ background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, padding:'20px', boxShadow:'0 1px 3px rgba(0,0,0,.05)' }}>
+          <div style={{ fontWeight:700, fontSize:14, color:C.tp, marginBottom:16 }}>실시간 활동 피드</div>
+          {[
+            { actor:'이승민', action:'ISS-039 이슈를 "해결" 상태로 변경', ts:'2분 전', icon:'✅', color:'#F97316' },
+            { actor:'박지수', action:'ISS-040에 코멘트 남김', ts:'8분 전', icon:'💬', color:'#6366F1' },
+            { actor:'김하나', action:'레일플러스 SDK 재현 케이스 2개 추가', ts:'14분 전', icon:'🔍', color:'#8B5CF6' },
+            { actor:'최기용', action:'알림 규칙 "레일플러스 성공률 임계값" 수정', ts:'22분 전', icon:'🔔', color:C.primary },
+            { actor:'박지수', action:'ISS-040 이슈 등록 — KG이니시스 지연', ts:'31분 전', icon:'🆕', color:'#6366F1' },
+            { actor:'이승민', action:'Crashlytics 리포트 분석 완료', ts:'45분 전', icon:'📊', color:'#F97316' },
+          ].map((a,i) => (
+            <div key={i} style={{ display:'flex', gap:12, marginBottom:14, paddingBottom:14, borderBottom:i<5?`1px solid ${C.border}`:'none' }}>
+              <div style={{ width:32, height:32, borderRadius:'50%', background:`${a.color}18`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, flexShrink:0 }}>{a.icon}</div>
+              <div>
+                <div style={{ fontSize:13, color:C.tp }}><strong style={{ color:a.color }}>{a.actor}</strong> {a.action}</div>
+                <div style={{ fontSize:11, color:C.ts, marginTop:2 }}>{a.ts}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+      {modal && (
+        <Modal title={`${modal.name} 프로필`} onClose={() => setModal(null)} actions={[<Btn key="c" variant="secondary" onClick={() => setModal(null)}>닫기</Btn>]}>
+          <div style={{ display:'flex', flexDirection:'column', gap:12, fontSize:13 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:4 }}>
+              <div style={{ width:52, height:52, borderRadius:'50%', background:`linear-gradient(135deg,${modal.color},${modal.color}aa)`, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:800, fontSize:22 }}>{modal.avatar}</div>
+              <div><div style={{ fontWeight:800, fontSize:16, color:C.tp }}>{modal.name}</div><div style={{ color:C.ts }}>{modal.role}</div></div>
+            </div>
+            <div style={{ background:'#F8FAFC', borderRadius:8, padding:'12px' }}>
+              <div style={{ fontSize:11, color:C.ts, marginBottom:6 }}>담당 SDK</div>
+              <div style={{ display:'flex', gap:6 }}>{modal.sdks.map(s=><span key={s} className="badge" style={{ background:C.primaryLight, color:C.primary }}>{s}</span>)}</div>
+            </div>
+            <div style={{ background:'#F8FAFC', borderRadius:8, padding:'12px' }}>
+              <div style={{ fontSize:11, color:C.ts, marginBottom:4 }}>최근 활동</div>
+              <p style={{ color:C.tp }}>{modal.recentActivity}</p>
+            </div>
+            <div style={{ background: modal.openIssues>0?'#FEE2E2':C.primaryLight, borderRadius:8, padding:'12px' }}>
+              <div style={{ fontSize:11, color:C.ts, marginBottom:4 }}>미해결 이슈</div>
+              <strong style={{ color:modal.openIssues>0?C.err:C.primary }}>{modal.openIssues}건</strong>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── 메인 앱
+function App() {
+  const [page, setPage] = useState('SDK 통합 현황판');
+
+  const render = () => {
+    switch(page) {
+      case 'SDK 통합 현황판': return <SdkOverviewPage />;
+      case '알림 규칙 설정': return <AlertRulesPage />;
+      case '이슈 트래킹': return <IssueTrackerPage />;
+      case '팀 협업 관리': return <TeamPage />;
+      default: return null;
+    }
+  };
+
+  return (
+    <div style={{ display:'flex', minHeight:'100vh' }}>
+      <Sidebar page={page} onNav={setPage} />
+      <div style={{ flex:1, display:'flex', flexDirection:'column', minWidth:0 }}>
+        <TopBar title={page} />
+        <main style={{ flex:1, overflow:'auto' }}>{render()}</main>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
