@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>질문-응답 자동화 플랫폼 MVP — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net"/>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Pretendard',sans-serif;background:#F0F4F8;color:#1A2332}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#f0f0f0}
+::-webkit-scrollbar-thumb{background:#c1c9d2;border-radius:3px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
+@keyframes modalIn{from{opacity:0;transform:scale(0.96)}to{opacity:1;transform:scale(1)}}
+.fade-in{animation:fadeIn 240ms ease}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } = Recharts;
+
+const C = {
+  primary: '#1E6FD9',
+  secondary: '#3B82F6',
+  accent: '#0EA5E9',
+  bg: '#F0F4F8',
+  surface: '#FFFFFF',
+  sidebar: '#0F2244',
+  sidebarActive: '#1E6FD9',
+  text: '#1A2332',
+  textSec: '#4A5568',
+  border: '#E2E8F0',
+  success: '#10B981',
+  warning: '#F59E0B',
+  danger: '#EF4444',
+  purple: '#8B5CF6',
+};
+
+// ─── 더미 데이터 ───
+const cohorts = [
+  { id: 1, name: '2기', startDate: '2026-03-01', endDate: '2026-05-31', memberCount: 28, status: '진행중', responseRate: 84 },
+  { id: 2, name: '3기', startDate: '2026-04-01', endDate: '2026-06-30', memberCount: 30, status: '진행중', responseRate: 76 },
+  { id: 3, name: '1기', startDate: '2026-01-01', endDate: '2026-02-28', memberCount: 29, status: '완료', responseRate: 91 },
+  { id: 4, name: '4기', startDate: '2026-06-01', endDate: '2026-08-31', memberCount: 0, status: '대기', responseRate: 0 },
+];
+
+const members = [
+  { id: 1, token: 'anon-7a3f...k2', cohort: '3기', joinedAt: '2026-04-01', status: '활성', todayResponded: true, totalResponses: 5 },
+  { id: 2, token: 'anon-2b9e...m7', cohort: '3기', joinedAt: '2026-04-01', status: '활성', todayResponded: false, totalResponses: 3 },
+  { id: 3, token: 'anon-5c1d...p4', cohort: '3기', joinedAt: '2026-04-02', status: '활성', todayResponded: true, totalResponses: 4 },
+  { id: 4, token: 'anon-8f4a...q9', cohort: '2기', joinedAt: '2026-03-01', status: '활성', todayResponded: true, totalResponses: 35 },
+  { id: 5, token: 'anon-3e7b...r1', cohort: '2기', joinedAt: '2026-03-01', status: '비활성', todayResponded: false, totalResponses: 12 },
+];
+
+const questions = [
+  { id: 1, content: '오늘 가장 어려웠던 순간은 언제였나요? 그 상황에서 어떤 감정이 들었나요?', scheduledAt: '2026-04-06 09:00', sentAt: '2026-04-06 09:00', responses: 45, status: '발송완료' },
+  { id: 2, content: '지금 이 순간, 당신이 가장 원하는 것은 무엇인가요?', scheduledAt: '2026-04-07 09:00', sentAt: null, responses: 0, status: '예약됨' },
+  { id: 3, content: '최근 당신을 가장 힘들게 하는 관계가 있다면, 그 이유는 무엇인가요?', scheduledAt: '2026-04-08 09:00', sentAt: null, responses: 0, status: '예약됨' },
+  { id: 4, content: '스스로에게 가장 자주 하는 부정적인 말은 무엇인가요?', scheduledAt: '2026-04-05 09:00', sentAt: '2026-04-05 09:00', responses: 52, status: '발송완료' },
+  { id: 5, content: '10년 후의 나는 지금의 나에게 어떤 말을 해줄 것 같나요?', scheduledAt: '2026-04-04 09:00', sentAt: '2026-04-04 09:00', responses: 50, status: '발송완료' },
+];
+
+const rules = [
+  { id: 1, name: '부정 감정 — 공감 응답', priority: 1, condition: '키워드: 힘들다, 지쳤다, 모르겠다', template: '지금 많이 힘드시겠어요. {{response_excerpt}} 라고 느끼셨군요. 그 감정은 충분히 자연스러운 반응입니다.', matchCount: 87, confidence: 0.91, status: '활성' },
+  { id: 2, name: '성장 키워드 — 격려 응답', priority: 2, condition: '키워드: 해냈다, 성장, 노력, 변화', template: '{{response_excerpt}} — 오늘 이 변화를 알아차리셨다는 것 자체가 이미 성장입니다.', matchCount: 62, confidence: 0.88, status: '활성' },
+  { id: 3, name: '관계 고민 — 재프레이밍', priority: 3, condition: '카테고리: 관계, 갈등, 기대', template: '상대방의 행동 뒤에는 어떤 욕구가 있었을까요? {{response_excerpt}} 에서 보이는 패턴을 함께 살펴봅시다.', matchCount: 41, confidence: 0.79, status: '활성' },
+  { id: 4, name: '미래 지향 — 가능성 확장', priority: 4, condition: '키워드: 원한다, 꿈, 목표, 되고 싶다', template: '{{response_excerpt}} — 그 바람을 실현하려면 오늘 어떤 작은 행동이 가능할까요?', matchCount: 28, confidence: 0.85, status: '활성' },
+  { id: 5, name: '기본 매칭 불가 — 검수 큐 이동', priority: 99, condition: '매칭 신뢰도 < 0.6', template: null, matchCount: 19, confidence: null, status: '폴백' },
+];
+
+const reviewItems = [
+  { id: 1, token: 'anon-2b9e...m7', question: '오늘 가장 어려웠던 순간은 언제였나요?', response: '그냥 아무것도 하기 싫었어요. 이유도 모르겠고 그냥 멍하니 있었는데 눈물이 나더라구요.', suggestedRule: '부정 감정 — 공감 응답', confidence: 0.54, status: '대기', createdAt: '2026-04-06 09:47' },
+  { id: 2, token: 'anon-9k2l...n3', question: '스스로에게 가장 자주 하는 부정적인 말은?', response: '왜 난 항상 이럴까... 남들은 다 잘하는데 나만 이러는 것 같아서 자책을 많이 해요.', suggestedRule: '부정 감정 — 공감 응답', confidence: 0.58, status: '대기', createdAt: '2026-04-05 14:23' },
+  { id: 3, token: 'anon-4m7p...v8', question: '최근 당신을 가장 힘들게 하는 관계가 있다면?', response: '직장 상사인데... 사실 제가 더 예민한 건지 모르겠어요. 뭔가 기대하게 만들고 실망시키는 패턴이 반복돼요.', suggestedRule: '관계 고민 — 재프레이밍', confidence: 0.61, status: '검수중', createdAt: '2026-04-06 11:10' },
+];
+
+const pipelineData = [
+  { date: '03-31', total: 148, auto: 129, manual: 19 },
+  { date: '04-01', total: 153, auto: 134, manual: 19 },
+  { date: '04-02', total: 142, auto: 121, manual: 21 },
+  { date: '04-03', total: 156, auto: 139, manual: 17 },
+  { date: '04-04', total: 160, auto: 145, manual: 15 },
+  { date: '04-05', total: 164, auto: 148, manual: 16 },
+  { date: '04-06', total: 58, auto: 49, manual: 9 },
+];
+
+const weeklyResponseRate = [
+  { week: '3/3주', rate: 78 }, { week: '3/4주', rate: 82 }, { week: '4/1주', rate: 79 },
+  { week: '4/2주', rate: 85 }, { week: '현재', rate: 80 },
+];
+
+// ─── 공통 컴포넌트 ───
+function Badge({ label, color = 'blue' }) {
+  const colors = {
+    blue: { bg: '#EFF6FF', text: '#1D4ED8' },
+    green: { bg: '#ECFDF5', text: '#059669' },
+    yellow: { bg: '#FFFBEB', text: '#B45309' },
+    red: { bg: '#FEF2F2', text: '#DC2626' },
+    gray: { bg: '#F3F4F6', text: '#6B7280' },
+    purple: { bg: '#F5F3FF', text: '#7C3AED' },
+  };
+  const c = colors[color] || colors.blue;
+  return (
+    <span style={{ background: c.bg, color: c.text, padding: '2px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, whiteSpace:'nowrap' }}>
+      {label}
+    </span>
+  );
+}
+
+function StatCard({ icon, label, value, sub, color = C.primary }) {
+  return (
+    <div style={{ background: C.surface, borderRadius: 12, padding: '20px 24px', boxShadow: '0 1px 6px rgba(0,0,0,0.07)', flex: 1, minWidth: 180 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <div style={{ width: 40, height: 40, borderRadius: 10, background: color + '18', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{icon}</div>
+        <span style={{ color: C.textSec, fontSize: 13, fontWeight: 500 }}>{label}</span>
+      </div>
+      <div style={{ fontSize: 28, fontWeight: 700, color: C.text }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: C.textSec, marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Modal({ children, onClose, title, width = 560 }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div style={{ background: C.surface, borderRadius: 16, width: '100%', maxWidth: width, maxHeight: '85vh', overflowY: 'auto', animation: 'modalIn 200ms ease', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px', borderBottom: `1px solid ${C.border}` }}>
+          <span style={{ fontWeight: 700, fontSize: 16 }}>{title}</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.textSec, lineHeight: 1 }}>✕</button>
+        </div>
+        <div style={{ padding: 24 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Toast({ message, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 2800); return () => clearTimeout(t); }, []);
+  return (
+    <div style={{ position: 'fixed', bottom: 28, right: 28, background: '#1A2332', color: '#fff', padding: '12px 20px', borderRadius: 10, zIndex: 2000, fontSize: 14, boxShadow: '0 8px 24px rgba(0,0,0,0.2)', animation: 'fadeIn 200ms ease' }}>
+      ✓ {message}
+    </div>
+  );
+}
+
+// ─── 대시보드 화면 ───
+function DashboardPage() {
+  return (
+    <div className="fade-in">
+      <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
+        <StatCard icon="📋" label="오늘 발송 질문" value="1건" sub="09:00 발송 완료" color={C.primary} />
+        <StatCard icon="💬" label="오늘 응답 수" value="58건" sub="전체 58명 중" color={C.success} />
+        <StatCard icon="⚡" label="자동 처리율" value="84.5%" sub="규칙 엔진 자동 답장" color={C.accent} />
+        <StatCard icon="🔍" label="검수 대기" value="9건" sub="수동 개입 필요" color={C.warning} />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 20, marginBottom: 20 }}>
+        <div style={{ background: C.surface, borderRadius: 12, padding: 24, boxShadow: '0 1px 6px rgba(0,0,0,0.07)' }}>
+          <div style={{ fontWeight: 700, marginBottom: 16, fontSize: 15 }}>주간 응답률 추이</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={weeklyResponseRate}>
+              <defs>
+                <linearGradient id="rateGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={C.primary} stopOpacity={0.18}/>
+                  <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+              <XAxis dataKey="week" tick={{ fontSize: 12 }} stroke={C.border}/>
+              <YAxis domain={[60, 100]} tick={{ fontSize: 12 }} stroke={C.border}/>
+              <Tooltip formatter={(v) => [`${v}%`, '응답률']} contentStyle={{ borderRadius: 8, border: `1px solid ${C.border}` }}/>
+              <Area type="monotone" dataKey="rate" stroke={C.primary} strokeWidth={2.5} fill="url(#rateGrad)" dot={{ r: 4, fill: C.primary }}/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{ background: C.surface, borderRadius: 12, padding: 24, boxShadow: '0 1px 6px rgba(0,0,0,0.07)' }}>
+          <div style={{ fontWeight: 700, marginBottom: 16, fontSize: 15 }}>기수 현황</div>
+          {cohorts.slice(0,3).map(c => (
+            <div key={c.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${C.border}` }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{c.name}</div>
+                <div style={{ fontSize: 12, color: C.textSec }}>참여자 {c.memberCount}명</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <Badge label={c.status} color={c.status === '진행중' ? 'blue' : c.status === '완료' ? 'green' : 'gray'} />
+                <div style={{ fontSize: 12, color: C.textSec, marginTop: 4 }}>응답률 {c.responseRate}%</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ background: C.surface, borderRadius: 12, padding: 24, boxShadow: '0 1px 6px rgba(0,0,0,0.07)' }}>
+        <div style={{ fontWeight: 700, marginBottom: 16, fontSize: 15 }}>일별 응답 처리 현황 (최근 7일)</div>
+        <ResponsiveContainer width="100%" height={200}>
+          <BarChart data={pipelineData}>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+            <XAxis dataKey="date" tick={{ fontSize: 12 }} stroke={C.border}/>
+            <YAxis tick={{ fontSize: 12 }} stroke={C.border}/>
+            <Tooltip contentStyle={{ borderRadius: 8, border: `1px solid ${C.border}` }}/>
+            <Bar dataKey="auto" name="자동 처리" fill={C.primary} radius={[4,4,0,0]}/>
+            <Bar dataKey="manual" name="수동 처리" fill={C.warning} radius={[4,4,0,0]}/>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+// ─── 기수 관리 화면 ───
+function CohortPage() {
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState('');
+
+  const statusColor = (s) => s === '진행중' ? 'blue' : s === '완료' ? 'green' : s === '대기' ? 'yellow' : 'gray';
+
+  return (
+    <div className="fade-in">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div style={{ fontSize: 14, color: C.textSec }}>총 {cohorts.length}개 기수 운영 중</div>
+        <button onClick={() => setModal('create')} style={{ background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+          + 기수 생성
+        </button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16, marginBottom: 24 }}>
+        {cohorts.map(c => (
+          <div key={c.id} onClick={() => setModal({ type: 'detail', item: c })} style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 6px rgba(0,0,0,0.07)', cursor: 'pointer', transition: 'box-shadow 150ms', border: `1px solid ${C.border}` }}
+            onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.12)'}
+            onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 6px rgba(0,0,0,0.07)'}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: 18 }}>{c.name}</div>
+              <Badge label={c.status} color={statusColor(c.status)} />
+            </div>
+            <div style={{ fontSize: 13, color: C.textSec, marginBottom: 8 }}>
+              {c.startDate} ~ {c.endDate}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 13, color: C.text }}>👥 {c.memberCount}명</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 80, height: 6, background: C.bg, borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ width: `${c.responseRate}%`, height: '100%', background: c.responseRate > 80 ? C.success : C.warning, borderRadius: 3 }}/>
+                </div>
+                <span style={{ fontSize: 12, fontWeight: 600, color: c.responseRate > 80 ? C.success : C.warning }}>{c.responseRate}%</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ background: C.surface, borderRadius: 12, padding: 24, boxShadow: '0 1px 6px rgba(0,0,0,0.07)' }}>
+        <div style={{ fontWeight: 700, marginBottom: 16, fontSize: 15 }}>참여자 목록 (3기)</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom: `2px solid ${C.border}` }}>
+              {['익명 토큰', '기수', '참여일', '상태', '오늘 응답', '누적 응답'].map(h => (
+                <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 12, color: C.textSec, fontWeight: 600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {members.map(m => (
+              <tr key={m.id} onClick={() => setModal({ type: 'member', item: m })} style={{ borderBottom: `1px solid ${C.border}`, cursor: 'pointer', transition: 'background 150ms' }}
+                onMouseEnter={e => e.currentTarget.style.background = '#F8FAFC'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <td style={{ padding: '12px', fontSize: 13, fontFamily: 'monospace', color: C.textSec }}>{m.token}</td>
+                <td style={{ padding: '12px', fontSize: 13 }}>{m.cohort}</td>
+                <td style={{ padding: '12px', fontSize: 13, color: C.textSec }}>{m.joinedAt}</td>
+                <td style={{ padding: '12px' }}><Badge label={m.status} color={m.status === '활성' ? 'green' : 'gray'} /></td>
+                <td style={{ padding: '12px', fontSize: 13 }}>{m.todayResponded ? <span style={{ color: C.success, fontWeight: 600 }}>✓ 완료</span> : <span style={{ color: C.warning }}>미응답</span>}</td>
+                <td style={{ padding: '12px', fontSize: 13, fontWeight: 600 }}>{m.totalResponses}회</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {modal === 'create' && (
+        <Modal title="새 기수 생성" onClose={() => setModal(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>기수 이름</label>
+              <input defaultValue="5기" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14 }}/>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>시작일</label>
+                <input type="date" defaultValue="2026-07-01" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14 }}/>
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>종료일</label>
+                <input type="date" defaultValue="2026-09-30" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14 }}/>
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>최대 참여 인원</label>
+              <input type="number" defaultValue="30" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14 }}/>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+              <button onClick={() => setModal(null)} style={{ padding: '10px 20px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: 'pointer', fontSize: 14 }}>취소</button>
+              <button onClick={() => { setModal(null); setToast('기수가 생성되었습니다.'); }} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>생성</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {modal?.type === 'detail' && (
+        <Modal title={`${modal.item.name} 상세`} onClose={() => setModal(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ background: C.bg, borderRadius: 10, padding: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                {[['기수 이름', modal.item.name], ['상태', modal.item.status], ['시작일', modal.item.startDate], ['종료일', modal.item.endDate], ['참여자 수', `${modal.item.memberCount}명`], ['응답률', `${modal.item.responseRate}%`]].map(([k, v]) => (
+                  <div key={k}>
+                    <div style={{ fontSize: 11, color: C.textSec, marginBottom: 3, fontWeight: 600 }}>{k}</div>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button onClick={() => { setModal(null); setToast('기수 정보가 수정되었습니다.'); }} style={{ padding: '9px 18px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>수정</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {modal?.type === 'member' && (
+        <Modal title="참여자 상세" onClose={() => setModal(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ background: C.bg, borderRadius: 10, padding: 16 }}>
+              {[['익명 토큰', modal.item.token], ['소속 기수', modal.item.cohort], ['참여일', modal.item.joinedAt], ['상태', modal.item.status], ['오늘 응답 여부', modal.item.todayResponded ? '완료' : '미응답'], ['누적 응답 수', `${modal.item.totalResponses}회`]].map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${C.border}` }}>
+                  <span style={{ fontSize: 13, color: C.textSec }}>{k}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{v}</span>
+                </div>
+              ))}
+            </div>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>관리자 메모</label>
+              <textarea rows={3} placeholder="이 참여자에 대한 메모를 입력하세요..." style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, resize: 'none' }}/>
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button onClick={() => { setModal(null); setToast('저장되었습니다.'); }} style={{ padding: '9px 18px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>저장</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast message={toast} onClose={() => setToast('')} />}
+    </div>
+  );
+}
+
+// ─── 질문 스케줄러 화면 ───
+function SchedulerPage() {
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState('');
+
+  return (
+    <div className="fade-in">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div style={{ fontSize: 14, color: C.textSec }}>총 {questions.length}개 질문 등록됨</div>
+        <button onClick={() => setModal('create')} style={{ background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+          + 질문 등록
+        </button>
+      </div>
+
+      <div style={{ background: C.surface, borderRadius: 12, boxShadow: '0 1px 6px rgba(0,0,0,0.07)', overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: '#F8FAFC', borderBottom: `2px solid ${C.border}` }}>
+              {['질문 내용', '발송 예약', '응답 수', '상태', ''].map(h => (
+                <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, color: C.textSec, fontWeight: 600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {questions.map(q => (
+              <tr key={q.id} style={{ borderBottom: `1px solid ${C.border}`, transition: 'background 150ms' }}
+                onMouseEnter={e => e.currentTarget.style.background = '#F8FAFC'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <td style={{ padding: '14px 16px', maxWidth: 380 }}>
+                  <div style={{ fontSize: 14, lineHeight: 1.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{q.content}</div>
+                </td>
+                <td style={{ padding: '14px 16px', fontSize: 13, color: C.textSec, whiteSpace: 'nowrap' }}>{q.scheduledAt}</td>
+                <td style={{ padding: '14px 16px', fontSize: 14, fontWeight: 600 }}>{q.responses > 0 ? q.responses : '—'}</td>
+                <td style={{ padding: '14px 16px' }}>
+                  <Badge label={q.status} color={q.status === '발송완료' ? 'green' : q.status === '예약됨' ? 'blue' : 'gray'} />
+                </td>
+                <td style={{ padding: '14px 16px' }}>
+                  <button onClick={() => setModal({ type: 'detail', item: q })} style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 12px', fontSize: 12, cursor: 'pointer', color: C.textSec }}>
+                    상세
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {modal === 'create' && (
+        <Modal title="새 질문 등록" onClose={() => setModal(null)} width={600}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>질문 내용</label>
+              <textarea rows={4} placeholder="참여자에게 발송할 질문을 입력하세요..." style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, resize: 'none', lineHeight: 1.6 }}/>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>발송 날짜</label>
+                <input type="date" defaultValue="2026-04-09" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14 }}/>
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>발송 시간</label>
+                <input type="time" defaultValue="09:00" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14 }}/>
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>대상 기수</label>
+              <select style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, background: C.surface }}>
+                <option>전체 진행 기수</option>
+                <option>2기</option>
+                <option>3기</option>
+              </select>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+              <button onClick={() => setModal(null)} style={{ padding: '10px 20px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: 'pointer', fontSize: 14 }}>취소</button>
+              <button onClick={() => { setModal(null); setToast('질문이 등록되었습니다.'); }} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>등록</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {modal?.type === 'detail' && (
+        <Modal title="질문 상세" onClose={() => setModal(null)} width={600}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ background: C.bg, borderRadius: 10, padding: 16, lineHeight: 1.7, fontSize: 15 }}>{modal.item.content}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {[['발송 예약', modal.item.scheduledAt], ['실제 발송', modal.item.sentAt || '미발송'], ['응답 수', `${modal.item.responses}건`], ['상태', modal.item.status]].map(([k, v]) => (
+                <div key={k} style={{ background: C.bg, borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontSize: 11, color: C.textSec, fontWeight: 600 }}>{k}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button onClick={() => { setModal(null); setToast('질문이 수정되었습니다.'); }} style={{ padding: '9px 18px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>수정</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast message={toast} onClose={() => setToast('')} />}
+    </div>
+  );
+}
+
+// ─── 규칙 엔진 화면 ───
+function RuleEditorPage() {
+  const [modal, setModal] = useState(null);
+  const [testInput, setTestInput] = useState('');
+  const [testResult, setTestResult] = useState(null);
+  const [toast, setToast] = useState('');
+
+  const runTest = () => {
+    if (!testInput.trim()) return;
+    const matched = rules.find(r => r.name !== '기본 매칭 불가 — 검수 큐 이동' && r.confidence > 0.6);
+    setTestResult({ rule: matched, input: testInput });
+  };
+
+  return (
+    <div className="fade-in">
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: 20 }}>
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div style={{ fontSize: 14, color: C.textSec }}>총 {rules.length}개 규칙 (우선순위 순)</div>
+            <button onClick={() => setModal('create')} style={{ background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+              + 규칙 추가
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {rules.map((r, i) => (
+              <div key={r.id} onClick={() => setModal({ type: 'detail', item: r })} style={{ background: C.surface, borderRadius: 12, padding: 18, boxShadow: '0 1px 6px rgba(0,0,0,0.07)', cursor: 'pointer', border: r.name.includes('폴백') ? `2px dashed ${C.border}` : `1px solid ${C.border}`, transition: 'box-shadow 150ms' }}
+                onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.1)'}
+                onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 6px rgba(0,0,0,0.07)'}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                  <div style={{ background: r.name.includes('폴백') ? C.bg : C.primary + '18', color: r.name.includes('폴백') ? C.textSec : C.primary, borderRadius: 8, padding: '2px 10px', fontSize: 12, fontWeight: 700 }}>
+                    P{r.priority === 99 ? 'fallback' : r.priority}
+                  </div>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>{r.name}</div>
+                  <div style={{ marginLeft: 'auto' }}>
+                    <Badge label={r.status} color={r.status === '활성' ? 'green' : r.status === '폴백' ? 'yellow' : 'gray'} />
+                  </div>
+                </div>
+                <div style={{ fontSize: 13, color: C.textSec, marginBottom: 8 }}>
+                  <span style={{ fontWeight: 600 }}>조건: </span>{r.condition}
+                </div>
+                {r.template && (
+                  <div style={{ fontSize: 13, color: C.text, background: C.bg, borderRadius: 8, padding: '8px 12px', lineHeight: 1.5, fontStyle: 'italic' }}>
+                    "{r.template.length > 80 ? r.template.slice(0, 80) + '...' : r.template}"
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 16, marginTop: 10 }}>
+                  <span style={{ fontSize: 12, color: C.textSec }}>매칭 {r.matchCount}건</span>
+                  {r.confidence && <span style={{ fontSize: 12, color: r.confidence > 0.8 ? C.success : C.warning }}>신뢰도 {(r.confidence * 100).toFixed(0)}%</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 6px rgba(0,0,0,0.07)' }}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 14 }}>🧪 규칙 테스터</div>
+            <textarea
+              rows={4} value={testInput} onChange={e => setTestInput(e.target.value)}
+              placeholder="테스트할 응답 텍스트를 입력하세요..."
+              style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, resize: 'none', marginBottom: 12, lineHeight: 1.6 }}
+            />
+            <button onClick={runTest} style={{ width: '100%', background: C.accent, color: '#fff', border: 'none', borderRadius: 8, padding: '10px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+              테스트 실행
+            </button>
+            {testResult && (
+              <div style={{ marginTop: 14, background: C.bg, borderRadius: 8, padding: 14 }}>
+                <div style={{ fontSize: 12, color: C.textSec, marginBottom: 6 }}>매칭된 규칙</div>
+                <div style={{ fontWeight: 700, color: C.primary, fontSize: 14, marginBottom: 8 }}>{testResult.rule?.name || '매칭 없음 → 검수 큐'}</div>
+                {testResult.rule?.template && (
+                  <div style={{ fontSize: 13, lineHeight: 1.6, color: C.text, fontStyle: 'italic', borderLeft: `3px solid ${C.primary}`, paddingLeft: 10 }}>
+                    {testResult.rule.template.replace('{{response_excerpt}}', `"${testInput.slice(0, 20)}..."`)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 6px rgba(0,0,0,0.07)' }}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 14 }}>📊 규칙 성과 요약</div>
+            {rules.filter(r => r.confidence).map(r => (
+              <div key={r.id} style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ color: C.textSec, fontWeight: 500 }}>{r.name.split(' — ')[0]}</span>
+                  <span style={{ fontWeight: 600 }}>{r.matchCount}건</span>
+                </div>
+                <div style={{ height: 6, background: C.bg, borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ width: `${(r.matchCount / 87) * 100}%`, height: '100%', background: C.primary, borderRadius: 3 }}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {modal === 'create' && (
+        <Modal title="새 규칙 추가" onClose={() => setModal(null)} width={620}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>규칙 이름</label>
+              <input placeholder="예: 자기 비판 키워드 — 자기 자비 응답" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14 }}/>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>조건 유형</label>
+                <select style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, background: C.surface }}>
+                  <option>키워드 매칭</option>
+                  <option>정규식</option>
+                  <option>카테고리</option>
+                  <option>복합 조건</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>우선순위</label>
+                <input type="number" defaultValue="5" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14 }}/>
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>조건 값</label>
+              <input placeholder="예: 나쁘다, 실망, 포기" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14 }}/>
+            </div>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>답장 템플릿</label>
+              <textarea rows={3} placeholder="{{response_excerpt}} 변수를 사용하여 답장을 작성하세요..." style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, resize: 'none', lineHeight: 1.6 }}/>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button onClick={() => setModal(null)} style={{ padding: '10px 20px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: 'pointer', fontSize: 14 }}>취소</button>
+              <button onClick={() => { setModal(null); setToast('규칙이 추가되었습니다.'); }} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>저장</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {modal?.type === 'detail' && (
+        <Modal title="규칙 상세" onClose={() => setModal(null)} width={620}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ background: C.bg, borderRadius: 10, padding: 16 }}>
+              {[['규칙 이름', modal.item.name], ['상태', modal.item.status], ['우선순위', modal.item.priority === 99 ? 'Fallback' : `P${modal.item.priority}`], ['조건', modal.item.condition], ['누적 매칭', `${modal.item.matchCount}건`], ['신뢰도', modal.item.confidence ? `${(modal.item.confidence * 100).toFixed(0)}%` : 'N/A']].map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', padding: '8px 0', borderBottom: `1px solid ${C.border}` }}>
+                  <span style={{ fontSize: 13, color: C.textSec, width: 120, flexShrink: 0 }}>{k}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{v}</span>
+                </div>
+              ))}
+            </div>
+            {modal.item.template && (
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.textSec, marginBottom: 8 }}>답장 템플릿</div>
+                <div style={{ background: C.bg, borderRadius: 8, padding: 14, fontSize: 14, lineHeight: 1.7, fontStyle: 'italic', borderLeft: `3px solid ${C.primary}` }}>
+                  {modal.item.template}
+                </div>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button onClick={() => { setModal(null); setToast('규칙이 수정되었습니다.'); }} style={{ padding: '9px 18px', borderRadius: 8, border: 'none', background: C.primary, color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>수정</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast message={toast} onClose={() => setToast('')} />}
+    </div>
+  );
+}
+
+// ─── 검수 큐 화면 ───
+function ReviewQueuePage() {
+  const [items, setItems] = useState(reviewItems);
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState('');
+
+  const approve = (id) => {
+    setItems(prev => prev.map(x => x.id === id ? { ...x, status: '승인' } : x));
+    setModal(null);
+    setToast('답장이 승인되어 발송되었습니다.');
+  };
+
+  const reject = (id) => {
+    setItems(prev => prev.map(x => x.id === id ? { ...x, status: '거부' } : x));
+    setModal(null);
+    setToast('답장이 거부되었습니다.');
+  };
+
+  const waiting = items.filter(x => x.status === '대기').length;
+  const reviewing = items.filter(x => x.status === '검수중').length;
+
+  return (
+    <div className="fade-in">
+      <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
+        <StatCard icon="⏳" label="대기 중" value={`${waiting}건`} color={C.warning} />
+        <StatCard icon="🔍" label="검수 중" value={`${reviewing}건`} color={C.accent} />
+        <StatCard icon="✓" label="오늘 처리" value="12건" color={C.success} />
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {items.map(item => (
+          <div key={item.id} onClick={() => setModal(item)} style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 6px rgba(0,0,0,0.07)', cursor: 'pointer', border: `1px solid ${C.border}`, transition: 'box-shadow 150ms' }}
+            onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.1)'}
+            onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 6px rgba(0,0,0,0.07)'}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 12, color: C.textSec, marginBottom: 4 }}>질문: {item.question}</div>
+                <div style={{ fontFamily: 'monospace', fontSize: 12, color: C.accent }}>{item.token}</div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0, marginLeft: 12 }}>
+                <span style={{ fontSize: 12, color: item.confidence >= 0.6 ? C.warning : C.danger, fontWeight: 600 }}>신뢰도 {(item.confidence * 100).toFixed(0)}%</span>
+                <Badge label={item.status} color={item.status === '대기' ? 'yellow' : item.status === '검수중' ? 'blue' : item.status === '승인' ? 'green' : 'red'} />
+              </div>
+            </div>
+            <div style={{ background: C.bg, borderRadius: 8, padding: '10px 14px', fontSize: 14, lineHeight: 1.6, color: C.text, marginBottom: 10 }}>
+              "{item.response}"
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: 12, color: C.textSec }}>제안 규칙: <span style={{ color: C.primary, fontWeight: 600 }}>{item.suggestedRule}</span></div>
+              <div style={{ fontSize: 12, color: C.textSec }}>{item.createdAt}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {modal && (
+        <Modal title="검수 상세" onClose={() => setModal(null)} width={640}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div>
+              <div style={{ fontSize: 12, color: C.textSec, fontWeight: 600, marginBottom: 6 }}>질문</div>
+              <div style={{ background: C.bg, borderRadius: 8, padding: 14, fontSize: 14, lineHeight: 1.6 }}>{modal.question}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: C.textSec, fontWeight: 600, marginBottom: 6 }}>참여자 응답 ({modal.token})</div>
+              <div style={{ background: C.bg, borderRadius: 8, padding: 14, fontSize: 14, lineHeight: 1.7, borderLeft: `3px solid ${C.warning}` }}>"{modal.response}"</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: C.textSec, fontWeight: 600, marginBottom: 6 }}>자동 생성 답장 (신뢰도 {(modal.confidence * 100).toFixed(0)}%)</div>
+              <div style={{ background: '#EFF6FF', borderRadius: 8, padding: 14, fontSize: 14, lineHeight: 1.7, borderLeft: `3px solid ${C.primary}` }}>
+                {rules[0].template.replace('{{response_excerpt}}', `"${modal.response.slice(0, 25)}..."`)}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: C.textSec, fontWeight: 600, marginBottom: 6 }}>직접 답장 작성 (선택)</div>
+              <textarea rows={3} placeholder="자동 생성 답장 대신 직접 작성할 내용을 입력하세요..." style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, resize: 'none', lineHeight: 1.6 }}/>
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button onClick={() => reject(modal.id)} style={{ padding: '10px 20px', borderRadius: 8, border: `1px solid ${C.danger}`, color: C.danger, background: C.surface, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>거부</button>
+              <button onClick={() => approve(modal.id)} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: C.success, color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>승인 · 발송</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast message={toast} onClose={() => setToast('')} />}
+    </div>
+  );
+}
+
+// ─── 데이터 파이프라인 화면 ───
+function DataPipelinePage() {
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState('');
+
+  const exports = [
+    { id: 1, name: '3기_전체_데이터셋', format: 'JSONL', records: 153, piiMasked: true, createdAt: '2026-04-06', status: '준비완료' },
+    { id: 2, name: '2기_완료_데이터셋', format: 'CSV', records: 841, piiMasked: true, createdAt: '2026-03-31', status: '준비완료' },
+    { id: 3, name: '1기_학습용_데이터셋', format: 'JSONL', records: 798, piiMasked: true, createdAt: '2026-02-28', status: '아카이브' },
+  ];
+
+  const schemaFields = [
+    { field: 'session_id', type: 'UUID', nullable: false, note: '기수-날짜-익명토큰 해시' },
+    { field: 'question_id', type: 'INT', nullable: false, note: '질문 테이블 FK' },
+    { field: 'question_text', type: 'TEXT', nullable: false, note: '발송된 질문 원문' },
+    { field: 'response_text', type: 'TEXT', nullable: false, note: '참여자 응답 (PII 마스킹 적용)' },
+    { field: 'matched_rule_id', type: 'INT', nullable: true, note: '매칭된 규칙 ID (null = 검수)' },
+    { field: 'reply_text', type: 'TEXT', nullable: true, note: '발송된 최종 답장' },
+    { field: 'confidence_score', type: 'FLOAT', nullable: true, note: '규칙 매칭 신뢰도 (0~1)' },
+    { field: 'is_manual_review', type: 'BOOL', nullable: false, note: '수동 검수 여부' },
+    { field: 'created_at', type: 'TIMESTAMP', nullable: false, note: '응답 제출 시각 (UTC)' },
+  ];
+
+  return (
+    <div className="fade-in">
+      <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
+        <StatCard icon="🗄️" label="총 데이터 레코드" value="1,792건" sub="전 기수 누적" color={C.purple} />
+        <StatCard icon="🔒" label="PII 마스킹 처리" value="100%" sub="UUID 익명화 적용" color={C.success} />
+        <StatCard icon="📦" label="내보내기 가능" value="3개" sub="데이터셋 준비 완료" color={C.accent} />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
+        <div style={{ background: C.surface, borderRadius: 12, padding: 24, boxShadow: '0 1px 6px rgba(0,0,0,0.07)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>데이터셋 내보내기</div>
+            <button onClick={() => setModal('export')} style={{ background: C.purple, color: '#fff', border: 'none', borderRadius: 8, padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+              + 새 내보내기
+            </button>
+          </div>
+          {exports.map(e => (
+            <div key={e.id} onClick={() => setModal({ type: 'export-detail', item: e })} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderBottom: `1px solid ${C.border}`, cursor: 'pointer' }}
+              onMouseEnter={ev => ev.currentTarget.style.background = '#F8FAFC'}
+              onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}
+            >
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{e.name}</div>
+                <div style={{ fontSize: 12, color: C.textSec }}>{e.format} · {e.records.toLocaleString()}건 · {e.createdAt}</div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {e.piiMasked && <span style={{ fontSize: 11, background: '#ECFDF5', color: '#059669', padding: '2px 8px', borderRadius: 20, fontWeight: 600 }}>🔒 PII 마스킹</span>}
+                <Badge label={e.status} color={e.status === '준비완료' ? 'green' : 'gray'} />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ background: C.surface, borderRadius: 12, padding: 24, boxShadow: '0 1px 6px rgba(0,0,0,0.07)' }}>
+          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16 }}>파이프라인 현황</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {[
+              { step: '1. 응답 수집', status: '실시간', color: C.success, desc: 'POST /api/responses → DB 저장' },
+              { step: '2. 규칙 매칭', status: '자동', color: C.primary, desc: '규칙 엔진 → 신뢰도 계산' },
+              { step: '3. PII 마스킹', status: '자동', color: C.success, desc: 'UUID 치환 → 익명화 테이블' },
+              { step: '4. 데이터셋 생성', status: '온디맨드', color: C.accent, desc: 'JSONL/CSV 직렬화' },
+            ].map(s => (
+              <div key={s.step} style={{ display: 'flex', alignItems: 'center', gap: 12, background: C.bg, borderRadius: 8, padding: 12 }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: s.color, flexShrink: 0 }}/>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{s.step}</div>
+                  <div style={{ fontSize: 12, color: C.textSec }}>{s.desc}</div>
+                </div>
+                <Badge label={s.status} color={s.color === C.success ? 'green' : s.color === C.primary ? 'blue' : 'gray'} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ background: C.surface, borderRadius: 12, padding: 24, boxShadow: '0 1px 6px rgba(0,0,0,0.07)' }}>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16 }}>데이터 스키마 (qa_dataset)</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: '#F8FAFC', borderBottom: `2px solid ${C.border}` }}>
+              {['필드명', '타입', 'Nullable', '설명'].map(h => (
+                <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 12, color: C.textSec, fontWeight: 600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {schemaFields.map(f => (
+              <tr key={f.field} style={{ borderBottom: `1px solid ${C.border}` }}
+                onMouseEnter={e => e.currentTarget.style.background = '#F8FAFC'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <td style={{ padding: '10px 12px', fontSize: 13, fontFamily: 'monospace', color: C.primary, fontWeight: 600 }}>{f.field}</td>
+                <td style={{ padding: '10px 12px', fontSize: 12, color: C.accent, fontFamily: 'monospace' }}>{f.type}</td>
+                <td style={{ padding: '10px 12px', fontSize: 12 }}>{f.nullable ? <span style={{ color: C.textSec }}>NULL</span> : <span style={{ color: C.text, fontWeight: 600 }}>NOT NULL</span>}</td>
+                <td style={{ padding: '10px 12px', fontSize: 13, color: C.textSec }}>{f.note}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {modal === 'export' && (
+        <Modal title="새 데이터셋 내보내기" onClose={() => setModal(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>데이터셋 이름</label>
+              <input defaultValue="4기_학습용_데이터셋" style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14 }}/>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>포맷</label>
+                <select style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, background: C.surface }}>
+                  <option>JSONL</option>
+                  <option>CSV</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600, color: C.textSec, display: 'block', marginBottom: 6 }}>대상 기수</label>
+                <select style={{ width: '100%', padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, background: C.surface }}>
+                  <option>전체</option>
+                  <option>3기</option>
+                  <option>2기</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ background: '#ECFDF5', borderRadius: 8, padding: 12, fontSize: 13 }}>
+              🔒 PII 마스킹이 자동 적용됩니다. 익명 토큰만 포함되며 개인식별정보는 제거됩니다.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button onClick={() => setModal(null)} style={{ padding: '10px 20px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: 'pointer', fontSize: 14 }}>취소</button>
+              <button onClick={() => { setModal(null); setToast('데이터셋 내보내기가 시작되었습니다.'); }} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: C.purple, color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>내보내기 시작</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {modal?.type === 'export-detail' && (
+        <Modal title="데이터셋 상세" onClose={() => setModal(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ background: C.bg, borderRadius: 10, padding: 16 }}>
+              {[['이름', modal.item.name], ['포맷', modal.item.format], ['레코드 수', `${modal.item.records.toLocaleString()}건`], ['PII 마스킹', modal.item.piiMasked ? '적용됨' : '미적용'], ['생성일', modal.item.createdAt], ['상태', modal.item.status]].map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${C.border}` }}>
+                  <span style={{ fontSize: 13, color: C.textSec }}>{k}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{v}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button onClick={() => { setModal(null); setToast('다운로드가 시작되었습니다.'); }} style={{ padding: '9px 18px', borderRadius: 8, border: 'none', background: C.purple, color: '#fff', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>📥 다운로드</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast message={toast} onClose={() => setToast('')} />}
+    </div>
+  );
+}
+
+// ─── 메인 앱 ───
+const NAV_ITEMS = [
+  { id: 'dashboard', label: '대시보드', icon: '📊' },
+  { id: 'cohort', label: '기수 관리', icon: '👥' },
+  { id: 'scheduler', label: '질문 스케줄러', icon: '📅' },
+  { id: 'rules', label: '규칙 엔진', icon: '⚙️' },
+  { id: 'review', label: '검수 큐', icon: '🔍' },
+  { id: 'pipeline', label: '데이터 파이프라인', icon: '🗄️' },
+];
+
+const PAGE_TITLES = {
+  dashboard: '대시보드',
+  cohort: '기수 관리',
+  scheduler: '질문 스케줄러',
+  rules: '규칙 엔진',
+  review: '검수 큐',
+  pipeline: '데이터 파이프라인',
+};
+
+function App() {
+  const [page, setPage] = useState('dashboard');
+
+  const renderPage = () => {
+    switch (page) {
+      case 'dashboard': return <DashboardPage />;
+      case 'cohort': return <CohortPage />;
+      case 'scheduler': return <SchedulerPage />;
+      case 'rules': return <RuleEditorPage />;
+      case 'review': return <ReviewQueuePage />;
+      case 'pipeline': return <DataPipelinePage />;
+      default: return <DashboardPage />;
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', minHeight: '100vh', background: C.bg }}>
+      {/* 사이드바 */}
+      <aside style={{ width: 260, background: C.sidebar, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '22px 20px 18px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ color: '#fff', fontWeight: 800, fontSize: 16, letterSpacing: -0.3 }}>
+            <span style={{ color: C.accent }}>Q&A</span> 자동화 플랫폼
+          </div>
+          <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11, marginTop: 3 }}>질문-응답 규칙화 시스템</div>
+        </div>
+
+        <nav style={{ flex: 1, padding: '12px 10px', overflowY: 'auto' }}>
+          {NAV_ITEMS.map(item => (
+            <button
+              key={item.id}
+              onClick={() => setPage(item.id)}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 14px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                background: page === item.id ? C.sidebarActive : 'transparent',
+                color: page === item.id ? '#fff' : 'rgba(255,255,255,0.6)',
+                fontSize: 14, fontWeight: page === item.id ? 600 : 400,
+                marginBottom: 2, transition: 'all 150ms', textAlign: 'left',
+                fontFamily: 'Pretendard, sans-serif',
+              }}
+              onMouseEnter={e => { if (page !== item.id) e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
+              onMouseLeave={e => { if (page !== item.id) e.currentTarget.style.background = 'transparent'; }}
+            >
+              <span style={{ fontSize: 16 }}>{item.icon}</span>
+              {item.label}
+            </button>
+          ))}
+        </nav>
+
+        <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: '50%', background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#fff' }}>관</div>
+            <div>
+              <div style={{ color: '#fff', fontSize: 13, fontWeight: 600 }}>운영자</div>
+              <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>슈퍼 관리자</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* 메인 영역 */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        {/* 탑바 */}
+        <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: '0 28px', height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 18 }}>{PAGE_TITLES[page]}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bg, borderRadius: 8, padding: '6px 12px', fontSize: 13, color: C.textSec }}>
+              <span>🔍</span>
+              <input placeholder="검색..." style={{ background: 'none', border: 'none', outline: 'none', fontSize: 13, width: 140, color: C.text }}/>
+            </div>
+            <div style={{ position: 'relative' }}>
+              <span style={{ fontSize: 20, cursor: 'pointer' }}>🔔</span>
+              <span style={{ position: 'absolute', top: -2, right: -4, width: 16, height: 16, background: C.danger, borderRadius: '50%', fontSize: 10, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>9</span>
+            </div>
+          </div>
+        </div>
+
+        {/* 콘텐츠 */}
+        <main style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
+          {renderPage()}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
