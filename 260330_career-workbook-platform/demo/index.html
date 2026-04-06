@@ -1056,7 +1056,10 @@ function setupRealtime() {
       const idx = students.findIndex(st => st.id === r.student_id);
       if (idx >= 0) {
         const key = `q${r.q_number}`;
-        students[idx][key] = r.answer_text || (r.answer_choice != null ? questions[r.q_number-1]?.options?.[r.answer_choice] : '') || '';
+        students[idx][key] = r.answer_text
+          || (r.answer_choice != null ? questions[r.q_number-1]?.options?.[r.answer_choice] : '')
+          || (r.answer_scale?.length ? r.answer_scale.join('·') : '')
+          || '';
         if (r.q_number === activeQ) {
           renderResponseTable();
         }
@@ -1368,6 +1371,136 @@ async function doSubmit() {
   showToast('워크북이 선생님께 전달되었습니다');
 }
 
+// ─── 시드 학생 응답 시뮬레이션 ──────────────────────────────
+// Q2(객관식), Q3(척도형), Q4·Q5(서술형) 답변을 랜덤 딜레이로 순차 삽입
+let _simAbort = null;
+
+const SEED_SIM = {
+  2: { // 객관식: { choice: index, text: 표시텍스트 }
+    'bbbbbbbb-0000-0000-0000-000000000001': { choice:3, text:'사회형(S)' },
+    'bbbbbbbb-0000-0000-0000-000000000002': { choice:1, text:'탐구형(I)' },
+    'bbbbbbbb-0000-0000-0000-000000000003': { choice:1, text:'탐구형(I)' },
+    'bbbbbbbb-0000-0000-0000-000000000005': { choice:4, text:'진취형(E)' },
+    'bbbbbbbb-0000-0000-0000-000000000006': { choice:2, text:'예술형(A)' },
+    'bbbbbbbb-0000-0000-0000-000000000008': { choice:2, text:'예술형(A)' },
+    'bbbbbbbb-0000-0000-0000-000000000009': { choice:2, text:'예술형(A)' },
+    'bbbbbbbb-0000-0000-0000-000000000010': { choice:1, text:'탐구형(I)' },
+    'bbbbbbbb-0000-0000-0000-000000000012': { choice:0, text:'현실형(R)' },
+    'bbbbbbbb-0000-0000-0000-000000000013': { choice:0, text:'현실형(R)' },
+    'bbbbbbbb-0000-0000-0000-000000000015': { choice:1, text:'탐구형(I)' },
+    'bbbbbbbb-0000-0000-0000-000000000016': { choice:1, text:'탐구형(I)' },
+    'bbbbbbbb-0000-0000-0000-000000000018': { choice:2, text:'예술형(A)' },
+    'bbbbbbbb-0000-0000-0000-000000000019': { choice:3, text:'사회형(S)' },
+    'bbbbbbbb-0000-0000-0000-000000000021': { choice:2, text:'예술형(A)' },
+    'bbbbbbbb-0000-0000-0000-000000000022': { choice:0, text:'현실형(R)' },
+    'bbbbbbbb-0000-0000-0000-000000000024': { choice:4, text:'진취형(E)' },
+    'bbbbbbbb-0000-0000-0000-000000000028': { choice:2, text:'예술형(A)' },
+  },
+  3: { // 척도형: { scale: [배열], text: 표시텍스트 }
+    'bbbbbbbb-0000-0000-0000-000000000001': { scale:[4,3,4,5], text:'4·3·4·5' },
+    'bbbbbbbb-0000-0000-0000-000000000002': { scale:[5,5,4,4], text:'5·5·4·4' },
+    'bbbbbbbb-0000-0000-0000-000000000003': { scale:[4,5,5,4], text:'4·5·5·4' },
+    'bbbbbbbb-0000-0000-0000-000000000005': { scale:[5,4,5,5], text:'5·4·5·5' },
+    'bbbbbbbb-0000-0000-0000-000000000006': { scale:[4,4,3,4], text:'4·4·3·4' },
+    'bbbbbbbb-0000-0000-0000-000000000008': { scale:[5,5,4,5], text:'5·5·4·5' },
+    'bbbbbbbb-0000-0000-0000-000000000009': { scale:[4,5,5,4], text:'4·5·5·4' },
+    'bbbbbbbb-0000-0000-0000-000000000010': { scale:[5,5,5,4], text:'5·5·5·4' },
+    'bbbbbbbb-0000-0000-0000-000000000012': { scale:[4,5,4,5], text:'4·5·4·5' },
+    'bbbbbbbb-0000-0000-0000-000000000013': { scale:[5,5,4,4], text:'5·5·4·4' },
+    'bbbbbbbb-0000-0000-0000-000000000015': { scale:[5,5,5,5], text:'5·5·5·5' },
+    'bbbbbbbb-0000-0000-0000-000000000016': { scale:[4,5,4,4], text:'4·5·4·4' },
+    'bbbbbbbb-0000-0000-0000-000000000018': { scale:[4,4,5,4], text:'4·4·5·4' },
+    'bbbbbbbb-0000-0000-0000-000000000019': { scale:[4,4,3,4], text:'4·4·3·4' },
+    'bbbbbbbb-0000-0000-0000-000000000021': { scale:[5,4,4,5], text:'5·4·4·5' },
+    'bbbbbbbb-0000-0000-0000-000000000022': { scale:[4,5,5,4], text:'4·5·5·4' },
+    'bbbbbbbb-0000-0000-0000-000000000024': { scale:[4,4,5,4], text:'4·4·5·4' },
+    'bbbbbbbb-0000-0000-0000-000000000028': { scale:[5,5,4,5], text:'5·5·4·5' },
+  },
+  4: { // 서술형
+    'bbbbbbbb-0000-0000-0000-000000000001': '그림 그리기, 친구들 챙기기',
+    'bbbbbbbb-0000-0000-0000-000000000002': '수학 풀기, 축구, 게임 전략',
+    'bbbbbbbb-0000-0000-0000-000000000003': '논리적 사고, 팀 활동',
+    'bbbbbbbb-0000-0000-0000-000000000005': '발표, 토론, 리더십',
+    'bbbbbbbb-0000-0000-0000-000000000006': '독서, 글쓰기, 악기 연주',
+    'bbbbbbbb-0000-0000-0000-000000000008': '미술, 디자인, 공예',
+    'bbbbbbbb-0000-0000-0000-000000000009': '노래, 춤, 퍼포먼스',
+    'bbbbbbbb-0000-0000-0000-000000000010': '실험, 과학 탐구, 로봇',
+    'bbbbbbbb-0000-0000-0000-000000000012': '체육, 팀 스포츠, 코칭',
+    'bbbbbbbb-0000-0000-0000-000000000013': '요리, 식품, 영양',
+    'bbbbbbbb-0000-0000-0000-000000000015': '프로그래밍, AI, 수학',
+    'bbbbbbbb-0000-0000-0000-000000000016': '동물, 수의학, 생물',
+    'bbbbbbbb-0000-0000-0000-000000000018': '체육, 무용, 건강',
+    'bbbbbbbb-0000-0000-0000-000000000019': '역사, 사회, 여행',
+    'bbbbbbbb-0000-0000-0000-000000000021': '문학, 작가, 언어',
+    'bbbbbbbb-0000-0000-0000-000000000022': '공학, 제조, 설계',
+    'bbbbbbbb-0000-0000-0000-000000000024': '외국어, 무역, 관광',
+    'bbbbbbbb-0000-0000-0000-000000000028': '음악, 작곡, 프로듀싱',
+  },
+  5: {
+    'bbbbbbbb-0000-0000-0000-000000000001': '요리사, 유치원 선생님',
+    'bbbbbbbb-0000-0000-0000-000000000002': '프로그래머, 게임 개발자',
+    'bbbbbbbb-0000-0000-0000-000000000003': '소프트웨어 엔지니어',
+    'bbbbbbbb-0000-0000-0000-000000000005': '변호사, CEO',
+    'bbbbbbbb-0000-0000-0000-000000000006': '작가, 음악가',
+    'bbbbbbbb-0000-0000-0000-000000000008': '그래픽 디자이너',
+    'bbbbbbbb-0000-0000-0000-000000000009': '안무가, 뮤지컬 배우',
+    'bbbbbbbb-0000-0000-0000-000000000010': '과학자, 로봇 공학자',
+    'bbbbbbbb-0000-0000-0000-000000000012': '체육 교사',
+    'bbbbbbbb-0000-0000-0000-000000000013': '파티시에, 영양사',
+    'bbbbbbbb-0000-0000-0000-000000000015': 'AI 연구원',
+    'bbbbbbbb-0000-0000-0000-000000000016': '수의사',
+    'bbbbbbbb-0000-0000-0000-000000000018': '댄서',
+    'bbbbbbbb-0000-0000-0000-000000000019': '역사 교사',
+    'bbbbbbbb-0000-0000-0000-000000000021': '소설가, 번역가',
+    'bbbbbbbb-0000-0000-0000-000000000022': '기계 엔지니어',
+    'bbbbbbbb-0000-0000-0000-000000000024': '외교관',
+    'bbbbbbbb-0000-0000-0000-000000000028': '프로듀서',
+  }
+};
+
+async function simulateStudentAnswers(qNum) {
+  if (_simAbort) _simAbort.cancelled = true;
+  const abort = { cancelled: false };
+  _simAbort = abort;
+
+  const qData = SEED_SIM[qNum];
+  if (!qData) return;
+
+  const eligible = students.filter(s => SEED_STUDENT_IDS.includes(s.id) && s.status === 'done' && qData[s.id]);
+  const shuffled = [...eligible].sort(() => Math.random() - 0.5);
+
+  for (const student of shuffled) {
+    if (abort.cancelled) break;
+    await new Promise(r => setTimeout(r, 600 + Math.random() * 1800));
+    if (abort.cancelled) break;
+
+    const ans = qData[student.id];
+    const displayText = typeof ans === 'string' ? ans : ans.text;
+
+    if (db && isOnline) {
+      try {
+        const payload = {
+          student_id: student.id, session_id: SESSION_ID,
+          q_number: qNum, answer_text: displayText,
+          is_submitted: false, updated_at: new Date().toISOString()
+        };
+        if (ans.choice !== undefined) payload.answer_choice = ans.choice;
+        if (ans.scale) payload.answer_scale = ans.scale;
+        await db.from('student_responses').upsert(payload, { onConflict: 'student_id,q_number' });
+        // Realtime이 UI 업데이트 처리
+      } catch(e) {
+        // DB 실패 시 로컬 직접 반영
+        student[`q${qNum}`] = displayText;
+        if (viewQ === qNum) renderResponseTable();
+      }
+    } else {
+      // 오프라인: 로컬 직접 반영
+      student[`q${qNum}`] = displayText;
+      if (viewQ === qNum) { renderResponseTable(); renderSBResponses(); }
+    }
+  }
+}
+
 // ─── 문항 활성화 (교사) ───────────────────────────────────
 async function activateQuestion(n) {
   if (n < 1 || n > 5) return;
@@ -1379,6 +1512,7 @@ async function activateQuestion(n) {
   renderSBBars();
   renderResponseTable();
   showToast(`Q${n} 활성화 — 학생 화면에 즉시 반영됩니다`);
+  if (n > 1) simulateStudentAnswers(n); // Q2 이상부터 응답 시뮬레이션 시작
 
   if (db && isOnline) {
     try {
