@@ -865,6 +865,21 @@ let saveTimer = null;
 let toastTimer = null;
 let isOnline = false;
 
+// ─── 크로스탭 통신 (BroadcastChannel) ─────────────────────
+const crossTab = new BroadcastChannel('career-workbook-spotlight');
+crossTab.onmessage = (e) => {
+  const { type, studentId, q } = e.data;
+  if (type === 'spotlight') {
+    focusedStudentId = studentId || null;
+    if (q) spotlightQ = q;
+    renderSBResponses();
+    if (ROLE === 'smartboard') {
+      if (focusedStudentId) showAnswerSpotlight(focusedStudentId);
+      else hideAnswerSpotlight();
+    }
+  }
+};
+
 // ─── Supabase Init ────────────────────────────────────────
 async function init() {
   // Config 교체 여부 확인
@@ -1008,19 +1023,6 @@ function setupRealtime() {
           if (focusedStudentId) showAnswerSpotlight(focusedStudentId);
           else hideAnswerSpotlight();
         }
-      }
-    })
-    .subscribe();
-
-  // 1.5 스포트라이트 broadcast 수신 (spotlight_q 전달용)
-  db.channel('spotlight-signal')
-    .on('broadcast', { event: 'spotlight' }, ({ payload }) => {
-      if (payload.q) spotlightQ = payload.q;
-      focusedStudentId = payload.student_id || null;
-      renderSBResponses();
-      if (ROLE === 'smartboard') {
-        if (focusedStudentId) showAnswerSpotlight(focusedStudentId);
-        else hideAnswerSpotlight();
       }
     })
     .subscribe();
@@ -1568,21 +1570,15 @@ async function setSpotlight(studentId) {
   spotlightQ = viewQ; // 교사가 현재 보고 있는 문항 기준으로 스포트라이트
   renderResponseTable();
   renderSBResponses();
-  // smartboard 역할에서만 로컬 스포트라이트 즉시 반영 (교사 탭에선 Supabase로 전파만)
-  if (ROLE === 'smartboard' || ROLE === 'all') {
-    if (nextId) showAnswerSpotlight(nextId); else hideAnswerSpotlight();
-  }
+  // 크로스탭 통신으로 smartboard 탭에 즉시 전달
+  crossTab.postMessage({ type: 'spotlight', studentId: nextId, q: nextId ? viewQ : null });
+  // Supabase DB도 업데이트 (다른 기기용)
   if (db && isOnline) {
     try {
-      // broadcast로 spotlight_q 전파 (DB 컬럼 불필요)
-      db.channel('spotlight-signal').send({
-        type: 'broadcast', event: 'spotlight',
-        payload: { student_id: nextId, q: nextId ? viewQ : null }
-      });
       await db.from('class_sessions')
         .update({ focused_student_id: nextId })
         .eq('id', SESSION_ID);
-    } catch(e) { console.warn('스포트라이트 업데이트 실패:', e); }
+    } catch(e) { console.warn('스포트라이트 DB 업데이트 실패:', e); }
   }
 }
 
