@@ -507,6 +507,20 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
 }
 
 // ─── Project Table ───
+// 미팅 임박 판별: 오늘/내일 미팅이면 'today'/'tomorrow', 아니면 null
+function getMeetingUrgency(meetingAt) {
+  if (!meetingAt) return null;
+  const m = new Date(meetingAt);
+  if (isNaN(m)) return null;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+  const dayAfter = new Date(today); dayAfter.setDate(today.getDate() + 2);
+  if (m >= today && m < tomorrow) return 'today';
+  if (m >= tomorrow && m < dayAfter) return 'tomorrow';
+  return null;
+}
+
 function ProjectTable({ data, filter, search, onRowClick, sortOrder, onToggleSort }) {
   const filtered = useMemo(() => {
     let list = filter === 'all' ? data : data.filter(d => d.current_status === filter);
@@ -514,10 +528,22 @@ function ProjectTable({ data, filter, search, onRowClick, sortOrder, onToggleSor
       const q = search.toLowerCase();
       list = list.filter(d => (d.title || '').toLowerCase().includes(q) || (d.slug || '').toLowerCase().includes(q));
     }
-    return list.sort((a, b) => {
+    // 미팅 임박 프로젝트를 최상단에 고정
+    const urgent = [];
+    const rest = [];
+    for (const r of list) {
+      const urg = getMeetingUrgency(r.meeting_at);
+      if (urg) { urgent.push({ ...r, _urgency: urg }); }
+      else { rest.push(r); }
+    }
+    // 임박 내에서는 미팅 시간순 정렬
+    urgent.sort((a, b) => new Date(a.meeting_at) - new Date(b.meeting_at));
+    // 나머지는 생성일 정렬
+    rest.sort((a, b) => {
       const dateA = a.created_at || ''; const dateB = b.created_at || '';
       return sortOrder === 'desc' ? dateB.localeCompare(dateA) : dateA.localeCompare(dateB);
     });
+    return [...urgent, ...rest];
   }, [data, filter, search, sortOrder]);
 
   const cols = [
@@ -557,12 +583,15 @@ function ProjectTable({ data, filter, search, onRowClick, sortOrder, onToggleSor
               const history = r.history || [];
               const lastH = history[history.length - 1];
               const meetingStr = formatMeetingAt(r.meeting_at);
+              const urgency = r._urgency || getMeetingUrgency(r.meeting_at);
+              const urgBg = urgency === 'today' ? '#fdcb6e18' : urgency === 'tomorrow' ? '#74b9ff12' : 'transparent';
+              const urgBorder = urgency === 'today' ? '#fdcb6e44' : urgency === 'tomorrow' ? '#74b9ff33' : 'var(--border)';
               return (
                 <tr key={r.slug}
                   onClick={() => onRowClick(r)}
-                  style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.1s' }}
-                  onMouseEnter={e => e.currentTarget.style.background = 'var(--surface2)'}
-                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                  style={{ borderBottom: `1px solid ${urgBorder}`, cursor: 'pointer', transition: 'background 0.1s', background: urgBg }}
+                  onMouseEnter={e => e.currentTarget.style.background = urgency ? (urgency === 'today' ? '#fdcb6e25' : '#74b9ff20') : 'var(--surface2)'}
+                  onMouseLeave={e => e.currentTarget.style.background = urgBg}
                 >
                   <td style={{ padding: '0.65rem 1rem', whiteSpace: 'nowrap' }}>
                     <span style={{
@@ -581,13 +610,23 @@ function ProjectTable({ data, filter, search, onRowClick, sortOrder, onToggleSor
                       const ms = getMeetingStatus(r.meeting_at);
                       const mt = MEETING_TYPES.find(t => t.key === r.meeting_type);
                       const isDone = ms === 'done';
+                      const urgLabel = urgency === 'today' ? '오늘' : urgency === 'tomorrow' ? '내일' : null;
                       return (
                         <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{
-                            padding: '0.1rem 0.35rem', borderRadius: 4, fontSize: '0.7rem', fontWeight: 600,
-                            background: isDone ? '#00b89422' : '#fdcb6e22',
-                            color: isDone ? '#00b894' : '#fdcb6e',
-                          }}>{isDone ? '완료' : '예정'}</span>
+                          {urgLabel ? (
+                            <span style={{
+                              padding: '0.1rem 0.35rem', borderRadius: 4, fontSize: '0.7rem', fontWeight: 700,
+                              background: urgency === 'today' ? '#fdcb6e33' : '#74b9ff22',
+                              color: urgency === 'today' ? '#fdcb6e' : '#74b9ff',
+                              animation: urgency === 'today' ? 'pulse 2s infinite' : 'none',
+                            }}>{urgLabel}</span>
+                          ) : (
+                            <span style={{
+                              padding: '0.1rem 0.35rem', borderRadius: 4, fontSize: '0.7rem', fontWeight: 600,
+                              background: isDone ? '#00b89422' : '#fdcb6e22',
+                              color: isDone ? '#00b894' : '#fdcb6e',
+                            }}>{isDone ? '완료' : '예정'}</span>
+                          )}
                           {mt && <span>{mt.emoji}</span>}
                           <span style={{ color: isDone ? 'var(--text2)' : 'var(--yellow)' }}>{meetingStr}</span>
                         </span>
