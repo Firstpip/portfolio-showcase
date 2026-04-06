@@ -203,17 +203,44 @@ function FilterTabs({ active, onChange, counts }) {
   );
 }
 
-// ─── Project Edit Modal (상태 변경 + 날짜 수정) ───
-function StatusModal({ project, onClose, onSave, onDateSave, saving }) {
+// ─── datetime-local 변환 유틸 ───
+function toLocalInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function formatMeetingAt(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d)) return null;
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ─── Project Edit Modal (상태 변경 + 날짜/미팅일 수정) ───
+function StatusModal({ project, onClose, onSave, onFieldSave, saving }) {
   const [newStatus, setNewStatus] = useState('');
   const [note, setNote] = useState('');
   const [editDate, setEditDate] = useState(project?.created_at || '');
   const [dateChanged, setDateChanged] = useState(false);
+  const [editMeeting, setEditMeeting] = useState(toLocalInput(project?.meeting_at));
+  const [meetingChanged, setMeetingChanged] = useState(false);
   if (!project) return null;
   const targets = TRANSITION_TARGETS[project.current_status] || [];
   const meta = STATUS_META[project.current_status] || {};
 
-  const handleDateChange = (v) => { setEditDate(v); setDateChanged(v !== (project.created_at || '')); };
+  const inputStyle = {
+    flex: 1, padding: '0.5rem 0.7rem', borderRadius: 8, fontSize: '0.85rem',
+    border: '1px solid var(--border)', background: 'var(--surface2)', color: 'var(--text)',
+    outline: 'none', colorScheme: 'dark',
+  };
+  const saveBtnStyle = (active) => ({
+    padding: '0.5rem 0.85rem', borderRadius: 8, border: 'none', cursor: 'pointer',
+    fontSize: '0.8rem', fontWeight: 600, background: active ? 'var(--blue)' : 'var(--surface2)',
+    color: active ? '#fff' : 'var(--text2)', opacity: saving ? 0.7 : 1,
+  });
 
   return (
     <div onClick={onClose} style={{
@@ -248,29 +275,35 @@ function StatusModal({ project, onClose, onSave, onDateSave, saving }) {
           </div>
         </div>
 
-        {/* 생성일 수정 */}
-        <div style={{ marginBottom: '1.25rem' }}>
-          <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 6 }}>생성일</div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input type="date" value={editDate} onChange={e => handleDateChange(e.target.value)}
-              style={{
-                flex: 1, padding: '0.5rem 0.7rem', borderRadius: 8, fontSize: '0.85rem',
-                border: '1px solid var(--border)', background: 'var(--surface2)', color: 'var(--text)',
-                outline: 'none', colorScheme: 'dark',
-              }}
-            />
+        {/* 생성일 + 미팅일 */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1.25rem' }}>
+          <div>
+            <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 6 }}>생성일</div>
+            <input type="date" value={editDate}
+              onChange={e => { setEditDate(e.target.value); setDateChanged(e.target.value !== (project.created_at || '')); }}
+              style={inputStyle} />
             {dateChanged && (
-              <button onClick={() => { onDateSave(project, editDate); setDateChanged(false); }} disabled={saving}
-                style={{
-                  padding: '0.5rem 0.85rem', borderRadius: 8, border: 'none', cursor: 'pointer',
-                  fontSize: '0.8rem', fontWeight: 600, background: 'var(--blue)', color: '#fff',
-                  opacity: saving ? 0.7 : 1,
-                }}>
-                {saving ? '...' : '날짜 저장'}
+              <button onClick={() => { onFieldSave(project, { created_at: editDate }); setDateChanged(false); }} disabled={saving}
+                style={{ ...saveBtnStyle(true), width: '100%', marginTop: 6 }}>
+                {saving ? '...' : '저장'}
               </button>
             )}
           </div>
-          {!project.created_at && <div style={{ fontSize: '0.75rem', color: 'var(--yellow)', marginTop: 4 }}>날짜가 설정되지 않았습니다</div>}
+          <div>
+            <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 6, color: 'var(--yellow)' }}>미팅 일시</div>
+            <input type="datetime-local" value={editMeeting}
+              onChange={e => { setEditMeeting(e.target.value); setMeetingChanged(e.target.value !== toLocalInput(project.meeting_at)); }}
+              style={inputStyle} />
+            {meetingChanged && (
+              <button onClick={() => {
+                const iso = editMeeting ? new Date(editMeeting).toISOString() : null;
+                onFieldSave(project, { meeting_at: iso }); setMeetingChanged(false);
+              }} disabled={saving}
+                style={{ ...saveBtnStyle(true), width: '100%', marginTop: 6 }}>
+                {saving ? '...' : '저장'}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* 이력 */}
@@ -394,7 +427,7 @@ function ProjectTable({ data, filter, search, onRowClick, sortOrder, onToggleSor
               const meta = STATUS_META[r.current_status] || {};
               const history = r.history || [];
               const lastH = history[history.length - 1];
-              const iv = getInterviewDate(r);
+              const meetingStr = formatMeetingAt(r.meeting_at);
               return (
                 <tr key={r.slug}
                   onClick={() => onRowClick(r)}
@@ -415,8 +448,8 @@ function ProjectTable({ data, filter, search, onRowClick, sortOrder, onToggleSor
                   <td style={{ padding: '0.65rem 1rem', whiteSpace: 'nowrap', fontSize: '0.8rem', color: r.budget ? 'var(--text)' : 'var(--text2)' }}>{r.budget || '—'}</td>
                   <td style={{ padding: '0.65rem 1rem', whiteSpace: 'nowrap', fontSize: '0.8rem', color: 'var(--text2)' }}>{r.created_at || '—'}</td>
                   <td style={{ padding: '0.65rem 1rem', whiteSpace: 'nowrap', fontSize: '0.8rem' }}>
-                    {iv ? (
-                      <span style={{ color: 'var(--yellow)' }}>{iv.date}{iv.note ? ` — ${iv.note}` : ''}</span>
+                    {meetingStr ? (
+                      <span style={{ color: 'var(--yellow)' }}>{meetingStr}</span>
                     ) : (
                       <span style={{ color: 'var(--text2)' }}>—</span>
                     )}
@@ -489,20 +522,21 @@ function App() {
     setSelectedProject(project);
   }, []);
 
-  // Supabase에 날짜 업데이트
-  const handleDateSave = useCallback(async (project, newDate) => {
+  // Supabase에 필드 업데이트 (생성일, 미팅일 등)
+  const handleFieldSave = useCallback(async (project, fields) => {
     setSaving(true);
     try {
       const { error } = await supabase
         .from(TABLE)
-        .update({ created_at: newDate, updated_at: new Date().toISOString().split('T')[0] })
+        .update({ ...fields, updated_at: new Date().toISOString().split('T')[0] })
         .eq('slug', project.slug);
       if (error) throw error;
-      setData(prev => prev.map(d => d.slug === project.slug ? { ...d, created_at: newDate } : d));
-      setSelectedProject(prev => prev ? { ...prev, created_at: newDate } : prev);
-      toast(`날짜 저장: ${project.slug} → ${newDate}`, 'success');
+      setData(prev => prev.map(d => d.slug === project.slug ? { ...d, ...fields } : d));
+      setSelectedProject(prev => prev ? { ...prev, ...fields } : prev);
+      const label = Object.keys(fields).map(k => k === 'created_at' ? '생성일' : k === 'meeting_at' ? '미팅일' : k).join(', ');
+      toast(`${label} 저장 완료`, 'success');
     } catch (err) {
-      toast('날짜 저장 실패: ' + err.message, 'error');
+      toast('저장 실패: ' + err.message, 'error');
     } finally {
       setSaving(false);
     }
@@ -555,7 +589,7 @@ function App() {
   return (
     <div>
       <ToastContainer toasts={toasts} />
-      {selectedProject && <StatusModal project={selectedProject} onClose={() => setSelectedProject(null)} onSave={handleSave} onDateSave={handleDateSave} saving={saving} />}
+      {selectedProject && <StatusModal project={selectedProject} onClose={() => setSelectedProject(null)} onSave={handleSave} onFieldSave={handleFieldSave} saving={saving} />}
 
       {/* Header */}
       <div className="fade-in" style={{ marginBottom: '2rem' }}>
