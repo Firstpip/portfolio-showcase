@@ -865,13 +865,20 @@ let saveTimer = null;
 let toastTimer = null;
 let isOnline = false;
 
-// focused_student_id DB 필드에 문항번호를 함께 인코딩 (DB 스키마 변경 불필요)
-function encodeSpotlight(studentId, qNum) { return studentId ? studentId + '::' + qNum : null; }
-function decodeSpotlight(val) {
-  if (!val) return { id: null, q: null };
-  const p = val.split('::');
-  return { id: p[0], q: p.length > 1 ? parseInt(p[1]) : null };
-}
+// 같은 기기 탭 간 통신 (viewQ 전달용)
+const crossTab = new BroadcastChannel('career-workbook-spotlight');
+crossTab.onmessage = (e) => {
+  const { type, studentId, q } = e.data;
+  if (type === 'spotlight') {
+    focusedStudentId = studentId || null;
+    if (q) spotlightQ = q;
+    renderSBResponses();
+    if (ROLE === 'smartboard') {
+      if (focusedStudentId) showAnswerSpotlight(focusedStudentId);
+      else hideAnswerSpotlight();
+    }
+  }
+};
 
 // ─── Supabase Init ────────────────────────────────────────
 async function init() {
@@ -899,9 +906,7 @@ async function init() {
     if (sessionRes.data) {
       activeQ = sessionRes.data.active_question;
       focusMode = !!sessionRes.data.focus_mode;
-      const _spot = decodeSpotlight(sessionRes.data.focused_student_id);
-      focusedStudentId = _spot.id;
-      spotlightQ = _spot.q;
+      focusedStudentId = sessionRes.data.focused_student_id || null;
     }
 
     if (studentsRes.data) {
@@ -1011,9 +1016,7 @@ function setupRealtime() {
       if (!payload.new.focus_mode && ROLE === 'smartboard' && overlay.classList.contains('active')) exitFocus();
       // 스포트라이트 포커스 변경 → 전자칠판 응답 카드 재렌더 + 전체화면 답변 표시
       if ('focused_student_id' in payload.new) {
-        const _spot = decodeSpotlight(payload.new.focused_student_id);
-        focusedStudentId = _spot.id;
-        if (_spot.q) spotlightQ = _spot.q;
+        focusedStudentId = payload.new.focused_student_id || null;
         renderSBResponses();
         if (ROLE === 'smartboard') {
           if (focusedStudentId) showAnswerSpotlight(focusedStudentId);
@@ -1566,14 +1569,17 @@ async function setSpotlight(studentId) {
   spotlightQ = viewQ;
   renderResponseTable();
   renderSBResponses();
+  // 같은 기기 탭 간: BroadcastChannel로 viewQ 포함 전달
+  crossTab.postMessage({ type: 'spotlight', studentId: nextId, q: nextId ? viewQ : null });
   // 교사 본인이 smartboard 탭도 열어둔 경우 로컬 즉시 반영
   if (ROLE === 'smartboard' || ROLE === 'all') {
     if (nextId) showAnswerSpotlight(nextId); else hideAnswerSpotlight();
   }
+  // 다른 기기: DB 업데이트 (순수 UUID, viewQ는 activeQ로 폴백)
   if (db && isOnline) {
     try {
       await db.from('class_sessions')
-        .update({ focused_student_id: encodeSpotlight(nextId, viewQ) })
+        .update({ focused_student_id: nextId })
         .eq('id', SESSION_ID);
     } catch(e) { console.warn('스포트라이트 업데이트 실패:', e); }
   }
