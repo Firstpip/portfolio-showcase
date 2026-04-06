@@ -906,7 +906,9 @@ async function init() {
     if (sessionRes.data) {
       activeQ = sessionRes.data.active_question;
       focusMode = !!sessionRes.data.focus_mode;
-      focusedStudentId = sessionRes.data.focused_student_id || null;
+      const decodedInit = decodeSpotlight(sessionRes.data.focused_student_id);
+      focusedStudentId = decodedInit.studentId;
+      if (decodedInit.q) spotlightQ = decodedInit.q;
     }
 
     if (studentsRes.data) {
@@ -993,22 +995,8 @@ function loadFallbackData() {
 }
 
 // ─── Realtime Subscriptions ───────────────────────────────
-let spotlightChannel = null; // Supabase broadcast 채널 (크로스 디바이스 스포트라이트)
-
 function setupRealtime() {
   if (!db) return;
-
-  // 0. 스포트라이트 broadcast 채널 (DB 컬럼 불필요, 크로스 디바이스 전달)
-  spotlightChannel = db.channel('spotlight-sync');
-  spotlightChannel.on('broadcast', { event: 'spotlight' }, ({ payload }) => {
-    if (payload.q) spotlightQ = payload.q;
-    focusedStudentId = payload.student_id || null;
-    renderSBResponses();
-    if (ROLE === 'smartboard') {
-      if (focusedStudentId) showAnswerSpotlight(focusedStudentId);
-      else hideAnswerSpotlight();
-    }
-  }).subscribe();
 
   // 1. 세션 변경 (active_question, focus_mode) → 학생 워크북 + 전자칠판
   db.channel('session-ctrl')
@@ -1041,9 +1029,10 @@ function setupRealtime() {
       if (!payload.new.focus_mode && ROLE === 'smartboard' && overlay.classList.contains('active')) exitFocus();
       // 스포트라이트 포커스 변경 → 전자칠판 응답 카드 재렌더 + 전체화면 답변 표시
       if ('focused_student_id' in payload.new) {
-        focusedStudentId = payload.new.focused_student_id || null;
+        const decoded = decodeSpotlight(payload.new.focused_student_id);
+        focusedStudentId = decoded.studentId;
+        if (decoded.q) spotlightQ = decoded.q;
         renderSBResponses();
-        // broadcast에서 spotlightQ를 먼저 받으므로 여기서는 DB 폴백만 처리
         if (ROLE === 'smartboard') {
           if (focusedStudentId) showAnswerSpotlight(focusedStudentId);
           else hideAnswerSpotlight();
@@ -1591,26 +1580,30 @@ function updateActiveQDisplay() {
   if (nextBtn) nextBtn.textContent = activeQ < 5 ? `Q${activeQ+1} 활성화 →` : '마지막 문항';
 }
 
+// ─── 스포트라이트 인코딩: "studentId::qNum" → DB 컬럼 추가 없이 문항 번호 전달 ──
+function encodeSpotlight(studentId, qNum) {
+  return studentId ? `${studentId}::${qNum}` : null;
+}
+function decodeSpotlight(val) {
+  if (!val) return { studentId: null, q: null };
+  const parts = val.split('::');
+  return { studentId: parts[0], q: parts.length > 1 ? parseInt(parts[1]) : null };
+}
+
 // ─── 칠판 공개 토글 (교사) ───────────────────────────────
 async function setSpotlight(studentId) {
   const nextId = focusedStudentId === studentId ? null : studentId;
   focusedStudentId = nextId;
-  spotlightQ = viewQ; // 교사가 현재 보고 있는 문항 기준으로 스포트라이트
+  spotlightQ = viewQ;
   renderResponseTable();
   renderSBResponses();
   // 크로스탭 통신 (같은 기기 탭 간)
   crossTab.postMessage({ type: 'spotlight', studentId: nextId, q: nextId ? viewQ : null });
-  // Supabase broadcast (다른 기기 전달) + DB 업데이트
+  // DB 업데이트 (다른 기기 전달 — postgres_changes로 수신)
   if (db && isOnline) {
     try {
-      if (spotlightChannel) {
-        spotlightChannel.send({
-          type: 'broadcast', event: 'spotlight',
-          payload: { student_id: nextId, q: nextId ? viewQ : null }
-        });
-      }
       await db.from('class_sessions')
-        .update({ focused_student_id: nextId })
+        .update({ focused_student_id: encodeSpotlight(nextId, viewQ) })
         .eq('id', SESSION_ID);
     } catch(e) { console.warn('스포트라이트 업데이트 실패:', e); }
   }
