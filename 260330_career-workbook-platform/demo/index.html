@@ -645,11 +645,12 @@ tr:last-child td { border-bottom: none; }
         </div>
         <div class="card">
           <div class="card-header">
-            <span class="card-title">최신 제출 응답 <span id="responseTableQLabel" style="font-size:11px;font-weight:600;color:var(--primary);background:var(--primary-light);padding:2px 8px;border-radius:10px;margin-left:6px;">Q2</span></span>
+            <span class="card-title">제출 응답</span>
             <button class="topbar-btn primary" style="padding:6px 12px; font-size:12px;" onclick="revealOnBoard()">📺 칠판 공개</button>
           </div>
+          <div style="display:flex;align-items:center;gap:4px;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--bg);flex-wrap:wrap;" id="responseQTabs"></div>
+          <div id="responseTableQText" style="padding:6px 14px;font-size:11px;color:var(--text-secondary);border-bottom:1px solid var(--border);background:var(--bg);"></div>
           <div class="card-body" style="padding:0;">
-            <div id="responseTableQText" style="padding:8px 14px 6px;font-size:12px;color:var(--text-secondary);border-bottom:1px solid var(--border);background:var(--bg);"></div>
             <table><thead><tr><th>학생</th><th>응답 요약</th><th>상태</th><th>칠판</th></tr></thead>
             <tbody id="responseTable"></tbody></table>
           </div>
@@ -852,6 +853,7 @@ const questions = [
 let db = null;
 let students = [];
 let activeQ = 2;
+let viewQ = 2;      // 교사 응답 테이블 조회 문항 (activeQ와 독립적으로 선택 가능)
 let myStudentId = null;
 let myAnswers = {};
 let myQ5Scales = {};
@@ -975,6 +977,7 @@ function setupRealtime() {
       const prev = activeQ;
       activeQ = payload.new.active_question;
       if (prev !== activeQ) {
+        viewQ = activeQ;  // Realtime으로 문항 바뀔 때도 조회 탭 동기화
         renderWorkbook();
         renderQControl();
         renderSBBars();
@@ -1367,11 +1370,12 @@ async function doSubmit() {
 async function activateQuestion(n) {
   if (n < 1 || n > 5) return;
   activeQ = n;
+  viewQ = n;  // 문항 활성화 시 조회 탭도 따라감 (수동 선택은 유지)
   updateActiveQDisplay();
   renderWorkbook();
   renderQControl();
   renderSBBars();
-  renderResponseTable(); // 활성 문항 변경 시 응답 테이블도 즉시 갱신
+  renderResponseTable();
   showToast(`Q${n} 활성화 — 학생 화면에 즉시 반영됩니다`);
 
   if (db && isOnline) {
@@ -1610,21 +1614,42 @@ function renderSBResponses() {
   }).join('') || '<div style="color:rgba(255,255,255,0.3);font-size:13px;text-align:center;padding:20px;">교사가 답변을 공개하면 여기에 표시됩니다</div>';
 }
 
+function renderResponseQTabs() {
+  const el = document.getElementById('responseQTabs');
+  if (!el) return;
+  el.innerHTML = questions.map((q, i) => {
+    const n = i + 1;
+    const isActive = n === activeQ;
+    const isView  = n === viewQ;
+    return `<button onclick="setViewQ(${n})" style="
+      padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;cursor:pointer;border:1.5px solid;transition:all .15s;
+      background:${isView ? 'var(--primary)' : 'transparent'};
+      color:${isView ? '#fff' : isActive ? 'var(--primary)' : 'var(--text-secondary)'};
+      border-color:${isView ? 'var(--primary)' : isActive ? 'var(--primary)' : 'var(--border)'};
+    ">Q${n}${isActive ? ' ●' : ''}</button>`;
+  }).join('');
+}
+
+function setViewQ(n) {
+  viewQ = n;
+  renderResponseQTabs();
+  renderResponseTable();
+}
+
 function renderResponseTable() {
   const tbody = document.getElementById('responseTable');
   if (!tbody) return;
-  const qKey = `q${activeQ}`;
+  const qKey = `q${viewQ}`;
   const doneStudents = students.filter(s => s.status==='done' && s[qKey]).slice().reverse().slice(0, 8);
 
-  // 카드 타이틀 Q 레이블 + 질문 텍스트 업데이트
-  const qLabel = document.getElementById('responseTableQLabel');
-  if (qLabel) qLabel.textContent = `Q${activeQ}`;
+  // Q 탭 + 질문 텍스트 업데이트
+  renderResponseQTabs();
   const qTextEl = document.getElementById('responseTableQText');
-  if (qTextEl) qTextEl.textContent = `Q${activeQ}. ${questions[activeQ-1]?.short || ''}`;
+  if (qTextEl) qTextEl.textContent = `Q${viewQ}. ${questions[viewQ-1]?.short || ''}`;
 
   tbody.innerHTML = doneStudents.map(s => {
     const isRevealed = revealedStudentIds.has(s.id);
-    const answerText = (s[qKey] || '').slice(0, 22);
+    const answerText = (s[`q${viewQ}`] || '').slice(0, 22);
     return `<tr>
       <td><span style="font-weight:600;">${s.name}</span></td>
       <td style="font-size:12.5px;color:var(--text-secondary);">${answerText}...</td>
@@ -1634,7 +1659,7 @@ function renderResponseTable() {
         <button onclick="setSpotlight('${s.id}')" title="전자칠판 스포트라이트" style="background:${focusedStudentId===s.id?'rgba(124,58,237,.35)':'transparent'};border:1px solid ${focusedStudentId===s.id?'#7c3aed':'#444'};color:${focusedStudentId===s.id?'#a78bfa':'#888'};border-radius:6px;padding:3px 8px;font-size:12px;cursor:pointer;">🔍</button>
       </td>
     </tr>`;
-  }).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--text-secondary);padding:20px;font-size:13px;">Q${activeQ} 제출 완료한 학생이 없습니다</td></tr>`;
+  }).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--text-secondary);padding:20px;font-size:13px;">Q${viewQ} 제출 완료한 학생이 없습니다</td></tr>`;
 }
 
 function updateCounts() {
