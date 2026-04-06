@@ -993,8 +993,22 @@ function loadFallbackData() {
 }
 
 // ─── Realtime Subscriptions ───────────────────────────────
+let spotlightChannel = null; // Supabase broadcast 채널 (크로스 디바이스 스포트라이트)
+
 function setupRealtime() {
   if (!db) return;
+
+  // 0. 스포트라이트 broadcast 채널 (DB 컬럼 불필요, 크로스 디바이스 전달)
+  spotlightChannel = db.channel('spotlight-sync');
+  spotlightChannel.on('broadcast', { event: 'spotlight' }, ({ payload }) => {
+    if (payload.q) spotlightQ = payload.q;
+    focusedStudentId = payload.student_id || null;
+    renderSBResponses();
+    if (ROLE === 'smartboard') {
+      if (focusedStudentId) showAnswerSpotlight(focusedStudentId);
+      else hideAnswerSpotlight();
+    }
+  }).subscribe();
 
   // 1. 세션 변경 (active_question, focus_mode) → 학생 워크북 + 전자칠판
   db.channel('session-ctrl')
@@ -1584,15 +1598,21 @@ async function setSpotlight(studentId) {
   spotlightQ = viewQ; // 교사가 현재 보고 있는 문항 기준으로 스포트라이트
   renderResponseTable();
   renderSBResponses();
-  // 크로스탭 통신으로 smartboard 탭에 즉시 전달
+  // 크로스탭 통신 (같은 기기 탭 간)
   crossTab.postMessage({ type: 'spotlight', studentId: nextId, q: nextId ? viewQ : null });
-  // Supabase DB도 업데이트 (다른 기기용)
+  // Supabase broadcast (다른 기기 전달) + DB 업데이트
   if (db && isOnline) {
     try {
+      if (spotlightChannel) {
+        spotlightChannel.send({
+          type: 'broadcast', event: 'spotlight',
+          payload: { student_id: nextId, q: nextId ? viewQ : null }
+        });
+      }
       await db.from('class_sessions')
         .update({ focused_student_id: nextId })
         .eq('id', SESSION_ID);
-    } catch(e) { console.warn('스포트라이트 DB 업데이트 실패:', e); }
+    } catch(e) { console.warn('스포트라이트 업데이트 실패:', e); }
   }
 }
 
