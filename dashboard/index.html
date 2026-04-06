@@ -566,7 +566,10 @@ function getMeetingUrgency(meetingAt) {
   return null;
 }
 
-function ProjectTable({ data, filter, search, onRowClick, sortOrder, onToggleSort }) {
+function ProjectTable({ data, filter, search, onRowClick, sortOrder, onToggleSort, onBatchLost }) {
+  const [selected, setSelected] = useState(new Set());
+  const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s = new Set(prev); s.has(slug) ? s.delete(slug) : s.add(slug); return s; }); };
+  const toggleAll = () => { setSelected(prev => prev.size === filtered.length ? new Set() : new Set(filtered.map(r => r.slug))); };
   const filtered = useMemo(() => {
     let list = filter === 'all' ? data : data.filter(d => d.current_status === filter);
     if (search.trim()) {
@@ -600,12 +603,37 @@ function ProjectTable({ data, filter, search, onRowClick, sortOrder, onToggleSor
     { key: 'note', label: '메모', sortable: false },
   ];
 
+  const selectedCount = selected.size;
+
   return (
     <div style={{ background: 'var(--surface)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
+      {/* 일괄 처리 바 */}
+      {selectedCount > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '0.6rem 1rem', background: '#e1705515', borderBottom: '1px solid #e1705533',
+        }}>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text)' }}>{selectedCount}건 선택됨</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setSelected(new Set())} style={{
+              padding: '0.35rem 0.7rem', borderRadius: 6, border: '1px solid var(--border)',
+              background: 'transparent', color: 'var(--text2)', cursor: 'pointer', fontSize: '0.8rem',
+            }}>선택 해제</button>
+            <button onClick={() => { onBatchLost([...selected]); setSelected(new Set()); }} style={{
+              padding: '0.35rem 0.7rem', borderRadius: 6, border: 'none',
+              background: '#e17055', color: '#fff', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+            }}>일괄 미선정</button>
+          </div>
+        </div>
+      )}
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)' }}>
+              <th style={{ padding: '0.75rem 0.5rem 0.75rem 1rem', width: 32 }}>
+                <input type="checkbox" checked={filtered.length > 0 && selectedCount === filtered.length}
+                  onChange={toggleAll} style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} />
+              </th>
               {cols.map(c => (
                 <th key={c.key}
                   onClick={c.sortable ? onToggleSort : undefined}
@@ -622,7 +650,7 @@ function ProjectTable({ data, filter, search, onRowClick, sortOrder, onToggleSor
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={cols.length} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text2)' }}>결과 없음</td></tr>
+              <tr><td colSpan={cols.length + 1} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text2)' }}>결과 없음</td></tr>
             ) : filtered.map(r => {
               const meta = STATUS_META[r.current_status] || {};
               const history = r.history || [];
@@ -638,6 +666,11 @@ function ProjectTable({ data, filter, search, onRowClick, sortOrder, onToggleSor
                   onMouseEnter={e => e.currentTarget.style.background = urgency ? (urgency === 'today' ? '#fdcb6e25' : '#74b9ff20') : 'var(--surface2)'}
                   onMouseLeave={e => e.currentTarget.style.background = urgBg}
                 >
+                  <td style={{ padding: '0.65rem 0.5rem 0.65rem 1rem', width: 32 }} onClick={e => e.stopPropagation()}>
+                    <input type="checkbox" checked={selected.has(r.slug)}
+                      onChange={e => toggleSelect(r.slug, e)}
+                      style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} />
+                  </td>
                   <td style={{ padding: '0.65rem 1rem', whiteSpace: 'nowrap' }}>
                     <span style={{
                       display: 'inline-block', padding: '0.2rem 0.6rem', borderRadius: 6, fontSize: '0.75rem', fontWeight: 500,
@@ -788,6 +821,25 @@ function App() {
     }
   }, [toast]);
 
+  // 일괄 미선정 처리
+  const handleBatchLost = useCallback(async (slugs) => {
+    if (!confirm(`${slugs.length}건을 미선정 처리하시겠습니까?`)) return;
+    const today = new Date().toISOString().split('T')[0];
+    let success = 0;
+    for (const slug of slugs) {
+      const project = data.find(d => d.slug === slug);
+      if (!project || project.current_status === 'lost' || project.current_status === 'won') continue;
+      const newHistory = [...(project.history || []), { status: 'lost', date: today, note: '일괄 미선정 처리' }];
+      const { error } = await supabase.from(TABLE).update({ current_status: 'lost', history: newHistory, updated_at: today }).eq('slug', slug);
+      if (!error) success++;
+    }
+    setData(prev => prev.map(d => slugs.includes(d.slug) && d.current_status !== 'won' ? {
+      ...d, current_status: 'lost', history: [...(d.history || []), { status: 'lost', date: today, note: '일괄 미선정 처리' }], updated_at: today,
+    } : d));
+    toast(`${success}건 미선정 처리 완료`, 'success');
+    if (success > 0) setTimeout(() => toast(`로컬 정리: node scripts/cleanup-lost.js --all`, 'info'), 500);
+  }, [data, toast]);
+
   // Supabase에서 프로젝트 삭제
   const handleDelete = useCallback(async (project) => {
     setSaving(true);
@@ -919,7 +971,7 @@ function App() {
           />
         </div>
         <div style={{ marginBottom: '1rem' }}><FilterTabs active={filter} onChange={setFilter} counts={counts} /></div>
-        <ProjectTable data={data} filter={filter} search={search} onRowClick={handleRowClick} sortOrder={sortOrder} onToggleSort={() => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')} />
+        <ProjectTable data={data} filter={filter} search={search} onRowClick={handleRowClick} sortOrder={sortOrder} onToggleSort={() => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')} onBatchLost={handleBatchLost} />
       </div>
 
       <div style={{ textAlign: 'center', padding: '2rem 0 1rem', color: 'var(--text2)', fontSize: '0.75rem' }}>
