@@ -892,7 +892,6 @@ async function init() {
       activeQ = sessionRes.data.active_question;
       focusMode = !!sessionRes.data.focus_mode;
       focusedStudentId = sessionRes.data.focused_student_id || null;
-      if (sessionRes.data.spotlight_q) spotlightQ = sessionRes.data.spotlight_q;
     }
 
     if (studentsRes.data) {
@@ -1003,12 +1002,25 @@ function setupRealtime() {
       // 스포트라이트 포커스 변경 → 전자칠판 응답 카드 재렌더 + 전체화면 답변 표시
       if ('focused_student_id' in payload.new) {
         focusedStudentId = payload.new.focused_student_id || null;
-        if ('spotlight_q' in payload.new && payload.new.spotlight_q) spotlightQ = payload.new.spotlight_q;
         renderSBResponses();
+        // broadcast에서 spotlightQ를 먼저 받으므로 여기서는 DB 폴백만 처리
         if (ROLE === 'smartboard') {
           if (focusedStudentId) showAnswerSpotlight(focusedStudentId);
           else hideAnswerSpotlight();
         }
+      }
+    })
+    .subscribe();
+
+  // 1.5 스포트라이트 broadcast 수신 (spotlight_q 전달용)
+  db.channel('spotlight-signal')
+    .on('broadcast', { event: 'spotlight' }, ({ payload }) => {
+      if (payload.q) spotlightQ = payload.q;
+      focusedStudentId = payload.student_id || null;
+      renderSBResponses();
+      if (ROLE === 'smartboard') {
+        if (focusedStudentId) showAnswerSpotlight(focusedStudentId);
+        else hideAnswerSpotlight();
       }
     })
     .subscribe();
@@ -1562,8 +1574,13 @@ async function setSpotlight(studentId) {
   }
   if (db && isOnline) {
     try {
+      // broadcast로 spotlight_q 전파 (DB 컬럼 불필요)
+      db.channel('spotlight-signal').send({
+        type: 'broadcast', event: 'spotlight',
+        payload: { student_id: nextId, q: nextId ? viewQ : null }
+      });
       await db.from('class_sessions')
-        .update({ focused_student_id: nextId, spotlight_q: nextId ? viewQ : null })
+        .update({ focused_student_id: nextId })
         .eq('id', SESSION_ID);
     } catch(e) { console.warn('스포트라이트 업데이트 실패:', e); }
   }
