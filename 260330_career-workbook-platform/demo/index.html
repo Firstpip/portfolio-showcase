@@ -944,6 +944,17 @@ async function init() {
   if (focusedStudentId && ROLE === 'smartboard') showAnswerSpotlight(focusedStudentId);
 }
 
+// ─── 학생 상태: 현재 활성 문항 기준 판단 ─────────────────
+function hasAnswered(student, qNum) {
+  const val = student[`q${qNum}`];
+  if (Array.isArray(val)) return val.length > 0;
+  return !!val && val !== '작성중...' && val !== '';
+}
+function effectiveStatus(student) {
+  if (student.status === 'absent') return 'absent';
+  return hasAnswered(student, activeQ) ? 'done' : 'writing';
+}
+
 // 폴백: Supabase 연결 실패 시 하드코딩 데이터
 function loadFallbackData() {
   activeQ = 1;
@@ -1528,6 +1539,9 @@ async function activateQuestion(n) {
   renderQControl();
   renderSBBars();
   renderResponseTable();
+  renderSBResponses();
+  renderStudentGrid();
+  updateCounts();
   showToast(`Q${n} 활성화 — 학생 화면에 즉시 반영됩니다`);
   if (n > 1) simulateStudentAnswers(n); // Q2 이상부터 응답 시뮬레이션 시작
 
@@ -1693,8 +1707,9 @@ function renderStudentGrid() {
   const grid = document.getElementById('studentGrid');
   if (!grid) return;
   grid.innerHTML = students.map(s => {
-    const cls = s.status==='done'?'done':s.status==='writing'?'writing':'absent';
-    const icon = s.status==='done'?'✓':s.status==='writing'?'✏':'—';
+    const eff = effectiveStatus(s);
+    const cls = eff==='done'?'done':eff==='writing'?'writing':'absent';
+    const icon = eff==='done'?'✓':eff==='writing'?'✏':'—';
     return `<div class="student-chip ${cls}" data-student-id="${s.id}" onclick="openStudentModal('${s.id}')" title="${s.name} 답변 보기">
       <div class="student-num">${icon} ${s.no}</div>
       <div class="student-name">${s.name}</div>
@@ -1705,20 +1720,21 @@ function renderStudentGrid() {
 function renderQControl() {
   const el = document.getElementById('questionControl');
   if (!el) return;
-  const doneCount = students.filter(s=>s.status==='done').length;
   const total = students.length || 28;
+  const present = students.filter(s=>s.status!=='absent').length;
   el.innerHTML = questions.map((q,i) => {
     const n = i+1;
+    const answered = students.filter(s=>s.status!=='absent' && hasAnswered(s, n)).length;
     let style, label;
     if (n < activeQ) {
       style = 'border:2px solid var(--success);background:#D1FAE5;';
-      label = `<div style="font-size:11px;color:#065F46;font-weight:700;">Q${n} 완료</div><div style="font-size:13px;font-weight:700;margin-top:4px;color:#065F46;">${total}/${total}</div>`;
+      label = `<div style="font-size:11px;color:#065F46;font-weight:700;">Q${n} 완료</div><div style="font-size:13px;font-weight:700;margin-top:4px;color:#065F46;">${answered}/${present}</div>`;
     } else if (n === activeQ) {
       style = 'border:2px solid var(--primary);background:var(--primary-light);';
-      label = `<div style="font-size:11px;color:var(--primary);font-weight:700;">Q${n} 활성 ▶</div><div style="font-size:13px;font-weight:700;margin-top:4px;color:var(--primary);">${doneCount}/${total}</div>`;
+      label = `<div style="font-size:11px;color:var(--primary);font-weight:700;">Q${n} 활성 ▶</div><div style="font-size:13px;font-weight:700;margin-top:4px;color:var(--primary);">${answered}/${present}</div>`;
     } else {
       style = 'border:2px solid var(--border);background:#F8FAFC;opacity:0.5;';
-      label = `<div style="font-size:11px;color:var(--text-secondary);font-weight:700;">Q${n} 잠금</div><div style="font-size:13px;font-weight:700;margin-top:4px;color:var(--text-secondary);">0/${total}</div>`;
+      label = `<div style="font-size:11px;color:var(--text-secondary);font-weight:700;">Q${n} 잠금</div><div style="font-size:13px;font-weight:700;margin-top:4px;color:var(--text-secondary);">0/${present}</div>`;
     }
     return `<div style="border-radius:10px;padding:14px;${style}cursor:pointer;text-align:center;" onclick="activateQuestion(${n})">${label}</div>`;
   }).join('');
@@ -1727,17 +1743,17 @@ function renderQControl() {
 function renderSBBars() {
   const el = document.getElementById('sbQBars');
   if (!el) return;
-  const done = students.filter(s=>s.status==='done').length;
   const total = students.length || 28;
   el.innerHTML = questions.map((q,i) => {
     const n = i+1;
+    const answered = students.filter(s=>s.status!=='absent' && hasAnswered(s, n)).length;
     let bg, label, count, w;
     if (n < activeQ) {
       bg='rgba(16,185,129,0.15)'; label=`<div style="font-size:10px;color:#6EE7B7;font-weight:700;">Q${n}</div>`;
-      count=`<div style="font-size:18px;font-weight:800;color:#10B981;">${total}</div>`; w='100%';
+      count=`<div style="font-size:18px;font-weight:800;color:#10B981;">${answered}</div>`; w=`${total>0?Math.round(answered/total*100):0}%`;
     } else if (n === activeQ) {
       bg='rgba(56,189,248,0.15)'; label=`<div style="font-size:10px;color:#38BDF8;font-weight:700;">Q${n} ▶</div>`;
-      count=`<div style="font-size:18px;font-weight:800;color:#38BDF8;">${done}</div>`; w=`${Math.round(done/total*100)}%`;
+      count=`<div style="font-size:18px;font-weight:800;color:#38BDF8;">${answered}</div>`; w=`${total>0?Math.round(answered/total*100):0}%`;
     } else {
       bg='rgba(255,255,255,0.04)'; label=`<div style="font-size:10px;color:rgba(255,255,255,0.4);font-weight:700;">Q${n}</div>`;
       count=`<div style="font-size:18px;font-weight:800;color:rgba(255,255,255,0.2);">—</div>`; w='0%';
@@ -1793,7 +1809,7 @@ function renderResponseTable() {
   const tbody = document.getElementById('responseTable');
   if (!tbody) return;
   const qKey = `q${viewQ}`;
-  const doneStudents = students.filter(s => s.status==='done' && s[qKey]).slice().reverse().slice(0, 8);
+  const doneStudents = students.filter(s => s.status!=='absent' && hasAnswered(s, viewQ)).slice().reverse().slice(0, 8);
 
   // Q 탭 + 질문 텍스트 업데이트
   renderResponseQTabs();
@@ -1816,9 +1832,9 @@ function renderResponseTable() {
 }
 
 function updateCounts() {
-  const done = students.filter(s=>s.status==='done').length;
-  const writing = students.filter(s=>s.status==='writing').length;
-  const absent = students.filter(s=>s.status==='absent').length;
+  const done = students.filter(s=>effectiveStatus(s)==='done').length;
+  const writing = students.filter(s=>effectiveStatus(s)==='writing').length;
+  const absent = students.filter(s=>effectiveStatus(s)==='absent').length;
   const total = students.length || 28;
   const pct = total > 0 ? Math.round(done/total*100) : 0;
 
