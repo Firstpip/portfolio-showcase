@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 상품 이미지 생성 — SD inpainting 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:#FFF1F2;color:#1E0A0F;overflow-x:hidden;}
+::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:#FECDD3;}::-webkit-scrollbar-thumb{background:#F43F5E;border-radius:3px;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.skeleton{background:linear-gradient(90deg,#FECDD3 25%,#FFF1F2 50%,#FECDD3 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:8px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect}=React;
+const {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,CartesianGrid}=Recharts;
+
+const C={primary:'#F43F5E',secondary:'#881337',accent:'#FB923C',bg:'#FFF1F2',surface:'#FFFFFF',text:'#1E0A0F',textSec:'#9F1239',border:'#FECDD3',success:'#059669',warning:'#D97706',danger:'#DC2626'};
+
+// ── Data ──
+const bgStyles=[
+  {id:1,name:'미니멀 화이트',emoji:'⬜',desc:'깔끔한 흰색 배경, 그림자 자연스럽게'},
+  {id:2,name:'라이프스타일',emoji:'🏠',desc:'감성적인 실내 공간 배경'},
+  {id:3,name:'자연 야외',emoji:'🌿',desc:'나뭇잎, 꽃 등 자연 소재 배경'},
+  {id:4,name:'그라디언트',emoji:'🌈',desc:'트렌디한 그라디언트 컬러 배경'},
+  {id:5,name:'스튜디오',emoji:'📷',desc:'전문 스튜디오 조명 효과'},
+  {id:6,name:'시즌 테마',emoji:'🎄',desc:'계절/이벤트 테마 배경'}
+];
+
+const ratios=[
+  {id:'1:1',label:'1:1',platform:'쇼핑몰',w:400,h:400},
+  {id:'4:5',label:'4:5',platform:'인스타그램',w:400,h:500},
+  {id:'16:9',label:'16:9',platform:'배너',w:640,h:360},
+  {id:'9:16',label:'9:16',platform:'릴스/스토리',w:360,h:640},
+  {id:'3:4',label:'3:4',platform:'핀터레스트',w:375,h:500},
+  {id:'1.91:1',label:'1.91:1',platform:'페이스북 광고',w:573,h:300}
+];
+
+const projects=[
+  {id:1,name:'봄 신상 가방 컬렉션',images:12,date:'2026-01-20',status:'완료'},
+  {id:2,name:'키친 용품 촬영',images:8,date:'2026-01-18',status:'완료'},
+  {id:3,name:'화장품 라인업',images:24,date:'2026-01-15',status:'진행중'},
+  {id:4,name:'전자기기 상세페이지',images:16,date:'2026-01-12',status:'완료'},
+  {id:5,name:'패션 액세서리',images:6,date:'2026-01-10',status:'완료'}
+];
+
+const historyImages=[
+  {id:1,name:'가죽 토트백',bg:'미니멀 화이트',ratios:['1:1','4:5'],date:'2026-01-20',project:'봄 신상 가방 컬렉션'},
+  {id:2,name:'크로스백',bg:'라이프스타일',ratios:['1:1','16:9'],date:'2026-01-20',project:'봄 신상 가방 컬렉션'},
+  {id:3,name:'스텐 텀블러',bg:'미니멀 화이트',ratios:['1:1','4:5','3:4'],date:'2026-01-18',project:'키친 용품 촬영'},
+  {id:4,name:'세라믹 머그컵',bg:'자연 야외',ratios:['1:1'],date:'2026-01-18',project:'키친 용품 촬영'},
+  {id:5,name:'파운데이션',bg:'그라디언트',ratios:['1:1','4:5','9:16'],date:'2026-01-15',project:'화장품 라인업'},
+  {id:6,name:'립스틱 세트',bg:'스튜디오',ratios:['1:1','4:5'],date:'2026-01-15',project:'화장품 라인업'}
+];
+
+// ── Components ──
+function Skeleton(){return(<div style={{padding:32}}><div className="skeleton" style={{width:'100%',height:280,marginBottom:24}}/><div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>{[1,2,3].map(i=><div key={i} className="skeleton" style={{height:200}}/>)}</div></div>);}
+
+function Drawer({open,onClose,title,children}){
+  if(!open)return null;
+  return(<div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.3)',zIndex:1000}}>
+    <div onClick={e=>e.stopPropagation()} style={{position:'absolute',right:0,top:0,bottom:0,width:480,background:C.surface,boxShadow:'-8px 0 30px rgba(0,0,0,0.1)',animation:'fadeIn .2s',overflow:'auto'}}>
+      <div style={{padding:'20px 24px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',position:'sticky',top:0,background:C.surface,zIndex:1}}>
+        <h3 style={{fontSize:18,fontWeight:700}}>{title}</h3>
+        <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSec}}>✕</button>
+      </div>
+      <div style={{padding:24}}>{children}</div>
+    </div>
+  </div>);
+}
+
+function Badge({text}){
+  const colors={완료:{bg:'#D1FAE5',t:'#065F46'},진행중:{bg:'#DBEAFE',t:'#1D4ED8'}};
+  const c=colors[text]||{bg:'#F3F4F6',t:'#374151'};
+  return <span style={{padding:'4px 10px',borderRadius:20,fontSize:12,fontWeight:600,background:c.bg,color:c.t}}>{text}</span>;
+}
+
+// ── Pages ──
+function HomePage({setPage,setDrawer}){
+  return(<div style={{animation:'fadeIn .4s'}}>
+    {/* Hero */}
+    <div style={{background:`linear-gradient(135deg, ${C.secondary} 0%, ${C.primary} 50%, ${C.accent} 100%)`,borderRadius:24,padding:'56px 64px',marginBottom:32,position:'relative',overflow:'hidden'}}>
+      <div style={{position:'absolute',top:-40,right:-40,width:200,height:200,background:'rgba(255,255,255,0.08)',borderRadius:'50%'}}/>
+      <div style={{position:'absolute',bottom:-20,left:'40%',width:120,height:120,background:'rgba(255,255,255,0.05)',borderRadius:'50%'}}/>
+      <div style={{position:'relative',zIndex:1}}>
+        <div style={{fontSize:14,color:'rgba(255,255,255,0.8)',fontWeight:600,marginBottom:8}}>이커머스 특화 AI 이미지 도구</div>
+        <h1 style={{fontSize:38,fontWeight:800,color:'#fff',lineHeight:1.3,marginBottom:14}}>상품 사진 한 장으로<br/>광고 소재를 자동 생성</h1>
+        <p style={{fontSize:16,color:'rgba(255,255,255,0.7)',marginBottom:28,lineHeight:1.6}}>배경 제거 → AI 배경 생성 → 합성 → 6가지 비율 자동 렌더링<br/>전문 스튜디오 없이도 완성도 높은 상품 이미지를 제작하세요</p>
+        <div style={{display:'flex',gap:12}}>
+          <button onClick={()=>setPage('upload')} style={{padding:'14px 32px',borderRadius:14,border:'none',background:'#fff',color:C.primary,fontSize:15,fontWeight:700,cursor:'pointer',boxShadow:'0 4px 15px rgba(0,0,0,0.15)'}}>무료로 시작하기 →</button>
+          <button onClick={()=>setPage('project-history')} style={{padding:'14px 32px',borderRadius:14,border:'2px solid rgba(255,255,255,0.3)',background:'transparent',color:'#fff',fontSize:15,fontWeight:600,cursor:'pointer'}}>프로젝트 보기</button>
+        </div>
+      </div>
+    </div>
+    {/* Features */}
+    <h2 style={{fontSize:20,fontWeight:700,marginBottom:16}}>작업 플로우</h2>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:32}}>
+      {[{icon:'📤',title:'업로드',desc:'상품 사진을 드래그앤드롭으로 올려주세요'},{icon:'✂️',title:'배경 제거',desc:'AI가 상품만 깔끔하게 잘라냅니다'},{icon:'🎨',title:'배경 생성',desc:'원하는 스타일의 배경을 AI로 생성'},{icon:'📐',title:'비율 렌더링',desc:'쇼핑몰·인스타·배너 등 6가지 비율'}].map((f,i)=><div key={i} style={{background:C.surface,borderRadius:16,padding:24,textAlign:'center',boxShadow:'0 2px 12px rgba(244,63,94,0.06)',cursor:'pointer',transition:'all .2s'}} onMouseEnter={e=>e.currentTarget.style.transform='translateY(-4px)'} onMouseLeave={e=>e.currentTarget.style.transform='none'}>
+        <div style={{fontSize:36,marginBottom:12}}>{f.icon}</div>
+        <div style={{fontSize:15,fontWeight:700,marginBottom:4}}>{f.title}</div>
+        <div style={{fontSize:12,color:C.textSec,lineHeight:1.5}}>{f.desc}</div>
+      </div>)}
+    </div>
+    {/* Recent Projects */}
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+      <h2 style={{fontSize:20,fontWeight:700}}>최근 프로젝트</h2>
+      <button onClick={()=>setPage('project-history')} style={{background:'none',border:'none',color:C.primary,fontSize:14,fontWeight:600,cursor:'pointer'}}>전체보기 →</button>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+      {projects.slice(0,3).map(p=><div key={p.id} onClick={()=>setDrawer({type:'project',data:p})} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 2px 10px rgba(244,63,94,0.05)',cursor:'pointer',transition:'all .2s'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 8px 25px rgba(244,63,94,0.1)'}} onMouseLeave={e=>{e.currentTarget.style.transform='none';e.currentTarget.style.boxShadow='0 2px 10px rgba(244,63,94,0.05)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <span style={{fontSize:15,fontWeight:700}}>{p.name}</span>
+          <Badge text={p.status}/>
+        </div>
+        <div style={{fontSize:13,color:C.textSec}}>{p.images}장 · {p.date}</div>
+      </div>)}
+    </div>
+  </div>);
+}
+
+function UploadPage({setDrawer}){
+  const [uploaded,setUploaded]=useState(false);
+  const [removing,setRemoving]=useState(false);
+  const [removed,setRemoved]=useState(false);
+  const doUpload=()=>{setUploaded(true);setRemoving(true);setTimeout(()=>{setRemoving(false);setRemoved(true)},2000);};
+  return(<div style={{animation:'fadeIn .4s'}}>
+    <h2 style={{fontSize:22,fontWeight:700,marginBottom:4}}>이미지 업로드</h2>
+    <p style={{color:C.textSec,fontSize:14,marginBottom:24}}>상품 사진을 업로드하면 AI가 배경을 자동 제거합니다</p>
+    {!uploaded?<div onClick={doUpload} style={{background:C.surface,border:`2px dashed ${C.border}`,borderRadius:20,padding:'64px 32px',textAlign:'center',cursor:'pointer',transition:'all .2s'}} onMouseEnter={e=>e.currentTarget.style.borderColor=C.primary} onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+      <div style={{fontSize:56,marginBottom:16}}>📸</div>
+      <div style={{fontSize:18,fontWeight:700,marginBottom:8}}>상품 사진을 드래그하거나 클릭</div>
+      <div style={{fontSize:14,color:C.textSec}}>JPG, PNG, WEBP (최대 10MB · 다중 업로드 가능)</div>
+    </div>
+    :removing?<div style={{background:C.surface,borderRadius:20,padding:48,textAlign:'center',boxShadow:'0 2px 12px rgba(0,0,0,0.04)'}}>
+      <div style={{fontSize:48,animation:'pulse 1.5s infinite',marginBottom:16}}>✂️</div>
+      <div style={{fontSize:18,fontWeight:700,marginBottom:8}}>AI가 배경을 제거하고 있습니다...</div>
+      <div style={{fontSize:13,color:C.textSec}}>Remove.bg API로 상품 영역만 추출 중</div>
+    </div>
+    :<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 2px 10px rgba(0,0,0,0.04)'}}>
+        <h3 style={{fontSize:16,fontWeight:700,marginBottom:16}}>원본 이미지</h3>
+        <div style={{height:260,background:'#FFF5F5',borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center',fontSize:80,position:'relative'}}>
+          👜
+          <div style={{position:'absolute',inset:0,background:'rgba(200,200,200,0.3)',borderRadius:12}}/>
+        </div>
+        <div style={{fontSize:13,color:C.textSec,marginTop:12}}>leather_bag_01.jpg · 3024×4032</div>
+      </div>
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 2px 10px rgba(0,0,0,0.04)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <h3 style={{fontSize:16,fontWeight:700}}>배경 제거 결과</h3>
+          <Badge text="완료"/>
+        </div>
+        <div style={{height:260,background:'repeating-conic-gradient(#E5E5E5 0% 25%, #FFF 0% 50%) 50% / 16px 16px',borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center',fontSize:80}}>
+          👜
+        </div>
+        <div style={{display:'flex',gap:8,marginTop:16}}>
+          <button onClick={()=>setDrawer({type:'mask-edit'})} style={{flex:1,padding:'10px',borderRadius:10,border:`1px solid ${C.primary}`,background:'transparent',color:C.primary,fontSize:13,fontWeight:600,cursor:'pointer'}}>🖌️ 마스크 보정</button>
+          <button onClick={()=>setDrawer({type:'bg-select'})} style={{flex:1,padding:'10px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>배경 생성 →</button>
+        </div>
+      </div>
+    </div>}
+  </div>);
+}
+
+function BgGenerationPage({setDrawer}){
+  const [selectedBg,setSelectedBg]=useState(0);
+  const [generated,setGenerated]=useState(false);
+  useEffect(()=>{const t=setTimeout(()=>setGenerated(true),2000);return()=>clearTimeout(t);},[]);
+  return(<div style={{animation:'fadeIn .4s'}}>
+    <h2 style={{fontSize:22,fontWeight:700,marginBottom:4}}>배경 생성</h2>
+    <p style={{color:C.textSec,fontSize:14,marginBottom:24}}>AI가 상품에 어울리는 배경을 생성합니다</p>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+      <div>
+        <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 2px 10px rgba(0,0,0,0.04)',marginBottom:16}}>
+          <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>배경 스타일</h3>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10}}>
+            {bgStyles.map((s,i)=><div key={s.id} onClick={()=>setSelectedBg(i)} style={{padding:14,borderRadius:12,border:selectedBg===i?`2px solid ${C.primary}`:`1px solid ${C.border}`,background:selectedBg===i?`${C.primary}08`:C.surface,cursor:'pointer',textAlign:'center',transition:'all .15s'}}>
+              <div style={{fontSize:24,marginBottom:4}}>{s.emoji}</div>
+              <div style={{fontSize:12,fontWeight:600}}>{s.name}</div>
+            </div>)}
+          </div>
+        </div>
+        <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 2px 10px rgba(0,0,0,0.04)'}}>
+          <h3 style={{fontSize:15,fontWeight:700,marginBottom:12}}>커스텀 프롬프트</h3>
+          <textarea rows={3} placeholder="원하는 배경을 자유롭게 묘사하세요..." style={{width:'100%',padding:12,border:`1px solid ${C.border}`,borderRadius:10,fontSize:14,fontFamily:'Pretendard',resize:'vertical'}}/>
+          <button style={{width:'100%',marginTop:12,padding:'12px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:14,fontWeight:600,cursor:'pointer'}}>AI 배경 생성</button>
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 2px 10px rgba(0,0,0,0.04)'}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>합성 결과</h3>
+        {!generated?<div style={{height:300,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:12}}>
+          <div style={{fontSize:48,animation:'pulse 1.5s infinite'}}>🎨</div>
+          <div style={{fontSize:14,color:C.textSec}}>Stable Diffusion으로 배경 생성 중...</div>
+        </div>
+        :<div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10}}>
+            {[1,2,3,4].map(i=><div key={i} onClick={()=>setDrawer({type:'composite-detail',data:{id:i,bg:bgStyles[selectedBg].name}})} style={{height:140,background:`linear-gradient(${45+i*30}deg, #FFF5F5 0%, #FFE4E6 50%, #FFF1F2 100%)`,borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center',fontSize:40,cursor:'pointer',transition:'all .15s',border:i===2?`2px solid ${C.primary}`:'2px solid transparent'}} onMouseEnter={e=>e.currentTarget.style.transform='scale(1.02)'} onMouseLeave={e=>e.currentTarget.style.transform='none'}>
+              👜{i===2&&<span style={{position:'absolute',top:8,right:8,padding:'2px 6px',borderRadius:8,fontSize:10,fontWeight:700,background:C.primary,color:'#fff'}}>Best</span>}
+            </div>)}
+          </div>
+          <div style={{display:'flex',gap:8,marginTop:16}}>
+            <button style={{flex:1,padding:'10px',borderRadius:10,border:`1px solid ${C.primary}`,background:'transparent',color:C.primary,fontSize:13,fontWeight:600,cursor:'pointer'}}>위치 조정</button>
+            <button onClick={()=>setDrawer({type:'export-select'})} style={{flex:1,padding:'10px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>내보내기 →</button>
+          </div>
+        </div>}
+      </div>
+    </div>
+  </div>);
+}
+
+function ExportPage({setDrawer}){
+  const [selectedRatios,setSelectedRatios]=useState(['1:1','4:5']);
+  const toggle=(id)=>setSelectedRatios(s=>s.includes(id)?s.filter(r=>r!==id):[...s,id]);
+  return(<div style={{animation:'fadeIn .4s'}}>
+    <h2 style={{fontSize:22,fontWeight:700,marginBottom:4}}>내보내기</h2>
+    <p style={{color:C.textSec,fontSize:14,marginBottom:24}}>플랫폼별 비율을 선택하고 다운로드하세요</p>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:24}}>
+      {ratios.map(r=><div key={r.id} onClick={()=>toggle(r.id)} style={{background:C.surface,borderRadius:16,padding:20,cursor:'pointer',border:selectedRatios.includes(r.id)?`2px solid ${C.primary}`:`2px solid ${C.border}`,transition:'all .15s',textAlign:'center'}} onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'} onMouseLeave={e=>e.currentTarget.style.transform='none'}>
+        <div style={{width:60,height:60,background:selectedRatios.includes(r.id)?`${C.primary}12`:'#F8FAFC',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 12px',fontSize:20,fontWeight:700,color:selectedRatios.includes(r.id)?C.primary:C.textSec}}>{r.label}</div>
+        <div style={{fontSize:14,fontWeight:700}}>{r.platform}</div>
+        <div style={{fontSize:12,color:C.textSec,marginTop:4}}>{r.w}×{r.h}px</div>
+        {selectedRatios.includes(r.id)&&<div style={{marginTop:8,fontSize:11,fontWeight:700,color:C.primary}}>✓ 선택됨</div>}
+      </div>)}
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+      {selectedRatios.slice(0,2).map(id=>{const r=ratios.find(x=>x.id===id);return(<div key={id} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 2px 10px rgba(0,0,0,0.04)'}}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:8}}>{r.platform} ({r.label})</div>
+        <div style={{height:180,background:`linear-gradient(135deg,#FFF5F5 0%,#FFE4E6 100%)`,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',fontSize:48}}>👜</div>
+      </div>);})}
+    </div>
+    <div style={{display:'flex',gap:8}}>
+      <button onClick={()=>setDrawer({type:'format-settings'})} style={{flex:1,padding:'14px',borderRadius:12,border:`1px solid ${C.primary}`,background:'transparent',color:C.primary,fontSize:14,fontWeight:600,cursor:'pointer'}}>포맷 설정</button>
+      <button onClick={()=>setDrawer({type:'download-zip'})} style={{flex:1,padding:'14px',borderRadius:12,border:'none',background:C.primary,color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer'}}>ZIP 다운로드 ({selectedRatios.length}장)</button>
+    </div>
+  </div>);
+}
+
+function ProjectHistoryPage({setDrawer}){
+  return(<div style={{animation:'fadeIn .4s'}}>
+    <h2 style={{fontSize:22,fontWeight:700,marginBottom:4}}>프로젝트 이력</h2>
+    <p style={{color:C.textSec,fontSize:14,marginBottom:24}}>작업한 프로젝트와 이미지 이력을 관리합니다</p>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:32}}>
+      {projects.map(p=><div key={p.id} onClick={()=>setDrawer({type:'project',data:p})} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 2px 10px rgba(244,63,94,0.05)',cursor:'pointer',transition:'all .2s'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 8px 20px rgba(244,63,94,0.1)'}} onMouseLeave={e=>{e.currentTarget.style.transform='none';e.currentTarget.style.boxShadow='0 2px 10px rgba(244,63,94,0.05)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <Badge text={p.status}/>
+          <span style={{fontSize:12,color:C.textSec}}>{p.date}</span>
+        </div>
+        <div style={{fontSize:16,fontWeight:700,marginBottom:8}}>{p.name}</div>
+        <div style={{fontSize:13,color:C.textSec}}>📸 {p.images}장</div>
+      </div>)}
+    </div>
+    <h3 style={{fontSize:18,fontWeight:700,marginBottom:16}}>최근 생성 이미지</h3>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+      {historyImages.map(img=><div key={img.id} onClick={()=>setDrawer({type:'image-detail',data:img})} style={{background:C.surface,borderRadius:12,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.04)',cursor:'pointer',transition:'all .15s'}} onMouseEnter={e=>e.currentTarget.style.transform='scale(1.02)'} onMouseLeave={e=>e.currentTarget.style.transform='none'}>
+        <div style={{height:120,background:'linear-gradient(135deg,#FFF5F5 0%,#FFE4E6 100%)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:36}}>👜</div>
+        <div style={{padding:12}}>
+          <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>{img.name}</div>
+          <div style={{fontSize:11,color:C.textSec}}>{img.bg} · {img.ratios.join(', ')}</div>
+          <div style={{fontSize:11,color:C.textSec,marginTop:2}}>{img.project}</div>
+        </div>
+      </div>)}
+    </div>
+  </div>);
+}
+
+// ── Drawer Contents ──
+function DrawerContent({drawer,onClose}){
+  if(!drawer)return null;
+  const d=drawer.data;
+  switch(drawer.type){
+    case 'project':return(<div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <h4 style={{fontSize:18,fontWeight:700}}>{d.name}</h4><Badge text={d.status}/>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+        {[['이미지 수',`${d.images}장`],['생성일',d.date]].map(([k,v])=><div key={k} style={{background:'#FFF5F5',borderRadius:8,padding:12}}><div style={{fontSize:11,color:C.textSec}}>{k}</div><div style={{fontSize:14,fontWeight:600,marginTop:2}}>{v}</div></div>)}
+      </div>
+      <h5 style={{fontSize:14,fontWeight:700,marginBottom:10}}>포함된 이미지</h5>
+      {historyImages.filter(i=>i.project===d.name).map(img=><div key={img.id} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
+        <span style={{fontSize:13,fontWeight:600}}>{img.name}</span>
+        <span style={{fontSize:12,color:C.textSec}}>{img.bg}</span>
+      </div>)}
+      <div style={{display:'flex',gap:8,marginTop:20}}>
+        <button onClick={onClose} style={{flex:1,padding:'12px',borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,fontSize:14,cursor:'pointer'}}>닫기</button>
+        <button onClick={onClose} style={{flex:1,padding:'12px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:14,fontWeight:600,cursor:'pointer'}}>재편집</button>
+      </div>
+    </div>);
+    case 'image-detail':return(<div>
+      <div style={{height:200,background:'linear-gradient(135deg,#FFF5F5 0%,#FFE4E6 100%)',borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center',fontSize:64,marginBottom:16}}>👜</div>
+      <h4 style={{fontSize:18,fontWeight:700,marginBottom:8}}>{d.name}</h4>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+        {[['배경 스타일',d.bg],['비율',d.ratios.join(', ')],['프로젝트',d.project],['생성일',d.date]].map(([k,v])=><div key={k} style={{background:'#FFF5F5',borderRadius:8,padding:10}}><div style={{fontSize:11,color:C.textSec}}>{k}</div><div style={{fontSize:13,fontWeight:600,marginTop:2}}>{v}</div></div>)}
+      </div>
+      <label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>메모</label>
+      <textarea rows={2} placeholder="이미지 관련 메모..." style={{width:'100%',padding:10,border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,fontFamily:'Pretendard',resize:'vertical',marginBottom:12}}/>
+      <div style={{display:'flex',gap:8}}>
+        <button onClick={onClose} style={{flex:1,padding:'12px',borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,fontSize:14,cursor:'pointer'}}>닫기</button>
+        <button onClick={onClose} style={{flex:1,padding:'12px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:14,fontWeight:600,cursor:'pointer'}}>재편집</button>
+      </div>
+    </div>);
+    case 'mask-edit':return(<div>
+      <h4 style={{fontSize:16,fontWeight:700,marginBottom:16}}>마스크 보정</h4>
+      <div style={{height:250,background:'repeating-conic-gradient(#E5E5E5 0% 25%, #FFF 0% 50%) 50% / 16px 16px',borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center',fontSize:64,marginBottom:16}}>👜</div>
+      <div style={{display:'flex',gap:8,marginBottom:16}}>
+        <button style={{flex:1,padding:'8px',borderRadius:8,border:`1px solid ${C.primary}`,background:`${C.primary}08`,color:C.primary,fontSize:12,fontWeight:600,cursor:'pointer'}}>🖌️ 추가</button>
+        <button style={{flex:1,padding:'8px',borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,fontSize:12,cursor:'pointer'}}>🧹 제거</button>
+        <button style={{flex:1,padding:'8px',borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,fontSize:12,cursor:'pointer'}}>↩️ 되돌리기</button>
+      </div>
+      <button onClick={onClose} style={{width:'100%',padding:'12px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:14,fontWeight:600,cursor:'pointer'}}>적용</button>
+    </div>);
+    case 'bg-select':case 'composite-detail':case 'export-select':return(<div>
+      <h4 style={{fontSize:16,fontWeight:700,marginBottom:12}}>{drawer.type==='bg-select'?'배경 스타일 선택':'합성 결과 상세'}</h4>
+      <div style={{height:200,background:'linear-gradient(135deg,#FFF5F5 0%,#FFE4E6 100%)',borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center',fontSize:56,marginBottom:16}}>👜</div>
+      <div style={{background:'#FFF5F5',borderRadius:10,padding:14,marginBottom:16,fontSize:13}}>
+        <div style={{fontWeight:600,marginBottom:4}}>합성 정보</div>
+        <div style={{color:C.textSec}}>배경: {d?.bg||'미니멀 화이트'} · SD inpainting · PIL 레이어 합성</div>
+      </div>
+      <div style={{display:'flex',gap:8}}>
+        <button onClick={onClose} style={{flex:1,padding:'12px',borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,fontSize:14,cursor:'pointer'}}>닫기</button>
+        <button onClick={onClose} style={{flex:1,padding:'12px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:14,fontWeight:600,cursor:'pointer'}}>선택</button>
+      </div>
+    </div>);
+    case 'format-settings':return(<div>
+      <h4 style={{fontSize:16,fontWeight:700,marginBottom:16}}>포맷 설정</h4>
+      <div style={{marginBottom:16}}><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>파일 형식</label>
+        <div style={{display:'flex',gap:8}}>{['PNG','JPG','WEBP'].map(f=><button key={f} style={{flex:1,padding:'10px',borderRadius:8,border:f==='PNG'?`2px solid ${C.primary}`:`1px solid ${C.border}`,background:f==='PNG'?`${C.primary}08`:C.surface,fontSize:13,fontWeight:f==='PNG'?700:400,cursor:'pointer',color:f==='PNG'?C.primary:C.text}}>{f}</button>)}</div>
+      </div>
+      <div style={{marginBottom:16}}><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>해상도</label>
+        <select style={{width:'100%',padding:'10px 14px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,fontFamily:'Pretendard'}}><option>원본 해상도</option><option>2x (고해상도)</option><option>1080px (웹 최적화)</option></select>
+      </div>
+      <button onClick={onClose} style={{width:'100%',padding:'12px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:14,fontWeight:600,cursor:'pointer'}}>적용</button>
+    </div>);
+    case 'download-zip':return(<div style={{textAlign:'center'}}>
+      <div style={{fontSize:48,marginBottom:12}}>📦</div>
+      <h4 style={{fontSize:18,fontWeight:700,marginBottom:8}}>ZIP 다운로드 준비 완료</h4>
+      <p style={{fontSize:14,color:C.textSec,marginBottom:20}}>선택한 비율의 이미지가 ZIP으로 묶여 다운로드됩니다.</p>
+      <button onClick={onClose} style={{padding:'14px 40px',borderRadius:12,border:'none',background:C.primary,color:'#fff',fontSize:15,fontWeight:700,cursor:'pointer'}}>다운로드</button>
+    </div>);
+    default:return null;
+  }
+}
+
+// ── App ──
+function App(){
+  const [loading,setLoading]=useState(true);
+  const [page,setPage]=useState('home');
+  const [drawer,setDrawer]=useState(null);
+  useEffect(()=>{setTimeout(()=>setLoading(false),1500)},[]);
+  if(loading)return <Skeleton/>;
+
+  const tabs=[
+    {key:'home',label:'홈'},{key:'upload',label:'이미지 업로드'},{key:'bg-generation',label:'배경 생성'},
+    {key:'export',label:'내보내기'},{key:'project-history',label:'프로젝트 이력'}
+  ];
+  const drawerTitles={project:'프로젝트 상세','image-detail':'이미지 상세','mask-edit':'마스크 보정','bg-select':'배경 선택','composite-detail':'합성 상세','export-select':'내보내기','format-settings':'포맷 설정','download-zip':'다운로드'};
+
+  return(<div style={{minHeight:'100vh',background:C.bg}}>
+    <header style={{background:C.surface,borderBottom:`1px solid ${C.border}`,position:'sticky',top:0,zIndex:100}}>
+      <div style={{maxWidth:1280,margin:'0 auto',padding:'0 32px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',height:64}}>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <span style={{fontSize:24}}>🎨</span>
+            <span style={{fontSize:20,fontWeight:800,color:C.secondary}}>AI 상품 이미지 데모</span>
+          </div>
+          <div style={{display:'flex',gap:12,alignItems:'center'}}>
+            <input placeholder="검색..." style={{padding:'8px 14px',border:`1px solid ${C.border}`,borderRadius:10,fontSize:13,width:200,outline:'none',fontFamily:'Pretendard'}}/>
+            <button style={{background:'none',border:'none',fontSize:18,cursor:'pointer'}}>🔔</button>
+            <div style={{width:36,height:36,borderRadius:'50%',background:`${C.primary}14`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,fontWeight:600,color:C.primary}}>관</div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:0}}>
+          {tabs.map(t=><button key={t.key} onClick={()=>setPage(t.key)} style={{padding:'12px 20px',border:'none',borderBottom:page===t.key?`3px solid ${C.primary}`:'3px solid transparent',background:'transparent',color:page===t.key?C.primary:C.textSec,fontSize:14,fontWeight:page===t.key?700:500,cursor:'pointer',transition:'all .15s'}}>{t.label}</button>)}
+        </div>
+      </div>
+    </header>
+    <main style={{maxWidth:1280,margin:'0 auto',padding:'32px 32px'}}>
+      {page==='home'&&<HomePage setPage={setPage} setDrawer={setDrawer}/>}
+      {page==='upload'&&<UploadPage setDrawer={setDrawer}/>}
+      {page==='bg-generation'&&<BgGenerationPage setDrawer={setDrawer}/>}
+      {page==='export'&&<ExportPage setDrawer={setDrawer}/>}
+      {page==='project-history'&&<ProjectHistoryPage setDrawer={setDrawer}/>}
+    </main>
+    <Drawer open={!!drawer} onClose={()=>setDrawer(null)} title={drawer?drawerTitles[drawer.type]||'상세':''}>
+      <DrawerContent drawer={drawer} onClose={()=>setDrawer(null)}/>
+    </Drawer>
+  </div>);
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

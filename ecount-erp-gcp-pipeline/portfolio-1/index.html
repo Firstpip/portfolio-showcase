@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>TradeSync — 수출입 데이터 파이프라인 관리 시스템</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net"/>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2.15.3/umd/Recharts.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Pretendard',sans-serif;background:#F0F9FF;color:#0F172A;overflow:hidden;height:100vh}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:translate(-50%,-50%) scale(0.95)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes barGrow{from{width:0}to{width:var(--target-width)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo}=React;
+const {BarChart,Bar,LineChart,Line,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,AreaChart,Area,PieChart,Pie,Cell,Legend}=Recharts;
+
+const C={
+  primary:'#0066CC',secondary:'#1A365D',accent:'#38BDF8',
+  bg:'#F0F9FF',surface:'#FFFFFF',border:'#E2E8F0',
+  text:'#0F172A',textLight:'#475569',textMuted:'#94A3B8',
+  success:'#059669',warning:'#D97706',danger:'#DC2626',
+  sidebarBg:'#1A365D',sidebarText:'#CBD5E1',sidebarActive:'#0066CC',
+};
+
+/* ─── Dummy Data ─── */
+const MONTHLY_TRADE=[
+  {month:'1월',export:42,import:38,amount:1240},
+  {month:'2월',export:38,import:35,amount:1150},
+  {month:'3월',export:51,import:44,amount:1480},
+  {month:'4월',export:47,import:41,amount:1360},
+  {month:'5월',export:55,import:48,amount:1620},
+  {month:'6월',export:49,import:45,amount:1510},
+];
+
+const PIPELINE_RUNS=[
+  {id:'ETL-0615-001',entity:'수출 거래',records:342,status:'완료',duration:'4.2초',time:'14:30',date:'2024.06.15'},
+  {id:'ETL-0615-002',entity:'수입 거래',records:287,status:'완료',duration:'3.8초',time:'14:30',date:'2024.06.15'},
+  {id:'ETL-0615-003',entity:'재고 현황',records:1205,status:'완료',duration:'6.1초',time:'14:30',date:'2024.06.15'},
+  {id:'ETL-0615-004',entity:'거래처 정보',records:184,status:'완료',duration:'2.3초',time:'14:31',date:'2024.06.15'},
+  {id:'ETL-0615-005',entity:'품목 마스터',records:856,status:'오류',duration:'—',time:'14:31',date:'2024.06.15',error:'ERP API 타임아웃 (30s 초과)'},
+  {id:'ETL-0615-006',entity:'회계 전표',records:0,status:'대기',duration:'—',time:'—',date:'2024.06.15'},
+  {id:'ETL-0614-001',entity:'수출 거래',records:335,status:'완료',duration:'4.0초',time:'09:00',date:'2024.06.14'},
+  {id:'ETL-0614-002',entity:'수입 거래',records:291,status:'완료',duration:'3.9초',time:'09:00',date:'2024.06.14'},
+];
+
+const DOCUMENTS=[
+  {id:'INV-2606-001',type:'인보이스',buyer:'Shanghai Metal Corp.',amount:'$42,500',status:'AI생성완료',confidence:0.94,date:'2024.06.15'},
+  {id:'PL-2606-001',type:'패킹리스트',buyer:'Shanghai Metal Corp.',amount:'12 CTN / 2,400kg',status:'AI생성완료',confidence:0.91,date:'2024.06.15'},
+  {id:'CO-2606-001',type:'원산지증명서',buyer:'Shanghai Metal Corp.',amount:'—',status:'검토대기',confidence:0.87,date:'2024.06.15'},
+  {id:'INV-2606-002',type:'인보이스',buyer:'Tokyo Steel Inc.',amount:'$28,700',status:'확정',confidence:0.96,date:'2024.06.15'},
+  {id:'INV-2606-003',type:'인보이스',buyer:'Vietnam Trading Co.',amount:'$15,300',status:'AI생성중',confidence:0,date:'2024.06.15'},
+  {id:'PL-2606-002',type:'패킹리스트',buyer:'Tokyo Steel Inc.',amount:'8 CTN / 1,600kg',status:'확정',confidence:0.95,date:'2024.06.15'},
+  {id:'INV-2605-048',type:'인보이스',buyer:'PT Baja Sentosa',amount:'$67,200',status:'발송완료',confidence:0.97,date:'2024.06.14'},
+];
+
+const INVENTORY=[
+  {code:'STS304-P06',name:'STS304 판재 6T',warehouse:'본사 1창고',qty:2450,unit:'kg',safety:1000,status:'정상',lastIn:'06.14',lastOut:'06.15'},
+  {code:'STS316-R50',name:'STS316 환봉 50Φ',warehouse:'본사 1창고',qty:820,unit:'kg',safety:500,status:'정상',lastIn:'06.13',lastOut:'06.15'},
+  {code:'SM45C-P10',name:'SM45C 판재 10T',warehouse:'본사 2창고',qty:380,unit:'kg',safety:500,status:'부족',lastIn:'06.10',lastOut:'06.15'},
+  {code:'STS304-P08',name:'STS304 판재 8T',warehouse:'외부 창고',qty:1890,unit:'kg',safety:800,status:'정상',lastIn:'06.15',lastOut:'06.14'},
+  {code:'SCM440-R30',name:'SCM440 환봉 30Φ',warehouse:'본사 2창고',qty:650,unit:'kg',safety:400,status:'정상',lastIn:'06.12',lastOut:'06.15'},
+  {code:'AL6061-P05',name:'AL6061 판재 5T',warehouse:'외부 창고',qty:1200,unit:'kg',safety:600,status:'정상',lastIn:'06.14',lastOut:'06.13'},
+  {code:'STS304-A20',name:'STS304 앵글 20×20',warehouse:'본사 1창고',qty:180,unit:'본',safety:200,status:'부족',lastIn:'06.08',lastOut:'06.15'},
+  {code:'CU-P03',name:'C1100 동판 3T',warehouse:'본사 2창고',qty:520,unit:'kg',safety:300,status:'정상',lastIn:'06.13',lastOut:'06.14'},
+];
+
+const INVENTORY_HISTORY=[
+  {date:'2024.06.15',item:'STS304 판재 6T',type:'출고',qty:-450,warehouse:'본사 1창고',order:'ORD-0615-003',operator:'김민수'},
+  {date:'2024.06.15',item:'STS316 환봉 50Φ',type:'출고',qty:-180,warehouse:'본사 1창고',order:'ORD-0615-004',operator:'박서진'},
+  {date:'2024.06.15',item:'STS304 판재 8T',type:'입고',qty:600,warehouse:'외부 창고',order:'PO-0615-001',operator:'이지은'},
+  {date:'2024.06.14',item:'STS304 판재 6T',type:'입고',qty:1200,warehouse:'본사 1창고',order:'PO-0614-002',operator:'이지은'},
+  {date:'2024.06.14',item:'SM45C 판재 10T',type:'출고',qty:-220,warehouse:'본사 2창고',order:'ORD-0614-008',operator:'김민수'},
+  {date:'2024.06.14',item:'AL6061 판재 5T',type:'입고',qty:800,warehouse:'외부 창고',order:'PO-0614-003',operator:'박서진'},
+];
+
+const PENDING_DOCS=[
+  {type:'인보이스',buyer:'Shanghai Metal',count:1},
+  {type:'패킹리스트',buyer:'Shanghai Metal',count:1},
+  {type:'원산지증명서',buyer:'Shanghai Metal',count:1},
+];
+
+const EXCHANGE_RATES=[
+  {currency:'USD/KRW',rate:'1,382.50',change:'+2.30',direction:'up'},
+  {currency:'CNY/KRW',rate:'190.45',change:'-0.15',direction:'down'},
+  {currency:'JPY/KRW',rate:'8.82',change:'+0.05',direction:'up'},
+];
+
+/* ─── Utils ─── */
+function CountUp({end,duration=1200,suffix=''}){
+  const[val,setVal]=useState(0);
+  useEffect(()=>{let s=0;const step=end/(duration/16);const t=setInterval(()=>{s+=step;if(s>=end){setVal(end);clearInterval(t)}else setVal(Math.floor(s))},16);return()=>clearInterval(t)},[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({message,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t)},[]);
+  return <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:C.secondary,color:'#fff',padding:'12px 24px',borderRadius:10,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.2)',fontSize:14,display:'flex',alignItems:'center',gap:8}}><span style={{color:C.accent}}>✓</span>{message}</div>;
+}
+
+function Modal({open,onClose,title,width=560,children}){
+  if(!open)return null;
+  return(
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:1000}}/>
+      <div style={{position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width,maxHeight:'85vh',background:C.surface,borderRadius:16,boxShadow:'0 24px 48px rgba(0,0,0,0.15)',zIndex:1001,animation:'fadeInScale 250ms ease',display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <div style={{padding:'20px 24px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <h3 style={{fontSize:18,fontWeight:700}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textLight,width:32,height:32,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </>
+  );
+}
+
+function Badge({text,color}){
+  const colors={success:{bg:'#ECFDF5',text:'#059669'},danger:{bg:'#FEF2F2',text:'#DC2626'},warning:{bg:'#FFFBEB',text:'#D97706'},info:{bg:'#EFF6FF',text:'#0066CC'},muted:{bg:'#F1F5F9',text:'#64748B'},accent:{bg:'#E0F2FE',text:'#0284C7'}};
+  const c=colors[color]||colors.info;
+  return <span style={{display:'inline-block',padding:'3px 10px',borderRadius:20,fontSize:12,fontWeight:600,background:c.bg,color:c.text}}>{text}</span>;
+}
+
+function Btn({children,variant='primary',size='md',onClick,style:s={}}){
+  const base={border:'none',cursor:'pointer',fontFamily:'inherit',fontWeight:600,borderRadius:10,transition:'all 150ms',display:'inline-flex',alignItems:'center',gap:6};
+  const vars={primary:{background:C.primary,color:'#fff',padding:size==='sm'?'6px 14px':'10px 20px',fontSize:size==='sm'?12:14},secondary:{background:C.bg,color:C.primary,padding:size==='sm'?'6px 14px':'10px 20px',fontSize:size==='sm'?12:14,border:`1px solid ${C.border}`},danger:{background:'#FEF2F2',color:C.danger,padding:size==='sm'?'6px 14px':'10px 20px',fontSize:size==='sm'?12:14}};
+  return <button onClick={onClick} style={{...base,...vars[variant],...s}} onMouseOver={e=>{if(variant==='primary')e.target.style.filter='brightness(1.1)'}} onMouseOut={e=>e.target.style.filter='none'}>{children}</button>;
+}
+
+function Skeleton(){
+  return(
+    <div style={{display:'flex',minHeight:'100vh'}}>
+      <div style={{width:260,background:C.sidebarBg}}/>
+      <div style={{flex:1,padding:24,display:'flex',flexDirection:'column',gap:16}}>
+        {[...Array(4)].map((_,i)=><div key={i} style={{height:i===0?60:160,borderRadius:12,background:'linear-gradient(90deg,#E2E8F0 25%,#F1F5F9 50%,#E2E8F0 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>)}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Sidebar ─── */
+function Sidebar({page,setPage}){
+  const nav=[
+    {id:'dashboard',icon:'📊',label:'대시보드'},
+    {id:'pipeline',icon:'🔄',label:'데이터 파이프라인'},
+    {id:'documents',icon:'📄',label:'서류 자동 생성'},
+    {id:'inventory',icon:'📦',label:'입출고 관리'},
+    {id:'settings',icon:'⚙️',label:'시스템 설정'},
+  ];
+  return(
+    <aside style={{width:260,background:C.sidebarBg,display:'flex',flexDirection:'column',flexShrink:0}}>
+      <div style={{padding:'24px 20px 20px',display:'flex',alignItems:'center',gap:10}}>
+        <div style={{width:36,height:36,borderRadius:10,background:`linear-gradient(135deg,${C.primary},${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:800,fontSize:16}}>TS</div>
+        <div><div style={{color:'#fff',fontWeight:700,fontSize:16}}>TradeSync</div><div style={{color:C.sidebarText,fontSize:11}}>수출입 데이터 자동화</div></div>
+      </div>
+      <div style={{padding:'0 12px',flex:1,display:'flex',flexDirection:'column',gap:2}}>
+        {nav.map(n=>{
+          const active=page===n.id;
+          return(
+            <button key={n.id} onClick={()=>setPage(n.id)} title={n.label} style={{display:'flex',alignItems:'center',gap:10,width:'100%',padding:'11px 14px',borderRadius:10,border:'none',cursor:'pointer',background:active?'rgba(0,102,204,0.2)':'transparent',color:active?'#fff':C.sidebarText,fontSize:14,fontWeight:active?600:400,transition:'all 150ms',fontFamily:'inherit',textAlign:'left'}} onMouseOver={e=>{if(!active)e.currentTarget.style.background='rgba(255,255,255,0.05)'}} onMouseOut={e=>{if(!active)e.currentTarget.style.background='transparent'}}>
+              <span style={{fontSize:18}}>{n.icon}</span>{n.label}
+              {n.id==='pipeline'&&<span style={{marginLeft:'auto',background:C.danger,color:'#fff',fontSize:10,padding:'2px 7px',borderRadius:10,fontWeight:700}}>1</span>}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{padding:16,borderTop:'1px solid rgba(255,255,255,0.08)',display:'flex',alignItems:'center',gap:10}}>
+        <div style={{width:36,height:36,borderRadius:'50%',background:'rgba(255,255,255,0.12)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:14,fontWeight:600}}>김</div>
+        <div><div style={{color:'#fff',fontSize:13,fontWeight:500}}>김민수</div><div style={{color:C.sidebarText,fontSize:11}}>관리자</div></div>
+      </div>
+    </aside>
+  );
+}
+
+/* ─── TopBar ─── */
+const TITLES={dashboard:'경영 대시보드',pipeline:'ERP 데이터 파이프라인',documents:'무역 서류 자동 생성',inventory:'입출고 현황 관리',settings:'시스템 설정'};
+function TopBar({page}){
+  return(
+    <header style={{height:60,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',padding:'0 28px',gap:16,flexShrink:0}}>
+      <h1 style={{fontSize:20,fontWeight:700,letterSpacing:'-0.02em'}}>{TITLES[page]}</h1>
+      <div style={{flex:1}}/>
+      <div style={{position:'relative'}}>
+        <input placeholder="검색..." style={{width:220,padding:'8px 14px 8px 36px',border:`1px solid ${C.border}`,borderRadius:10,fontSize:13,fontFamily:'inherit',outline:'none',background:C.bg}}/>
+        <span style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',fontSize:14,color:C.textMuted}}>🔍</span>
+      </div>
+      <div style={{position:'relative',cursor:'pointer'}}>
+        <span style={{fontSize:20}}>🔔</span>
+        <span style={{position:'absolute',top:-2,right:-4,width:8,height:8,borderRadius:'50%',background:C.danger}}/>
+      </div>
+    </header>
+  );
+}
+
+/* ─── Dashboard ─── */
+function DashboardPage({setPage}){
+  const kpis=[
+    {label:'이번 달 수출 건수',value:49,suffix:'건',icon:'🚢',color:C.primary},
+    {label:'이번 달 수입 건수',value:45,suffix:'건',icon:'📥',color:C.accent},
+    {label:'미결 서류',value:3,suffix:'건',icon:'📄',color:C.warning},
+    {label:'ETL 연동 엔티티',value:8,suffix:'종',icon:'🔄',color:C.success},
+  ];
+  const COLORS_PIE=['#0066CC','#38BDF8','#059669','#D97706','#7C3AED'];
+  const pieData=[{name:'철강',value:42},{name:'비철금속',value:25},{name:'화학',value:18},{name:'기계부품',value:10},{name:'기타',value:5}];
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:20,marginBottom:24}}>
+        {kpis.map((k,i)=>(
+          <div key={i} style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',animation:`slideUp 400ms ease ${i*80}ms both`,transition:'all 200ms'}} onMouseOver={e=>e.currentTarget.style.transform='translateY(-2px)'} onMouseOut={e=>e.currentTarget.style.transform='translateY(0)'}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <span style={{fontSize:13,color:C.textLight,fontWeight:500}}>{k.label}</span>
+              <span style={{fontSize:24}}>{k.icon}</span>
+            </div>
+            <div style={{fontSize:28,fontWeight:800,color:k.color,letterSpacing:'-0.02em'}}>
+              <CountUp end={k.value} suffix={k.suffix}/>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:20,marginBottom:24}}>
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+            <h3 style={{fontSize:16,fontWeight:700}}>월별 수출입 추이</h3>
+            <span style={{fontSize:12,color:C.textMuted}}>2024년 상반기</span>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={MONTHLY_TRADE} barGap={4}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0"/>
+              <XAxis dataKey="month" tick={{fontSize:12,fill:'#94A3B8'}}/>
+              <YAxis tick={{fontSize:12,fill:'#94A3B8'}}/>
+              <Tooltip contentStyle={{borderRadius:8,border:'none',boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}/>
+              <Bar dataKey="export" name="수출" fill="#0066CC" radius={[4,4,0,0]}/>
+              <Bar dataKey="import" name="수입" fill="#38BDF8" radius={[4,4,0,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <h3 style={{fontSize:16,fontWeight:700,marginBottom:16}}>품목별 거래 비중</h3>
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart>
+              <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={3}>
+                {pieData.map((_,i)=><Cell key={i} fill={COLORS_PIE[i]}/>)}
+              </Pie>
+              <Tooltip contentStyle={{borderRadius:8,border:'none',boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}/>
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{display:'flex',flexWrap:'wrap',gap:8,justifyContent:'center'}}>
+            {pieData.map((d,i)=>(
+              <div key={i} style={{display:'flex',alignItems:'center',gap:4,fontSize:11,color:C.textLight}}>
+                <div style={{width:8,height:8,borderRadius:2,background:COLORS_PIE[i]}}/>{d.name} {d.value}%
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+            <h3 style={{fontSize:16,fontWeight:700}}>미결 서류</h3>
+            <Btn variant="secondary" size="sm" onClick={()=>setPage('documents')}>전체 보기 →</Btn>
+          </div>
+          {PENDING_DOCS.map((d,i)=>(
+            <div key={i} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 0',borderBottom:i<2?`1px solid ${C.border}`:'none'}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:600}}>{d.type}</div>
+                <div style={{fontSize:12,color:C.textMuted}}>{d.buyer}</div>
+              </div>
+              <Badge text="검토 필요" color="warning"/>
+            </div>
+          ))}
+        </div>
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <h3 style={{fontSize:16,fontWeight:700,marginBottom:16}}>실시간 환율</h3>
+          {EXCHANGE_RATES.map((r,i)=>(
+            <div key={i} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 0',borderBottom:i<2?`1px solid ${C.border}`:'none'}}>
+              <span style={{fontSize:14,fontWeight:600}}>{r.currency}</span>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:16,fontWeight:700}}>₩{r.rate}</div>
+                <div style={{fontSize:12,color:r.direction==='up'?C.danger:C.success,fontWeight:500}}>{r.change}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Pipeline Page ─── */
+function PipelinePage(){
+  const[toast,setToast]=useState('');
+  const[detailModal,setDetailModal]=useState(null);
+  const[filter,setFilter]=useState('전체');
+  const statuses=['전체','완료','오류','대기'];
+  const filtered=filter==='전체'?PIPELINE_RUNS:PIPELINE_RUNS.filter(r=>r.status===filter);
+
+  const entityStats=[
+    {name:'수출 거래',status:'완료',icon:'🟢',records:342,lastSync:'14:30'},
+    {name:'수입 거래',status:'완료',icon:'🟢',records:287,lastSync:'14:30'},
+    {name:'재고 현황',status:'완료',icon:'🟢',records:1205,lastSync:'14:30'},
+    {name:'거래처 정보',status:'완료',icon:'🟢',records:184,lastSync:'14:31'},
+    {name:'품목 마스터',status:'오류',icon:'🔴',records:0,lastSync:'14:31'},
+    {name:'회계 전표',status:'대기',icon:'🟡',records:0,lastSync:'—'},
+  ];
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {toast&&<Toast message={toast} onClose={()=>setToast('')}/>}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:24}}>
+        {[
+          {label:'연동 엔티티',value:'8종',icon:'📊',sub:'ERP Open API'},
+          {label:'오늘 수집 레코드',value:'2,874건',icon:'💾',sub:'06.15 기준'},
+          {label:'파이프라인 상태',value:'5/6 정상',icon:'🔄',sub:'오류 1건'},
+        ].map((k,i)=>(
+          <div key={i} style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',animation:`slideUp 400ms ease ${i*80}ms both`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <span style={{fontSize:13,color:C.textMuted}}>{k.label}</span>
+              <span style={{fontSize:22}}>{k.icon}</span>
+            </div>
+            <div style={{fontSize:22,fontWeight:800}}>{k.value}</div>
+            <div style={{fontSize:11,color:C.textMuted,marginTop:4}}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',marginBottom:24}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <h3 style={{fontSize:16,fontWeight:700}}>엔티티별 수집 현황</h3>
+          <Btn size="sm" onClick={()=>setToast('전체 파이프라인을 수동 실행합니다')}>🔄 수동 실행</Btn>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+          {entityStats.map((e,i)=>(
+            <div key={i} style={{padding:16,borderRadius:10,border:`1px solid ${e.status==='오류'?'#FCA5A5':e.status==='대기'?'#FDE68A':C.border}`,background:e.status==='오류'?'#FEF2F2':e.status==='대기'?'#FFFBEB':'transparent'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                <span style={{fontSize:13,fontWeight:600}}>{e.icon} {e.name}</span>
+                <Badge text={e.status} color={e.status==='완료'?'success':e.status==='오류'?'danger':'warning'}/>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:C.textMuted}}>
+                <span>{e.records>0?`${e.records.toLocaleString()}건`:'-'}</span>
+                <span>최종: {e.lastSync}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',overflow:'hidden'}}>
+        <div style={{padding:'16px 20px',display:'flex',justifyContent:'space-between',alignItems:'center',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:16,fontWeight:700}}>수집 이력</h3>
+          <div style={{display:'flex',gap:8}}>
+            {statuses.map(s=>(
+              <button key={s} onClick={()=>setFilter(s)} style={{padding:'5px 14px',borderRadius:20,border:`1px solid ${filter===s?C.primary:C.border}`,background:filter===s?C.primary:'transparent',color:filter===s?'#fff':C.textLight,fontSize:12,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>{s}</button>
+            ))}
+          </div>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:C.bg}}>
+              {['ID','엔티티','레코드','상태','소요시간','시각',''].map(h=><th key={h} style={{padding:'12px 14px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textMuted}}>{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((r,i)=>(
+              <tr key={i} style={{borderBottom:`1px solid ${C.border}`,transition:'background 150ms',height:48}} onMouseOver={e=>e.currentTarget.style.background=`${C.primary}06`} onMouseOut={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'10px 14px',fontSize:12,fontFamily:'monospace',color:C.primary,fontWeight:600}}>{r.id}</td>
+                <td style={{padding:'10px 14px',fontSize:13,fontWeight:500}}>{r.entity}</td>
+                <td style={{padding:'10px 14px',fontSize:13}}>{r.records>0?`${r.records.toLocaleString()}건`:'—'}</td>
+                <td style={{padding:'10px 14px'}}><Badge text={r.status} color={r.status==='완료'?'success':r.status==='오류'?'danger':'warning'}/></td>
+                <td style={{padding:'10px 14px',fontSize:12,fontFamily:'monospace'}}>{r.duration}</td>
+                <td style={{padding:'10px 14px',fontSize:12,color:C.textMuted}}>{r.date} {r.time}</td>
+                <td style={{padding:'10px 14px'}}>
+                  {r.status==='오류'&&<Btn variant="danger" size="sm" onClick={()=>setToast(`${r.entity} 재수집을 시작합니다`)}>재시도</Btn>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Documents Page ─── */
+function DocumentsPage(){
+  const[toast,setToast]=useState('');
+  const[selected,setSelected]=useState(null);
+  const[genModal,setGenModal]=useState(false);
+  const[filter,setFilter]=useState('전체');
+  const statuses=['전체','AI생성완료','검토대기','확정','발송완료','AI생성중'];
+  const filtered=filter==='전체'?DOCUMENTS:DOCUMENTS.filter(d=>d.status===filter);
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {toast&&<Toast message={toast} onClose={()=>setToast('')}/>}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          {statuses.map(s=>(
+            <button key={s} onClick={()=>setFilter(s)} style={{padding:'5px 14px',borderRadius:20,border:`1px solid ${filter===s?C.primary:C.border}`,background:filter===s?C.primary:'transparent',color:filter===s?'#fff':C.textLight,fontSize:12,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>{s}</button>
+          ))}
+        </div>
+        <Btn onClick={()=>setGenModal(true)}>🤖 AI 서류 생성</Btn>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+        <div style={{background:C.surface,borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',overflow:'hidden'}}>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{background:C.bg}}>
+                {['문서번호','유형','바이어','상태',''].map(h=><th key={h} style={{padding:'12px 14px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textMuted}}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((d,i)=>(
+                <tr key={i} onClick={()=>setSelected(d)} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',background:selected?.id===d.id?`${C.primary}08`:'transparent',transition:'background 150ms',height:48}} onMouseOver={e=>{if(selected?.id!==d.id)e.currentTarget.style.background=`${C.primary}04`}} onMouseOut={e=>{if(selected?.id!==d.id)e.currentTarget.style.background='transparent'}}>
+                  <td style={{padding:'10px 14px',fontSize:12,fontWeight:600,color:C.primary,fontFamily:'monospace'}}>{d.id}</td>
+                  <td style={{padding:'10px 14px',fontSize:13}}>{d.type}</td>
+                  <td style={{padding:'10px 14px',fontSize:12,color:C.textLight}}>{d.buyer}</td>
+                  <td style={{padding:'10px 14px'}}><Badge text={d.status} color={d.status==='확정'||d.status==='발송완료'?'success':d.status==='AI생성완료'?'info':d.status==='검토대기'?'warning':'accent'}/></td>
+                  <td style={{padding:'10px 14px'}}><Btn variant="secondary" size="sm" onClick={e=>{e.stopPropagation();setSelected(d)}}>상세</Btn></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          {selected?(
+            <div style={{animation:'slideInRight 250ms ease'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+                <div>
+                  <h3 style={{fontSize:18,fontWeight:700}}>{selected.type}</h3>
+                  <div style={{fontSize:12,color:C.textMuted}}>{selected.id} · {selected.date}</div>
+                </div>
+                <Badge text={selected.status} color={selected.status==='확정'||selected.status==='발송완료'?'success':selected.status==='AI생성완료'?'info':'warning'}/>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
+                {[
+                  {l:'바이어',v:selected.buyer},{l:'금액',v:selected.amount},
+                  {l:'AI 신뢰도',v:selected.confidence>0?`${(selected.confidence*100).toFixed(0)}%`:'—'},{l:'작성일',v:selected.date},
+                ].map((info,i)=>(
+                  <div key={i} style={{background:C.bg,borderRadius:10,padding:14}}>
+                    <div style={{fontSize:11,color:C.textMuted,marginBottom:4}}>{info.l}</div>
+                    <div style={{fontSize:14,fontWeight:600}}>{info.v}</div>
+                  </div>
+                ))}
+              </div>
+              {selected.confidence>0&&selected.confidence<0.9&&(
+                <div style={{padding:14,background:'#FFFBEB',borderRadius:10,borderLeft:`3px solid ${C.warning}`,marginBottom:16}}>
+                  <div style={{fontSize:12,fontWeight:600,color:C.warning,marginBottom:4}}>⚠️ 낮은 신뢰도 항목</div>
+                  <div style={{fontSize:12,color:C.text}}>HS Code, 원산지 항목의 AI 신뢰도가 임계치(0.90) 미만입니다. 담당자 확인이 필요합니다.</div>
+                </div>
+              )}
+              <div style={{display:'flex',gap:8}}>
+                {['AI생성완료','검토대기'].includes(selected.status)&&<Btn onClick={()=>setToast('서류를 확정 처리합니다')}>✅ 확정</Btn>}
+                <Btn variant="secondary" onClick={()=>setToast('PDF 미리보기를 엽니다')}>📄 PDF 미리보기</Btn>
+              </div>
+            </div>
+          ):(
+            <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%',color:C.textMuted,gap:8,minHeight:300}}>
+              <span style={{fontSize:40}}>📄</span>
+              <span style={{fontSize:14}}>좌측에서 서류를 선택하세요</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <Modal open={genModal} onClose={()=>setGenModal(false)} title="AI 서류 생성" width={560}>
+        <div style={{marginBottom:20}}>
+          <label style={{display:'block',fontSize:13,fontWeight:600,color:C.textLight,marginBottom:6}}>수출입 거래 선택</label>
+          <select style={{width:'100%',padding:'10px 14px',border:`1px solid ${C.border}`,borderRadius:10,fontSize:14,fontFamily:'inherit',outline:'none'}}>
+            <option>EXP-0615-001 — Shanghai Metal Corp. ($42,500)</option>
+            <option>EXP-0615-002 — Tokyo Steel Inc. ($28,700)</option>
+            <option>IMP-0615-001 — Vietnam Trading Co. ($15,300)</option>
+          </select>
+        </div>
+        <div style={{marginBottom:20}}>
+          <label style={{display:'block',fontSize:13,fontWeight:600,color:C.textLight,marginBottom:6}}>생성 서류 유형</label>
+          <div style={{display:'flex',gap:8}}>
+            {['인보이스','패킹리스트','원산지증명서'].map(t=>(
+              <label key={t} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',border:`1px solid ${C.border}`,borderRadius:10,fontSize:13,cursor:'pointer'}}>
+                <input type="checkbox" defaultChecked/>{t}
+              </label>
+            ))}
+          </div>
+        </div>
+        <div style={{padding:16,background:C.bg,borderRadius:10,marginBottom:20}}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>🤖 Gemini AI가 ERP 데이터를 분석하여 서류를 생성합니다</div>
+          <div style={{fontSize:12,color:C.textMuted}}>생성 후 담당자 검토 → 확정 → PDF 출력 순서로 진행됩니다</div>
+        </div>
+        <div style={{display:'flex',justifyContent:'flex-end',gap:8}}>
+          <Btn variant="secondary" onClick={()=>setGenModal(false)}>취소</Btn>
+          <Btn onClick={()=>{setGenModal(false);setToast('AI 서류 생성을 시작합니다')}}>🤖 생성 시작</Btn>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+/* ─── Inventory Page ─── */
+function InventoryPage(){
+  const[toast,setToast]=useState('');
+  const[tab,setTab]=useState('현황');
+  const[detailModal,setDetailModal]=useState(null);
+  const tabs=['현황','입출고 이력'];
+
+  const stockData=INVENTORY.map(item=>({name:item.code.split('-')[0],qty:item.qty,safety:item.safety})).slice(0,6);
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {toast&&<Toast message={toast} onClose={()=>setToast('')}/>}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div style={{display:'flex',gap:8}}>
+          {tabs.map(t=>(
+            <button key={t} onClick={()=>setTab(t)} style={{padding:'7px 16px',borderRadius:20,border:`1px solid ${tab===t?C.primary:C.border}`,background:tab===t?C.primary:'transparent',color:tab===t?'#fff':C.textLight,fontSize:13,fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>{t}</button>
+          ))}
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <Btn variant="secondary" size="sm" onClick={()=>setToast('재고 엑셀을 내보냅니다')}>📥 엑셀</Btn>
+          <Btn size="sm" onClick={()=>setToast('재고 조정 모달을 엽니다')}>📦 재고 조정</Btn>
+        </div>
+      </div>
+
+      {tab==='현황'?(
+        <>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}}>
+            {[
+              {label:'총 품목 수',value:'8종',color:C.primary},
+              {label:'안전재고 부족',value:'2건',color:C.danger},
+              {label:'본사 1창고',value:'3,450kg',color:C.accent},
+              {label:'외부 창고',value:'3,090kg',color:C.success},
+            ].map((k,i)=>(
+              <div key={i} style={{background:C.surface,borderRadius:12,padding:18,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+                <div style={{fontSize:12,color:C.textMuted,marginBottom:4}}>{k.label}</div>
+                <div style={{fontSize:22,fontWeight:800,color:k.color}}>{k.value}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{background:C.surface,borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',overflow:'hidden'}}>
+            <table style={{width:'100%',borderCollapse:'collapse'}}>
+              <thead>
+                <tr style={{background:C.bg}}>
+                  {['품번','품명','창고','현재고','안전재고','상태','최종입고','최종출고'].map(h=><th key={h} style={{padding:'12px 14px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textMuted}}>{h}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {INVENTORY.map((item,i)=>(
+                  <tr key={i} onClick={()=>setDetailModal(item)} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms',height:48}} onMouseOver={e=>e.currentTarget.style.background=`${C.primary}06`} onMouseOut={e=>e.currentTarget.style.background='transparent'}>
+                    <td style={{padding:'10px 14px',fontSize:12,fontFamily:'monospace',color:C.primary,fontWeight:600}}>{item.code}</td>
+                    <td style={{padding:'10px 14px',fontSize:13,fontWeight:500}}>{item.name}</td>
+                    <td style={{padding:'10px 14px',fontSize:12,color:C.textLight}}>{item.warehouse}</td>
+                    <td style={{padding:'10px 14px',fontSize:13,fontWeight:700}}>{item.qty.toLocaleString()}{item.unit}</td>
+                    <td style={{padding:'10px 14px',fontSize:13}}>{item.safety.toLocaleString()}{item.unit}</td>
+                    <td style={{padding:'10px 14px'}}><Badge text={item.status} color={item.status==='정상'?'success':'danger'}/></td>
+                    <td style={{padding:'10px 14px',fontSize:12,color:C.textMuted}}>{item.lastIn}</td>
+                    <td style={{padding:'10px 14px',fontSize:12,color:C.textMuted}}>{item.lastOut}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ):(
+        <div style={{background:C.surface,borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',overflow:'hidden'}}>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{background:C.bg}}>
+                {['일자','품명','유형','수량','창고','주문번호','담당자'].map(h=><th key={h} style={{padding:'12px 14px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textMuted}}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {INVENTORY_HISTORY.map((h,i)=>(
+                <tr key={i} style={{borderBottom:`1px solid ${C.border}`,height:48}}>
+                  <td style={{padding:'10px 14px',fontSize:13}}>{h.date}</td>
+                  <td style={{padding:'10px 14px',fontSize:13,fontWeight:500}}>{h.item}</td>
+                  <td style={{padding:'10px 14px'}}><Badge text={h.type} color={h.type==='입고'?'success':'warning'}/></td>
+                  <td style={{padding:'10px 14px',fontSize:13,fontWeight:700,color:h.qty>0?C.success:C.danger}}>{h.qty>0?'+':''}{h.qty.toLocaleString()}</td>
+                  <td style={{padding:'10px 14px',fontSize:12,color:C.textLight}}>{h.warehouse}</td>
+                  <td style={{padding:'10px 14px',fontSize:12,fontFamily:'monospace',color:C.primary}}>{h.order}</td>
+                  <td style={{padding:'10px 14px',fontSize:12}}>{h.operator}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <Modal open={!!detailModal} onClose={()=>setDetailModal(null)} title={`품목 상세 — ${detailModal?.name||''}`} width={500}>
+        {detailModal&&(
+          <div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+              {[{l:'품번',v:detailModal.code},{l:'창고',v:detailModal.warehouse},{l:'현재고',v:`${detailModal.qty.toLocaleString()}${detailModal.unit}`},{l:'안전재고',v:`${detailModal.safety.toLocaleString()}${detailModal.unit}`}].map((info,i)=>(
+                <div key={i} style={{background:C.bg,borderRadius:10,padding:14}}>
+                  <div style={{fontSize:11,color:C.textMuted,marginBottom:4}}>{info.l}</div>
+                  <div style={{fontSize:14,fontWeight:600}}>{info.v}</div>
+                </div>
+              ))}
+            </div>
+            {detailModal.status==='부족'&&(
+              <div style={{padding:14,background:'#FEF2F2',borderRadius:10,borderLeft:`3px solid ${C.danger}`,marginBottom:16}}>
+                <div style={{fontSize:12,fontWeight:600,color:C.danger}}>⚠️ 안전재고 미달</div>
+                <div style={{fontSize:12,color:C.text,marginTop:4}}>현재고({detailModal.qty})가 안전재고({detailModal.safety}) 미만입니다. 발주를 검토하세요.</div>
+              </div>
+            )}
+            <div style={{display:'flex',gap:8}}>
+              <Btn onClick={()=>{setDetailModal(null);setToast('재고 조정을 시작합니다')}}>📦 재고 조정</Btn>
+              <Btn variant="secondary" onClick={()=>setDetailModal(null)}>닫기</Btn>
+            </div>
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+/* ─── Settings Page ─── */
+function SettingsPage(){
+  const[toast,setToast]=useState('');
+  const sections=[
+    {title:'ERP 연동 설정',items:[{label:'API Endpoint',value:'https://api.ecount.com/v1',type:'text'},{label:'인증 토큰 갱신 주기',value:'50분 (만료 전 자동 갱신)',type:'info'},{label:'Rate Limit',value:'분당 60건',type:'info'}]},
+    {title:'ETL 스케줄 설정',items:[{label:'수출입 거래',value:'매 30분',type:'select'},{label:'재고 현황',value:'매 15분',type:'select'},{label:'거래처/품목',value:'매일 09:00',type:'select'},{label:'회계 전표',value:'매일 18:00',type:'select'}]},
+    {title:'AI 서류 생성 설정',items:[{label:'AI 모델',value:'Gemini 1.5 Pro',type:'info'},{label:'자동 승인 임계치',value:'0.90',type:'text'},{label:'생성 서류 유형',value:'인보이스, 패킹리스트, 원산지증명서',type:'info'}]},
+    {title:'알림 설정',items:[{label:'파이프라인 오류 알림',value:'이메일 + 슬랙',type:'info'},{label:'안전재고 미달 알림',value:'이메일',type:'info'},{label:'서류 생성 완료 알림',value:'슬랙',type:'info'}]},
+  ];
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {toast&&<Toast message={toast} onClose={()=>setToast('')}/>}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+        {sections.map((s,si)=>(
+          <div key={si} style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+            <h3 style={{fontSize:16,fontWeight:700,marginBottom:16}}>{s.title}</h3>
+            {s.items.map((item,ii)=>(
+              <div key={ii} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 0',borderBottom:ii<s.items.length-1?`1px solid ${C.border}`:'none'}}>
+                <span style={{fontSize:13,color:C.textLight}}>{item.label}</span>
+                <span style={{fontSize:13,fontWeight:600,fontFamily:item.type==='text'?'monospace':'inherit'}}>{item.value}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div style={{marginTop:20,display:'flex',gap:8}}>
+        <Btn onClick={()=>setToast('설정이 저장되었습니다')}>💾 설정 저장</Btn>
+        <Btn variant="secondary" onClick={()=>setToast('ERP 연결 테스트를 실행합니다')}>🔗 연결 테스트</Btn>
+      </div>
+    </div>
+  );
+}
+
+/* ─── App ─── */
+function App(){
+  const[loading,setLoading]=useState(true);
+  const[page,setPage]=useState('dashboard');
+  useEffect(()=>{setTimeout(()=>setLoading(false),1500)},[]);
+  if(loading)return <Skeleton/>;
+
+  const renderPage=()=>{
+    switch(page){
+      case 'dashboard':return <DashboardPage setPage={setPage}/>;
+      case 'pipeline':return <PipelinePage/>;
+      case 'documents':return <DocumentsPage/>;
+      case 'inventory':return <InventoryPage/>;
+      case 'settings':return <SettingsPage/>;
+      default:return <DashboardPage setPage={setPage}/>;
+    }
+  };
+
+  return(
+    <div style={{display:'flex',minHeight:'100vh',maxHeight:'100vh'}}>
+      <Sidebar page={page} setPage={setPage}/>
+      <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <TopBar page={page}/>
+        <main style={{flex:1,overflow:'auto',padding:24}} key={page}>
+          {renderPage()}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>PaySync Hub - 인사급여 데이터 ERP 일괄 연동 시스템</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net"/>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Pretendard',sans-serif;background:#0F172A;color:#F1F5F9;overflow:hidden;height:100vh}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-thumb{background:#334155;border-radius:3px}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes barGrow{from{width:0%}to{width:var(--target-width)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px);max-height:0}to{opacity:1;transform:translateY(0);max-height:500px}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo} = React;
+const {BarChart,Bar,LineChart,Line,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,Legend,AreaChart,Area} = Recharts;
+
+const C = {
+  primary:'#0EA5E9',primaryDim:'rgba(14,165,233,0.15)',secondary:'#1E293B',accent:'#38BDF8',
+  bg:'#0F172A',surface:'#1E293B',surfaceLight:'#273549',border:'#334155',
+  text:'#F1F5F9',textLight:'#94A3B8',
+  success:'#34D399',warning:'#FBBF24',danger:'#F87171',info:'#60A5FA'
+};
+
+const TABS = [
+  {id:'home',label:'급여 변환'},
+  {id:'rules',label:'매핑 규칙'},
+  {id:'queue',label:'작업 큐'},
+  {id:'report',label:'오류 리포트'},
+  {id:'settings',label:'설정'},
+];
+
+const HERO_META = {
+  home:{title:'급여 데이터 ERP 변환',desc:'HRM 급여·근태 → 이카운트 ERP 회계 전표 자동 변환',gradient:`linear-gradient(135deg,#0EA5E9,#6366F1)`,
+    kpis:[{label:'금월 변환',value:'3,847건'},{label:'성공률',value:'98.2%'},{label:'절약 시간',value:'128h'}]},
+  rules:{title:'매핑 규칙 관리',desc:'근태 코드 ↔ ERP 계정 코드 매핑 규칙 버전 관리',gradient:`linear-gradient(135deg,#8B5CF6,#EC4899)`,
+    kpis:[{label:'활성 규칙',value:'156개'},{label:'버전',value:'v3.2'},{label:'최근 수정',value:'2일 전'}]},
+  queue:{title:'배치 작업 큐',desc:'Celery 워커 기반 비동기 배치 작업 현황 모니터링',gradient:`linear-gradient(135deg,#059669,#0EA5E9)`,
+    kpis:[{label:'대기 작업',value:'3건'},{label:'진행 중',value:'1건'},{label:'금일 완료',value:'12건'}]},
+  report:{title:'연동 오류 리포트',desc:'변환·연동 오류 유형별 분류 및 재처리 관리',gradient:`linear-gradient(135deg,#F59E0B,#EF4444)`,
+    kpis:[{label:'금월 오류',value:'67건'},{label:'재처리 대기',value:'5건'},{label:'해결률',value:'92.5%'}]},
+  settings:{title:'시스템 설정',desc:'API 연동 정보 및 배치 스케줄 관리',gradient:`linear-gradient(135deg,#6B7280,#374151)`,
+    kpis:[{label:'API 상태',value:'정상'},{label:'마지막 동기화',value:'5분 전'},{label:'스케줄',value:'2회/일'}]},
+};
+
+const PAYROLL_DATA = [
+  {id:'PAY-2603-001',dept:'영업1팀',employees:24,total:'82,400,000원',status:'변환완료',erp:'전송완료',date:'2026.03.13',type:'정기급여'},
+  {id:'PAY-2603-002',dept:'개발팀',employees:18,total:'94,600,000원',status:'변환완료',erp:'전송완료',date:'2026.03.13',type:'정기급여'},
+  {id:'PAY-2603-003',dept:'마케팅팀',employees:12,total:'56,200,000원',status:'변환중',erp:'대기',date:'2026.03.13',type:'정기급여'},
+  {id:'PAY-2603-004',dept:'인사팀',employees:8,total:'38,800,000원',status:'변환완료',erp:'전송중',date:'2026.03.13',type:'정기급여'},
+  {id:'PAY-2603-005',dept:'경영지원팀',employees:6,total:'31,200,000원',status:'매핑오류',erp:'실패',date:'2026.03.13',type:'정기급여'},
+  {id:'PAY-2603-006',dept:'영업2팀',employees:20,total:'68,000,000원',status:'대기',erp:'대기',date:'2026.03.13',type:'정기급여'},
+  {id:'PAY-2603-007',dept:'연구소',employees:15,total:'78,500,000원',status:'변환완료',erp:'전송완료',date:'2026.03.13',type:'정기급여'},
+];
+
+const MONTHLY_CHART = [
+  {month:'2025.10',건수:3420,오류:45},{month:'2025.11',건수:3580,오류:38},
+  {month:'2025.12',건수:3650,오류:52},{month:'2026.01',건수:3720,오류:41},
+  {month:'2026.02',건수:3810,오류:35},{month:'2026.03',건수:3847,오류:67},
+];
+
+const RULES_DATA = [
+  {id:1,name:'정기급여 전표 매핑',code:'R-001',accounts:'기본급→461001, 식대→461002, 교통비→461003',version:'v3.2',status:'활성',updated:'2026.03.11',dept:'전체'},
+  {id:2,name:'야근수당 계정 매핑',code:'R-002',accounts:'야근수당→462001, 휴일근무→462002',version:'v2.1',status:'활성',updated:'2026.03.08',dept:'전체'},
+  {id:3,name:'4대보험 공제 매핑',code:'R-003',accounts:'국민연금→471001, 건강보험→471002, 고용보험→471003',version:'v3.0',status:'활성',updated:'2026.03.05',dept:'전체'},
+  {id:4,name:'퇴직급여 충당금 매핑',code:'R-004',accounts:'퇴직급여→491001',version:'v1.3',status:'비활성',updated:'2026.02.28',dept:'전체'},
+  {id:5,name:'인센티브 특별 매핑',code:'R-005',accounts:'분기인센→463001, 연간인센→463002',version:'v2.0',status:'활성',updated:'2026.03.10',dept:'영업팀'},
+  {id:6,name:'연구개발비 계정 매핑',code:'R-006',accounts:'연구수당→465001, 논문장려금→465002',version:'v1.5',status:'활성',updated:'2026.03.01',dept:'연구소'},
+];
+
+const QUEUE_JOBS = [
+  {id:'JOB-001',name:'3월 정기급여 변환',worker:'worker-01',progress:100,total:103,status:'완료',started:'09:00',ended:'09:14',priority:'높음'},
+  {id:'JOB-002',name:'3월 ERP 전표 전송',worker:'worker-02',progress:78,total:98,status:'진행중',started:'09:15',ended:'-',priority:'높음'},
+  {id:'JOB-003',name:'근태 데이터 동기화',worker:'worker-03',progress:100,total:245,status:'완료',started:'08:00',ended:'08:22',priority:'보통'},
+  {id:'JOB-004',name:'4대보험 정산 변환',worker:'-',progress:0,total:103,status:'대기',started:'-',ended:'-',priority:'보통'},
+  {id:'JOB-005',name:'오류 건 재처리',worker:'-',progress:0,total:5,status:'대기',started:'-',ended:'-',priority:'낮음'},
+];
+
+const ERROR_DATA = [
+  {id:'ERR-001',type:'매핑 미설정',dept:'경영지원팀',field:'복리후생비',desc:'계정코드 미지정 — ERP 전표 생성 불가',count:3,status:'미처리',date:'2026.03.13'},
+  {id:'ERR-002',type:'금액 불일치',dept:'영업1팀',field:'야근수당',desc:'HRM 계산값과 ERP 기준값 차이 발생',count:2,status:'미처리',date:'2026.03.13'},
+  {id:'ERR-003',type:'코드 변경',dept:'개발팀',field:'식대',desc:'이카운트 계정 코드 변경으로 매핑 무효화',count:1,status:'처리완료',date:'2026.03.12'},
+  {id:'ERR-004',type:'API 타임아웃',dept:'인사팀',field:'전체',desc:'이카운트 API 응답 지연 (30초 초과)',count:4,status:'자동해결',date:'2026.03.12'},
+  {id:'ERR-005',type:'데이터 누락',dept:'마케팅팀',field:'교통비',desc:'HRM 원본에 교통비 항목 누락',count:2,status:'미처리',date:'2026.03.13'},
+];
+
+const ERROR_CHART = [{name:'매핑 미설정',value:28},{name:'금액 불일치',value:18},{name:'코드 변경',value:8},{name:'API 오류',value:8},{name:'데이터 누락',value:5}];
+
+// ─── Components ───
+function CountUp({end,duration=1200,suffix=''}){
+  const [val,setVal]=useState(0);
+  useEffect(()=>{let s=0;const step=end/(duration/16);const t=setInterval(()=>{s+=step;if(s>=end){setVal(end);clearInterval(t)}else setVal(Math.floor(s))},16);return()=>clearInterval(t)},[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({message,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t)},[]);
+  return <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:C.primary,color:'#fff',padding:'12px 24px',borderRadius:12,animation:'slideUp 300ms ease',boxShadow:'0 4px 20px rgba(14,165,233,0.4)',fontSize:14}}>{message}</div>;
+}
+
+function Badge({text}){
+  const colors={변환완료:{bg:'rgba(52,211,153,0.15)',text:C.success},변환중:{bg:'rgba(251,191,36,0.15)',text:C.warning},매핑오류:{bg:'rgba(248,113,113,0.15)',text:C.danger},대기:{bg:'rgba(96,165,250,0.15)',text:C.info},
+    전송완료:{bg:'rgba(52,211,153,0.15)',text:C.success},전송중:{bg:'rgba(251,191,36,0.15)',text:C.warning},'실패':{bg:'rgba(248,113,113,0.15)',text:C.danger},
+    활성:{bg:'rgba(52,211,153,0.15)',text:C.success},비활성:{bg:'rgba(148,163,184,0.15)',text:C.textLight},
+    완료:{bg:'rgba(52,211,153,0.15)',text:C.success},진행중:{bg:'rgba(14,165,233,0.15)',text:C.primary},
+    미처리:{bg:'rgba(248,113,113,0.15)',text:C.danger},처리완료:{bg:'rgba(52,211,153,0.15)',text:C.success},자동해결:{bg:'rgba(96,165,250,0.15)',text:C.info},
+    높음:{bg:'rgba(248,113,113,0.15)',text:C.danger},보통:{bg:'rgba(251,191,36,0.15)',text:C.warning},낮음:{bg:'rgba(148,163,184,0.15)',text:C.textLight},
+  };
+  const c=colors[text]||{bg:'rgba(148,163,184,0.15)',text:C.textLight};
+  return <span style={{display:'inline-block',padding:'3px 12px',borderRadius:16,fontSize:12,fontWeight:600,background:c.bg,color:c.text}}>{text}</span>;
+}
+
+function Drawer({item,onClose,setToast,type}){
+  return(<>
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:200,animation:'fadeIn 200ms ease'}}/>
+    <div style={{position:'fixed',top:0,right:0,bottom:0,width:520,background:C.surface,boxShadow:'-8px 0 40px rgba(0,0,0,0.3)',zIndex:201,overflowY:'auto',padding:28,animation:'slideInRight 200ms ease'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
+        <h3 style={{fontSize:18,fontWeight:700}}>{type==='payroll'?`급여 상세 — ${item.id}`:type==='rule'?`규칙 상세 — ${item.code}`:type==='error'?`오류 상세 — ${item.id}`:`작업 상세 — ${item.id}`}</h3>
+        <button onClick={onClose} style={{background:'none',border:'none',color:C.textLight,fontSize:20,cursor:'pointer'}}>✕</button>
+      </div>
+      {type==='payroll' && <>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+          {[{l:'부서',v:item.dept},{l:'인원',v:`${item.employees}명`},{l:'총액',v:item.total},{l:'유형',v:item.type},{l:'일자',v:item.date},{l:'상태',v:item.status}].map(f=>
+            <div key={f.l} style={{background:C.bg,borderRadius:12,padding:14}}><div style={{fontSize:11,color:C.textLight,marginBottom:4,textTransform:'uppercase',letterSpacing:'0.05em'}}>{f.l}</div><div style={{fontSize:14,fontWeight:600}}>{f.v}</div></div>)}
+        </div>
+        <div style={{display:'flex',gap:8,marginBottom:20}}><Badge text={item.status}/><Badge text={item.erp}/></div>
+        <div style={{background:C.bg,borderRadius:12,padding:16,marginBottom:20}}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:12}}>전표 항목 미리보기</div>
+          {['기본급 — 461001','식대 — 461002','교통비 — 461003','국민연금 공제 — 471001','건강보험 공제 — 471002'].map((r,i)=>
+            <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:i<4?`1px solid ${C.border}`:'none',fontSize:13}}>
+              <span>{r}</span><span style={{color:C.accent}}>{(Math.floor(Math.random()*5000)+1000).toLocaleString()}만원</span>
+            </div>)}
+        </div>
+        <div style={{marginBottom:16}}><div style={{fontSize:13,fontWeight:600,marginBottom:8}}>관리자 메모</div><textarea placeholder="메모를 입력하세요..." style={{width:'100%',padding:12,border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,resize:'vertical',minHeight:60,outline:'none',fontFamily:'inherit',background:C.bg,color:C.text}}/></div>
+        <div style={{display:'flex',gap:8}}><button onClick={()=>{setToast('재변환을 시작합니다.');onClose()}} style={{flex:1,padding:'10px',background:C.bg,border:`1px solid ${C.primary}`,color:C.primary,borderRadius:8,cursor:'pointer',fontSize:13,fontWeight:600}}>재변환</button><button onClick={()=>{setToast('ERP로 전송합니다.');onClose()}} style={{flex:1,padding:'10px',background:C.primary,color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontSize:13,fontWeight:600}}>ERP 전송</button></div>
+      </>}
+      {type==='rule' && <>
+        <div style={{display:'grid',gap:16,marginBottom:20}}>
+          {[{l:'규칙명',v:item.name},{l:'코드',v:item.code},{l:'적용 부서',v:item.dept},{l:'버전',v:item.version}].map(f=>
+            <div key={f.l}><label style={{fontSize:11,color:C.textLight,marginBottom:4,display:'block',textTransform:'uppercase',letterSpacing:'0.05em'}}>{f.l}</label><input defaultValue={f.v} style={{width:'100%',padding:'10px 14px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,outline:'none',background:C.bg,color:C.text}}/></div>)}
+        </div>
+        <div style={{background:C.bg,borderRadius:12,padding:16,marginBottom:20}}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:12}}>계정 매핑 규칙</div>
+          <div style={{fontSize:13,color:C.textLight,lineHeight:1.8,fontFamily:'monospace'}}>{item.accounts}</div>
+        </div>
+        <div style={{display:'flex',gap:8,marginBottom:16}}><Badge text={item.status}/><span style={{fontSize:12,color:C.textLight}}>최근 수정: {item.updated}</span></div>
+        <div style={{display:'flex',gap:8}}><button onClick={onClose} style={{flex:1,padding:'10px',background:C.bg,border:`1px solid ${C.border}`,color:C.text,borderRadius:8,cursor:'pointer',fontSize:13}}>취소</button><button onClick={()=>{setToast('규칙이 저장되었습니다.');onClose()}} style={{flex:1,padding:'10px',background:C.primary,color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontSize:13,fontWeight:600}}>저장</button></div>
+      </>}
+      {type==='queue' && <>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+          {[{l:'작업명',v:item.name},{l:'워커',v:item.worker},{l:'시작',v:item.started},{l:'종료',v:item.ended},{l:'전체',v:`${item.total}건`},{l:'우선순위',v:item.priority}].map(f=>
+            <div key={f.l} style={{background:C.bg,borderRadius:12,padding:14}}><div style={{fontSize:11,color:C.textLight,marginBottom:4,textTransform:'uppercase',letterSpacing:'0.05em'}}>{f.l}</div><div style={{fontSize:14,fontWeight:600}}>{f.v}</div></div>)}
+        </div>
+        <div style={{marginBottom:20}}><div style={{fontSize:13,fontWeight:600,marginBottom:8}}>진행률</div>
+          <div style={{background:C.bg,borderRadius:8,height:12,overflow:'hidden'}}><div style={{height:'100%',borderRadius:8,background:`linear-gradient(90deg,${C.primary},${C.accent})`,width:`${item.total>0?(item.progress/item.total*100):0}%`,transition:'width 1s ease'}}/></div>
+          <div style={{fontSize:12,color:C.textLight,marginTop:4}}>{item.total>0?`${item.progress}/${item.total} (${(item.progress/item.total*100).toFixed(1)}%)`:'대기 중'}</div>
+        </div>
+        <Badge text={item.status}/>
+      </>}
+      {type==='error' && <>
+        <div style={{display:'grid',gap:16,marginBottom:20}}>
+          {[{l:'오류 유형',v:item.type},{l:'부서',v:item.dept},{l:'항목',v:item.field},{l:'발생 건수',v:`${item.count}건`},{l:'발생일',v:item.date}].map(f=>
+            <div key={f.l} style={{background:C.bg,borderRadius:12,padding:14}}><div style={{fontSize:11,color:C.textLight,marginBottom:4,textTransform:'uppercase',letterSpacing:'0.05em'}}>{f.l}</div><div style={{fontSize:14,fontWeight:600}}>{f.v}</div></div>)}
+        </div>
+        <div style={{background:C.bg,borderRadius:12,padding:16,marginBottom:20}}><div style={{fontSize:13,fontWeight:600,marginBottom:8}}>상세 설명</div><div style={{fontSize:13,color:C.textLight,lineHeight:1.6}}>{item.desc}</div></div>
+        <div style={{display:'flex',gap:8,marginBottom:16}}><Badge text={item.status}/></div>
+        {item.status==='미처리' && <button onClick={()=>{setToast('재처리를 시작합니다.');onClose()}} style={{width:'100%',padding:'10px',background:C.primary,color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontSize:13,fontWeight:600}}>재처리 실행</button>}
+      </>}
+    </div>
+  </>);
+}
+
+function SkeletonLoader(){
+  return <div style={{padding:32}}><div style={{height:140,borderRadius:16,background:'linear-gradient(90deg,#1E293B 25%,#334155 50%,#1E293B 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite',marginBottom:24}}/>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>{[1,2,3].map(i=><div key={i} style={{height:200,borderRadius:16,background:'linear-gradient(90deg,#1E293B 25%,#334155 50%,#1E293B 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>)}</div>
+  </div>;
+}
+
+// ─── Pages ───
+function HomePage({setDrawer,setToast}){
+  return <div style={{animation:'fadeIn 300ms ease'}}>
+    <div style={{display:'flex',gap:8,marginBottom:24}}>
+      <button onClick={()=>setToast('급여 파일 업로드 준비 중...')} style={{padding:'10px 24px',background:C.primary,color:'#fff',border:'none',borderRadius:12,cursor:'pointer',fontSize:14,fontWeight:700}}>📤 급여 파일 업로드</button>
+      <button onClick={()=>setToast('일괄 변환을 시작합니다.')} style={{padding:'10px 24px',background:C.surfaceLight,color:C.text,border:`1px solid ${C.border}`,borderRadius:12,cursor:'pointer',fontSize:14,fontWeight:600}}>▶ 일괄 변환</button>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:24}}>
+      <div style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.1)'}}>
+        <h3 style={{fontSize:16,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:16,color:C.textLight}}>월별 변환 추이</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <AreaChart data={MONTHLY_CHART}><defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.primary} stopOpacity={0.3}/><stop offset="100%" stopColor={C.primary} stopOpacity={0}/></linearGradient></defs>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="month" fontSize={11} stroke={C.textLight}/><YAxis fontSize={11} stroke={C.textLight}/><Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}}/>
+            <Area type="monotone" dataKey="건수" stroke={C.primary} fill="url(#g1)" strokeWidth={2}/>
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.1)'}}>
+        <h3 style={{fontSize:16,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:16,color:C.textLight}}>부서별 변환 현황</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={[{dept:'영업1',건수:24},{dept:'개발',건수:18},{dept:'마케팅',건수:12},{dept:'인사',건수:8},{dept:'경영지원',건수:6},{dept:'영업2',건수:20},{dept:'연구소',건수:15}]}>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="dept" fontSize={11} stroke={C.textLight}/><YAxis fontSize={11} stroke={C.textLight}/><Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}}/>
+            <Bar dataKey="건수" fill={C.primary} radius={[6,6,0,0]}/>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+      {PAYROLL_DATA.slice(0,6).map((p,i)=><div key={p.id} onClick={()=>setDrawer({item:p,type:'payroll'})} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.1)',cursor:'pointer',transition:'all 200ms',animation:`slideUp 400ms ease ${i*80}ms both`}} onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,0.2)'}} onMouseLeave={e=>{e.currentTarget.style.transform='scale(1)';e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,0.1)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <span style={{fontSize:12,color:C.primary,fontWeight:700,fontFamily:'monospace'}}>{p.id}</span>
+          <Badge text={p.status}/>
+        </div>
+        <div style={{fontSize:16,fontWeight:700,marginBottom:4}}>{p.dept}</div>
+        <div style={{fontSize:13,color:C.textLight,marginBottom:12}}>{p.employees}명 · {p.type}</div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <span style={{fontSize:15,fontWeight:700,color:C.accent}}>{p.total}</span>
+          <Badge text={p.erp}/>
+        </div>
+      </div>)}
+    </div>
+  </div>;
+}
+
+function RulesPage({setDrawer,setToast}){
+  return <div style={{animation:'fadeIn 300ms ease'}}>
+    <div style={{display:'flex',gap:8,marginBottom:24}}>
+      <button onClick={()=>setToast('새 규칙 생성 폼을 열겠습니다.')} style={{padding:'10px 24px',background:C.primary,color:'#fff',border:'none',borderRadius:12,cursor:'pointer',fontSize:14,fontWeight:700}}>+ 규칙 추가</button>
+      <input placeholder="규칙명, 코드 검색..." style={{padding:'10px 16px',border:`1px solid ${C.border}`,borderRadius:12,fontSize:13,background:C.bg,color:C.text,outline:'none',width:260}}/>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+      {RULES_DATA.map((r,i)=><div key={r.id} onClick={()=>setDrawer({item:r,type:'rule'})} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.1)',cursor:'pointer',transition:'all 200ms',animation:`slideUp 400ms ease ${i*80}ms both`}} onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,0.2)'}} onMouseLeave={e=>{e.currentTarget.style.transform='scale(1)';e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,0.1)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <span style={{fontSize:12,color:C.primary,fontWeight:700,fontFamily:'monospace'}}>{r.code}</span>
+          <Badge text={r.status}/>
+        </div>
+        <div style={{fontSize:15,fontWeight:700,marginBottom:6}}>{r.name}</div>
+        <div style={{fontSize:12,color:C.textLight,marginBottom:12,lineHeight:1.6}}>{r.accounts}</div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <span style={{fontSize:12,color:C.accent,fontWeight:600}}>{r.version}</span>
+          <span style={{fontSize:11,color:C.textLight}}>적용: {r.dept}</span>
+        </div>
+      </div>)}
+    </div>
+  </div>;
+}
+
+function QueuePage({setDrawer}){
+  return <div style={{animation:'fadeIn 300ms ease'}}>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:24}}>
+      {[{label:'WORKER-01',status:'처리 중',job:'3월 ERP 전표 전송',color:C.primary},{label:'WORKER-02',status:'유휴',job:'-',color:C.textLight},{label:'WORKER-03',status:'유휴',job:'-',color:C.textLight}].map((w,i)=>
+        <div key={i} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.1)',animation:`slideUp 400ms ease ${i*80}ms both`}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+            <div style={{width:10,height:10,borderRadius:'50%',background:w.status==='처리 중'?C.success:C.textLight,animation:w.status==='처리 중'?'pulse 2s infinite':'none'}}/>
+            <span style={{fontSize:14,fontWeight:700}}>{w.label}</span>
+          </div>
+          <div style={{fontSize:12,color:C.textLight,marginBottom:4}}>상태: <span style={{color:w.color,fontWeight:600}}>{w.status}</span></div>
+          <div style={{fontSize:12,color:C.textLight}}>작업: {w.job}</div>
+        </div>)}
+    </div>
+    <div style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.1)'}}>
+      <h3 style={{fontSize:16,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:16,color:C.textLight}}>작업 큐 목록</h3>
+      {QUEUE_JOBS.map((j,i)=><div key={j.id} onClick={()=>setDrawer({item:j,type:'queue'})} style={{display:'flex',alignItems:'center',gap:16,padding:'16px 0',borderBottom:i<QUEUE_JOBS.length-1?`1px solid ${C.border}`:'none',cursor:'pointer',transition:'all 150ms'}} onMouseEnter={e=>e.currentTarget.style.background=C.primaryDim} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+        <div style={{flex:'0 0 100px'}}><span style={{fontSize:12,fontFamily:'monospace',color:C.primary,fontWeight:600}}>{j.id}</span></div>
+        <div style={{flex:1}}><div style={{fontSize:14,fontWeight:600,marginBottom:4}}>{j.name}</div><div style={{fontSize:12,color:C.textLight}}>워커: {j.worker} · 우선순위: {j.priority}</div></div>
+        <div style={{flex:'0 0 180px'}}>
+          <div style={{background:C.bg,borderRadius:6,height:8,overflow:'hidden',marginBottom:4}}><div style={{height:'100%',borderRadius:6,background:`linear-gradient(90deg,${C.primary},${C.accent})`,width:`${j.total>0?(j.progress/j.total*100):0}%`,transition:'width 1s ease'}}/></div>
+          <div style={{fontSize:11,color:C.textLight}}>{j.total>0?`${j.progress}/${j.total}`:'-'}</div>
+        </div>
+        <div style={{flex:'0 0 80px',textAlign:'right'}}><Badge text={j.status}/></div>
+      </div>)}
+    </div>
+  </div>;
+}
+
+function ReportPage({setDrawer}){
+  return <div style={{animation:'fadeIn 300ms ease'}}>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:24}}>
+      <div style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.1)'}}>
+        <h3 style={{fontSize:16,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:16,color:C.textLight}}>오류 유형별 분포</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <PieChart><Pie data={ERROR_CHART} cx="50%" cy="50%" outerRadius={85} innerRadius={45} dataKey="value" paddingAngle={3} label={({name,percent})=>`${name} ${(percent*100).toFixed(0)}%`} labelLine={false} fontSize={11}>
+            {[C.danger,C.warning,C.info,C.primary,'#A78BFA'].map((c,i)=><Cell key={i} fill={c}/>)}
+          </Pie></PieChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.1)'}}>
+        <h3 style={{fontSize:16,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:16,color:C.textLight}}>월별 오류 추이</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={MONTHLY_CHART}><CartesianGrid strokeDasharray="3 3" stroke={C.border}/><XAxis dataKey="month" fontSize={11} stroke={C.textLight}/><YAxis fontSize={11} stroke={C.textLight}/><Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}}/>
+            <Bar dataKey="오류" fill={C.danger} radius={[6,6,0,0]}/>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+    <div style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.1)'}}>
+      <h3 style={{fontSize:16,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:16,color:C.textLight}}>오류 목록</h3>
+      {ERROR_DATA.map((e,i)=><div key={e.id} onClick={()=>setDrawer({item:e,type:'error'})} style={{display:'flex',alignItems:'center',gap:16,padding:'16px 0',borderBottom:i<ERROR_DATA.length-1?`1px solid ${C.border}`:'none',cursor:'pointer',transition:'background 150ms'}} onMouseEnter={el=>el.currentTarget.style.background=C.primaryDim} onMouseLeave={el=>el.currentTarget.style.background='transparent'}>
+        <div style={{flex:'0 0 90px'}}><span style={{fontSize:12,fontFamily:'monospace',color:C.danger,fontWeight:600}}>{e.id}</span></div>
+        <div style={{flex:1}}><div style={{fontSize:14,fontWeight:600,marginBottom:4}}>{e.type} — {e.field}</div><div style={{fontSize:12,color:C.textLight}}>{e.dept} · {e.desc}</div></div>
+        <div style={{flex:'0 0 60px',textAlign:'center',fontSize:14,fontWeight:700,color:C.warning}}>{e.count}건</div>
+        <div style={{flex:'0 0 80px',textAlign:'right'}}><Badge text={e.status}/></div>
+      </div>)}
+    </div>
+  </div>;
+}
+
+function SettingsPage({setToast}){
+  return <div style={{animation:'fadeIn 300ms ease'}}>
+    <div style={{display:'grid',gap:20}}>
+      {[{title:'이카운트 ERP API',desc:'API 인증 및 엔드포인트 설정',fields:[{l:'엔드포인트',v:'https://api.ecount.com/v2'},{l:'API Key',v:'ec_key_****'}]},
+        {title:'HRM 시스템 연동',desc:'인사 관리 시스템 데이터 소스 설정',fields:[{l:'데이터 소스',v:'MySQL (hrm-db.internal:3306)'},{l:'동기화 주기',v:'매일 08:00'}]},
+        {title:'Celery 배치 설정',desc:'워커 수, Redis 브로커, 스케줄 관리',fields:[{l:'Redis 브로커',v:'redis://cache.internal:6379/0'},{l:'워커 수',v:'3'}]},
+      ].map((s,i)=><div key={i} style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.1)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <div><h3 style={{fontSize:16,fontWeight:700}}>{s.title}</h3><p style={{fontSize:12,color:C.textLight,marginTop:2}}>{s.desc}</p></div>
+          <button onClick={()=>setToast(`${s.title} 저장 완료`)} style={{padding:'8px 20px',background:C.primary,color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontSize:13,fontWeight:600}}>저장</button>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          {s.fields.map(f=><div key={f.l}><label style={{fontSize:11,color:C.textLight,marginBottom:4,display:'block',textTransform:'uppercase',letterSpacing:'0.05em'}}>{f.l}</label><input defaultValue={f.v} style={{width:'100%',padding:'10px 14px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,outline:'none',background:C.bg,color:C.text}}/></div>)}
+        </div>
+      </div>)}
+    </div>
+  </div>;
+}
+
+// ─── App ───
+function App(){
+  const [loading,setLoading]=useState(true);
+  const [tab,setTab]=useState('home');
+  const [drawer,setDrawer]=useState(null);
+  const [toast,setToast]=useState(null);
+
+  useEffect(()=>{setTimeout(()=>setLoading(false),1200)},[]);
+  if(loading) return <SkeletonLoader/>;
+
+  const meta=HERO_META[tab];
+
+  return(
+    <div style={{minHeight:'100vh',background:C.bg}}>
+      {/* Top Nav */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:4}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginRight:24}}>
+          <div style={{width:28,height:28,borderRadius:8,background:`linear-gradient(135deg,${C.primary},${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>💰</div>
+          <span style={{fontWeight:800,fontSize:15}}>PaySync Hub</span>
+        </div>
+        {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} title={t.label} style={{padding:'8px 16px',border:'none',cursor:'pointer',background:tab===t.id?C.primaryDim:'transparent',color:tab===t.id?C.primary:C.textLight,borderRadius:8,fontSize:13,fontWeight:tab===t.id?700:400,fontFamily:'inherit',transition:'all 150ms'}}>{t.label}</button>)}
+        <div style={{flex:1}}/>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <input placeholder="검색..." style={{padding:'7px 14px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,background:C.bg,color:C.text,outline:'none',width:180}}/>
+          <span style={{fontSize:18,cursor:'pointer'}}>🔔</span>
+          <div style={{width:28,height:28,borderRadius:'50%',background:C.primaryDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12}}>👤</div>
+        </div>
+      </header>
+
+      {/* Hero Banner */}
+      <div style={{background:meta.gradient,padding:'28px 32px',color:'#fff'}}>
+        <h1 style={{fontSize:28,fontWeight:800,letterSpacing:'-0.03em'}}>{meta.title}</h1>
+        <p style={{fontSize:14,opacity:0.85,marginTop:4}}>{meta.desc}</p>
+        <div style={{display:'flex',gap:40,marginTop:16}}>
+          {meta.kpis.map(k=><div key={k.label}><div style={{fontSize:11,opacity:0.7,textTransform:'uppercase',letterSpacing:'0.05em'}}>{k.label}</div><div style={{fontSize:22,fontWeight:800,marginTop:2}}>{k.value}</div></div>)}
+        </div>
+      </div>
+
+      {/* Content */}
+      <main style={{padding:'24px 32px',maxHeight:'calc(100vh - 56px - 130px)',overflowY:'auto'}}>
+        {tab==='home'&&<HomePage setDrawer={setDrawer} setToast={setToast}/>}
+        {tab==='rules'&&<RulesPage setDrawer={setDrawer} setToast={setToast}/>}
+        {tab==='queue'&&<QueuePage setDrawer={setDrawer}/>}
+        {tab==='report'&&<ReportPage setDrawer={setDrawer}/>}
+        {tab==='settings'&&<SettingsPage setToast={setToast}/>}
+      </main>
+
+      {drawer&&<Drawer item={drawer.item} type={drawer.type} onClose={()=>setDrawer(null)} setToast={setToast}/>}
+      {toast&&<Toast message={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

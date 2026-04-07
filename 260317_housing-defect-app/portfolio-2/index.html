@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>건설 현장 안전 점검 플랫폼 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net"/>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Pretendard',sans-serif;background:#FFF1F2;color:#1A0A0F}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-thumb{background:#E5E7EB;border-radius:3px}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes barGrow{from{width:0%}to{width:var(--target-width)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo} = React;
+const {ResponsiveContainer,PieChart,Pie,Cell,BarChart,Bar,XAxis,YAxis,Tooltip,CartesianGrid,LineChart,Line,Legend,RadarChart,Radar,PolarGrid,PolarAngleAxis,PolarRadiusAxis} = Recharts;
+
+const C = {
+  primary:'#F43F5E',secondary:'#881337',accent:'#FB923C',
+  bg:'#FFF1F2',surface:'#FFFFFF',border:'#F3E8E8',
+  text:'#1A0A0F',textLight:'#6B7280',
+  success:'#10B981',warning:'#F59E0B',danger:'#EF4444',
+  gradient:'linear-gradient(135deg,#F43F5E,#FB923C)',
+};
+
+const TABS = [
+  {id:'dashboard',label:'현장 안전 대시보드',icon:'🏗️'},
+  {id:'hazard-record',label:'위험 항목 기록',icon:'⚠️'},
+  {id:'action-tracking',label:'조치 이력 추적',icon:'📋'},
+  {id:'report-gen',label:'점검 보고서 생성',icon:'📊'},
+  {id:'site-map',label:'현장 관리',icon:'🗺️'},
+];
+
+const RISK_LEVELS = [{label:'긴급',color:'#EF4444'},{label:'높음',color:'#F97316'},{label:'보통',color:'#F59E0B'},{label:'낮음',color:'#22C55E'}];
+const HAZARD_TYPES = ['추락 위험','전기 위험','화재 위험','붕괴 위험','유해물질','미끄러움','장비 고장','기타'];
+
+const SITES = [
+  {name:'강남 오피스텔 신축 현장',zone:'A구역',workers:45,hazards:12,resolved:8,score:82},
+  {name:'판교 물류센터 건설',zone:'B구역',workers:62,hazards:18,resolved:14,score:76},
+  {name:'인천 아파트 단지 3블록',zone:'C구역',workers:38,hazards:8,resolved:6,score:89},
+  {name:'용산 복합 개발 현장',zone:'D구역',workers:55,hazards:22,resolved:15,score:68},
+  {name:'세종 행정타운 2단계',zone:'E구역',workers:41,hazards:10,resolved:9,score:91},
+];
+
+const HAZARDS = Array.from({length:36},(_,i)=>({
+  id:`HZ-${String(i+1).padStart(4,'0')}`,
+  site:SITES[i%5].name,
+  zone:['A구역 1층','B구역 지하','C구역 옥상','A구역 3층','B구역 외부'][i%5],
+  type:HAZARD_TYPES[i%8],
+  risk:RISK_LEVELS[i%4],
+  aiClass:HAZARD_TYPES[(i+1)%8],
+  aiConfidence:Math.floor(Math.random()*20+75),
+  reporter:['김민수','이준호','박서진','정하윤','최우진'][i%5],
+  date:`2025.${String(Math.floor(i/6)+1).padStart(2,'0')}.${String((i%28)+1).padStart(2,'0')}`,
+  description:`${SITES[i%5].name} ${['A구역 1층','B구역 지하','C구역 옥상'][i%3]}에서 발견된 ${HAZARD_TYPES[i%8]} 항목. 즉시 조치가 필요합니다.`,
+  photos:Math.floor(Math.random()*4+1),
+  actions:[
+    {date:'2025.01.15',action:'위험 등록',user:'시스템',level:'info'},
+    {date:'2025.01.16',action:'담당자 배정',user:'안전팀',level:'info'},
+    {date:'2025.01.18',action:'현장 조치 시작',user:['김민수','이준호'][i%2],level:'action'},
+  ],
+  status:['미조치','조치중','조치완료','확인완료'][i%4],
+  statusColor:['#EF4444','#F59E0B','#10B981','#3B82F6'][i%4],
+  deadline:`2025.0${Math.floor(i/6)+1}.${String((i%28)+7).padStart(2,'0')}`,
+}));
+
+const riskDistribution = RISK_LEVELS.map(r=>({name:r.label,value:Math.floor(Math.random()*15+5)}));
+const PIE_COLORS = ['#EF4444','#F97316','#F59E0B','#22C55E'];
+
+const weeklyTrend = ['1주','2주','3주','4주','5주','6주'].map(w=>({
+  week:w,신규:Math.floor(Math.random()*12+4),조치완료:Math.floor(Math.random()*10+3),에스컬레이션:Math.floor(Math.random()*3+0),
+}));
+
+const radarData = SITES.map(s=>({site:s.name.slice(0,6),안전점수:s.score,조치율:Math.round(s.resolved/s.hazards*100),작업자수:Math.round(s.workers/0.7)}));
+
+function CountUp({end,duration=1200,suffix=''}){
+  const [val,setVal]=useState(0);
+  useEffect(()=>{let s=0;const step=end/(duration/16);const t=setInterval(()=>{s+=step;if(s>=end){setVal(end);clearInterval(t)}else setVal(Math.floor(s))},16);return()=>clearInterval(t)},[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({message,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t)},[]);
+  return <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:C.secondary,color:'#fff',padding:'12px 24px',borderRadius:12,animation:'slideUp 300ms ease',boxShadow:'0 8px 24px rgba(0,0,0,.2)',fontSize:14}}>{message}</div>;
+}
+
+function Badge({text,color,bg}){
+  return <span style={{display:'inline-block',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:700,color:color||'#fff',background:bg||C.primary,letterSpacing:'0.02em'}}>{text}</span>;
+}
+
+function Drawer({item,onClose,setToast}){
+  return(
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.4)',zIndex:200,animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:500,background:C.surface,boxShadow:'-8px 0 40px rgba(0,0,0,.15)',zIndex:201,overflowY:'auto',padding:28,animation:'slideInRight 200ms ease'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
+          <h3 style={{fontSize:20,fontWeight:800}}>{item.id}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:C.textLight}}>✕</button>
+        </div>
+        <div style={{display:'flex',gap:8,marginBottom:20}}>
+          <Badge text={item.risk.label} bg={item.risk.color}/>
+          <Badge text={item.status} bg={item.statusColor}/>
+          <Badge text={item.type} bg={`${C.primary}15`} color={C.primary}/>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:20}}>
+          {[{l:'현장',v:item.site},{l:'구역',v:item.zone},{l:'보고자',v:item.reporter},{l:'보고일',v:item.date},{l:'조치 기한',v:item.deadline},{l:'사진',v:`📷 ${item.photos}장`}].map(f=>(
+            <div key={f.l}><div style={{fontSize:11,color:C.textLight,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.05em'}}>{f.l}</div><div style={{fontSize:14,fontWeight:600,marginTop:4}}>{f.v}</div></div>
+          ))}
+        </div>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:11,color:C.textLight,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:8}}>AI 자동 분류 결과</div>
+          <div style={{padding:16,background:`linear-gradient(135deg,${C.primary}08,${C.accent}08)`,borderRadius:12,border:`1px solid ${C.primary}20`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <span style={{fontWeight:700}}>🤖 {item.aiClass}</span>
+              <Badge text={`신뢰도 ${item.aiConfidence}%`} bg={item.aiConfidence>85?`${C.success}20`:`${C.warning}20`} color={item.aiConfidence>85?C.success:C.warning}/>
+            </div>
+            <div style={{fontSize:12,color:C.textLight}}>Claude API Vision 분석 기반 자동 분류 결과입니다.</div>
+          </div>
+        </div>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:11,color:C.textLight,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:8}}>상세 설명</div>
+          <div style={{fontSize:14,lineHeight:1.7,padding:14,background:'#FFF5F5',borderRadius:10}}>{item.description}</div>
+        </div>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:11,color:C.textLight,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:8}}>조치 이력</div>
+          {item.actions.map((a,i)=>(
+            <div key={i} style={{display:'flex',gap:12,padding:'10px 0',borderBottom:i<item.actions.length-1?`1px solid ${C.border}`:''}}>
+              <div style={{width:10,height:10,borderRadius:'50%',background:a.level==='action'?C.primary:'#94A3B8',marginTop:5,flexShrink:0}}/>
+              <div><div style={{fontSize:13,fontWeight:600}}>{a.action}</div><div style={{fontSize:12,color:C.textLight}}>{a.date} · {a.user}</div></div>
+            </div>
+          ))}
+        </div>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:11,color:C.textLight,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:8}}>조치 내용 입력</div>
+          <textarea rows={3} placeholder="조치 내용을 입력하세요..." style={{width:'100%',padding:12,borderRadius:10,border:`1px solid ${C.border}`,fontSize:13,fontFamily:'inherit',resize:'vertical'}}/>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>{onClose();setToast('조치 완료 처리되었습니다')}} style={{flex:1,padding:'12px',background:C.primary,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:13,fontFamily:'inherit'}}>조치 완료</button>
+          <button onClick={()=>{onClose();setToast('에스컬레이션 요청되었습니다')}} style={{flex:1,padding:'12px',background:C.accent,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:13,fontFamily:'inherit'}}>에스컬레이션</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Modal({title,onClose,children,width=560}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,.4)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:'#fff',borderRadius:16,zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,.15)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'20px 24px',borderBottom:'1px solid #F3E8E8'}}>
+          <h3 style={{fontSize:18,fontWeight:800}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textLight}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Pages ───
+function DashboardPage({setDrawer}){
+  const kpis=[
+    {label:'등록 위험 항목',value:36,icon:'⚠️',color:C.primary},
+    {label:'미조치 항목',value:9,icon:'🚨',color:C.danger},
+    {label:'금주 신규',value:7,icon:'📝',color:C.accent},
+  ];
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:28}}>
+        {kpis.map((k,i)=>(
+          <div key={k.label} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,.08)',animation:`slideUp 400ms ease ${i*80}ms both`,transition:'all 200ms',cursor:'default'}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,.12)'}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,.08)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+              <span style={{fontSize:22}}>{k.icon}</span>
+              <span style={{fontSize:12,color:C.textLight,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.05em'}}>{k.label}</span>
+            </div>
+            <div style={{fontSize:36,fontWeight:800,color:k.color,letterSpacing:'-0.03em'}}><CountUp end={k.value}/></div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:24}}>
+        <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,.08)'}}>
+          <h3 style={{fontSize:16,fontWeight:700,marginBottom:16,textTransform:'uppercase',letterSpacing:'0.03em'}}>위험 등급 분포</h3>
+          <ResponsiveContainer width="100%" height={260}>
+            <PieChart><Pie data={riskDistribution} cx="50%" cy="50%" innerRadius={50} outerRadius={85} paddingAngle={4} dataKey="value">
+              {riskDistribution.map((e,i)=><Cell key={i} fill={PIE_COLORS[i]}/>)}
+            </Pie><Tooltip/></PieChart>
+          </ResponsiveContainer>
+          <div style={{display:'flex',justifyContent:'center',gap:16,marginTop:8}}>
+            {RISK_LEVELS.map(r=><div key={r.label} style={{display:'flex',alignItems:'center',gap:6,fontSize:12}}><div style={{width:10,height:10,borderRadius:'50%',background:r.color}}/>{r.label}</div>)}
+          </div>
+        </div>
+        <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,.08)'}}>
+          <h3 style={{fontSize:16,fontWeight:700,marginBottom:16,textTransform:'uppercase',letterSpacing:'0.03em'}}>주간 위험 추이</h3>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={weeklyTrend}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F3E8E8"/>
+              <XAxis dataKey="week" fontSize={12} stroke="#94A3B8"/>
+              <YAxis fontSize={12} stroke="#94A3B8"/>
+              <Tooltip contentStyle={{borderRadius:12,border:'none',boxShadow:'0 4px 16px rgba(0,0,0,.1)'}}/>
+              <Bar dataKey="신규" fill={C.primary} radius={[6,6,0,0]}/>
+              <Bar dataKey="조치완료" fill={C.success} radius={[6,6,0,0]}/>
+              <Bar dataKey="에스컬레이션" fill={C.accent} radius={[6,6,0,0]}/>
+              <Legend/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,.08)'}}>
+        <h3 style={{fontSize:16,fontWeight:700,marginBottom:16}}>미조치 긴급 항목</h3>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+          {HAZARDS.filter(h=>h.status==='미조치').slice(0,6).map((h,i)=>(
+            <div key={h.id} onClick={()=>setDrawer(h)} style={{padding:16,borderRadius:12,border:`2px solid ${h.risk.color}30`,cursor:'pointer',transition:'all 200ms',animation:`slideUp 400ms ease ${i*80}ms both`}}
+              onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,.12)'}}
+              onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow=''}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+                <Badge text={h.risk.label} bg={h.risk.color}/>
+                <span style={{fontSize:11,color:C.textLight}}>{h.date}</span>
+              </div>
+              <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>{h.type}</div>
+              <div style={{fontSize:12,color:C.textLight}}>{h.site.slice(0,12)}... · {h.zone}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HazardRecordPage({setDrawer,setModal,setToast}){
+  const [filter,setFilter]=useState({risk:'',type:''});
+  const filtered=useMemo(()=>HAZARDS.filter(h=>{
+    if(filter.risk && h.risk.label!==filter.risk) return false;
+    if(filter.type && h.type!==filter.type) return false;
+    return true;
+  }),[filter]);
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',gap:12,marginBottom:20,flexWrap:'wrap',alignItems:'center'}}>
+        <select value={filter.risk} onChange={e=>setFilter(f=>({...f,risk:e.target.value}))} style={{padding:'10px 16px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:13,fontFamily:'inherit'}}>
+          <option value="">전체 등급</option>{RISK_LEVELS.map(r=><option key={r.label}>{r.label}</option>)}
+        </select>
+        <select value={filter.type} onChange={e=>setFilter(f=>({...f,type:e.target.value}))} style={{padding:'10px 16px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:13,fontFamily:'inherit'}}>
+          <option value="">전체 유형</option>{HAZARD_TYPES.map(t=><option key={t}>{t}</option>)}
+        </select>
+        <div style={{flex:1}}/>
+        <button onClick={()=>setModal({type:'create-hazard'})} style={{padding:'10px 24px',background:C.gradient,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:13,fontFamily:'inherit'}}>+ 위험 항목 등록</button>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+        {filtered.slice(0,12).map((h,i)=>(
+          <div key={h.id} onClick={()=>setDrawer(h)} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,.08)',cursor:'pointer',transition:'all 200ms',animation:`slideUp 400ms ease ${i*60}ms both`}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,.15)'}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,.08)'}}>
+            <div style={{height:120,background:`linear-gradient(135deg,${h.risk.color}15,${h.risk.color}05)`,borderRadius:10,marginBottom:14,display:'flex',alignItems:'center',justifyContent:'center',fontSize:36}}>
+              {['🚧','⚡','🔥','🏗️','☣️','💧','🔧','⚠️'][HAZARD_TYPES.indexOf(h.type)]}
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <span style={{fontSize:12,fontWeight:700,color:C.primary}}>{h.id}</span>
+              <Badge text={h.risk.label} bg={h.risk.color}/>
+            </div>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:4}}>{h.type}</div>
+            <div style={{fontSize:12,color:C.textLight,marginBottom:10}}>{h.site.slice(0,15)}... · {h.zone}</div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <Badge text={h.status} bg={h.statusColor}/>
+              <span style={{fontSize:11,color:C.textLight}}>📷 {h.photos} · {h.date}</span>
+            </div>
+            <div style={{marginTop:10,padding:8,background:`${C.primary}05`,borderRadius:8,fontSize:11,color:C.textLight}}>
+              🤖 AI 분류: {h.aiClass} ({h.aiConfidence}%)
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ActionTrackingPage({setDrawer}){
+  const statuses = ['미조치','조치중','조치완료','확인완료'];
+  const statusColors = ['#EF4444','#F59E0B','#10B981','#3B82F6'];
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:24}}>
+        {statuses.map((s,i)=>{
+          const count=HAZARDS.filter(h=>h.status===s).length;
+          return(
+            <div key={s} style={{background:C.surface,borderRadius:16,padding:16,boxShadow:'0 4px 16px rgba(0,0,0,.08)',textAlign:'center',animation:`slideUp 400ms ease ${i*80}ms both`}}>
+              <div style={{width:10,height:10,borderRadius:'50%',background:statusColors[i],margin:'0 auto 8px'}}/>
+              <div style={{fontSize:28,fontWeight:800,color:statusColors[i]}}>{count}</div>
+              <div style={{fontSize:12,color:C.textLight,fontWeight:600}}>{s}</div>
+            </div>
+          );
+        })}
+      </div>
+      {statuses.map((s,si)=>{
+        const items=HAZARDS.filter(h=>h.status===s);
+        if(!items.length) return null;
+        return(
+          <div key={s} style={{marginBottom:24}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14}}>
+              <div style={{width:12,height:12,borderRadius:'50%',background:statusColors[si]}}/>
+              <h3 style={{fontSize:16,fontWeight:800}}>{s}</h3>
+              <Badge text={items.length} bg={`${statusColors[si]}20`} color={statusColors[si]}/>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {items.slice(0,4).map((h,i)=>(
+                <div key={h.id} onClick={()=>setDrawer(h)} style={{background:C.surface,borderRadius:12,padding:16,boxShadow:'0 2px 8px rgba(0,0,0,.06)',display:'flex',alignItems:'center',gap:16,cursor:'pointer',transition:'all 200ms',animation:`slideInRight 300ms ease ${i*60}ms both`}}
+                  onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.01)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,.12)';e.currentTarget.style.borderLeft=`3px solid ${statusColors[si]}`}}
+                  onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 2px 8px rgba(0,0,0,.06)';e.currentTarget.style.borderLeft=''}}>
+                  <div style={{width:48,height:48,borderRadius:12,background:`${h.risk.color}15`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,flexShrink:0}}>
+                    {['🚧','⚡','🔥','🏗️','☣️','💧','🔧','⚠️'][HAZARD_TYPES.indexOf(h.type)]}
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                      <span style={{fontSize:13,fontWeight:700}}>{h.type}</span>
+                      <Badge text={h.risk.label} bg={h.risk.color}/>
+                    </div>
+                    <div style={{fontSize:12,color:C.textLight}}>{h.site.slice(0,20)} · {h.zone}</div>
+                  </div>
+                  <div style={{textAlign:'right'}}>
+                    <div style={{fontSize:12,fontWeight:600}}>{h.reporter}</div>
+                    <div style={{fontSize:11,color:C.textLight}}>기한: {h.deadline}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReportGenPage({setToast,setModal}){
+  const reports = [
+    {name:'2025년 1월 월간 안전점검 보고서',date:'2025.02.01',pages:24,status:'완료'},
+    {name:'강남 오피스텔 현장 특별 점검',date:'2025.01.20',pages:12,status:'완료'},
+    {name:'2025년 1월 3주차 주간 보고서',date:'2025.01.19',pages:8,status:'완료'},
+    {name:'용산 현장 긴급 안전 보고서',date:'2025.01.15',pages:6,status:'생성중'},
+  ];
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,marginBottom:24}}>
+        <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,.08)'}}>
+          <h3 style={{fontSize:16,fontWeight:700,marginBottom:20}}>보고서 생성</h3>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div><label style={{fontSize:12,color:C.textLight,fontWeight:600,display:'block',marginBottom:6}}>현장 선택</label>
+              <select style={{width:'100%',padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:13,fontFamily:'inherit'}}><option>전체 현장</option>{SITES.map(s=><option key={s.name}>{s.name}</option>)}</select></div>
+            <div><label style={{fontSize:12,color:C.textLight,fontWeight:600,display:'block',marginBottom:6}}>기간</label>
+              <div style={{display:'flex',gap:8}}><input type="date" style={{flex:1,padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:13,fontFamily:'inherit'}}/><input type="date" style={{flex:1,padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:13,fontFamily:'inherit'}}/></div></div>
+            <div><label style={{fontSize:12,color:C.textLight,fontWeight:600,display:'block',marginBottom:6}}>위험 등급</label>
+              <div style={{display:'flex',gap:8}}>{RISK_LEVELS.map(r=>(<label key={r.label} style={{display:'flex',alignItems:'center',gap:4,fontSize:13}}><input type="checkbox" defaultChecked/>{r.label}</label>))}</div></div>
+            <div><label style={{fontSize:12,color:C.textLight,fontWeight:600,display:'block',marginBottom:6}}>포함 항목</label>
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>{['현장 사진 포함','조치 이력 포함','AI 분류 결과 포함','통계 차트 포함'].map(opt=>(<label key={opt} style={{display:'flex',alignItems:'center',gap:6,fontSize:13}}><input type="checkbox" defaultChecked/>{opt}</label>))}</div></div>
+            <button onClick={()=>setToast('PDF 보고서 생성이 시작되었습니다')} style={{padding:'12px',background:C.gradient,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:14,fontFamily:'inherit',marginTop:4}}>📄 PDF 생성</button>
+          </div>
+        </div>
+        <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,.08)'}}>
+          <h3 style={{fontSize:16,fontWeight:700,marginBottom:20}}>최근 보고서</h3>
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {reports.map((r,i)=>(
+              <div key={r.name} onClick={()=>setModal({type:'report-preview',item:r})} style={{padding:16,borderRadius:12,border:`1px solid ${C.border}`,cursor:'pointer',transition:'all 200ms',animation:`slideUp 300ms ease ${i*60}ms both`}}
+                onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,.1)'}}
+                onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow=''}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
+                  <div style={{fontSize:14,fontWeight:700}}>{r.name}</div>
+                  <Badge text={r.status} bg={r.status==='완료'?C.success:'#F59E0B'}/>
+                </div>
+                <div style={{fontSize:12,color:C.textLight}}>{r.date} · {r.pages}페이지</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SiteMapPage({setDrawer}){
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:24}}>
+        {SITES.map((s,i)=>(
+          <div key={s.name} onClick={()=>setDrawer({...HAZARDS[i],site:s.name,description:`${s.name} 현장 관리 정보입니다.`})} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,.08)',cursor:'pointer',transition:'all 200ms',animation:`slideUp 400ms ease ${i*80}ms both`}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,.15)'}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,.08)'}}>
+            <div style={{height:100,background:`linear-gradient(135deg,${C.primary}15,${C.accent}10)`,borderRadius:12,marginBottom:14,display:'flex',alignItems:'center',justifyContent:'center',fontSize:36}}>🏗️</div>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:4}}>{s.name}</div>
+            <div style={{fontSize:12,color:C.textLight,marginBottom:12}}>{s.zone} · 작업자 {s.workers}명</div>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
+              <div style={{textAlign:'center'}}><div style={{fontSize:20,fontWeight:800,color:C.danger}}>{s.hazards}</div><div style={{fontSize:10,color:C.textLight}}>위험</div></div>
+              <div style={{textAlign:'center'}}><div style={{fontSize:20,fontWeight:800,color:C.success}}>{s.resolved}</div><div style={{fontSize:10,color:C.textLight}}>조치</div></div>
+              <div style={{textAlign:'center'}}><div style={{fontSize:20,fontWeight:800,color:s.score>=80?C.success:C.warning}}>{s.score}</div><div style={{fontSize:10,color:C.textLight}}>점수</div></div>
+            </div>
+            <div style={{background:'#F3E8E8',borderRadius:4,height:6,overflow:'hidden'}}>
+              <div style={{background:s.score>=80?C.success:C.warning,height:'100%',width:`${s.score}%`,borderRadius:4}}/>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,.08)'}}>
+        <h3 style={{fontSize:16,fontWeight:700,marginBottom:16}}>현장별 안전 지표 비교</h3>
+        <ResponsiveContainer width="100%" height={300}>
+          <RadarChart data={radarData}>
+            <PolarGrid stroke="#F3E8E8"/>
+            <PolarAngleAxis dataKey="site" fontSize={11}/>
+            <PolarRadiusAxis fontSize={10}/>
+            <Radar name="안전점수" dataKey="안전점수" stroke={C.primary} fill={C.primary} fillOpacity={0.2}/>
+            <Radar name="조치율" dataKey="조치율" stroke={C.success} fill={C.success} fillOpacity={0.2}/>
+            <Legend/>
+          </RadarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main App ───
+function App(){
+  const [tab,setTab]=useState('dashboard');
+  const [drawer,setDrawer]=useState(null);
+  const [modal,setModal]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{setTimeout(()=>setLoading(false),1200)},[]);
+
+  if(loading) return(
+    <div style={{minHeight:'100vh',background:C.bg}}>
+      <div style={{height:56,background:C.surface}}/>
+      <div style={{height:100,background:`linear-gradient(135deg,${C.primary}30,${C.accent}30)`}}/>
+      <div style={{padding:24,display:'flex',flexDirection:'column',gap:16}}>
+        {[...Array(3)].map((_,i)=><div key={i} style={{height:160,borderRadius:16,background:'linear-gradient(90deg,#FFF5F5 25%,#FFE4E6 50%,#FFF5F5 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>)}
+      </div>
+    </div>
+  );
+
+  const heroKpis = {
+    'dashboard':[{l:'전체 현장',v:'5개'},{l:'등록 위험',v:'36건'},{l:'평균 안전점수',v:'81.2'}],
+    'hazard-record':[{l:'금일 신규',v:'3건'},{l:'AI 분류 대기',v:'2건'},{l:'미확인',v:'5건'}],
+    'action-tracking':[{l:'미조치',v:'9건'},{l:'조치중',v:'9건'},{l:'금주 완료',v:'7건'}],
+    'report-gen':[{l:'생성된 보고서',v:'12건'},{l:'금월 보고서',v:'3건'},{l:'대기중',v:'1건'}],
+    'site-map':[{l:'활성 현장',v:'5개'},{l:'총 작업자',v:'241명'},{l:'평균 점수',v:'81'}],
+  };
+
+  const renderPage=()=>{
+    switch(tab){
+      case 'dashboard':return <DashboardPage setDrawer={setDrawer}/>;
+      case 'hazard-record':return <HazardRecordPage setDrawer={setDrawer} setModal={setModal} setToast={setToast}/>;
+      case 'action-tracking':return <ActionTrackingPage setDrawer={setDrawer}/>;
+      case 'report-gen':return <ReportGenPage setToast={setToast} setModal={setModal}/>;
+      case 'site-map':return <SiteMapPage setDrawer={setDrawer}/>;
+      default:return <DashboardPage setDrawer={setDrawer}/>;
+    }
+  };
+
+  return(
+    <div style={{minHeight:'100vh',background:C.bg}}>
+      {/* Top Nav */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:8}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginRight:20}}>
+          <div style={{width:32,height:32,borderRadius:8,background:C.gradient,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,color:'#fff',fontWeight:800}}>S</div>
+          <span style={{fontWeight:800,fontSize:15,color:C.text}}>SafeCheck</span>
+        </div>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} title={t.label} style={{padding:'8px 14px',borderRadius:8,border:'none',cursor:'pointer',background:tab===t.id?`${C.primary}10`:'transparent',color:tab===t.id?C.primary:C.textLight,fontWeight:tab===t.id?700:500,fontSize:13,fontFamily:'inherit',transition:'all 150ms',display:'flex',alignItems:'center',gap:6}}>
+            <span style={{fontSize:14}}>{t.icon}</span>{t.label}
+          </button>
+        ))}
+        <div style={{flex:1}}/>
+        <div style={{position:'relative'}}>
+          <input placeholder="검색..." style={{padding:'7px 14px 7px 32px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:12,width:180,outline:'none',fontFamily:'inherit'}}/>
+          <span style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',fontSize:12}}>🔍</span>
+        </div>
+        <button style={{position:'relative',background:'none',border:'none',fontSize:18,cursor:'pointer'}}>🔔<div style={{position:'absolute',top:-2,right:-2,width:7,height:7,borderRadius:'50%',background:C.danger}}/></button>
+        <div style={{width:30,height:30,borderRadius:'50%',background:C.secondary,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,fontWeight:700}}>관</div>
+      </header>
+
+      {/* Hero Banner */}
+      <div style={{background:C.gradient,padding:'28px 32px',color:'#fff'}}>
+        <h1 style={{fontSize:24,fontWeight:800,marginBottom:10}}>{TABS.find(t=>t.id===tab)?.label}</h1>
+        <div style={{display:'flex',gap:32}}>
+          {(heroKpis[tab]||[]).map(k=>(
+            <div key={k.l}><div style={{fontSize:11,opacity:.8,marginBottom:2}}>{k.l}</div><div style={{fontSize:20,fontWeight:800}}>{k.v}</div></div>
+          ))}
+        </div>
+      </div>
+
+      {/* Content */}
+      <main style={{padding:'24px 32px'}}>
+        {renderPage()}
+      </main>
+
+      {/* Drawer */}
+      {drawer && <Drawer item={drawer} onClose={()=>setDrawer(null)} setToast={setToast}/>}
+
+      {/* Modal: Create Hazard */}
+      {modal?.type==='create-hazard' && (
+        <Modal title="위험 항목 등록" onClose={()=>setModal(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <div><label style={{fontSize:12,color:C.textLight,fontWeight:600,display:'block',marginBottom:6}}>현장 선택</label>
+              <select style={{width:'100%',padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:13,fontFamily:'inherit'}}>{SITES.map(s=><option key={s.name}>{s.name}</option>)}</select></div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <div><label style={{fontSize:12,color:C.textLight,fontWeight:600,display:'block',marginBottom:6}}>구역</label>
+                <input placeholder="예: A구역 3층" style={{width:'100%',padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:13,fontFamily:'inherit'}}/></div>
+              <div><label style={{fontSize:12,color:C.textLight,fontWeight:600,display:'block',marginBottom:6}}>위험 유형</label>
+                <select style={{width:'100%',padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:13,fontFamily:'inherit'}}>{HAZARD_TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
+            </div>
+            <div><label style={{fontSize:12,color:C.textLight,fontWeight:600,display:'block',marginBottom:6}}>위험 등급</label>
+              <div style={{display:'flex',gap:8}}>{RISK_LEVELS.map(r=>(<button key={r.label} style={{flex:1,padding:'10px',borderRadius:10,border:`2px solid ${r.color}`,background:`${r.color}10`,color:r.color,fontWeight:700,cursor:'pointer',fontSize:13,fontFamily:'inherit'}}>{r.label}</button>))}</div></div>
+            <div><label style={{fontSize:12,color:C.textLight,fontWeight:600,display:'block',marginBottom:6}}>상세 설명</label>
+              <textarea rows={3} placeholder="위험 상황을 설명하세요..." style={{width:'100%',padding:12,borderRadius:10,border:`1px solid ${C.border}`,fontSize:13,fontFamily:'inherit',resize:'vertical'}}/></div>
+            <div><label style={{fontSize:12,color:C.textLight,fontWeight:600,display:'block',marginBottom:6}}>사진 첨부</label>
+              <div style={{padding:20,border:`2px dashed ${C.border}`,borderRadius:10,textAlign:'center',color:C.textLight,fontSize:13}}>📷 클릭하여 사진 업로드 (최대 5장) — Claude API 자동 분류 적용</div></div>
+            <button onClick={()=>{setModal(null);setToast('위험 항목이 등록되었습니다')}} style={{padding:'12px',background:C.gradient,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:14,fontFamily:'inherit'}}>등록</button>
+          </div>
+        </Modal>
+      )}
+      {modal?.type==='report-preview' && (
+        <Modal title={modal.item.name} onClose={()=>setModal(null)} width={640}>
+          <div style={{display:'flex',gap:12,marginBottom:16}}>
+            <Badge text={modal.item.status} bg={modal.item.status==='완료'?C.success:'#F59E0B'}/>
+            <span style={{fontSize:13,color:C.textLight}}>{modal.item.date} · {modal.item.pages}페이지</span>
+          </div>
+          <div style={{height:300,background:'#F8FAFC',borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center',marginBottom:16}}>
+            <div style={{textAlign:'center',color:C.textLight}}>
+              <div style={{fontSize:48,marginBottom:8}}>📄</div>
+              <div style={{fontSize:14}}>PDF 미리보기 영역</div>
+            </div>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <button onClick={()=>{setModal(null);setToast('PDF 다운로드가 시작되었습니다')}} style={{flex:1,padding:'12px',background:C.primary,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:13,fontFamily:'inherit'}}>📥 다운로드</button>
+            <button onClick={()=>setModal(null)} style={{flex:1,padding:'12px',background:'#E2E8F0',color:C.text,border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',fontSize:13,fontFamily:'inherit'}}>닫기</button>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast message={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

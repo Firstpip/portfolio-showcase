@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>어필리에이트 정산 자동화 플랫폼 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:#F0F9FF;color:#0F172A;overflow-x:hidden;}
+::-webkit-scrollbar{width:6px;}::-webkit-scrollbar-track{background:#E2E8F0;}::-webkit-scrollbar-thumb{background:#94A3B8;border-radius:3px;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideIn{from{opacity:0;transform:translateX(300px)}to{opacity:1;transform:translateX(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+.skeleton{background:linear-gradient(90deg,#E2E8F0 25%,#F1F5F9 50%,#E2E8F0 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:8px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo}=React;
+const {BarChart,Bar,XAxis,YAxis,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,LineChart,Line,CartesianGrid,Legend,AreaChart,Area,ComposedChart}=Recharts;
+
+const C={primary:'#0066CC',secondary:'#1A365D',accent:'#38BDF8',bg:'#F0F9FF',surface:'#FFFFFF',text:'#0F172A',textSec:'#475569',border:'#E2E8F0',success:'#059669',warning:'#D97706',danger:'#DC2626'};
+
+// ── Data ──
+const partners=[
+  {id:1,name:'리뷰킹 박지훈',channel:'블로그',followers:85000,tier:'Gold',commission:12,conversions:342,revenue:18400000,earned:2208000,status:'활성',joined:'2025-09-15',email:'jpark@review.kr'},
+  {id:2,name:'쇼핑러버 김소연',channel:'인스타그램',followers:210000,tier:'Platinum',commission:15,conversions:528,revenue:31200000,earned:4680000,status:'활성',joined:'2025-08-20',email:'soyeon@shop.kr'},
+  {id:3,name:'테크리뷰 이민수',channel:'유튜브',followers:450000,tier:'Platinum',commission:15,conversions:267,revenue:24800000,earned:3720000,status:'활성',joined:'2025-07-10',email:'minsu@tech.kr'},
+  {id:4,name:'맛집탐방 최유리',channel:'블로그',followers:62000,tier:'Silver',commission:8,conversions:156,revenue:8900000,earned:712000,status:'활성',joined:'2025-10-01',email:'yuri@food.kr'},
+  {id:5,name:'뷰티인사이드 한서희',channel:'유튜브',followers:320000,tier:'Gold',commission:12,conversions:410,revenue:22100000,earned:2652000,status:'비활성',joined:'2025-06-15',email:'seohee@beauty.kr'},
+  {id:6,name:'패션코드 장민호',channel:'인스타그램',followers:180000,tier:'Gold',commission:12,conversions:198,revenue:12400000,earned:1488000,status:'활성',joined:'2025-11-05',email:'minho@fashion.kr'}
+];
+
+const trackLinks=[
+  {id:'AFL-001',partner:'리뷰킹 박지훈',product:'무선 이어폰 Pro',clicks:12400,conversions:342,revenue:18400000,rate:2.76,status:'활성',created:'2026-01-15'},
+  {id:'AFL-002',partner:'쇼핑러버 김소연',product:'프리미엄 에센스',clicks:18900,conversions:528,revenue:31200000,rate:2.79,status:'활성',created:'2026-01-10'},
+  {id:'AFL-003',partner:'테크리뷰 이민수',product:'스마트워치 X',clicks:9800,conversions:267,revenue:24800000,rate:2.72,status:'활성',created:'2026-02-01'},
+  {id:'AFL-004',partner:'맛집탐방 최유리',product:'건강 간식 세트',clicks:6200,conversions:156,revenue:8900000,rate:2.52,status:'활성',created:'2026-02-10'},
+  {id:'AFL-005',partner:'뷰티인사이드 한서희',product:'립스틱 컬렉션',clicks:14500,conversions:410,revenue:22100000,rate:2.83,status:'중단',created:'2025-12-20'},
+  {id:'AFL-006',partner:'패션코드 장민호',product:'캐주얼 재킷',clicks:7800,conversions:198,revenue:12400000,rate:2.54,status:'활성',created:'2026-03-01'}
+];
+
+const settlementData=[
+  {id:'SET-001',partner:'쇼핑러버 김소연',period:'2026년 2월',amount:4680000,status:'지급완료',approvedBy:'운영팀',date:'2026-03-05'},
+  {id:'SET-002',partner:'테크리뷰 이민수',period:'2026년 2월',amount:3720000,status:'지급완료',approvedBy:'운영팀',date:'2026-03-05'},
+  {id:'SET-003',partner:'리뷰킹 박지훈',period:'2026년 2월',amount:2208000,status:'검토중',approvedBy:'-',date:'2026-03-10'},
+  {id:'SET-004',partner:'뷰티인사이드 한서희',period:'2026년 2월',amount:2652000,status:'계산완료',approvedBy:'-',date:'2026-03-08'},
+  {id:'SET-005',partner:'패션코드 장민호',period:'2026년 2월',amount:1488000,status:'대기',approvedBy:'-',date:'-'},
+  {id:'SET-006',partner:'맛집탐방 최유리',period:'2026년 2월',amount:712000,status:'지급완료',approvedBy:'운영팀',date:'2026-03-05'}
+];
+
+const commissionRules=[
+  {id:1,tier:'Platinum',category:'전자제품',rateBase:15,rateBonus:3,threshold:'월 200건 이상'},
+  {id:2,tier:'Gold',category:'전자제품',rateBase:12,rateBonus:2,threshold:'월 100건 이상'},
+  {id:3,tier:'Silver',category:'전자제품',rateBase:8,rateBonus:1,threshold:'월 50건 이상'},
+  {id:4,tier:'Platinum',category:'뷰티',rateBase:18,rateBonus:4,threshold:'월 300건 이상'},
+  {id:5,tier:'Gold',category:'뷰티',rateBase:14,rateBonus:2,threshold:'월 150건 이상'},
+  {id:6,tier:'Silver',category:'식품',rateBase:10,rateBonus:1,threshold:'월 80건 이상'}
+];
+
+const dailyPerf=[
+  {date:'3/11',clicks:2840,conversions:78,revenue:4200000},
+  {date:'3/12',clicks:3120,conversions:92,revenue:5100000},
+  {date:'3/13',clicks:2680,conversions:71,revenue:3800000},
+  {date:'3/14',clicks:3450,conversions:104,revenue:5800000},
+  {date:'3/15',clicks:3890,conversions:118,revenue:6400000},
+  {date:'3/16',clicks:2960,conversions:82,revenue:4500000},
+  {date:'3/17',clicks:3640,conversions:99,revenue:5600000},
+  {date:'3/18',clicks:4120,conversions:132,revenue:7200000},
+  {date:'3/19',clicks:3780,conversions:108,revenue:6100000},
+  {date:'3/20',clicks:4350,conversions:142,revenue:7800000}
+];
+
+const channelDist=[{name:'인스타그램',value:38},{name:'유튜브',value:32},{name:'블로그',value:22},{name:'틱톡',value:8}];
+const pieColors=['#0066CC','#38BDF8','#7DD3FC','#BAE6FD'];
+
+const reports=[
+  {id:1,partner:'쇼핑러버 김소연',month:'2026년 2월',clicks:18900,conversions:528,revenue:31200000,commission:4680000,convRate:2.79},
+  {id:2,partner:'테크리뷰 이민수',month:'2026년 2월',clicks:9800,conversions:267,revenue:24800000,commission:3720000,convRate:2.72},
+  {id:3,partner:'리뷰킹 박지훈',month:'2026년 2월',clicks:12400,conversions:342,revenue:18400000,commission:2208000,convRate:2.76}
+];
+
+// ── Components ──
+function Skeleton(){return(<div style={{padding:32}}><div className="skeleton" style={{width:'100%',height:160,marginBottom:24,borderRadius:16}}/><div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>{[1,2,3].map(i=><div key={i} className="skeleton" style={{height:200,borderRadius:12}}/>)}</div></div>);}
+
+function Drawer({open,onClose,title,children}){
+  if(!open)return null;
+  return(<div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(15,23,42,0.4)',zIndex:1000}}>
+    <div onClick={e=>e.stopPropagation()} style={{position:'absolute',right:0,top:0,bottom:0,width:520,background:C.surface,boxShadow:'-12px 0 40px rgba(0,0,0,0.12)',animation:'slideIn .3s',overflow:'auto'}}>
+      <div style={{padding:'20px 24px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',position:'sticky',top:0,background:C.surface,zIndex:1}}>
+        <h3 style={{fontSize:18,fontWeight:700}}>{title}</h3>
+        <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSec}}>✕</button>
+      </div>
+      <div style={{padding:24}}>{children}</div>
+    </div>
+  </div>);
+}
+
+function Badge({text}){
+  const colors={활성:{bg:'#D1FAE5',t:'#065F46'},비활성:{bg:'#FEE2E2',t:'#991B1B'},중단:{bg:'#FEE2E2',t:'#991B1B'},지급완료:{bg:'#D1FAE5',t:'#065F46'},검토중:{bg:'#FEF3C7',t:'#92400E'},계산완료:{bg:'#DBEAFE',t:'#1D4ED8'},대기:{bg:'#F3F4F6',t:'#374151'},Platinum:{bg:'#EDE9FE',t:'#5B21B6'},Gold:{bg:'#FEF3C7',t:'#92400E'},Silver:{bg:'#F3F4F6',t:'#374151'}};
+  const c=colors[text]||{bg:'#F3F4F6',t:'#374151'};
+  return <span style={{padding:'4px 10px',borderRadius:20,fontSize:12,fontWeight:600,background:c.bg,color:c.t}}>{text}</span>;
+}
+
+function HeroBanner({icon,title,kpis}){
+  return(<div style={{background:`linear-gradient(135deg, ${C.secondary} 0%, ${C.primary} 60%, ${C.accent} 100%)`,borderRadius:20,padding:'36px 44px',marginBottom:28,position:'relative',overflow:'hidden'}}>
+    <div style={{position:'absolute',top:-40,right:-40,width:200,height:200,background:'rgba(56,189,248,0.1)',borderRadius:'50%'}}/>
+    <div style={{position:'absolute',bottom:-20,right:120,width:120,height:120,background:'rgba(56,189,248,0.08)',borderRadius:'50%'}}/>
+    <div style={{position:'relative',zIndex:1,display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+      <div style={{display:'flex',alignItems:'center',gap:16}}>
+        <div style={{fontSize:36}}>{icon}</div>
+        <h1 style={{fontSize:28,fontWeight:800,color:'#fff'}}>{title}</h1>
+      </div>
+      <div style={{display:'flex',gap:24}}>
+        {kpis.map(k=><div key={k.label} style={{textAlign:'center'}}>
+          <div style={{fontSize:26,fontWeight:800,color:'#fff'}}>{k.value}</div>
+          <div style={{fontSize:12,color:'rgba(255,255,255,0.7)',marginTop:2}}>{k.label}</div>
+        </div>)}
+      </div>
+    </div>
+  </div>);
+}
+
+function Toast({msg,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,2500);return()=>clearTimeout(t);},[]);
+  return(<div style={{position:'fixed',bottom:24,right:24,background:C.secondary,color:'#fff',padding:'12px 20px',borderRadius:10,fontSize:14,fontWeight:500,boxShadow:'0 8px 30px rgba(0,0,0,0.15)',zIndex:2000,animation:'fadeIn .3s'}}>✅ {msg}</div>);
+}
+
+// ── Pages ──
+function DashboardPage(){
+  const totalClicks=dailyPerf.reduce((s,d)=>s+d.clicks,0);
+  const totalConv=dailyPerf.reduce((s,d)=>s+d.conversions,0);
+  const totalRev=dailyPerf.reduce((s,d)=>s+d.revenue,0);
+  return(<div style={{animation:'fadeIn .4s'}}>
+    <HeroBanner icon="📊" title="성과 분석 대시보드" kpis={[
+      {label:'활성 파트너',value:partners.filter(p=>p.status==='활성').length+'명'},
+      {label:'총 클릭 (10일)',value:(totalClicks/1000).toFixed(1)+'K'},
+      {label:'총 전환 매출',value:(totalRev/100000000).toFixed(1)+'억원'}
+    ]}/>
+    <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:20,marginBottom:24}}>
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 2px 8px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:16,fontWeight:700,marginBottom:16}}>일별 클릭·전환·매출 추이</h3>
+        <ResponsiveContainer width="100%" height={280}>
+          <ComposedChart data={dailyPerf}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0"/>
+            <XAxis dataKey="date" tick={{fontSize:12}}/>
+            <YAxis yAxisId="left" tick={{fontSize:11}}/>
+            <YAxis yAxisId="right" orientation="right" tick={{fontSize:11}} tickFormatter={v=>(v/10000)+'만'}/>
+            <Tooltip formatter={(v,n)=>n==='매출'?((v/10000).toFixed(0)+'만원'):v.toLocaleString()}/>
+            <Legend wrapperStyle={{fontSize:12}}/>
+            <Bar yAxisId="left" dataKey="clicks" name="클릭" fill="#BAE6FD" radius={[4,4,0,0]}/>
+            <Bar yAxisId="left" dataKey="conversions" name="전환" fill={C.primary} radius={[4,4,0,0]}/>
+            <Line yAxisId="right" type="monotone" dataKey="revenue" name="매출" stroke="#D97706" strokeWidth={2} dot={{r:3}}/>
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 2px 8px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:16,fontWeight:700,marginBottom:16}}>채널별 분포</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <PieChart><Pie data={channelDist} cx="50%" cy="50%" innerRadius={45} outerRadius={80} dataKey="value" label={({name,percent})=>`${name} ${(percent*100).toFixed(0)}%`} style={{fontSize:11}}>{channelDist.map((_,i)=><Cell key={i} fill={pieColors[i]}/>)}</Pie><Tooltip/></PieChart>
+        </ResponsiveContainer>
+        <div style={{display:'flex',flexWrap:'wrap',gap:8,marginTop:12,justifyContent:'center'}}>{channelDist.map((d,i)=><div key={d.name} style={{display:'flex',alignItems:'center',gap:6,fontSize:12}}><div style={{width:10,height:10,borderRadius:3,background:pieColors[i]}}/>{d.name}</div>)}</div>
+      </div>
+    </div>
+    <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 2px 8px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`}}>
+      <h3 style={{fontSize:16,fontWeight:700,marginBottom:16}}>실시간 전환 피드</h3>
+      <div style={{display:'flex',flexDirection:'column',gap:8}}>
+        {[{time:'방금 전',partner:'쇼핑러버 김소연',product:'프리미엄 에센스',amount:59000},{time:'2분 전',partner:'테크리뷰 이민수',product:'스마트워치 X',amount:329000},{time:'5분 전',partner:'리뷰킹 박지훈',product:'무선 이어폰 Pro',amount:89000},{time:'8분 전',partner:'패션코드 장민호',product:'캐주얼 재킷',amount:128000},{time:'12분 전',partner:'쇼핑러버 김소연',product:'세럼 앰플',amount:42000}].map((e,i)=>
+          <div key={i} style={{display:'flex',alignItems:'center',gap:16,padding:'12px 16px',background:i===0?'#F0F9FF':'transparent',borderRadius:10,border:i===0?`1px solid ${C.accent}`:'1px solid transparent'}}>
+            <div style={{width:8,height:8,borderRadius:'50%',background:i===0?C.success:'#94A3B8',animation:i===0?'pulse 2s infinite':'none'}}/>
+            <span style={{fontSize:12,color:C.textSec,width:60}}>{e.time}</span>
+            <span style={{fontSize:14,fontWeight:600,flex:1}}>{e.partner}</span>
+            <span style={{fontSize:13,color:C.textSec}}>{e.product}</span>
+            <span style={{fontSize:14,fontWeight:700,color:C.primary}}>+{e.amount.toLocaleString()}원</span>
+          </div>
+        )}
+      </div>
+    </div>
+  </div>);
+}
+
+function TrackingLinksPage(){
+  const [drawer,setDrawer]=useState(null);
+  const [createDrawer,setCreateDrawer]=useState(false);
+  const [toast,setToast]=useState('');
+  const [search,setSearch]=useState('');
+  const filtered=trackLinks.filter(l=>search===''||l.partner.includes(search)||l.product.includes(search));
+
+  return(<div style={{animation:'fadeIn .4s'}}>
+    <HeroBanner icon="🔗" title="추적 링크 관리" kpis={[
+      {label:'활성 링크',value:trackLinks.filter(l=>l.status==='활성').length+'개'},
+      {label:'총 클릭',value:(trackLinks.reduce((s,l)=>s+l.clicks,0)/1000).toFixed(1)+'K'},
+      {label:'평균 전환율',value:(trackLinks.reduce((s,l)=>s+l.rate,0)/trackLinks.length).toFixed(2)+'%'}
+    ]}/>
+    <div style={{display:'flex',gap:12,marginBottom:20,alignItems:'center'}}>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="파트너 또는 상품 검색..." style={{flex:1,padding:'10px 16px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:14,outline:'none',fontFamily:'Pretendard'}}/>
+      <button onClick={()=>setCreateDrawer(true)} style={{padding:'10px 20px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:14,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>+ 링크 발급</button>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+      {filtered.map(l=><div key={l.id} onClick={()=>setDrawer(l)} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 2px 8px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`,cursor:'pointer',transition:'all .2s'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 12px 30px rgba(0,102,204,0.12)';}} onMouseLeave={e=>{e.currentTarget.style.transform='none';e.currentTarget.style.boxShadow='0 2px 8px rgba(0,0,0,0.04)';}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+          <span style={{fontSize:12,fontFamily:'monospace',color:C.primary,fontWeight:600}}>{l.id}</span>
+          <Badge text={l.status}/>
+        </div>
+        <div style={{fontSize:16,fontWeight:700,marginBottom:4}}>{l.product}</div>
+        <div style={{fontSize:13,color:C.textSec,marginBottom:16}}>{l.partner}</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
+          <div style={{textAlign:'center',background:'#F0F9FF',borderRadius:8,padding:'8px 4px'}}><div style={{fontSize:11,color:C.textSec}}>클릭</div><div style={{fontSize:15,fontWeight:700}}>{(l.clicks/1000).toFixed(1)}K</div></div>
+          <div style={{textAlign:'center',background:'#F0F9FF',borderRadius:8,padding:'8px 4px'}}><div style={{fontSize:11,color:C.textSec}}>전환</div><div style={{fontSize:15,fontWeight:700}}>{l.conversions}</div></div>
+          <div style={{textAlign:'center',background:'#F0F9FF',borderRadius:8,padding:'8px 4px'}}><div style={{fontSize:11,color:C.textSec}}>전환율</div><div style={{fontSize:15,fontWeight:700,color:C.primary}}>{l.rate}%</div></div>
+        </div>
+        <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <span style={{fontSize:12,color:C.textSec}}>매출</span>
+          <span style={{fontSize:16,fontWeight:800,color:C.primary}}>{(l.revenue/10000).toLocaleString()}만원</span>
+        </div>
+      </div>)}
+    </div>
+
+    <Drawer open={!!drawer} onClose={()=>setDrawer(null)} title="추적 링크 상세">
+      {drawer&&<div>
+        <div style={{background:'#F0F9FF',borderRadius:12,padding:16,marginBottom:20}}>
+          <div style={{fontSize:12,color:C.textSec,marginBottom:4}}>추적 URL</div>
+          <div style={{fontSize:13,fontFamily:'monospace',color:C.primary,wordBreak:'break-all'}}>https://aff.platform.kr/r/{drawer.id.toLowerCase()}?partner={drawer.partner.replace(/\s/g,'_')}</div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+          {[{l:'파트너',v:drawer.partner},{l:'상품',v:drawer.product},{l:'클릭수',v:drawer.clicks.toLocaleString()},{l:'전환수',v:drawer.conversions.toLocaleString()},{l:'전환율',v:drawer.rate+'%'},{l:'매출',v:(drawer.revenue/10000).toFixed(0)+'만원'},{l:'생성일',v:drawer.created},{l:'상태',v:drawer.status}].map(f=><div key={f.l}><div style={{fontSize:12,color:C.textSec,marginBottom:4}}>{f.l}</div><div style={{fontSize:15,fontWeight:600}}>{f.v}</div></div>)}
+        </div>
+        <h4 style={{fontSize:14,fontWeight:700,marginBottom:12}}>클릭 추이 (최근 10일)</h4>
+        <ResponsiveContainer width="100%" height={180}>
+          <AreaChart data={dailyPerf}><CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0"/><XAxis dataKey="date" tick={{fontSize:11}}/><YAxis tick={{fontSize:11}}/><Area type="monotone" dataKey="clicks" stroke={C.primary} fill="#DBEAFE" strokeWidth={2}/></AreaChart>
+        </ResponsiveContainer>
+        <textarea placeholder="관리 메모를 입력하세요..." style={{width:'100%',padding:12,borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,minHeight:60,resize:'vertical',fontFamily:'Pretendard',marginTop:16}}/>
+        <div style={{display:'flex',gap:8,marginTop:16}}>
+          <button onClick={()=>{setDrawer(null);setToast('링크가 비활성화되었습니다');}} style={{flex:1,padding:'10px',borderRadius:8,border:`1px solid ${C.danger}`,background:'transparent',color:C.danger,fontSize:13,fontWeight:600,cursor:'pointer'}}>비활성화</button>
+          <button onClick={()=>{setDrawer(null);setToast('QR코드가 다운로드되었습니다');}} style={{flex:1,padding:'10px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>QR 다운로드</button>
+        </div>
+      </div>}
+    </Drawer>
+
+    <Drawer open={createDrawer} onClose={()=>setCreateDrawer(false)} title="추적 링크 발급">
+      <div style={{display:'flex',flexDirection:'column',gap:16}}>
+        <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>파트너 선택</label><select style={{width:'100%',padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:14,fontFamily:'Pretendard'}}>{partners.filter(p=>p.status==='활성').map(p=><option key={p.id}>{p.name} ({p.channel})</option>)}</select></div>
+        <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>상품명</label><input placeholder="추적할 상품명 입력" style={{width:'100%',padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:14,fontFamily:'Pretendard'}}/></div>
+        <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>목적지 URL</label><input placeholder="https://shop.example.com/product/123" style={{width:'100%',padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:14,fontFamily:'Pretendard'}}/></div>
+        <div style={{background:'#F0F9FF',borderRadius:10,padding:16}}><div style={{fontSize:12,color:C.textSec,marginBottom:4}}>생성될 추적 URL 미리보기</div><div style={{fontSize:13,fontFamily:'monospace',color:C.primary}}>https://aff.platform.kr/r/afl-007?partner=new</div></div>
+        <button onClick={()=>{setCreateDrawer(false);setToast('추적 링크가 발급되었습니다');}} style={{padding:'12px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:15,fontWeight:700,cursor:'pointer'}}>링크 발급하기</button>
+      </div>
+    </Drawer>
+    {toast&&<Toast msg={toast} onClose={()=>setToast('')}/>}
+  </div>);
+}
+
+function SettlementPage(){
+  const [drawer,setDrawer]=useState(null);
+  const [tab,setTab]=useState('history');
+  const [toast,setToast]=useState('');
+  return(<div style={{animation:'fadeIn .4s'}}>
+    <HeroBanner icon="💰" title="수수료 자동 정산" kpis={[
+      {label:'이번 달 정산액',value:(settlementData.reduce((s,d)=>s+d.amount,0)/10000).toFixed(0)+'만원'},
+      {label:'지급 완료',value:settlementData.filter(s=>s.status==='지급완료').length+'건'},
+      {label:'검토 대기',value:settlementData.filter(s=>s.status!=='지급완료').length+'건'}
+    ]}/>
+    <div style={{display:'flex',gap:8,marginBottom:20}}>
+      {[{k:'history',l:'정산 내역'},{k:'rules',l:'수수료 정책'},{k:'preview',l:'정산 미리보기'}].map(t=><button key={t.k} onClick={()=>setTab(t.k)} style={{padding:'10px 24px',borderRadius:10,border:'none',background:tab===t.k?C.primary:'#E0F2FE',color:tab===t.k?'#fff':C.primary,fontSize:14,fontWeight:600,cursor:'pointer'}}>{t.l}</button>)}
+    </div>
+
+    {tab==='history'&&<div style={{display:'flex',flexDirection:'column',gap:12}}>
+      {settlementData.map(s=><div key={s.id} onClick={()=>setDrawer({type:'settlement',item:s})} style={{background:C.surface,borderRadius:16,padding:'16px 24px',boxShadow:'0 2px 8px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:20,cursor:'pointer',transition:'all .15s'}} onMouseEnter={e=>e.currentTarget.style.background='#F0F9FF'} onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
+        <div style={{width:48,height:48,borderRadius:12,background:s.status==='지급완료'?'#D1FAE5':'#DBEAFE',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,flexShrink:0}}>{s.status==='지급완료'?'✅':'⏳'}</div>
+        <div style={{flex:1}}><div style={{fontSize:15,fontWeight:700}}>{s.partner}</div><div style={{fontSize:12,color:C.textSec}}>{s.period} · {s.id}</div></div>
+        <div style={{textAlign:'right',marginRight:16}}><div style={{fontSize:18,fontWeight:800,color:C.primary}}>{s.amount.toLocaleString()}원</div><div style={{fontSize:12,color:C.textSec}}>{s.date}</div></div>
+        <Badge text={s.status}/>
+      </div>)}
+    </div>}
+
+    {tab==='rules'&&<div style={{background:C.surface,borderRadius:16,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`}}>
+      <table style={{width:'100%',borderCollapse:'collapse'}}>
+        <thead><tr style={{borderBottom:`2px solid ${C.border}`,background:'#F8FAFC'}}>
+          {['등급','카테고리','기본 요율','보너스 요율','보너스 조건'].map(h=><th key={h} style={{padding:'14px 16px',textAlign:'left',fontSize:13,color:C.textSec,fontWeight:600}}>{h}</th>)}
+        </tr></thead>
+        <tbody>{commissionRules.map(r=><tr key={r.id} onClick={()=>setDrawer({type:'rule',item:r})} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer'}} onMouseEnter={e=>e.currentTarget.style.background='#F0F9FF'} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+          <td style={{padding:'14px 16px'}}><Badge text={r.tier}/></td>
+          <td style={{padding:'14px 16px',fontSize:14}}>{r.category}</td>
+          <td style={{padding:'14px 16px',fontSize:16,fontWeight:700,color:C.primary}}>{r.rateBase}%</td>
+          <td style={{padding:'14px 16px',fontSize:14,color:C.success,fontWeight:600}}>+{r.rateBonus}%</td>
+          <td style={{padding:'14px 16px',fontSize:13,color:C.textSec}}>{r.threshold}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>}
+
+    {tab==='preview'&&<div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+      {reports.map(r=><div key={r.id} onClick={()=>setDrawer({type:'report',item:r})} style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 2px 8px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`,cursor:'pointer',transition:'all .2s'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 12px 30px rgba(0,102,204,0.12)';}} onMouseLeave={e=>{e.currentTarget.style.transform='none';e.currentTarget.style.boxShadow='0 2px 8px rgba(0,0,0,0.04)';}}>
+        <div style={{fontSize:16,fontWeight:700,marginBottom:4}}>{r.partner}</div>
+        <div style={{fontSize:12,color:C.textSec,marginBottom:16}}>{r.month}</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+          {[{l:'클릭',v:(r.clicks/1000).toFixed(1)+'K'},{l:'전환',v:r.conversions+'건'},{l:'매출',v:(r.revenue/10000).toFixed(0)+'만원'},{l:'전환율',v:r.convRate+'%'}].map(s=><div key={s.l} style={{background:'#F0F9FF',borderRadius:8,padding:'8px 10px'}}><div style={{fontSize:11,color:C.textSec}}>{s.l}</div><div style={{fontSize:14,fontWeight:700}}>{s.v}</div></div>)}
+        </div>
+        <div style={{background:`linear-gradient(135deg, ${C.primary}, ${C.accent})`,borderRadius:10,padding:16,textAlign:'center'}}>
+          <div style={{fontSize:12,color:'rgba(255,255,255,0.7)'}}>예상 수수료</div>
+          <div style={{fontSize:24,fontWeight:800,color:'#fff'}}>{r.commission.toLocaleString()}원</div>
+        </div>
+      </div>)}
+    </div>}
+
+    <Drawer open={!!drawer} onClose={()=>setDrawer(null)} title={drawer?.type==='settlement'?'정산 상세':drawer?.type==='rule'?'수수료 정책 상세':'정산 리포트'}>
+      {drawer?.type==='settlement'&&drawer?.item&&<div>
+        <div style={{background:'#F0F9FF',borderRadius:12,padding:20,textAlign:'center',marginBottom:20}}>
+          <div style={{fontSize:12,color:C.textSec}}>정산 금액</div>
+          <div style={{fontSize:32,fontWeight:800,color:C.primary}}>{drawer.item.amount.toLocaleString()}원</div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+          {[{l:'파트너',v:drawer.item.partner},{l:'정산 기간',v:drawer.item.period},{l:'정산ID',v:drawer.item.id},{l:'처리일',v:drawer.item.date},{l:'승인자',v:drawer.item.approvedBy},{l:'상태',v:drawer.item.status}].map(f=><div key={f.l}><div style={{fontSize:12,color:C.textSec,marginBottom:4}}>{f.l}</div><div style={{fontSize:15,fontWeight:600}}>{f.v}</div></div>)}
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>{setDrawer(null);setToast('정산이 승인되었습니다');}} style={{flex:1,padding:'10px',borderRadius:8,border:'none',background:C.success,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>승인</button>
+          <button onClick={()=>{setDrawer(null);setToast('정산이 반려되었습니다');}} style={{flex:1,padding:'10px',borderRadius:8,border:`1px solid ${C.danger}`,background:'transparent',color:C.danger,fontSize:13,fontWeight:600,cursor:'pointer'}}>반려</button>
+        </div>
+        <textarea placeholder="정산 메모..." style={{width:'100%',padding:12,borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,minHeight:60,resize:'vertical',fontFamily:'Pretendard',marginTop:16}}/>
+      </div>}
+      {drawer?.type==='rule'&&drawer?.item&&<div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+          <div><div style={{fontSize:12,color:C.textSec,marginBottom:4}}>등급</div><Badge text={drawer.item.tier}/></div>
+          <div><div style={{fontSize:12,color:C.textSec,marginBottom:4}}>카테고리</div><div style={{fontSize:15,fontWeight:600}}>{drawer.item.category}</div></div>
+        </div>
+        <div style={{background:'#F0F9FF',borderRadius:12,padding:20,marginBottom:20}}>
+          <div style={{display:'flex',justifyContent:'space-around',textAlign:'center'}}>
+            <div><div style={{fontSize:12,color:C.textSec}}>기본 요율</div><div style={{fontSize:28,fontWeight:800,color:C.primary}}>{drawer.item.rateBase}%</div></div>
+            <div style={{fontSize:24,color:C.textSec,alignSelf:'center'}}>+</div>
+            <div><div style={{fontSize:12,color:C.textSec}}>보너스</div><div style={{fontSize:28,fontWeight:800,color:C.success}}>{drawer.item.rateBonus}%</div></div>
+            <div style={{fontSize:24,color:C.textSec,alignSelf:'center'}}>=</div>
+            <div><div style={{fontSize:12,color:C.textSec}}>최대</div><div style={{fontSize:28,fontWeight:800,color:C.secondary}}>{drawer.item.rateBase+drawer.item.rateBonus}%</div></div>
+          </div>
+        </div>
+        <div><div style={{fontSize:12,color:C.textSec,marginBottom:4}}>보너스 조건</div><div style={{fontSize:14,fontWeight:600}}>{drawer.item.threshold}</div></div>
+        <button onClick={()=>{setDrawer(null);setToast('수수료 정책이 수정되었습니다');}} style={{width:'100%',padding:'10px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',marginTop:20}}>수정하기</button>
+      </div>}
+      {drawer?.type==='report'&&drawer?.item&&<div>
+        <div style={{fontSize:16,fontWeight:700,marginBottom:4}}>{drawer.item.partner}</div>
+        <div style={{fontSize:13,color:C.textSec,marginBottom:20}}>{drawer.item.month} 성과 리포트</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
+          {[{l:'클릭',v:drawer.item.clicks.toLocaleString()},{l:'전환',v:drawer.item.conversions+'건'},{l:'매출',v:(drawer.item.revenue/10000).toFixed(0)+'만원'},{l:'전환율',v:drawer.item.convRate+'%'}].map(s=><div key={s.l} style={{background:'#F0F9FF',borderRadius:8,padding:12}}><div style={{fontSize:11,color:C.textSec}}>{s.l}</div><div style={{fontSize:16,fontWeight:700}}>{s.v}</div></div>)}
+        </div>
+        <div style={{background:`linear-gradient(135deg, ${C.primary}, ${C.accent})`,borderRadius:12,padding:20,textAlign:'center',marginBottom:20}}>
+          <div style={{fontSize:12,color:'rgba(255,255,255,0.7)'}}>예상 수수료</div>
+          <div style={{fontSize:28,fontWeight:800,color:'#fff'}}>{drawer.item.commission.toLocaleString()}원</div>
+        </div>
+        <button onClick={()=>{setDrawer(null);setToast('PDF 리포트가 다운로드되었습니다');}} style={{width:'100%',padding:'10px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>PDF 다운로드</button>
+      </div>}
+    </Drawer>
+    {toast&&<Toast msg={toast} onClose={()=>setToast('')}/>}
+  </div>);
+}
+
+function PartnersPage(){
+  const [drawer,setDrawer]=useState(null);
+  const [createDrawer,setCreateDrawer]=useState(false);
+  const [search,setSearch]=useState('');
+  const [toast,setToast]=useState('');
+  const filtered=partners.filter(p=>search===''||p.name.includes(search)||p.channel.includes(search));
+
+  return(<div style={{animation:'fadeIn .4s'}}>
+    <HeroBanner icon="🤝" title="파트너 관리" kpis={[
+      {label:'전체 파트너',value:partners.length+'명'},
+      {label:'활성',value:partners.filter(p=>p.status==='활성').length+'명'},
+      {label:'총 수수료 지급',value:(partners.reduce((s,p)=>s+p.earned,0)/10000).toFixed(0)+'만원'}
+    ]}/>
+    <div style={{display:'flex',gap:12,marginBottom:20,alignItems:'center'}}>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="파트너 검색..." style={{flex:1,padding:'10px 16px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:14,outline:'none',fontFamily:'Pretendard'}}/>
+      <button onClick={()=>setCreateDrawer(true)} style={{padding:'10px 20px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:14,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>+ 파트너 등록</button>
+    </div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:16}}>
+      {filtered.map(p=><div key={p.id} onClick={()=>setDrawer(p)} style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 2px 8px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`,cursor:'pointer',transition:'all .2s'}} onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 12px 30px rgba(0,102,204,0.12)';}} onMouseLeave={e=>{e.currentTarget.style.transform='none';e.currentTarget.style.boxShadow='0 2px 8px rgba(0,0,0,0.04)';}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <div style={{width:48,height:48,borderRadius:'50%',background:`linear-gradient(135deg, ${C.primary}, ${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:18,fontWeight:800}}>{p.name[0]}</div>
+            <div><div style={{fontSize:16,fontWeight:700}}>{p.name}</div><div style={{fontSize:13,color:C.textSec}}>{p.channel} · {(p.followers/1000).toFixed(0)}K 팔로워</div></div>
+          </div>
+          <div style={{display:'flex',gap:6}}><Badge text={p.tier}/><Badge text={p.status}/></div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8}}>
+          {[{l:'수수료율',v:p.commission+'%'},{l:'전환',v:p.conversions+'건'},{l:'매출',v:(p.revenue/10000).toFixed(0)+'만'},{l:'수수료',v:(p.earned/10000).toFixed(0)+'만'}].map(s=><div key={s.l} style={{background:'#F0F9FF',borderRadius:8,padding:'8px 6px',textAlign:'center'}}><div style={{fontSize:11,color:C.textSec}}>{s.l}</div><div style={{fontSize:14,fontWeight:700}}>{s.v}</div></div>)}
+        </div>
+      </div>)}
+    </div>
+
+    <Drawer open={!!drawer} onClose={()=>setDrawer(null)} title="파트너 상세">
+      {drawer&&<div>
+        <div style={{display:'flex',alignItems:'center',gap:16,marginBottom:24}}>
+          <div style={{width:64,height:64,borderRadius:'50%',background:`linear-gradient(135deg, ${C.primary}, ${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:28,fontWeight:800}}>{drawer.name[0]}</div>
+          <div><div style={{fontSize:20,fontWeight:700}}>{drawer.name}</div><div style={{fontSize:14,color:C.textSec}}>{drawer.channel} · {drawer.email}</div><div style={{display:'flex',gap:6,marginTop:4}}><Badge text={drawer.tier}/><Badge text={drawer.status}/></div></div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+          {[{l:'팔로워',v:(drawer.followers/1000).toFixed(0)+'K'},{l:'수수료율',v:drawer.commission+'%'},{l:'총 전환',v:drawer.conversions+'건'},{l:'총 매출',v:(drawer.revenue/10000).toFixed(0)+'만원'},{l:'누적 수수료',v:(drawer.earned/10000).toFixed(0)+'만원'},{l:'가입일',v:drawer.joined}].map(f=><div key={f.l}><div style={{fontSize:12,color:C.textSec,marginBottom:4}}>{f.l}</div><div style={{fontSize:15,fontWeight:600}}>{f.v}</div></div>)}
+        </div>
+        <h4 style={{fontSize:14,fontWeight:700,marginBottom:12}}>월별 매출 추이</h4>
+        <ResponsiveContainer width="100%" height={180}>
+          <BarChart data={[{m:'10월',v:3200000},{m:'11월',v:4100000},{m:'12월',v:5800000},{m:'1월',v:4500000},{m:'2월',v:drawer.revenue/3}]}><CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0"/><XAxis dataKey="m" tick={{fontSize:11}}/><YAxis tick={{fontSize:11}} tickFormatter={v=>(v/10000)+'만'}/><Bar dataKey="v" fill={C.primary} radius={[6,6,0,0]}/></BarChart>
+        </ResponsiveContainer>
+        <textarea placeholder="관리 메모를 입력하세요..." style={{width:'100%',padding:12,borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,minHeight:60,resize:'vertical',fontFamily:'Pretendard',marginTop:16}}/>
+        <div style={{display:'flex',gap:8,marginTop:16}}>
+          <button onClick={()=>{setDrawer(null);setToast('등급이 변경되었습니다');}} style={{flex:1,padding:'10px',borderRadius:8,border:`1px solid ${C.primary}`,background:'transparent',color:C.primary,fontSize:13,fontWeight:600,cursor:'pointer'}}>등급 변경</button>
+          <button onClick={()=>{setDrawer(null);setToast('리포트가 다운로드되었습니다');}} style={{flex:1,padding:'10px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>리포트 PDF</button>
+        </div>
+      </div>}
+    </Drawer>
+
+    <Drawer open={createDrawer} onClose={()=>setCreateDrawer(false)} title="파트너 등록">
+      <div style={{display:'flex',flexDirection:'column',gap:16}}>
+        <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>파트너명</label><input placeholder="파트너 이름" style={{width:'100%',padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:14,fontFamily:'Pretendard'}}/></div>
+        <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>이메일</label><input type="email" placeholder="partner@email.com" style={{width:'100%',padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:14,fontFamily:'Pretendard'}}/></div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>채널</label><select style={{width:'100%',padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:14,fontFamily:'Pretendard'}}>{['블로그','인스타그램','유튜브','틱톡'].map(o=><option key={o}>{o}</option>)}</select></div>
+          <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>등급</label><select style={{width:'100%',padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:14,fontFamily:'Pretendard'}}>{['Silver','Gold','Platinum'].map(o=><option key={o}>{o}</option>)}</select></div>
+        </div>
+        <div><label style={{fontSize:13,fontWeight:600,display:'block',marginBottom:6}}>채널 URL</label><input placeholder="https://instagram.com/partner" style={{width:'100%',padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:14,fontFamily:'Pretendard'}}/></div>
+        <div style={{background:'#F0F9FF',borderRadius:10,padding:16}}>
+          <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',fontSize:13}}>
+            <input type="checkbox" style={{width:16,height:16}}/>
+            <span>파트너 이용약관에 동의합니다</span>
+          </label>
+        </div>
+        <button onClick={()=>{setCreateDrawer(false);setToast('파트너가 등록되었습니다');}} style={{padding:'12px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:15,fontWeight:700,cursor:'pointer'}}>등록하기</button>
+      </div>
+    </Drawer>
+    {toast&&<Toast msg={toast} onClose={()=>setToast('')}/>}
+  </div>);
+}
+
+function ReportsPage(){
+  const [drawer,setDrawer]=useState(null);
+  return(<div style={{animation:'fadeIn .4s'}}>
+    <HeroBanner icon="📈" title="성과 리포트" kpis={[
+      {label:'리포트 대상',value:reports.length+'명'},
+      {label:'총 수수료',value:((reports.reduce((s,r)=>s+r.commission,0))/10000).toFixed(0)+'만원'},
+      {label:'평균 전환율',value:(reports.reduce((s,r)=>s+r.convRate,0)/reports.length).toFixed(2)+'%'}
+    ]}/>
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,marginBottom:24}}>
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 2px 8px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:16,fontWeight:700,marginBottom:16}}>파트너별 매출 비교</h3>
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={partners.filter(p=>p.status==='활성').map(p=>({name:p.name.split(' ')[0],revenue:p.revenue/10000,earned:p.earned/10000}))} layout="vertical">
+            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0"/><XAxis type="number" tick={{fontSize:11}} tickFormatter={v=>v+'만'}/><YAxis type="category" dataKey="name" tick={{fontSize:12}} width={60}/>
+            <Tooltip formatter={v=>v.toLocaleString()+'만원'}/><Legend wrapperStyle={{fontSize:12}}/>
+            <Bar dataKey="revenue" name="매출" fill="#BAE6FD" radius={[0,4,4,0]}/>
+            <Bar dataKey="earned" name="수수료" fill={C.primary} radius={[0,4,4,0]}/>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 2px 8px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:16,fontWeight:700,marginBottom:16}}>일별 전환율 추이</h3>
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={dailyPerf.map(d=>({...d,rate:((d.conversions/d.clicks)*100).toFixed(2)}))}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0"/><XAxis dataKey="date" tick={{fontSize:11}}/><YAxis tick={{fontSize:11}} domain={[2,4]}/>
+            <Tooltip formatter={v=>v+'%'}/><Line type="monotone" dataKey="rate" name="전환율" stroke={C.primary} strokeWidth={2} dot={{r:4,fill:C.primary}}/>
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+    <div style={{background:C.surface,borderRadius:16,overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.04)',border:`1px solid ${C.border}`}}>
+      <table style={{width:'100%',borderCollapse:'collapse'}}>
+        <thead><tr style={{borderBottom:`2px solid ${C.border}`,background:'#F8FAFC'}}>
+          {['파트너','기간','클릭','전환','매출','수수료','전환율'].map(h=><th key={h} style={{padding:'14px 16px',textAlign:'left',fontSize:13,color:C.textSec,fontWeight:600}}>{h}</th>)}
+        </tr></thead>
+        <tbody>{reports.map(r=><tr key={r.id} onClick={()=>setDrawer(r)} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer'}} onMouseEnter={e=>e.currentTarget.style.background='#F0F9FF'} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+          <td style={{padding:'14px 16px',fontSize:14,fontWeight:600}}>{r.partner}</td>
+          <td style={{padding:'14px 16px',fontSize:13}}>{r.month}</td>
+          <td style={{padding:'14px 16px',fontSize:13}}>{r.clicks.toLocaleString()}</td>
+          <td style={{padding:'14px 16px',fontSize:13,fontWeight:600}}>{r.conversions}건</td>
+          <td style={{padding:'14px 16px',fontSize:13}}>{(r.revenue/10000).toFixed(0)}만원</td>
+          <td style={{padding:'14px 16px',fontSize:14,fontWeight:700,color:C.primary}}>{(r.commission/10000).toFixed(0)}만원</td>
+          <td style={{padding:'14px 16px',fontSize:13}}>{r.convRate}%</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+
+    <Drawer open={!!drawer} onClose={()=>setDrawer(null)} title="리포트 상세">
+      {drawer&&<div>
+        <div style={{fontSize:18,fontWeight:700,marginBottom:4}}>{drawer.partner}</div>
+        <div style={{fontSize:13,color:C.textSec,marginBottom:20}}>{drawer.month} 성과 리포트</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
+          {[{l:'클릭',v:drawer.clicks.toLocaleString()},{l:'전환',v:drawer.conversions+'건'},{l:'매출',v:(drawer.revenue/10000).toFixed(0)+'만원'},{l:'전환율',v:drawer.convRate+'%'}].map(s=><div key={s.l} style={{background:'#F0F9FF',borderRadius:8,padding:12}}><div style={{fontSize:11,color:C.textSec}}>{s.l}</div><div style={{fontSize:16,fontWeight:700}}>{s.v}</div></div>)}
+        </div>
+        <div style={{background:`linear-gradient(135deg, ${C.primary}, ${C.accent})`,borderRadius:12,padding:20,textAlign:'center',marginBottom:20}}>
+          <div style={{fontSize:12,color:'rgba(255,255,255,0.7)'}}>수수료</div>
+          <div style={{fontSize:28,fontWeight:800,color:'#fff'}}>{drawer.commission.toLocaleString()}원</div>
+        </div>
+        <h4 style={{fontSize:14,fontWeight:700,marginBottom:12}}>일별 전환 추이</h4>
+        <ResponsiveContainer width="100%" height={160}>
+          <AreaChart data={dailyPerf}><CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0"/><XAxis dataKey="date" tick={{fontSize:10}}/><YAxis tick={{fontSize:10}}/><Area type="monotone" dataKey="conversions" stroke={C.primary} fill="#DBEAFE" strokeWidth={2}/></AreaChart>
+        </ResponsiveContainer>
+        <textarea placeholder="리포트 메모..." style={{width:'100%',padding:12,borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,minHeight:60,resize:'vertical',fontFamily:'Pretendard',marginTop:16}}/>
+        <button onClick={()=>setDrawer(null)} style={{width:'100%',padding:'10px',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',marginTop:12}}>PDF 다운로드</button>
+      </div>}
+    </Drawer>
+  </div>);
+}
+
+// ── App ──
+const tabs=[
+  {key:'dashboard',label:'성과 분석 대시보드',icon:'📊'},
+  {key:'tracking-links',label:'추적 링크 관리',icon:'🔗'},
+  {key:'settlement',label:'수수료 자동 정산',icon:'💰'},
+  {key:'partners',label:'파트너 관리',icon:'🤝'},
+  {key:'reports',label:'성과 리포트',icon:'📈'}
+];
+
+function App(){
+  const [tab,setTab]=useState('dashboard');
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{const t=setTimeout(()=>setLoading(false),600);return()=>clearTimeout(t);},[]);
+  useEffect(()=>{setLoading(true);const t=setTimeout(()=>setLoading(false),300);return()=>clearTimeout(t);},[tab]);
+
+  return(<div style={{minHeight:'100vh',background:C.bg}}>
+    {/* Top Nav */}
+    <nav style={{position:'sticky',top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,boxShadow:'0 1px 3px rgba(0,0,0,0.04)'}}>
+      <div style={{maxWidth:1320,margin:'0 auto',padding:'0 32px',display:'flex',alignItems:'center',height:60}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginRight:40}}>
+          <div style={{width:32,height:32,borderRadius:8,background:`linear-gradient(135deg, ${C.primary}, ${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,color:'#fff'}}>💰</div>
+          <span style={{fontSize:16,fontWeight:800,color:C.secondary}}>AffiliateHub</span>
+        </div>
+        <div style={{display:'flex',gap:2,flex:1}}>
+          {tabs.map(t=><button key={t.key} title={t.label} onClick={()=>setTab(t.key)} style={{padding:'8px 16px',borderRadius:8,border:'none',background:tab===t.key?'#E0F2FE':'transparent',color:tab===t.key?C.primary:C.textSec,fontSize:13,fontWeight:tab===t.key?700:500,cursor:'pointer',fontFamily:'Pretendard',display:'flex',alignItems:'center',gap:6,transition:'all .15s'}} onMouseEnter={e=>{if(tab!==t.key)e.currentTarget.style.background='#F0F9FF';}} onMouseLeave={e=>{if(tab!==t.key)e.currentTarget.style.background='transparent';}}>
+            <span>{t.icon}</span>{t.label}
+          </button>)}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:16}}>
+          <input placeholder="검색..." style={{padding:'8px 14px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,width:180,outline:'none',fontFamily:'Pretendard'}}/>
+          <div style={{position:'relative',cursor:'pointer'}}><span style={{fontSize:18}}>🔔</span><div style={{position:'absolute',top:-2,right:-2,width:7,height:7,borderRadius:'50%',background:C.danger}}/></div>
+          <div style={{width:32,height:32,borderRadius:'50%',background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:14,fontWeight:700}}>A</div>
+        </div>
+      </div>
+    </nav>
+
+    {/* Content */}
+    <main style={{maxWidth:1320,margin:'0 auto',padding:'24px 32px'}}>
+      {loading?<Skeleton/>:tab==='dashboard'?<DashboardPage/>:tab==='tracking-links'?<TrackingLinksPage/>:tab==='settlement'?<SettlementPage/>:tab==='partners'?<PartnersPage/>:<ReportsPage/>}
+    </main>
+  </div>);
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

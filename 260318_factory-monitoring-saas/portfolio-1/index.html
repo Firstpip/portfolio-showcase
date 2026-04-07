@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>스마트 팩토리 설비 관제 시스템 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:#F0F9FF;color:#0F172A;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useCallback,useMemo} = React;
+const {LineChart,Line,BarChart,Bar,AreaChart,Area,PieChart,Pie,Cell,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,Legend} = Recharts;
+
+// === Design Tokens ===
+const C = {
+  primary:'#0066CC',secondary:'#1A365D',accent:'#38BDF8',
+  bg:'#F0F9FF',surface:'#FFFFFF',border:'#E2E8F0',
+  text:'#0F172A',textLight:'#475569',textMuted:'#94A3B8',
+  success:'#059669',warning:'#D97706',danger:'#DC2626',
+  sidebarBg:'#1A365D',sidebarText:'#CBD5E1',sidebarActive:'#0066CC',
+};
+
+// === Dummy Data ===
+const LINES = [
+  {id:'L01',name:'A라인 (조립)',status:'running',uptime:94.2,defectRate:1.2,mtbf:148,production:1284,target:1350,temp:72.3,vibration:0.42},
+  {id:'L02',name:'B라인 (프레스)',status:'running',uptime:89.7,defectRate:2.1,mtbf:132,production:876,target:900,temp:68.5,vibration:0.38},
+  {id:'L03',name:'C라인 (도장)',status:'warning',uptime:78.4,defectRate:3.8,mtbf:96,production:562,target:720,temp:81.2,vibration:0.67},
+  {id:'L04',name:'D라인 (검사)',status:'running',uptime:96.1,defectRate:0.5,mtbf:210,production:1580,target:1600,temp:64.1,vibration:0.21},
+  {id:'L05',name:'E라인 (포장)',status:'stopped',uptime:0,defectRate:0,mtbf:0,production:0,target:800,temp:42.0,vibration:0},
+];
+
+const ALERTS = [
+  {id:1,time:'14:32',line:'C라인',type:'임계값 초과',severity:'critical',msg:'진동 센서 0.67mm/s — 임계치(0.5) 초과',ack:false,detail:'설비 PR-301 진동 센서에서 임계값 초과 감지. 베어링 마모 의심. 정비팀 점검 필요.',assignee:'박서진'},
+  {id:2,time:'14:15',line:'A라인',type:'정비 요청',severity:'warning',msg:'설비 AS-102 정기 정비 일정 도래 (D-2)',ack:false,detail:'설비 AS-102 정기 정비 예정일 2일 남음. 작업 오더 자동 생성 완료.',assignee:'이준호'},
+  {id:3,time:'13:48',line:'B라인',type:'온도 이상',severity:'warning',msg:'금형 온도 68.5°C → 정상 범위 초과 주의',ack:true,detail:'금형 PR-205 온도가 정상 범위(60°C) 상회. 냉각 시스템 점검 요망.',assignee:'김민수'},
+  {id:4,time:'12:30',line:'D라인',type:'설비 이상',severity:'info',msg:'설비 QC-401 자가 진단 완료 — 정상',ack:true,detail:'설비 QC-401 정기 자가 진단 완료. 모든 센서 정상 범위 내.',assignee:'정하윤'},
+  {id:5,time:'11:45',line:'A라인',type:'생산 달성',severity:'info',msg:'오전 목표 생산량 642개 달성',ack:true,detail:'A라인 오전 생산 목표 달성. 현재 생산 속도 유지 시 일일 목표 초과 예상.',assignee:'최우진'},
+  {id:6,time:'10:22',line:'E라인',type:'설비 정지',severity:'critical',msg:'E라인 전체 정지 — 컨베이어 벨트 이탈',ack:false,detail:'E라인 컨베이어 벨트 이탈로 전체 라인 정지. 긴급 정비 진행 중. 예상 복구 시간 2시간.',assignee:'강민재'},
+  {id:7,time:'09:15',line:'C라인',type:'품질 경고',severity:'warning',msg:'도장 불량률 3.8% — 기준치(2.0%) 초과',ack:false,detail:'C라인 도장 공정 불량률 상승. 도장 건 노즐 점검 및 도료 점도 확인 필요.',assignee:'김서연'},
+  {id:8,time:'08:30',line:'B라인',type:'정비 완료',severity:'info',msg:'설비 PR-203 예방 정비 완료',ack:true,detail:'프레스 PR-203 유압 오일 교체 및 실린더 점검 완료. 시운전 정상 확인.',assignee:'이지은'},
+];
+
+const USERS = [
+  {id:1,name:'김민수',email:'minsu@factory.kr',role:'admin',lines:['A라인','B라인','C라인','D라인','E라인'],lastLogin:'2026-03-18 09:12',status:'active'},
+  {id:2,name:'이준호',email:'junho@factory.kr',role:'manager',lines:['A라인','B라인'],lastLogin:'2026-03-18 08:45',status:'active'},
+  {id:3,name:'박서진',email:'seojin@factory.kr',role:'manager',lines:['C라인','D라인'],lastLogin:'2026-03-17 17:30',status:'active'},
+  {id:4,name:'정하윤',email:'hayun@factory.kr',role:'viewer',lines:['D라인'],lastLogin:'2026-03-18 10:05',status:'active'},
+  {id:5,name:'최우진',email:'woojin@factory.kr',role:'viewer',lines:['A라인'],lastLogin:'2026-03-16 14:20',status:'inactive'},
+  {id:6,name:'강민재',email:'minjae@factory.kr',role:'manager',lines:['E라인'],lastLogin:'2026-03-18 07:55',status:'active'},
+];
+
+const ROLE_MAP = {admin:'시스템 관리자',manager:'라인 관리자',viewer:'현장 뷰어'};
+const STATUS_COLOR = {running:C.success,warning:C.warning,stopped:C.danger};
+const SEV_COLOR = {critical:C.danger,warning:C.warning,info:C.accent};
+const SEV_LABEL = {critical:'긴급',warning:'주의',info:'정보'};
+
+const HOURLY_DATA = Array.from({length:24},(_,i)=>({hour:`${String(i).padStart(2,'0')}:00`,uptime:85+Math.random()*12,production:Math.floor(40+Math.random()*30),defect:+(Math.random()*3).toFixed(1)}));
+const STOP_REASONS = [{reason:'금형 파손',count:12},{reason:'센서 이상',count:9},{reason:'자재 부족',count:7},{reason:'전원 장애',count:5},{reason:'유압 누유',count:4}];
+const WEEKLY_PROD = ['월','화','수','목','금','토','일'].map(d=>({day:d,plan:Math.floor(800+Math.random()*400),actual:Math.floor(750+Math.random()*380)}));
+
+// === Components ===
+function CountUp({end,duration=1200,suffix=''}){
+  const [val,setVal]=useState(0);
+  useEffect(()=>{let s=0;const step=end/(duration/16);const t=setInterval(()=>{s+=step;if(s>=end){setVal(end);clearInterval(t)}else setVal(Math.floor(s))},16);return()=>clearInterval(t)},[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({message,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t)},[]);
+  return <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:C.secondary,color:'#fff',padding:'12px 24px',borderRadius:8,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.2)',fontSize:14}}>{message}</div>;
+}
+
+function Modal({title,onClose,children,width=560}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.4)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:'#fff',borderRadius:12,zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.15)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'20px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:18,fontWeight:700}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textLight}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Badge({color,children}){
+  return <span style={{display:'inline-block',padding:'2px 10px',borderRadius:20,fontSize:12,fontWeight:600,background:color+'18',color}}>{children}</span>;
+}
+
+function Btn({onClick,children,variant='primary',size='md',style:s={}}){
+  const base={border:'none',cursor:'pointer',fontFamily:'inherit',fontWeight:600,borderRadius:8,transition:'all 200ms',display:'inline-flex',alignItems:'center',gap:6};
+  const sizes={sm:{padding:'6px 12px',fontSize:12},md:{padding:'8px 16px',fontSize:13},lg:{padding:'10px 20px',fontSize:14}};
+  const variants={primary:{background:C.primary,color:'#fff'},secondary:{background:C.bg,color:C.primary,border:`1px solid ${C.border}`},danger:{background:C.danger+'15',color:C.danger}};
+  return <button onClick={onClick} style={{...base,...sizes[size],...variants[variant],...s}} onMouseEnter={e=>e.currentTarget.style.opacity='0.85'} onMouseLeave={e=>e.currentTarget.style.opacity='1'}>{children}</button>;
+}
+
+// === Pages ===
+function DashboardPage({setModal}){
+  const totalProd = LINES.reduce((a,l)=>a+l.production,0);
+  const totalTarget = LINES.reduce((a,l)=>a+l.target,0);
+  const avgUptime = (LINES.filter(l=>l.status!=='stopped').reduce((a,l)=>a+l.uptime,0)/LINES.filter(l=>l.status!=='stopped').length).toFixed(1);
+  const critAlerts = ALERTS.filter(a=>a.severity==='critical'&&!a.ack).length;
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {/* KPI Cards */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:20,marginBottom:32}}>
+        {[
+          {label:'평균 가동률',value:avgUptime,suffix:'%',icon:'',color:C.success,sub:'가동 중 4개 라인 기준'},
+          {label:'금일 생산량',value:totalProd,suffix:'개',icon:'',color:C.primary,sub:`목표 ${totalTarget.toLocaleString()}개`},
+          {label:'불량률 (평균)',value:'1.9',suffix:'%',icon:'',color:C.warning,sub:'기준치 2.0% 이하'},
+          {label:'미확인 알림',value:critAlerts,suffix:'건',icon:'',color:C.danger,sub:'긴급 알림 포함'},
+        ].map((kpi,i)=>(
+          <div key={i} style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',animation:`slideUp 400ms ease ${i*80}ms both`,cursor:'pointer',transition:'all 200ms'}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.12)'}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 1px 3px rgba(0,0,0,0.08)'}}
+            onClick={()=>setModal({type:'kpi-detail',data:kpi})}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+              <span style={{fontSize:13,color:C.textLight,fontWeight:500}}>{kpi.label}</span>
+              <span style={{fontSize:20}}>{kpi.icon}</span>
+            </div>
+            <div style={{fontSize:32,fontWeight:800,color:kpi.color,letterSpacing:'-0.02em'}}><CountUp end={parseFloat(kpi.value)} suffix={kpi.suffix}/></div>
+            <div style={{fontSize:12,color:C.textMuted,marginTop:4}}>{kpi.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Charts Row */}
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:20,marginBottom:32}}>
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <h3 style={{fontSize:16,fontWeight:600,marginBottom:16}}>시간대별 가동률 추이</h3>
+          <ResponsiveContainer width="100%" height={260}>
+            <AreaChart data={HOURLY_DATA}>
+              <defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.primary} stopOpacity={0.3}/><stop offset="100%" stopColor={C.primary} stopOpacity={0.02}/></linearGradient></defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0"/>
+              <XAxis dataKey="hour" tick={{fontSize:11,fill:C.textMuted}} interval={3}/>
+              <YAxis tick={{fontSize:11,fill:C.textMuted}} domain={[70,100]}/>
+              <Tooltip contentStyle={{borderRadius:8,fontSize:12,border:'none',boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}/>
+              <Area type="monotone" dataKey="uptime" stroke={C.primary} fill="url(#g1)" strokeWidth={2} name="가동률 (%)"/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <h3 style={{fontSize:16,fontWeight:600,marginBottom:16}}>정지 원인 TOP5</h3>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            {STOP_REASONS.map((r,i)=>(
+              <div key={i}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                  <span style={{fontSize:13,fontWeight:500}}>{r.reason}</span>
+                  <span style={{fontSize:13,fontWeight:700,color:C.primary}}>{r.count}건</span>
+                </div>
+                <div style={{height:8,background:C.bg,borderRadius:4,overflow:'hidden'}}>
+                  <div style={{height:'100%',background:`linear-gradient(90deg,${C.primary},${C.accent})`,borderRadius:4,width:`${(r.count/12)*100}%`,animation:`barGrow 800ms ease ${i*100}ms both`,transformOrigin:'left'}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Line Status Table */}
+      <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <h3 style={{fontSize:16,fontWeight:600}}>라인별 현황</h3>
+          <span style={{fontSize:12,color:C.textMuted}}>마지막 갱신: 14:35</span>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{borderBottom:`2px solid ${C.border}`}}>
+              {['라인','상태','가동률','불량률','MTBF','금일 생산','온도','진동'].map(h=>(
+                <th key={h} style={{padding:'10px 12px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textMuted}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {LINES.map((line,i)=>(
+              <tr key={line.id} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms',animation:`slideUp 300ms ease ${i*60}ms both`}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.primary+'08'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}
+                onClick={()=>setModal({type:'line-detail',data:line})}>
+                <td style={{padding:'14px 12px',fontSize:14,fontWeight:600}}>{line.name}</td>
+                <td style={{padding:'14px 12px'}}><Badge color={STATUS_COLOR[line.status]}>{line.status==='running'?'가동 중':line.status==='warning'?'주의':'정지'}</Badge></td>
+                <td style={{padding:'14px 12px',fontSize:14,fontWeight:600,color:line.uptime>=90?C.success:line.uptime>=70?C.warning:C.danger}}>{line.uptime}%</td>
+                <td style={{padding:'14px 12px',fontSize:14,color:line.defectRate>2?C.danger:C.textLight}}>{line.defectRate}%</td>
+                <td style={{padding:'14px 12px',fontSize:14,color:C.textLight}}>{line.mtbf}h</td>
+                <td style={{padding:'14px 12px',fontSize:14}}>
+                  <span style={{fontWeight:600}}>{line.production.toLocaleString()}</span>
+                  <span style={{color:C.textMuted,fontSize:12}}>/{line.target.toLocaleString()}</span>
+                </td>
+                <td style={{padding:'14px 12px',fontSize:14,color:line.temp>75?C.danger:C.textLight}}>{line.temp}°C</td>
+                <td style={{padding:'14px 12px',fontSize:14,color:line.vibration>0.5?C.danger:C.textLight}}>{line.vibration}mm/s</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function LineDetailPage({setModal}){
+  const [selectedLine,setSelectedLine]=useState(LINES[0]);
+  const sensorData = Array.from({length:48},(_,i)=>({time:`${String(Math.floor(i/2)).padStart(2,'0')}:${i%2===0?'00':'30'}`,temp:60+Math.random()*25,vibration:0.2+Math.random()*0.5,pressure:4.5+Math.random()*1.5}));
+  const defectByProcess = [{process:'프레스',count:8},{process:'용접',count:5},{process:'도장',count:12},{process:'조립',count:3},{process:'검사',count:2}];
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {/* Line Selector */}
+      <div style={{display:'flex',gap:8,marginBottom:24,flexWrap:'wrap'}}>
+        {LINES.map(l=>(
+          <button key={l.id} onClick={()=>setSelectedLine(l)} style={{padding:'8px 16px',borderRadius:8,border:`1.5px solid ${selectedLine.id===l.id?C.primary:C.border}`,background:selectedLine.id===l.id?C.primary+'10':'#fff',color:selectedLine.id===l.id?C.primary:C.textLight,fontWeight:selectedLine.id===l.id?600:400,cursor:'pointer',fontFamily:'inherit',fontSize:13,transition:'all 200ms'}}>
+            <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:STATUS_COLOR[l.status],marginRight:6}}/>
+            {l.name}
+          </button>
+        ))}
+      </div>
+
+      {/* KPI Row */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}}>
+        {[
+          {label:'가동률',value:`${selectedLine.uptime}%`,color:selectedLine.uptime>=90?C.success:C.warning},
+          {label:'불량률',value:`${selectedLine.defectRate}%`,color:selectedLine.defectRate>2?C.danger:C.success},
+          {label:'MTBF',value:`${selectedLine.mtbf}h`,color:C.primary},
+          {label:'금일 생산',value:`${selectedLine.production.toLocaleString()}/${selectedLine.target.toLocaleString()}`,color:C.primary},
+        ].map((k,i)=>(
+          <div key={i} style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',animation:`slideUp 400ms ease ${i*80}ms both`}}>
+            <div style={{fontSize:12,color:C.textMuted,marginBottom:8}}>{k.label}</div>
+            <div style={{fontSize:24,fontWeight:800,color:k.color}}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Sensor Timeline Chart */}
+      <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',marginBottom:24}}>
+        <h3 style={{fontSize:16,fontWeight:600,marginBottom:16}}>센서 데이터 타임라인</h3>
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart data={sensorData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0"/>
+            <XAxis dataKey="time" tick={{fontSize:10,fill:C.textMuted}} interval={5}/>
+            <YAxis yAxisId="temp" tick={{fontSize:11,fill:C.textMuted}} domain={[50,100]}/>
+            <YAxis yAxisId="vib" orientation="right" tick={{fontSize:11,fill:C.textMuted}} domain={[0,1]}/>
+            <Tooltip contentStyle={{borderRadius:8,fontSize:12,border:'none',boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}/>
+            <Legend wrapperStyle={{fontSize:12}}/>
+            <Line yAxisId="temp" type="monotone" dataKey="temp" stroke={C.danger} strokeWidth={2} dot={false} name="온도 (°C)"/>
+            <Line yAxisId="vib" type="monotone" dataKey="vibration" stroke={C.primary} strokeWidth={2} dot={false} name="진동 (mm/s)"/>
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+        {/* Pareto Chart */}
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <h3 style={{fontSize:16,fontWeight:600,marginBottom:16}}>공정별 불량 현황</h3>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={defectByProcess}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0"/>
+              <XAxis dataKey="process" tick={{fontSize:12,fill:C.textMuted}}/>
+              <YAxis tick={{fontSize:11,fill:C.textMuted}}/>
+              <Tooltip contentStyle={{borderRadius:8,fontSize:12,border:'none',boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}/>
+              <Bar dataKey="count" fill={C.primary} radius={[6,6,0,0]} name="불량 건수"/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Equipment List */}
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <h3 style={{fontSize:16,fontWeight:600,marginBottom:16}}>설비 목록</h3>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {[
+              {id:'AS-101',name:'프레스 #1',status:'running',temp:71.2},
+              {id:'AS-102',name:'프레스 #2',status:'warning',temp:68.5},
+              {id:'AS-103',name:'용접 로봇',status:'running',temp:55.3},
+              {id:'AS-104',name:'이송 컨베이어',status:'running',temp:42.1},
+              {id:'AS-105',name:'검사 장비',status:'running',temp:38.9},
+            ].map((eq,i)=>(
+              <div key={eq.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,cursor:'pointer',transition:'all 150ms'}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.primary+'06'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}
+                onClick={()=>setModal({type:'equipment-detail',data:eq})}>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <span style={{width:8,height:8,borderRadius:'50%',background:STATUS_COLOR[eq.status]}}/>
+                  <span style={{fontSize:13,fontWeight:600}}>{eq.name}</span>
+                  <span style={{fontSize:11,color:C.textMuted}}>{eq.id}</span>
+                </div>
+                <span style={{fontSize:13,color:eq.temp>65?C.warning:C.textLight}}>{eq.temp}°C</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AlertLogPage({setModal}){
+  const [filter,setFilter]=useState('all');
+  const [alerts,setAlerts]=useState(ALERTS);
+  const filtered = filter==='all'?alerts:alerts.filter(a=>a.severity===filter);
+
+  const handleAck=(id)=>{
+    setAlerts(prev=>prev.map(a=>a.id===id?{...a,ack:true}:a));
+  };
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {/* Filter Tabs */}
+      <div style={{display:'flex',gap:8,marginBottom:24}}>
+        {[{key:'all',label:'전체',count:alerts.length},{key:'critical',label:'긴급',count:alerts.filter(a=>a.severity==='critical').length},{key:'warning',label:'주의',count:alerts.filter(a=>a.severity==='warning').length},{key:'info',label:'정보',count:alerts.filter(a=>a.severity==='info').length}].map(f=>(
+          <button key={f.key} onClick={()=>setFilter(f.key)} style={{padding:'8px 16px',borderRadius:8,border:`1.5px solid ${filter===f.key?(SEV_COLOR[f.key]||C.primary):C.border}`,background:filter===f.key?(SEV_COLOR[f.key]||C.primary)+'10':'#fff',color:filter===f.key?(SEV_COLOR[f.key]||C.primary):C.textLight,fontWeight:filter===f.key?600:400,cursor:'pointer',fontFamily:'inherit',fontSize:13,transition:'all 200ms'}}>
+            {f.label} <span style={{marginLeft:4,fontSize:11,opacity:0.7}}>({f.count})</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Alert Cards */}
+      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+        {filtered.map((alert,i)=>(
+          <div key={alert.id} style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',borderLeft:`4px solid ${SEV_COLOR[alert.severity]}`,animation:`slideUp 300ms ease ${i*60}ms both`,cursor:'pointer',transition:'all 200ms'}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.12)'}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 1px 3px rgba(0,0,0,0.08)'}}
+            onClick={()=>setModal({type:'alert-detail',data:alert})}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+                  <Badge color={SEV_COLOR[alert.severity]}>{SEV_LABEL[alert.severity]}</Badge>
+                  <span style={{fontSize:12,color:C.textMuted}}>{alert.line}</span>
+                  <span style={{fontSize:12,color:C.textMuted}}>|</span>
+                  <span style={{fontSize:12,color:C.textMuted}}>{alert.type}</span>
+                  <span style={{fontSize:12,color:C.textMuted,marginLeft:'auto'}}>{alert.time}</span>
+                </div>
+                <div style={{fontSize:14,fontWeight:500,color:C.text}}>{alert.msg}</div>
+              </div>
+              <div style={{marginLeft:16,display:'flex',alignItems:'center',gap:8}}>
+                {alert.ack ? <span style={{fontSize:12,color:C.success,fontWeight:500}}>확인됨</span> :
+                  <Btn size="sm" onClick={(e)=>{e.stopPropagation();handleAck(alert.id)}}>확인</Btn>}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function UserRBACPage({setModal}){
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
+        <div>
+          <span style={{fontSize:13,color:C.textMuted}}>전체 {USERS.length}명 | 활성 {USERS.filter(u=>u.status==='active').length}명</span>
+        </div>
+        <Btn onClick={()=>setModal({type:'user-create'})}>+ 사용자 추가</Btn>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',overflow:'hidden'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:C.bg}}>
+              {['이름','이메일','역할','접근 라인','마지막 로그인','상태',''].map(h=>(
+                <th key={h} style={{padding:'12px 16px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textMuted}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {USERS.map((user,i)=>(
+              <tr key={user.id} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms',animation:`slideUp 300ms ease ${i*60}ms both`}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.primary+'08'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}
+                onClick={()=>setModal({type:'user-detail',data:user})}>
+                <td style={{padding:'14px 16px',fontSize:14,fontWeight:600}}>{user.name}</td>
+                <td style={{padding:'14px 16px',fontSize:13,color:C.textLight}}>{user.email}</td>
+                <td style={{padding:'14px 16px'}}><Badge color={user.role==='admin'?C.primary:user.role==='manager'?C.success:C.textMuted}>{ROLE_MAP[user.role]}</Badge></td>
+                <td style={{padding:'14px 16px',fontSize:13,color:C.textLight}}>{user.lines.join(', ')}</td>
+                <td style={{padding:'14px 16px',fontSize:13,color:C.textLight}}>{user.lastLogin}</td>
+                <td style={{padding:'14px 16px'}}><Badge color={user.status==='active'?C.success:C.textMuted}>{user.status==='active'?'활성':'비활성'}</Badge></td>
+                <td style={{padding:'14px 16px'}}>
+                  <Btn size="sm" variant="secondary" onClick={(e)=>{e.stopPropagation();setModal({type:'user-edit',data:user})}}>편집</Btn>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// === Modal Content ===
+function ModalContent({modal,onClose,setToast}){
+  if(!modal) return null;
+  const {type,data}=modal;
+
+  if(type==='kpi-detail') return(
+    <Modal title={`KPI 상세 — ${data.label}`} onClose={onClose}>
+      <div style={{textAlign:'center',padding:20}}>
+        <div style={{fontSize:48,fontWeight:800,color:data.color,marginBottom:8}}>{data.value}{data.suffix}</div>
+        <div style={{fontSize:14,color:C.textMuted,marginBottom:20}}>{data.sub}</div>
+        <div style={{background:C.bg,borderRadius:8,padding:16,textAlign:'left'}}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:8}}>최근 7일 추이</div>
+          <div style={{display:'flex',gap:8,alignItems:'flex-end',height:60}}>
+            {[65,72,78,85,82,90,94].map((v,i)=>(
+              <div key={i} style={{flex:1,background:i===6?C.primary:C.primary+'40',height:`${v}%`,borderRadius:4,transition:'all 200ms'}}/>
+            ))}
+          </div>
+          <div style={{display:'flex',justifyContent:'space-between',marginTop:4,fontSize:10,color:C.textMuted}}>
+            <span>3/12</span><span>3/18</span>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+
+  if(type==='line-detail') return(
+    <Modal title={`${data.name} 상세`} onClose={onClose} width={640}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+        <div style={{background:C.bg,borderRadius:8,padding:16}}>
+          <div style={{fontSize:12,color:C.textMuted,marginBottom:4}}>가동률</div>
+          <div style={{fontSize:28,fontWeight:800,color:data.uptime>=90?C.success:C.warning}}>{data.uptime}%</div>
+        </div>
+        <div style={{background:C.bg,borderRadius:8,padding:16}}>
+          <div style={{fontSize:12,color:C.textMuted,marginBottom:4}}>금일 생산</div>
+          <div style={{fontSize:28,fontWeight:800,color:C.primary}}>{data.production.toLocaleString()}<span style={{fontSize:14,color:C.textMuted}}>/{data.target.toLocaleString()}</span></div>
+        </div>
+      </div>
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:8}}>센서 현황</div>
+        <div style={{display:'flex',gap:12}}>
+          <div style={{flex:1,background:C.bg,borderRadius:8,padding:12,textAlign:'center'}}>
+            <div style={{fontSize:11,color:C.textMuted}}>온도</div>
+            <div style={{fontSize:18,fontWeight:700,color:data.temp>75?C.danger:C.textLight}}>{data.temp}°C</div>
+          </div>
+          <div style={{flex:1,background:C.bg,borderRadius:8,padding:12,textAlign:'center'}}>
+            <div style={{fontSize:11,color:C.textMuted}}>진동</div>
+            <div style={{fontSize:18,fontWeight:700,color:data.vibration>0.5?C.danger:C.textLight}}>{data.vibration}mm/s</div>
+          </div>
+          <div style={{flex:1,background:C.bg,borderRadius:8,padding:12,textAlign:'center'}}>
+            <div style={{fontSize:11,color:C.textMuted}}>MTBF</div>
+            <div style={{fontSize:18,fontWeight:700,color:C.primary}}>{data.mtbf}h</div>
+          </div>
+        </div>
+      </div>
+      <div style={{fontSize:13,fontWeight:600,marginBottom:8}}>관리자 메모</div>
+      <textarea placeholder="메모를 입력하세요..." style={{width:'100%',minHeight:80,padding:12,borderRadius:8,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:13,resize:'vertical'}}/>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:16}}>
+        <Btn variant="secondary" onClick={onClose}>닫기</Btn>
+        <Btn onClick={()=>{onClose();setToast('메모가 저장되었습니다.')}}>저장</Btn>
+      </div>
+    </Modal>
+  );
+
+  if(type==='alert-detail') return(
+    <Modal title="알림 상세" onClose={onClose} width={560}>
+      <div style={{marginBottom:16}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+          <Badge color={SEV_COLOR[data.severity]}>{SEV_LABEL[data.severity]}</Badge>
+          <span style={{fontSize:13,color:C.textMuted}}>{data.line} | {data.type}</span>
+          <span style={{fontSize:13,color:C.textMuted,marginLeft:'auto'}}>{data.time}</span>
+        </div>
+        <div style={{fontSize:15,fontWeight:600,marginBottom:8}}>{data.msg}</div>
+        <div style={{fontSize:13,color:C.textLight,lineHeight:1.7,background:C.bg,borderRadius:8,padding:16}}>{data.detail}</div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+        <div><span style={{fontSize:12,color:C.textMuted}}>담당자</span><div style={{fontSize:14,fontWeight:600,marginTop:2}}>{data.assignee}</div></div>
+        <div><span style={{fontSize:12,color:C.textMuted}}>확인 상태</span><div style={{fontSize:14,fontWeight:600,marginTop:2,color:data.ack?C.success:C.danger}}>{data.ack?'확인됨':'미확인'}</div></div>
+      </div>
+      <div style={{fontSize:13,fontWeight:600,marginBottom:8}}>조치 내용</div>
+      <textarea placeholder="조치 내용을 입력하세요..." style={{width:'100%',minHeight:80,padding:12,borderRadius:8,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:13,resize:'vertical'}}/>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:16}}>
+        <Btn variant="secondary" onClick={onClose}>닫기</Btn>
+        <Btn onClick={()=>{onClose();setToast('조치 내용이 기록되었습니다.')}}>저장</Btn>
+      </div>
+    </Modal>
+  );
+
+  if(type==='equipment-detail') return(
+    <Modal title={`설비 상세 — ${data.name}`} onClose={onClose}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+        <div style={{background:C.bg,borderRadius:8,padding:14}}>
+          <div style={{fontSize:12,color:C.textMuted}}>설비 ID</div>
+          <div style={{fontSize:16,fontWeight:700,marginTop:4}}>{data.id}</div>
+        </div>
+        <div style={{background:C.bg,borderRadius:8,padding:14}}>
+          <div style={{fontSize:12,color:C.textMuted}}>온도</div>
+          <div style={{fontSize:16,fontWeight:700,marginTop:4,color:data.temp>65?C.warning:C.textLight}}>{data.temp}°C</div>
+        </div>
+      </div>
+      <div style={{fontSize:12,color:C.textMuted,marginBottom:4}}>상태</div>
+      <Badge color={STATUS_COLOR[data.status]}>{data.status==='running'?'가동 중':'주의'}</Badge>
+      <div style={{fontSize:13,fontWeight:600,marginTop:16,marginBottom:8}}>정비 이력</div>
+      <div style={{fontSize:13,color:C.textLight,lineHeight:1.7}}>
+        2026-03-15 유압 오일 교체<br/>
+        2026-03-01 정기 점검 완료<br/>
+        2026-02-15 베어링 교체
+      </div>
+    </Modal>
+  );
+
+  if(type==='user-detail') return(
+    <Modal title={`사용자 상세 — ${data.name}`} onClose={onClose}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+        <div><span style={{fontSize:12,color:C.textMuted}}>이름</span><div style={{fontSize:15,fontWeight:600,marginTop:2}}>{data.name}</div></div>
+        <div><span style={{fontSize:12,color:C.textMuted}}>이메일</span><div style={{fontSize:15,marginTop:2}}>{data.email}</div></div>
+        <div><span style={{fontSize:12,color:C.textMuted}}>역할</span><div style={{marginTop:4}}><Badge color={data.role==='admin'?C.primary:data.role==='manager'?C.success:C.textMuted}>{ROLE_MAP[data.role]}</Badge></div></div>
+        <div><span style={{fontSize:12,color:C.textMuted}}>상태</span><div style={{marginTop:4}}><Badge color={data.status==='active'?C.success:C.textMuted}>{data.status==='active'?'활성':'비활성'}</Badge></div></div>
+      </div>
+      <div style={{fontSize:12,color:C.textMuted,marginBottom:4}}>접근 가능 라인</div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:16}}>
+        {data.lines.map(l=><Badge key={l} color={C.primary}>{l}</Badge>)}
+      </div>
+      <div><span style={{fontSize:12,color:C.textMuted}}>마지막 로그인</span><div style={{fontSize:14,marginTop:2}}>{data.lastLogin}</div></div>
+    </Modal>
+  );
+
+  if(type==='user-edit'||type==='user-create') return(
+    <Modal title={type==='user-create'?'사용자 추가':'사용자 편집'} onClose={onClose}>
+      <div style={{display:'flex',flexDirection:'column',gap:16}}>
+        <div>
+          <label style={{fontSize:12,fontWeight:600,color:C.textMuted,display:'block',marginBottom:4}}>이름</label>
+          <input defaultValue={data?.name||''} placeholder="이름 입력" style={{width:'100%',padding:'10px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:14}}/>
+        </div>
+        <div>
+          <label style={{fontSize:12,fontWeight:600,color:C.textMuted,display:'block',marginBottom:4}}>이메일</label>
+          <input defaultValue={data?.email||''} placeholder="이메일 입력" style={{width:'100%',padding:'10px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:14}}/>
+        </div>
+        <div>
+          <label style={{fontSize:12,fontWeight:600,color:C.textMuted,display:'block',marginBottom:4}}>역할</label>
+          <select defaultValue={data?.role||'viewer'} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:14,background:'#fff'}}>
+            <option value="admin">시스템 관리자</option>
+            <option value="manager">라인 관리자</option>
+            <option value="viewer">현장 뷰어</option>
+          </select>
+        </div>
+        <div>
+          <label style={{fontSize:12,fontWeight:600,color:C.textMuted,display:'block',marginBottom:8}}>접근 라인</label>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            {LINES.map(l=>(
+              <label key={l.id} style={{display:'flex',alignItems:'center',gap:4,fontSize:13,cursor:'pointer'}}>
+                <input type="checkbox" defaultChecked={data?.lines?.includes(l.name)}/>
+                {l.name}
+              </label>
+            ))}
+          </div>
+        </div>
+        <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:8}}>
+          <Btn variant="secondary" onClick={onClose}>취소</Btn>
+          <Btn onClick={()=>{onClose();setToast(type==='user-create'?'사용자가 추가되었습니다.':'변경 사항이 저장되었습니다.')}}>{type==='user-create'?'추가':'저장'}</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+
+  return null;
+}
+
+// === Main App ===
+function App(){
+  const [page,setPage]=useState('dashboard');
+  const [modal,setModal]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [loading,setLoading]=useState(true);
+
+  useEffect(()=>{setTimeout(()=>setLoading(false),1200)},[]);
+
+  const MENU = [
+    {id:'dashboard',icon:'',label:'설비 KPI 대시보드'},
+    {id:'line-detail',icon:'',label:'라인 상세 분석'},
+    {id:'alert-log',icon:'',label:'알림 이벤트 로그'},
+    {id:'user-rbac',icon:'',label:'사용자 권한 관리'},
+  ];
+  const PAGE_TITLES = {'dashboard':'설비 KPI 대시보드','line-detail':'라인 상세 분석','alert-log':'알림 이벤트 로그','user-rbac':'사용자 권한 관리'};
+
+  if(loading) return(
+    <div style={{display:'flex',minHeight:'100vh'}}>
+      <div style={{width:260,background:C.sidebarBg,flexShrink:0}}/>
+      <div style={{flex:1,padding:24}}>
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          {[...Array(4)].map((_,i)=>(
+            <div key={i} style={{height:100,borderRadius:12,background:'linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  const unackCount = ALERTS.filter(a=>!a.ack&&a.severity==='critical').length;
+
+  return(
+    <div style={{display:'flex',minHeight:'100vh'}}>
+      {/* Sidebar */}
+      <aside style={{width:260,background:C.sidebarBg,flexShrink:0,display:'flex',flexDirection:'column',position:'sticky',top:0,height:'100vh'}}>
+        <div style={{padding:'20px 20px 24px',borderBottom:'1px solid rgba(255,255,255,0.08)'}}>
+          <div style={{fontSize:18,fontWeight:800,color:'#fff',display:'flex',alignItems:'center',gap:8}}>
+            <span style={{fontSize:22}}>&#9881;</span> FactoryMon
+          </div>
+          <div style={{fontSize:11,color:C.sidebarText,marginTop:4}}>스마트 팩토리 설비 관제</div>
+        </div>
+        <nav style={{flex:1,padding:'12px 10px',display:'flex',flexDirection:'column',gap:2}}>
+          {MENU.map(m=>(
+            <button key={m.id} title={m.label} onClick={()=>setPage(m.id)} style={{display:'flex',alignItems:'center',gap:10,width:'100%',padding:'10px 14px',borderRadius:8,border:'none',cursor:'pointer',background:page===m.id?'rgba(255,255,255,0.12)':'transparent',color:page===m.id?'#fff':C.sidebarText,fontSize:14,fontWeight:page===m.id?600:400,fontFamily:'inherit',transition:'all 150ms',textAlign:'left'}}>
+              <span style={{fontSize:18,width:24,textAlign:'center'}}>{m.icon}</span>
+              {m.label}
+              {m.id==='alert-log'&&unackCount>0&&<span style={{marginLeft:'auto',background:C.danger,color:'#fff',borderRadius:10,padding:'1px 7px',fontSize:11,fontWeight:700}}>{unackCount}</span>}
+            </button>
+          ))}
+        </nav>
+        <div style={{padding:'16px 20px',borderTop:'1px solid rgba(255,255,255,0.08)',display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:32,height:32,borderRadius:'50%',background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:14,fontWeight:700}}>K</div>
+          <div>
+            <div style={{fontSize:13,fontWeight:600,color:'#fff'}}>김민수</div>
+            <div style={{fontSize:11,color:C.sidebarText}}>시스템 관리자</div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <div style={{flex:1,display:'flex',flexDirection:'column'}}>
+        <header style={{height:56,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',padding:'0 24px',flexShrink:0,position:'sticky',top:0,zIndex:50}}>
+          <h1 style={{fontSize:18,fontWeight:700}}>{PAGE_TITLES[page]}</h1>
+          <div style={{flex:1}}/>
+          <div style={{display:'flex',alignItems:'center',gap:16}}>
+            <div style={{position:'relative',display:'flex',alignItems:'center'}}>
+              <input placeholder="검색..." style={{padding:'7px 12px 7px 32px',borderRadius:8,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:13,width:200,background:C.bg}}/>
+              <span style={{position:'absolute',left:10,fontSize:14,color:C.textMuted}}>&#128269;</span>
+            </div>
+            <span style={{fontSize:18,cursor:'pointer',position:'relative'}}>&#128276;
+              {unackCount>0&&<span style={{position:'absolute',top:-4,right:-4,width:8,height:8,borderRadius:'50%',background:C.danger}}/>}
+            </span>
+          </div>
+        </header>
+        <main style={{flex:1,overflow:'auto',padding:24}}>
+          {page==='dashboard'&&<DashboardPage setModal={setModal}/>}
+          {page==='line-detail'&&<LineDetailPage setModal={setModal}/>}
+          {page==='alert-log'&&<AlertLogPage setModal={setModal}/>}
+          {page==='user-rbac'&&<UserRBACPage setModal={setModal}/>}
+        </main>
+      </div>
+
+      {/* Modal */}
+      <ModalContent modal={modal} onClose={()=>setModal(null)} setToast={setToast}/>
+      {/* Toast */}
+      {toast&&<Toast message={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>물류 허브 실시간 관제 플랫폼 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:#F8FAFC;color:#0F172A;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo} = React;
+const {BarChart,Bar,AreaChart,Area,PieChart,Pie,Cell,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,Legend,ComposedChart,Line:RLine} = Recharts;
+
+const C = {
+  primary:'#334155',secondary:'#0F172A',accent:'#06B6D4',
+  bg:'#F8FAFC',surface:'#FFFFFF',border:'#E2E8F0',
+  text:'#0F172A',textLight:'#64748B',textMuted:'#94A3B8',
+  success:'#059669',warning:'#D97706',danger:'#DC2626',
+  gradient:'linear-gradient(135deg,#334155,#06B6D4)',
+};
+
+// === Dummy Data ===
+const HUBS = [
+  {id:'H01',name:'인천 제1허브',city:'인천',lat:37.45,lng:126.7,inbound:342,outbound:298,stock:82.3,vehicles:18,activeVehicles:14},
+  {id:'H02',name:'부산 물류센터',city:'부산',lat:35.17,lng:129.08,inbound:278,outbound:310,stock:67.1,vehicles:12,activeVehicles:10},
+  {id:'H03',name:'대전 중앙허브',city:'대전',lat:36.35,lng:127.38,inbound:156,outbound:148,stock:91.5,vehicles:8,activeVehicles:6},
+  {id:'H04',name:'광주 서부센터',city:'광주',lat:35.16,lng:126.85,inbound:98,outbound:112,stock:54.2,vehicles:6,activeVehicles:5},
+  {id:'H05',name:'수원 경기허브',city:'수원',lat:37.26,lng:127.03,inbound:210,outbound:195,stock:76.8,vehicles:10,activeVehicles:8},
+];
+
+const VEHICLES = [
+  {id:'V-1001',plate:'서울 12가 3456',hub:'인천 제1허브',route:'인천→수원',status:'운행중',driver:'김민수',departure:'08:30',eta:'10:15',cargo:'전자부품 2.4톤'},
+  {id:'V-1002',plate:'경기 34나 7890',hub:'인천 제1허브',route:'인천→대전',status:'운행중',driver:'이준호',departure:'07:00',eta:'11:30',cargo:'생활용품 3.1톤'},
+  {id:'V-1003',plate:'인천 56다 1234',hub:'인천 제1허브',route:'인천→부산',status:'출발',driver:'박서진',departure:'09:00',eta:'14:00',cargo:'의류 1.8톤'},
+  {id:'V-1004',plate:'부산 78라 5678',hub:'부산 물류센터',route:'부산→광주',status:'도착',driver:'정하윤',departure:'06:00',eta:'09:30',cargo:'식품 2.7톤'},
+  {id:'V-1005',plate:'대전 90마 9012',hub:'대전 중앙허브',route:'대전→수원',status:'대기',driver:'최우진',departure:'-',eta:'-',cargo:'대기 중'},
+  {id:'V-1006',plate:'광주 11바 3456',hub:'광주 서부센터',route:'광주→인천',status:'운행중',driver:'강민재',departure:'05:30',eta:'12:00',cargo:'농산물 3.5톤'},
+  {id:'V-1007',plate:'수원 22사 7890',hub:'수원 경기허브',route:'수원→부산',status:'운행중',driver:'김서연',departure:'06:30',eta:'13:00',cargo:'기계부품 2.0톤'},
+  {id:'V-1008',plate:'인천 33아 1234',hub:'인천 제1허브',route:'인천→광주',status:'대기',driver:'이지은',departure:'-',eta:'-',cargo:'대기 중'},
+];
+
+const EVENTS = [
+  {id:1,time:'14:45',hub:'인천 제1허브',type:'지연 입고',severity:'critical',msg:'동남아 수입 컨테이너 3시간 지연 — 세관 통관 지연',detail:'SCEL-2026-3845 컨테이너 세관 심사 지연. 물량 1,200CBM. 입고 예정 시간 18:00으로 변경. 후속 출하 스케줄 조정 필요.',assignee:'김민수'},
+  {id:2,time:'14:20',hub:'부산 물류센터',type:'적재율 초과',severity:'warning',msg:'B-3 구역 적재율 95% — 임계값(90%) 초과',detail:'B-3 구역(식품 냉장) 적재율 임계값 초과. 잔여 슬롯 12개. 금일 추가 입고 예정 물량 고려 시 C-1 구역 분산 배치 필요.',assignee:'정하윤'},
+  {id:3,time:'13:50',hub:'대전 중앙허브',type:'차량 배차 오류',severity:'warning',msg:'V-1005 배차 일정 충돌 — 동일 시간대 2건 배정',detail:'최우진 기사 차량 V-1005에 13:00~15:00 대전→수원, 13:30~16:00 대전→광주 동시 배정됨. 배차 수정 필요.',assignee:'이준호'},
+  {id:4,time:'12:30',hub:'수원 경기허브',type:'정상 입고',severity:'info',msg:'서울발 전자부품 132팔레트 정상 입고 완료',detail:'서울 강서 물류센터 발송 전자부품 132팔레트 입고 완료. 품질 검수 합격. A-2 구역 적재 완료.',assignee:'강민재'},
+  {id:5,time:'11:15',hub:'광주 서부센터',type:'온도 이상',severity:'critical',msg:'냉장 구역 C-2 온도 8°C → 기준(4°C) 초과',detail:'냉장 보관 구역 C-2 온도 센서 이상 감지. 현재 8°C로 기준치 초과. 냉동기 점검 긴급 요청. 보관 식품 품질 확인 필요.',assignee:'박서진'},
+  {id:6,time:'10:40',hub:'인천 제1허브',type:'출고 완료',severity:'info',msg:'대전행 혼적 화물 48팔레트 출고 완료',detail:'대전 중앙허브 행 혼적 화물 출고. 생활용품 28팔레트 + 전자부품 20팔레트. V-1002 적재 완료.',assignee:'김서연'},
+];
+
+const VH_STATUS_COLOR = {'운행중':C.success,'출발':C.accent,'도착':C.primary,'대기':C.textMuted};
+const SEV_COLOR = {critical:C.danger,warning:C.warning,info:C.accent};
+const SEV_LABEL = {critical:'긴급',warning:'주의',info:'정보'};
+
+const DAILY_IO = Array.from({length:7},(_,i)=>({day:['월','화','수','목','금','토','일'][i],inbound:Math.floor(200+Math.random()*200),outbound:Math.floor(180+Math.random()*200),stock:Math.floor(60+Math.random()*30)}));
+
+const ACCOUNTS = [
+  {id:1,name:'김민수',email:'minsu@logistics.kr',role:'admin',hubs:['인천 제1허브','부산 물류센터','대전 중앙허브','광주 서부센터','수원 경기허브'],lastLogin:'2026-03-18 09:12',status:'active'},
+  {id:2,name:'정하윤',email:'hayun@logistics.kr',role:'manager',hubs:['부산 물류센터'],lastLogin:'2026-03-18 08:45',status:'active'},
+  {id:3,name:'이준호',email:'junho@logistics.kr',role:'manager',hubs:['인천 제1허브','대전 중앙허브'],lastLogin:'2026-03-17 17:30',status:'active'},
+  {id:4,name:'박서진',email:'seojin@logistics.kr',role:'viewer',hubs:['광주 서부센터'],lastLogin:'2026-03-18 10:05',status:'active'},
+  {id:5,name:'강민재',email:'minjae@logistics.kr',role:'manager',hubs:['수원 경기허브'],lastLogin:'2026-03-16 14:20',status:'inactive'},
+];
+
+const ROLE_LABEL = {admin:'전체 관리자',manager:'허브 관리자',viewer:'뷰어'};
+
+// === Components ===
+function CountUp({end,duration=1200,suffix=''}){
+  const [val,setVal]=useState(0);
+  useEffect(()=>{let s=0;const step=end/(duration/16);const t=setInterval(()=>{s+=step;if(s>=end){setVal(end);clearInterval(t)}else setVal(Math.floor(s))},16);return()=>clearInterval(t)},[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{typeof end==='number'&&end%1!==0?val.toFixed(1):val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({message,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t)},[]);
+  return <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:C.secondary,color:'#fff',padding:'12px 24px',borderRadius:12,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.2)',fontSize:14}}>{message}</div>;
+}
+
+function Badge({color,children}){
+  return <span style={{display:'inline-block',padding:'3px 12px',borderRadius:20,fontSize:12,fontWeight:600,background:color+'18',color}}>{children}</span>;
+}
+
+function Btn({onClick,children,variant='primary',size='md',style:s={}}){
+  const base={border:'none',cursor:'pointer',fontFamily:'inherit',fontWeight:600,borderRadius:12,transition:'all 200ms',display:'inline-flex',alignItems:'center',gap:6};
+  const sizes={sm:{padding:'6px 14px',fontSize:12},md:{padding:'8px 18px',fontSize:13},lg:{padding:'10px 22px',fontSize:14}};
+  const variants={primary:{background:C.accent,color:'#fff'},secondary:{background:'#fff',color:C.primary,border:`1px solid ${C.border}`},danger:{background:C.danger+'15',color:C.danger}};
+  return <button onClick={onClick} style={{...base,...sizes[size],...variants[variant],...s}} onMouseEnter={e=>e.currentTarget.style.opacity='0.85'} onMouseLeave={e=>e.currentTarget.style.opacity='1'}>{children}</button>;
+}
+
+// Drawer (topnav-hero pattern)
+function Drawer({item,onClose,children}){
+  return(
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:200,animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:520,background:C.surface,boxShadow:'-8px 0 40px rgba(0,0,0,0.15)',zIndex:201,overflowY:'auto',padding:0,animation:'slideInRight 200ms ease'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'20px 24px',borderBottom:`1px solid ${C.border}`,position:'sticky',top:0,background:'#fff',zIndex:1}}>
+          <h3 style={{fontSize:18,fontWeight:700}}>{item.title||'상세 정보'}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textLight}}>&#10005;</button>
+        </div>
+        <div style={{padding:24}}>{children}</div>
+      </div>
+    </>
+  );
+}
+
+function Modal({title,onClose,children,width=560}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.4)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:'#fff',borderRadius:16,zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.15)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'20px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:18,fontWeight:700}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textLight}}>&#10005;</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// === Pages ===
+function HubOverviewPage({setDrawer}){
+  const totalIn = HUBS.reduce((a,h)=>a+h.inbound,0);
+  const totalOut = HUBS.reduce((a,h)=>a+h.outbound,0);
+  const avgStock = (HUBS.reduce((a,h)=>a+h.stock,0)/HUBS.length).toFixed(1);
+  const totalVehicles = HUBS.reduce((a,h)=>a+h.activeVehicles,0);
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {/* Hub Cards */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:32}}>
+        {HUBS.map((hub,i)=>(
+          <div key={hub.id} style={{background:C.surface,borderRadius:16,overflow:'hidden',boxShadow:'0 4px 16px rgba(0,0,0,0.10)',cursor:'pointer',transition:'all 200ms',animation:`slideUp 400ms ease ${i*80}ms both`}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,0.15)'}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,0.10)'}}
+            onClick={()=>setDrawer({title:hub.name,type:'hub',data:hub})}>
+            <div style={{background:C.gradient,padding:'16px 20px',color:'#fff'}}>
+              <div style={{fontSize:11,opacity:0.8,marginBottom:4}}>{hub.city}</div>
+              <div style={{fontSize:16,fontWeight:700}}>{hub.name}</div>
+            </div>
+            <div style={{padding:20}}>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
+                <div><div style={{fontSize:11,color:C.textMuted}}>입고</div><div style={{fontSize:20,fontWeight:800,color:C.accent}}>{hub.inbound}</div></div>
+                <div><div style={{fontSize:11,color:C.textMuted}}>출고</div><div style={{fontSize:20,fontWeight:800,color:C.primary}}>{hub.outbound}</div></div>
+              </div>
+              <div style={{marginBottom:8}}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                  <span style={{fontSize:12,color:C.textMuted}}>적재율</span>
+                  <span style={{fontSize:12,fontWeight:700,color:hub.stock>85?C.warning:C.success}}>{hub.stock}%</span>
+                </div>
+                <div style={{height:6,background:C.bg,borderRadius:3,overflow:'hidden'}}>
+                  <div style={{height:'100%',background:hub.stock>85?C.warning:C.success,borderRadius:3,width:`${hub.stock}%`,transformOrigin:'left',animation:`barGrow 800ms ease ${i*100}ms both`}}/>
+                </div>
+              </div>
+              <div style={{fontSize:12,color:C.textLight}}>차량 {hub.activeVehicles}/{hub.vehicles}대 가동</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Charts */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+        <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.10)'}}>
+          <h3 style={{fontSize:16,fontWeight:700,marginBottom:16,letterSpacing:'-0.03em'}}>주간 입출고 추이</h3>
+          <ResponsiveContainer width="100%" height={240}>
+            <ComposedChart data={DAILY_IO}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0"/>
+              <XAxis dataKey="day" tick={{fontSize:12,fill:C.textMuted}}/>
+              <YAxis tick={{fontSize:11,fill:C.textMuted}}/>
+              <Tooltip contentStyle={{borderRadius:12,fontSize:12,border:'none',boxShadow:'0 4px 16px rgba(0,0,0,0.12)'}}/>
+              <Legend wrapperStyle={{fontSize:12}}/>
+              <Bar dataKey="inbound" fill={C.accent} radius={[6,6,0,0]} name="입고"/>
+              <Bar dataKey="outbound" fill={C.primary} radius={[6,6,0,0]} name="출고"/>
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.10)'}}>
+          <h3 style={{fontSize:16,fontWeight:700,marginBottom:16,letterSpacing:'-0.03em'}}>허브별 적재율</h3>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            {HUBS.map((h,i)=>(
+              <div key={h.id}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+                  <span style={{fontSize:13,fontWeight:600}}>{h.name}</span>
+                  <span style={{fontSize:13,fontWeight:700,color:h.stock>85?C.warning:C.success}}>{h.stock}%</span>
+                </div>
+                <div style={{height:10,background:C.bg,borderRadius:5,overflow:'hidden'}}>
+                  <div style={{height:'100%',background:h.stock>85?`linear-gradient(90deg,${C.warning},${C.danger})`:`linear-gradient(90deg,${C.accent},${C.success})`,borderRadius:5,width:`${h.stock}%`,transformOrigin:'left',animation:`barGrow 800ms ease ${i*120}ms both`}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VehicleDispatchPage({setDrawer}){
+  const [statusFilter,setStatusFilter]=useState('all');
+  const filtered = statusFilter==='all'?VEHICLES:VEHICLES.filter(v=>v.status===statusFilter);
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {/* Status Summary Cards */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}}>
+        {[
+          {label:'운행중',count:VEHICLES.filter(v=>v.status==='운행중').length,color:C.success,icon:'&#128666;'},
+          {label:'출발',count:VEHICLES.filter(v=>v.status==='출발').length,color:C.accent,icon:'&#128640;'},
+          {label:'도착',count:VEHICLES.filter(v=>v.status==='도착').length,color:C.primary,icon:'&#9989;'},
+          {label:'대기',count:VEHICLES.filter(v=>v.status==='대기').length,color:C.textMuted,icon:'&#9202;'},
+        ].map((s,i)=>(
+          <div key={i} onClick={()=>setStatusFilter(s.label==='전체'?'all':s.label)} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.10)',cursor:'pointer',transition:'all 200ms',border:statusFilter===s.label?`2px solid ${s.color}`:'2px solid transparent',animation:`slideUp 400ms ease ${i*80}ms both`}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)'}}
+            onMouseLeave={e=>{e.currentTarget.style.transform=''}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:12,color:C.textMuted,marginBottom:4}}>{s.label}</div>
+                <div style={{fontSize:28,fontWeight:800,color:s.color}}>{s.count}</div>
+              </div>
+              <span style={{fontSize:28}} dangerouslySetInnerHTML={{__html:s.icon}}/>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filter */}
+      <div style={{display:'flex',gap:8,marginBottom:16}}>
+        {['all','운행중','출발','도착','대기'].map(f=>(
+          <button key={f} onClick={()=>setStatusFilter(f)} style={{padding:'7px 16px',borderRadius:20,border:`1.5px solid ${statusFilter===f?C.accent:C.border}`,background:statusFilter===f?C.accent+'15':'#fff',color:statusFilter===f?C.accent:C.textLight,fontWeight:statusFilter===f?600:400,cursor:'pointer',fontFamily:'inherit',fontSize:12,transition:'all 200ms'}}>
+            {f==='all'?'전체':f}
+          </button>
+        ))}
+      </div>
+
+      {/* Vehicle Table */}
+      <div style={{background:C.surface,borderRadius:16,boxShadow:'0 4px 16px rgba(0,0,0,0.10)',overflow:'hidden'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:C.secondary,color:'#fff'}}>
+              {['차량 번호','번호판','허브','노선','상태','기사','출발','도착 예정'].map(h=>(
+                <th key={h} style={{padding:'12px 16px',textAlign:'left',fontSize:12,fontWeight:600}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((v,i)=>(
+              <tr key={v.id} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'all 150ms',animation:`slideUp 300ms ease ${i*50}ms both`}}
+                onMouseEnter={e=>{e.currentTarget.style.background=C.accent+'08';e.currentTarget.style.borderLeft=`3px solid ${C.accent}`}}
+                onMouseLeave={e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.borderLeft='3px solid transparent'}}
+                onClick={()=>setDrawer({title:`차량 ${v.id}`,type:'vehicle',data:v})}>
+                <td style={{padding:'14px 16px',fontSize:13,fontWeight:700}}>{v.id}</td>
+                <td style={{padding:'14px 16px',fontSize:13,color:C.textLight}}>{v.plate}</td>
+                <td style={{padding:'14px 16px',fontSize:13}}>{v.hub}</td>
+                <td style={{padding:'14px 16px',fontSize:13,fontWeight:600}}>{v.route}</td>
+                <td style={{padding:'14px 16px'}}><Badge color={VH_STATUS_COLOR[v.status]}>{v.status}</Badge></td>
+                <td style={{padding:'14px 16px',fontSize:13}}>{v.driver}</td>
+                <td style={{padding:'14px 16px',fontSize:13,color:C.textLight}}>{v.departure}</td>
+                <td style={{padding:'14px 16px',fontSize:13,color:C.textLight}}>{v.eta}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function EventAlertPage({setDrawer}){
+  const [filter,setFilter]=useState('all');
+  const [events,setEvents]=useState(EVENTS);
+  const filtered = filter==='all'?events:events.filter(e=>e.severity===filter);
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',gap:8,marginBottom:24}}>
+        {[{key:'all',label:'전체'},{key:'critical',label:'긴급'},{key:'warning',label:'주의'},{key:'info',label:'정보'}].map(f=>(
+          <button key={f.key} onClick={()=>setFilter(f.key)} style={{padding:'8px 18px',borderRadius:20,border:`1.5px solid ${filter===f.key?(SEV_COLOR[f.key]||C.accent):C.border}`,background:filter===f.key?(SEV_COLOR[f.key]||C.accent)+'15':'#fff',color:filter===f.key?(SEV_COLOR[f.key]||C.accent):C.textLight,fontWeight:filter===f.key?600:400,cursor:'pointer',fontFamily:'inherit',fontSize:13,transition:'all 200ms'}}>
+            {f.label} ({f.key==='all'?events.length:events.filter(e=>e.severity===f.key).length})
+          </button>
+        ))}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:16}}>
+        {filtered.map((evt,i)=>(
+          <div key={evt.id} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.10)',borderTop:`3px solid ${SEV_COLOR[evt.severity]}`,cursor:'pointer',transition:'all 200ms',animation:`slideUp 400ms ease ${i*80}ms both`}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,0.15)'}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,0.10)'}}
+            onClick={()=>setDrawer({title:'이벤트 상세',type:'event',data:evt})}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+              <Badge color={SEV_COLOR[evt.severity]}>{SEV_LABEL[evt.severity]}</Badge>
+              <span style={{fontSize:12,color:C.textMuted}}>{evt.hub}</span>
+              <span style={{fontSize:12,color:C.textMuted,marginLeft:'auto'}}>{evt.time}</span>
+            </div>
+            <div style={{fontSize:13,fontWeight:600,marginBottom:6}}>{evt.type}</div>
+            <div style={{fontSize:13,color:C.textLight,lineHeight:1.6}}>{evt.msg}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AccountMgmtPage({setDrawer,setToast}){
+  const [showCreate,setShowCreate]=useState(false);
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
+        <span style={{fontSize:13,color:C.textMuted}}>전체 {ACCOUNTS.length}명</span>
+        <Btn onClick={()=>setShowCreate(true)}>+ 계정 추가</Btn>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+        {ACCOUNTS.map((acc,i)=>(
+          <div key={acc.id} style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.10)',cursor:'pointer',transition:'all 200ms',animation:`slideUp 400ms ease ${i*80}ms both`}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,0.15)'}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,0.10)'}}
+            onClick={()=>setDrawer({title:acc.name,type:'account',data:acc})}>
+            <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
+              <div style={{width:40,height:40,borderRadius:'50%',background:C.gradient,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:700,fontSize:16}}>{acc.name[0]}</div>
+              <div>
+                <div style={{fontSize:15,fontWeight:700}}>{acc.name}</div>
+                <div style={{fontSize:12,color:C.textMuted}}>{acc.email}</div>
+              </div>
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+              <Badge color={acc.role==='admin'?C.accent:acc.role==='manager'?C.success:C.textMuted}>{ROLE_LABEL[acc.role]}</Badge>
+              <Badge color={acc.status==='active'?C.success:C.textMuted}>{acc.status==='active'?'활성':'비활성'}</Badge>
+            </div>
+            <div style={{fontSize:12,color:C.textLight}}>접근 허브: {acc.hubs.length===5?'전체':acc.hubs.join(', ')}</div>
+            <div style={{fontSize:11,color:C.textMuted,marginTop:6}}>마지막 로그인: {acc.lastLogin}</div>
+          </div>
+        ))}
+      </div>
+
+      {showCreate&&(
+        <Modal title="계정 추가" onClose={()=>setShowCreate(false)}>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <div><label style={{fontSize:12,fontWeight:600,color:C.textMuted,display:'block',marginBottom:4}}>이름</label><input placeholder="이름" style={{width:'100%',padding:'10px 12px',borderRadius:10,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:14}}/></div>
+            <div><label style={{fontSize:12,fontWeight:600,color:C.textMuted,display:'block',marginBottom:4}}>이메일</label><input placeholder="이메일" style={{width:'100%',padding:'10px 12px',borderRadius:10,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:14}}/></div>
+            <div><label style={{fontSize:12,fontWeight:600,color:C.textMuted,display:'block',marginBottom:4}}>역할</label>
+              <select style={{width:'100%',padding:'10px 12px',borderRadius:10,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:14,background:'#fff'}}>
+                <option value="admin">전체 관리자</option><option value="manager">허브 관리자</option><option value="viewer">뷰어</option>
+              </select>
+            </div>
+            <div><label style={{fontSize:12,fontWeight:600,color:C.textMuted,display:'block',marginBottom:8}}>접근 허브</label>
+              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{HUBS.map(h=>(<label key={h.id} style={{display:'flex',alignItems:'center',gap:4,fontSize:13,cursor:'pointer'}}><input type="checkbox"/>{h.name}</label>))}</div>
+            </div>
+            <div style={{display:'flex',justifyContent:'flex-end',gap:8}}>
+              <Btn variant="secondary" onClick={()=>setShowCreate(false)}>취소</Btn>
+              <Btn onClick={()=>{setShowCreate(false);setToast('계정이 추가되었습니다.')}}>추가</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// === Drawer Content ===
+function DrawerContent({drawer,onClose,setToast}){
+  if(!drawer) return null;
+  const {type,data}=drawer;
+
+  if(type==='hub') return(
+    <Drawer item={drawer} onClose={onClose}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+        <div style={{background:C.bg,borderRadius:12,padding:16,textAlign:'center'}}><div style={{fontSize:11,color:C.textMuted}}>입고</div><div style={{fontSize:28,fontWeight:800,color:C.accent}}>{data.inbound}</div></div>
+        <div style={{background:C.bg,borderRadius:12,padding:16,textAlign:'center'}}><div style={{fontSize:11,color:C.textMuted}}>출고</div><div style={{fontSize:28,fontWeight:800,color:C.primary}}>{data.outbound}</div></div>
+      </div>
+      <div style={{marginBottom:20}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}><span style={{fontSize:13}}>적재율</span><span style={{fontSize:13,fontWeight:700,color:data.stock>85?C.warning:C.success}}>{data.stock}%</span></div>
+        <div style={{height:10,background:C.bg,borderRadius:5,overflow:'hidden'}}><div style={{height:'100%',background:data.stock>85?C.warning:C.success,borderRadius:5,width:`${data.stock}%`}}/></div>
+      </div>
+      <div style={{fontSize:14,fontWeight:600,marginBottom:8}}>차량 현황</div>
+      <div style={{fontSize:13,color:C.textLight,marginBottom:16}}>{data.activeVehicles}대 가동 중 / 총 {data.vehicles}대</div>
+      <div style={{fontSize:14,fontWeight:600,marginBottom:8}}>메모</div>
+      <textarea placeholder="허브 메모 입력..." style={{width:'100%',minHeight:80,padding:12,borderRadius:10,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:13,resize:'vertical'}}/>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:16}}>
+        <Btn variant="secondary" onClick={onClose}>닫기</Btn>
+        <Btn onClick={()=>{onClose();setToast('메모가 저장되었습니다.')}}>저장</Btn>
+      </div>
+    </Drawer>
+  );
+
+  if(type==='vehicle') return(
+    <Drawer item={drawer} onClose={onClose}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+        {[{l:'차량 번호',v:data.id},{l:'번호판',v:data.plate},{l:'노선',v:data.route},{l:'상태',v:data.status,badge:true},{l:'기사',v:data.driver},{l:'화물',v:data.cargo},{l:'출발 시간',v:data.departure},{l:'도착 예정',v:data.eta}].map((f,i)=>(
+          <div key={i} style={{background:C.bg,borderRadius:10,padding:12}}>
+            <div style={{fontSize:11,color:C.textMuted,marginBottom:2}}>{f.l}</div>
+            {f.badge?<Badge color={VH_STATUS_COLOR[f.v]}>{f.v}</Badge>:<div style={{fontSize:14,fontWeight:600}}>{f.v}</div>}
+          </div>
+        ))}
+      </div>
+      <div style={{fontSize:14,fontWeight:600,marginBottom:8}}>배차 메모</div>
+      <textarea placeholder="배차 관련 메모..." style={{width:'100%',minHeight:80,padding:12,borderRadius:10,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:13,resize:'vertical'}}/>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:16}}>
+        <Btn variant="secondary" onClick={onClose}>닫기</Btn>
+        <Btn onClick={()=>{onClose();setToast('저장되었습니다.')}}>저장</Btn>
+      </div>
+    </Drawer>
+  );
+
+  if(type==='event') return(
+    <Drawer item={drawer} onClose={onClose}>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:16}}>
+        <Badge color={SEV_COLOR[data.severity]}>{SEV_LABEL[data.severity]}</Badge>
+        <span style={{fontSize:13,color:C.textMuted}}>{data.hub} | {data.type}</span>
+        <span style={{fontSize:13,color:C.textMuted,marginLeft:'auto'}}>{data.time}</span>
+      </div>
+      <div style={{fontSize:15,fontWeight:600,marginBottom:8}}>{data.msg}</div>
+      <div style={{fontSize:13,color:C.textLight,lineHeight:1.7,background:C.bg,borderRadius:10,padding:16,marginBottom:16}}>{data.detail}</div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+        <div><span style={{fontSize:12,color:C.textMuted}}>담당자</span><div style={{fontSize:14,fontWeight:600,marginTop:2}}>{data.assignee}</div></div>
+        <div><span style={{fontSize:12,color:C.textMuted}}>이벤트 유형</span><div style={{fontSize:14,fontWeight:600,marginTop:2}}>{data.type}</div></div>
+      </div>
+      <div style={{fontSize:14,fontWeight:600,marginBottom:8}}>조치 내용</div>
+      <textarea placeholder="조치 사항 입력..." style={{width:'100%',minHeight:80,padding:12,borderRadius:10,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:13,resize:'vertical'}}/>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:16}}>
+        <Btn variant="secondary" onClick={onClose}>닫기</Btn>
+        <Btn onClick={()=>{onClose();setToast('조치 내용이 기록되었습니다.')}}>저장</Btn>
+      </div>
+    </Drawer>
+  );
+
+  if(type==='account') return(
+    <Drawer item={drawer} onClose={onClose}>
+      <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:20}}>
+        <div style={{width:52,height:52,borderRadius:'50%',background:C.gradient,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:700,fontSize:20}}>{data.name[0]}</div>
+        <div><div style={{fontSize:18,fontWeight:700}}>{data.name}</div><div style={{fontSize:13,color:C.textMuted}}>{data.email}</div></div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+        <div><span style={{fontSize:12,color:C.textMuted}}>역할</span><div style={{marginTop:4}}><Badge color={data.role==='admin'?C.accent:data.role==='manager'?C.success:C.textMuted}>{ROLE_LABEL[data.role]}</Badge></div></div>
+        <div><span style={{fontSize:12,color:C.textMuted}}>상태</span><div style={{marginTop:4}}><Badge color={data.status==='active'?C.success:C.textMuted}>{data.status==='active'?'활성':'비활성'}</Badge></div></div>
+      </div>
+      <div style={{fontSize:13,fontWeight:600,marginBottom:6}}>접근 허브</div>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:16}}>{data.hubs.map(h=><Badge key={h} color={C.accent}>{h}</Badge>)}</div>
+      <div style={{fontSize:12,color:C.textMuted}}>마지막 로그인: {data.lastLogin}</div>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:20}}>
+        <Btn variant="secondary" onClick={onClose}>닫기</Btn>
+        <Btn onClick={()=>{onClose();setToast('계정이 수정되었습니다.')}}>편집</Btn>
+      </div>
+    </Drawer>
+  );
+
+  return null;
+}
+
+// === Main App ===
+function App(){
+  const [tab,setTab]=useState('home');
+  const [drawer,setDrawer]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [loading,setLoading]=useState(true);
+
+  useEffect(()=>{setTimeout(()=>setLoading(false),1200)},[]);
+
+  const TABS = [
+    {id:'home',label:'허브 운영 현황판',icon:'&#127968;'},
+    {id:'vehicle-dispatch',label:'차량 배차 현황',icon:'&#128666;'},
+    {id:'event-alert',label:'입출고 이벤트 알림',icon:'&#128276;'},
+    {id:'account-mgmt',label:'운영자 계정 관리',icon:'&#128100;'},
+  ];
+
+  const PAGE_META = {
+    'home':{title:'허브 운영 현황판',kpis:[{label:'총 입고',value:HUBS.reduce((a,h)=>a+h.inbound,0),suffix:'건'},{label:'총 출고',value:HUBS.reduce((a,h)=>a+h.outbound,0),suffix:'건'},{label:'평균 적재율',value:'74.4',suffix:'%'}]},
+    'vehicle-dispatch':{title:'차량 배차 현황',kpis:[{label:'총 차량',value:HUBS.reduce((a,h)=>a+h.vehicles,0),suffix:'대'},{label:'운행중',value:VEHICLES.filter(v=>v.status==='운행중').length,suffix:'대'},{label:'대기',value:VEHICLES.filter(v=>v.status==='대기').length,suffix:'대'}]},
+    'event-alert':{title:'입출고 이벤트 알림',kpis:[{label:'전체',value:EVENTS.length,suffix:'건'},{label:'긴급',value:EVENTS.filter(e=>e.severity==='critical').length,suffix:'건'},{label:'주의',value:EVENTS.filter(e=>e.severity==='warning').length,suffix:'건'}]},
+    'account-mgmt':{title:'운영자 계정 관리',kpis:[{label:'전체',value:ACCOUNTS.length,suffix:'명'},{label:'활성',value:ACCOUNTS.filter(a=>a.status==='active').length,suffix:'명'},{label:'관리자',value:ACCOUNTS.filter(a=>a.role==='admin').length,suffix:'명'}]},
+  };
+
+  if(loading) return(
+    <div style={{minHeight:'100vh',background:C.bg}}>
+      <div style={{height:56,background:C.surface}}/>
+      <div style={{padding:24}}>
+        {[...Array(3)].map((_,i)=>(<div key={i} style={{height:120,borderRadius:16,marginBottom:16,background:'linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>))}
+      </div>
+    </div>
+  );
+
+  const critCount = EVENTS.filter(e=>e.severity==='critical').length;
+
+  return(
+    <div style={{minHeight:'100vh',background:C.bg}}>
+      {/* Top Nav */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:4}}>
+        <div style={{fontSize:18,fontWeight:800,color:C.secondary,marginRight:20,display:'flex',alignItems:'center',gap:6}}>
+          <span style={{fontSize:20}}>&#128230;</span> LogiHub
+        </div>
+        {TABS.map(t=>(
+          <button key={t.id} title={t.label} onClick={()=>setTab(t.id)} style={{padding:'6px 16px',borderRadius:10,border:'none',background:tab===t.id?C.secondary:C.bg,color:tab===t.id?'#fff':C.textLight,fontWeight:tab===t.id?700:500,cursor:'pointer',fontFamily:'inherit',fontSize:13,transition:'all 200ms',display:'flex',alignItems:'center',gap:6}}>
+            <span dangerouslySetInnerHTML={{__html:t.icon}} style={{fontSize:14}}/>
+            {t.label}
+            {t.id==='event-alert'&&critCount>0&&<span style={{background:C.danger,color:'#fff',borderRadius:10,padding:'1px 6px',fontSize:10,fontWeight:700}}>{critCount}</span>}
+          </button>
+        ))}
+        <div style={{flex:1}}/>
+        <div style={{position:'relative'}}>
+          <input placeholder="검색..." style={{padding:'7px 12px 7px 30px',borderRadius:10,border:`1px solid ${C.border}`,fontFamily:'inherit',fontSize:13,width:180,background:C.bg}}/>
+          <span style={{position:'absolute',left:9,top:'50%',transform:'translateY(-50%)',fontSize:13,color:C.textMuted}}>&#128269;</span>
+        </div>
+        <div style={{width:32,height:32,borderRadius:'50%',background:C.gradient,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700,marginLeft:8}}>K</div>
+      </header>
+
+      {/* Hero Banner */}
+      <div style={{background:C.gradient,padding:'28px 32px',color:'#fff'}}>
+        <h1 style={{fontSize:28,fontWeight:800,letterSpacing:'-0.03em'}}>{PAGE_META[tab].title}</h1>
+        <div style={{display:'flex',gap:32,marginTop:12}}>
+          {PAGE_META[tab].kpis.map(k=>(
+            <div key={k.label} style={{display:'flex',alignItems:'baseline',gap:8}}>
+              <span style={{fontSize:13,opacity:0.8}}>{k.label}</span>
+              <span style={{fontSize:22,fontWeight:800}}><CountUp end={parseFloat(k.value)} suffix={k.suffix}/></span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Content */}
+      <main style={{padding:'24px 32px'}}>
+        {tab==='home'&&<HubOverviewPage setDrawer={setDrawer}/>}
+        {tab==='vehicle-dispatch'&&<VehicleDispatchPage setDrawer={setDrawer}/>}
+        {tab==='event-alert'&&<EventAlertPage setDrawer={setDrawer}/>}
+        {tab==='account-mgmt'&&<AccountMgmtPage setDrawer={setDrawer} setToast={setToast}/>}
+      </main>
+
+      {/* Drawer */}
+      <DrawerContent drawer={drawer} onClose={()=>setDrawer(null)} setToast={setToast}/>
+      {/* Toast */}
+      {toast&&<Toast message={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

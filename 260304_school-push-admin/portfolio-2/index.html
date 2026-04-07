@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>배송 알림 플랫폼 — (주)로지알림</title>
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+  <script src="https://unpkg.com/react-is@18.3.1/umd/react-is.development.js"></script>
+  <script src="https://unpkg.com/recharts/umd/Recharts.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Pretendard', sans-serif; background: #F5F3FF; color: #1E1B4B; font-size: 14px; }
+    ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: #C4B5FD; border-radius: 3px; }
+
+    @keyframes fadeInScale {
+      from { opacity:0; transform:translate(-50%,-50%) scale(0.95); }
+      to   { opacity:1; transform:translate(-50%,-50%) scale(1); }
+    }
+    @keyframes slideIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+    .skeleton { background:linear-gradient(90deg,#EDE9FE 25%,#F5F3FF 50%,#EDE9FE 75%);
+      background-size:200% 100%; animation:shimmer 1.5s infinite; border-radius:4px; }
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+const { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, ComposedChart, Line,
+        XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = Recharts;
+
+const C = {
+  pri:'#7C3AED', sec:'#4C1D95', acc:'#F59E0B',
+  bg:'#F5F3FF', surf:'#FFFFFF', txt:'#1E1B4B', sub:'#6B7280',
+  green:'#10B981', red:'#EF4444', border:'#EDE9FE',
+  ch: { fcm:'#7C3AED', sms:'#F59E0B', kakao:'#FFE600' },
+};
+
+function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a;}
+
+// 더미 데이터
+const HOURS = Array.from({length:24},(_,i)=>({
+  time: `${String(i).padStart(2,'0')}:00`,
+  FCM:  i>=7&&i<=22 ? rnd(200,i===14?1800:800) : rnd(10,50),
+  SMS:  i>=7&&i<=22 ? rnd(80, i===14?600:300)  : rnd(5,20),
+  카카오: i>=7&&i<=22 ? rnd(100,i===14?900:400)  : rnd(10,30),
+}));
+
+const STAGE_DATA = [
+  {name:'출고', FCM:4821, SMS:1234, 카카오:2108},
+  {name:'집화', FCM:2341, SMS:612,  카카오:987},
+  {name:'이동', FCM:3102, SMS:891,  카카오:1456},
+  {name:'배달중', FCM:5677, SMS:1540, 카카오:2890},
+  {name:'배달완료', FCM:6234, SMS:1721, 카카오:3102},
+];
+
+const PIE_DATA = [
+  {name:'FCM',  value:38, color:C.pri},
+  {name:'SMS',  value:24, color:C.acc},
+  {name:'카카오',value:38, color:'#A78BFA'},
+];
+
+function makeHistory(id){
+  const stages = ['출고','집화','이동','배달중','배달완료'];
+  const channels = ['FCM','SMS','카카오알림톡'];
+  const names = ['김민준','이서연','박지호','최하은','정준서','윤서우','강도윤','조하린'];
+  const orders = ['ORD-2025-','EC-','LOG-'];
+  const st = id%7===0?'실패':id%4===0?'재시도':id%12===0?'최종실패':'성공';
+  return {
+    id, orderId: `${orders[id%3]}${String(id+10000).padStart(6,'0')}`,
+    receiver: names[id%names.length], phone:`010-${rnd(1000,9999)}-${rnd(1000,9999)}`,
+    stage: stages[id%stages.length], channel: channels[id%3], status: st,
+    sentAt: `2025.08.${String(rnd(1,28)).padStart(2,'0')} ${String(rnd(8,21)).padStart(2,'0')}:${String(rnd(0,59)).padStart(2,'0')}`,
+    latency: `${rnd(120,2400)}ms`,
+  };
+}
+const ALL_HISTORY = Array.from({length:100},(_,i)=>makeHistory(i+1));
+const PER = 12;
+
+function Sk({h=80,w='100%'}){return <div className="skeleton" style={{height:h,width:w,borderRadius:8}}/>;}
+
+function Badge({st}){
+  const m={'성공':[C.green,'#ECFDF5'],'실패':[C.red,'#FEF2F2'],
+    '재시도':[C.acc,'#FFFBEB'],'최종실패':['#7C3AED','#EDE9FE'],
+    '활성':['#10B981','#ECFDF5'],'장애':[C.red,'#FEF2F2'],'비활성':[C.sub,'#F8FAFC']};
+  const [c,b]=m[st]||[C.sub,'#F8FAFC'];
+  return(
+    <span style={{display:'inline-flex',alignItems:'center',gap:4,padding:'2px 8px',
+      borderRadius:12,fontSize:11,fontWeight:600,color:c,background:b}}>
+      <span style={{width:5,height:5,borderRadius:'50%',background:c}}/>
+      {st}
+    </span>
+  );
+}
+
+// ── TopNav ──
+const TABS=[
+  {id:'main',label:'현황 대시보드',icon:'📊'},
+  {id:'channel',label:'채널 관리',icon:'📡'},
+  {id:'analytics',label:'트래픽 분석',icon:'📈'},
+  {id:'history',label:'발송 이력',icon:'📋'},
+];
+function TopNav({cur,onNav}){
+  return(
+    <div style={{background:C.sec,boxShadow:'0 2px 12px rgba(76,29,149,0.3)'}}>
+      <div style={{maxWidth:1400,margin:'0 auto',padding:'0 32px',
+        display:'flex',alignItems:'center',justifyContent:'space-between',height:64}}>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <div style={{width:36,height:36,borderRadius:10,background:C.pri,
+            display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>🚚</div>
+          <div>
+            <div style={{fontWeight:800,fontSize:15,color:'#fff',letterSpacing:'-0.3px'}}>(주)로지알림</div>
+            <div style={{fontSize:10,color:'rgba(255,255,255,0.5)'}}>Delivery Push Platform</div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:4}}>
+          {TABS.map(t=>(
+            <button key={t.id} onClick={()=>onNav(t.id)}
+              style={{display:'flex',alignItems:'center',gap:6,padding:'8px 16px',
+                borderRadius:8,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,
+                background:cur===t.id?'rgba(255,255,255,0.15)':'transparent',
+                color:cur===t.id?'#fff':'rgba(255,255,255,0.6)',transition:'all 0.15s'}}>
+              <span>{t.icon}</span>{t.label}
+            </button>
+          ))}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <div style={{display:'flex',alignItems:'center',gap:6,padding:'6px 12px',
+            background:'rgba(16,185,129,0.2)',borderRadius:8,fontSize:11,color:'#6EE7B7',fontWeight:600}}>
+            <span style={{width:6,height:6,borderRadius:'50%',background:'#10B981',
+              display:'inline-block',animation:'pulse 2s infinite'}}/>
+            시스템 정상
+          </div>
+          <div style={{width:32,height:32,borderRadius:'50%',background:C.pri,
+            color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',
+            fontSize:13,fontWeight:700,cursor:'pointer'}}>관</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Hero Banner ──
+function Hero({title,subtitle,stats=[]}){
+  return(
+    <div style={{background:`linear-gradient(135deg, ${C.sec} 0%, ${C.pri} 100%)`,
+      padding:'32px',color:'#fff'}}>
+      <div style={{maxWidth:1400,margin:'0 auto'}}>
+        <div style={{fontSize:22,fontWeight:800,letterSpacing:'-0.5px',marginBottom:4}}>{title}</div>
+        <div style={{fontSize:13,color:'rgba(255,255,255,0.7)',marginBottom:stats.length?24:0}}>{subtitle}</div>
+        {stats.length>0&&(
+          <div style={{display:'flex',gap:32}}>
+            {stats.map(s=>(
+              <div key={s.label}>
+                <div style={{fontSize:26,fontWeight:800,letterSpacing:'-1px'}}>{s.value}</div>
+                <div style={{fontSize:11,color:'rgba(255,255,255,0.6)',marginTop:2}}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── 현황 대시보드 ──
+function MainDash(){
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{const t=setTimeout(()=>setLoading(false),1500);return()=>clearTimeout(t);},[]);
+
+  const cards=[
+    {label:'오늘 총 발송',value:'42,189',sub:'FCM+SMS+카카오알림톡',color:C.pri,icon:'📨'},
+    {label:'FCM 발송',value:'21,304',sub:'성공률 99.1%',color:C.pri,icon:'📱'},
+    {label:'SMS 발송',value:'8,712',sub:'성공률 97.8%',color:C.acc,icon:'💬'},
+    {label:'카카오알림톡',value:'12,173',sub:'성공률 98.4%',color:'#A78BFA',icon:'🟡'},
+  ];
+
+  return(
+    <div>
+      <Hero title="현황 대시보드" subtitle="채널별 배송 알림 발송 현황 실시간 모니터링"
+        stats={[
+          {value:'42,189',label:'오늘 총 발송'},
+          {value:'98.7%',label:'평균 성공률'},
+          {value:'3채널',label:'운영 채널'},
+          {value:'12건',label:'재시도 중'},
+        ]} />
+      <div style={{maxWidth:1400,margin:'0 auto',padding:28}}>
+        {/* Cards */}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}}>
+          {cards.map(c=>(
+            <div key={c.label} style={{background:C.surf,borderRadius:12,padding:20,
+              border:`1px solid ${C.border}`,boxShadow:'0 4px 12px rgba(124,58,237,0.08)',
+              animation:'slideIn 0.3s ease'}}>
+              {loading?<Sk h={80}/>:<>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                  <div style={{fontSize:11,color:C.sub,fontWeight:500}}>{c.label}</div>
+                  <span style={{fontSize:20}}>{c.icon}</span>
+                </div>
+                <div style={{fontSize:28,fontWeight:800,color:c.color,marginTop:8,letterSpacing:'-1px'}}>{c.value}</div>
+                <div style={{fontSize:11,color:C.sub,marginTop:4}}>{c.sub}</div>
+              </>}
+            </div>
+          ))}
+        </div>
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 320px',gap:20}}>
+          {/* 시간대별 채널 발송 */}
+          <div style={{background:C.surf,borderRadius:12,padding:20,
+            border:`1px solid ${C.border}`,boxShadow:'0 4px 12px rgba(124,58,237,0.08)'}}>
+            <div style={{fontWeight:700,fontSize:14,marginBottom:4}}>시간대별 채널별 발송량</div>
+            <div style={{fontSize:11,color:C.sub,marginBottom:16}}>오늘 00:00 — 현재 (24시간)</div>
+            {loading?<Sk h={220}/>:(
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={HOURS.filter((_,i)=>i%2===0)} margin={{top:4,right:8,bottom:0,left:-20}}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F0FF" />
+                  <XAxis dataKey="time" tick={{fontSize:9,fill:C.sub}} />
+                  <YAxis tick={{fontSize:9,fill:C.sub}} />
+                  <Tooltip contentStyle={{fontSize:11,borderRadius:8}} />
+                  <Legend iconSize={8} wrapperStyle={{fontSize:10}} />
+                  <Bar dataKey="FCM" stackId="a" fill={C.pri} />
+                  <Bar dataKey="SMS" stackId="a" fill={C.acc} />
+                  <Bar dataKey="카카오" stackId="a" fill="#A78BFA" radius={[3,3,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          {/* 채널 비율 */}
+          <div style={{background:C.surf,borderRadius:12,padding:20,
+            border:`1px solid ${C.border}`,boxShadow:'0 4px 12px rgba(124,58,237,0.08)'}}>
+            <div style={{fontWeight:700,fontSize:14,marginBottom:16}}>채널별 발송 비율</div>
+            {loading?<Sk h={200}/>:(
+              <>
+                <ResponsiveContainer width="100%" height={140}>
+                  <PieChart>
+                    <Pie data={PIE_DATA} cx="50%" cy="50%" innerRadius={40} outerRadius={64}
+                      dataKey="value" paddingAngle={3}>
+                      {PIE_DATA.map(d=><Cell key={d.name} fill={d.color}/>)}
+                    </Pie>
+                    <Tooltip contentStyle={{fontSize:11,borderRadius:8}} formatter={(v)=>`${v}%`} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:8}}>
+                  {PIE_DATA.map(d=>(
+                    <div key={d.name} style={{display:'flex',justifyContent:'space-between',
+                      alignItems:'center',padding:'6px 10px',background:'#F8F4FF',borderRadius:6}}>
+                      <div style={{display:'flex',alignItems:'center',gap:6}}>
+                        <span style={{width:8,height:8,borderRadius:'50%',background:d.color,display:'inline-block'}}/>
+                        <span style={{fontSize:12,fontWeight:500}}>{d.name}</span>
+                      </div>
+                      <span style={{fontSize:12,fontWeight:700,color:d.color}}>{d.value}%</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* 최근 실패 */}
+        <div style={{background:C.surf,borderRadius:12,border:`1px solid ${C.border}`,
+          boxShadow:'0 4px 12px rgba(124,58,237,0.08)',marginTop:20,overflow:'hidden'}}>
+          <div style={{padding:'14px 20px',borderBottom:`1px solid ${C.border}`,
+            display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div style={{fontWeight:700,fontSize:14}}>최근 발송 실패 현황</div>
+            <button onClick={()=>{}} style={{padding:'4px 12px',background:'#EDE9FE',color:C.pri,
+              border:'none',borderRadius:6,fontSize:12,cursor:'pointer',fontWeight:600}}>
+              전체 재시도
+            </button>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr style={{background:'#F8F4FF'}}>
+              {['주문번호','수신자','채널','단계','지연시간','상태'].map(h=>(
+                <th key={h} style={{padding:'10px 16px',textAlign:'left',fontSize:11,
+                  color:C.sub,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {loading?Array.from({length:5},(_,i)=>(
+                <tr key={i}><td colSpan={6} style={{padding:'12px 16px'}}><Sk h={14}/></td></tr>
+              )):ALL_HISTORY.filter(h=>h.status!=='성공').slice(0,6).map(h=>(
+                <tr key={h.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                  <td style={{padding:'10px 16px',fontSize:12,fontFamily:'monospace',color:C.sub}}>{h.orderId}</td>
+                  <td style={{padding:'10px 16px',fontSize:12,fontWeight:500}}>{h.receiver}</td>
+                  <td style={{padding:'10px 16px',fontSize:12}}>
+                    <span style={{padding:'2px 8px',borderRadius:8,fontSize:11,fontWeight:600,
+                      background:h.channel==='FCM'?'#EDE9FE':h.channel==='SMS'?'#FFFBEB':'#FEF9C3',
+                      color:h.channel==='FCM'?C.pri:h.channel==='SMS'?'#92400E':'#713F12'}}>
+                      {h.channel}
+                    </span>
+                  </td>
+                  <td style={{padding:'10px 16px',fontSize:12,color:C.sub}}>{h.stage}</td>
+                  <td style={{padding:'10px 16px',fontSize:12,fontFamily:'monospace',color:C.red}}>{h.latency}</td>
+                  <td style={{padding:'10px 16px'}}><Badge st={h.status}/></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 채널 관리 ──
+function ChannelManager(){
+  const [loading,setLoading]=useState(true);
+  const [saved,setSaved]=useState('');
+  const [channels,setChannels]=useState([
+    {id:'fcm',name:'FCM (Firebase)',icon:'📱',status:'활성',priority:1,
+      apiKey:'AIzaSy***************************',successRate:99.1,
+      fallback:'SMS',desc:'Android 기기 대상 Firebase Cloud Messaging'},
+    {id:'kakao',name:'카카오알림톡',icon:'🟡',status:'활성',priority:2,
+      apiKey:'KA01st***************************',successRate:98.4,
+      fallback:'SMS',desc:'카카오톡 알림톡 (템플릿 기반 메시지)'},
+    {id:'sms',name:'SMS (KT)',icon:'💬',status:'활성',priority:3,
+      apiKey:'KTAPI***************************',successRate:97.8,
+      fallback:'—',desc:'단문 문자 메시지 (폴백 채널)'},
+  ]);
+  const [modal,setModal]=useState(null);
+  const [tempKey,setTempKey]=useState('');
+
+  useEffect(()=>{const t=setTimeout(()=>setLoading(false),1500);return()=>clearTimeout(t);},[]);
+
+  function saveKey(){
+    setSaved(modal.name);
+    setModal(null);
+    setTimeout(()=>setSaved(''),2000);
+  }
+
+  return(
+    <div>
+      <Hero title="채널 관리" subtitle="FCM · SMS · 카카오알림톡 채널 연동 설정 및 폴백 정책 관리"/>
+      <div style={{maxWidth:1400,margin:'0 auto',padding:28}}>
+        {saved&&(
+          <div style={{background:C.green,color:'#fff',padding:'10px 20px',borderRadius:8,
+            fontSize:13,marginBottom:16,fontWeight:600,animation:'slideIn 0.2s'}}>
+            ✅ {saved} API 키가 저장되었습니다.
+          </div>
+        )}
+
+        {/* 채널 카드 */}
+        {loading?<div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:20}}>
+          {[1,2,3].map(i=><div key={i} style={{background:C.surf,borderRadius:12,padding:20,border:`1px solid ${C.border}`}}><Sk h={180}/></div>)}
+        </div>:(
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:20,marginBottom:28}}>
+            {channels.map(ch=>(
+              <div key={ch.id} style={{background:C.surf,borderRadius:12,padding:24,
+                border:`1px solid ${C.border}`,boxShadow:'0 4px 12px rgba(124,58,237,0.08)',
+                animation:'slideIn 0.3s ease'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <span style={{fontSize:28}}>{ch.icon}</span>
+                    <div>
+                      <div style={{fontWeight:700,fontSize:14}}>{ch.name}</div>
+                      <div style={{fontSize:11,color:C.sub,marginTop:2}}>우선순위 {ch.priority}순위</div>
+                    </div>
+                  </div>
+                  <Badge st={ch.status}/>
+                </div>
+                <div style={{fontSize:12,color:C.sub,marginBottom:16}}>{ch.desc}</div>
+
+                <div style={{background:'#F8F4FF',borderRadius:8,padding:12,marginBottom:12}}>
+                  <div style={{fontSize:11,color:C.sub,marginBottom:6}}>API 키</div>
+                  <div style={{fontSize:11,fontFamily:'monospace',color:C.pri}}>{ch.apiKey}</div>
+                </div>
+
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+                  <span style={{fontSize:11,color:C.sub}}>성공률</span>
+                  <span style={{fontSize:14,fontWeight:700,color:C.pri}}>{ch.successRate}%</span>
+                </div>
+                <div style={{height:6,background:'#EDE9FE',borderRadius:3,overflow:'hidden',marginBottom:12}}>
+                  <div style={{height:'100%',width:`${ch.successRate}%`,background:C.pri,borderRadius:3}}/>
+                </div>
+
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+                  <span style={{fontSize:11,color:C.sub}}>폴백 채널</span>
+                  <span style={{fontSize:12,fontWeight:600,color:ch.fallback==='—'?C.sub:C.acc}}>
+                    {ch.fallback}
+                  </span>
+                </div>
+
+                <div style={{display:'flex',gap:8}}>
+                  <button onClick={()=>{setModal(ch);setTempKey('');}}
+                    style={{flex:1,padding:'8px',background:C.pri,color:'#fff',
+                      border:'none',borderRadius:8,fontSize:12,cursor:'pointer',fontWeight:600}}>
+                    설정 수정
+                  </button>
+                  <button onClick={()=>setChannels(prev=>prev.map(c=>c.id===ch.id
+                    ?{...c,status:c.status==='활성'?'비활성':'활성'}:c))}
+                    style={{padding:'8px 12px',background:'#F3F4F6',color:C.sub,
+                      border:'none',borderRadius:8,fontSize:12,cursor:'pointer'}}>
+                    {ch.status==='활성'?'비활성화':'활성화'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 폴백 정책 */}
+        <div style={{background:C.surf,borderRadius:12,padding:24,
+          border:`1px solid ${C.border}`,boxShadow:'0 4px 12px rgba(124,58,237,0.08)'}}>
+          <div style={{fontWeight:700,fontSize:14,marginBottom:16}}>채널 폴백 정책</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+            {[
+              {from:'FCM 장애',to:'카카오알림톡',then:'SMS',icon:'📱→🟡→💬'},
+              {from:'카카오 템플릿 미승인',to:'SMS',then:'—',icon:'🟡→💬'},
+              {from:'SMS 발송 한도',to:'카카오알림톡',then:'—',icon:'💬→🟡'},
+            ].map(f=>(
+              <div key={f.from} style={{padding:16,background:'#F8F4FF',borderRadius:10}}>
+                <div style={{fontSize:20,marginBottom:8}}>{f.icon}</div>
+                <div style={{fontSize:12,fontWeight:600,color:C.txt,marginBottom:4}}>{f.from}</div>
+                <div style={{fontSize:11,color:C.sub}}>
+                  → {f.to}{f.then!=='—'?` → ${f.then}`:''}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Modal */}
+      {modal&&(
+        <>
+          <div onClick={()=>setModal(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:100}}/>
+          <div style={{position:'fixed',top:'50%',left:'50%',
+            transform:'translate(-50%,-50%)',zIndex:101,width:460,
+            background:C.surf,borderRadius:16,boxShadow:'0 20px 60px rgba(0,0,0,0.25)',
+            animation:'fadeInScale 0.2s ease',overflow:'hidden'}}>
+            <div style={{padding:'20px 24px',background:C.pri,color:'#fff',
+              display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{fontWeight:700,fontSize:15}}>{modal.icon} {modal.name} 설정</div>
+              <button onClick={()=>setModal(null)} style={{background:'rgba(255,255,255,0.2)',
+                border:'none',color:'#fff',width:28,height:28,borderRadius:'50%',cursor:'pointer',fontSize:16}}>✕</button>
+            </div>
+            <div style={{padding:24}}>
+              <div style={{marginBottom:16}}>
+                <label style={{fontSize:12,fontWeight:600,display:'block',marginBottom:6}}>API 키</label>
+                <input value={tempKey||modal.apiKey}
+                  onChange={e=>setTempKey(e.target.value)}
+                  style={{width:'100%',padding:'10px 12px',border:`1px solid ${C.border}`,
+                    borderRadius:8,fontSize:12,fontFamily:'monospace',color:C.txt}}/>
+              </div>
+              <div style={{marginBottom:16}}>
+                <label style={{fontSize:12,fontWeight:600,display:'block',marginBottom:6}}>폴백 채널</label>
+                <select style={{width:'100%',padding:'10px 12px',border:`1px solid ${C.border}`,
+                  borderRadius:8,fontSize:12,color:C.txt}}>
+                  <option>SMS (KT)</option><option>카카오알림톡</option><option>없음</option>
+                </select>
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>setModal(null)}
+                  style={{flex:1,padding:10,background:'#F3F4F6',color:C.sub,
+                    border:'none',borderRadius:8,fontSize:13,cursor:'pointer'}}>취소</button>
+                <button onClick={saveKey}
+                  style={{flex:1,padding:10,background:C.pri,color:'#fff',
+                    border:'none',borderRadius:8,fontSize:13,fontWeight:700,cursor:'pointer'}}>저장</button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── 트래픽 분석 ──
+function TrafficAnalytics(){
+  const [loading,setLoading]=useState(true);
+  const [period,setPeriod]=useState('일별');
+  useEffect(()=>{const t=setTimeout(()=>setLoading(false),1500);return()=>clearTimeout(t);},[]);
+  useEffect(()=>{setLoading(true);const t=setTimeout(()=>setLoading(false),800);return()=>clearTimeout(t);},[period]);
+
+  return(
+    <div>
+      <Hero title="트래픽 분석" subtitle="채널별 · 배송단계별 발송 트래픽 추이 및 시간대 분포 분석"/>
+      <div style={{maxWidth:1400,margin:'0 auto',padding:28}}>
+        {/* 기간 필터 */}
+        <div style={{display:'flex',gap:8,marginBottom:20}}>
+          {['일별','주별','월별'].map(p=>(
+            <button key={p} onClick={()=>setPeriod(p)}
+              style={{padding:'6px 16px',borderRadius:8,border:'none',fontSize:12,
+                cursor:'pointer',fontWeight:600,
+                background:period===p?C.pri:'#fff',
+                color:period===p?'#fff':C.sub,
+                boxShadow:period===p?'0 2px 8px rgba(124,58,237,0.3)':'none',
+                border:`1px solid ${period===p?C.pri:C.border}`}}>
+              {p}
+            </button>
+          ))}
+        </div>
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:20,marginBottom:20}}>
+          {/* 채널별 트래픽 */}
+          <div style={{background:C.surf,borderRadius:12,padding:20,
+            border:`1px solid ${C.border}`,boxShadow:'0 4px 12px rgba(124,58,237,0.08)'}}>
+            <div style={{fontWeight:700,fontSize:14,marginBottom:16}}>채널별 발송 트래픽 추이</div>
+            {loading?<Sk h={240}/>:(
+              <ResponsiveContainer width="100%" height={240}>
+                <AreaChart data={HOURS.filter((_,i)=>i%2===0)} margin={{top:4,right:8,bottom:0,left:-20}}>
+                  <defs>
+                    <linearGradient id="gFCM" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={C.pri} stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor={C.pri} stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="gSMS" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={C.acc} stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor={C.acc} stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F0FF"/>
+                  <XAxis dataKey="time" tick={{fontSize:9,fill:C.sub}}/>
+                  <YAxis tick={{fontSize:9,fill:C.sub}}/>
+                  <Tooltip contentStyle={{fontSize:11,borderRadius:8}}/>
+                  <Legend iconSize={8} wrapperStyle={{fontSize:10}}/>
+                  <Area type="monotone" dataKey="FCM" stroke={C.pri} fill="url(#gFCM)" strokeWidth={2}/>
+                  <Area type="monotone" dataKey="SMS" stroke={C.acc} fill="url(#gSMS)" strokeWidth={2}/>
+                  <Area type="monotone" dataKey="카카오" stroke="#A78BFA" fill="transparent" strokeWidth={2} strokeDasharray="5 3"/>
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          {/* 배송단계별 */}
+          <div style={{background:C.surf,borderRadius:12,padding:20,
+            border:`1px solid ${C.border}`,boxShadow:'0 4px 12px rgba(124,58,237,0.08)'}}>
+            <div style={{fontWeight:700,fontSize:14,marginBottom:16}}>배송단계별 발송 비율</div>
+            {loading?<Sk h={240}/>:(
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart data={STAGE_DATA} layout="vertical" margin={{top:0,right:8,bottom:0,left:24}}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F0FF"/>
+                  <XAxis type="number" tick={{fontSize:9,fill:C.sub}}/>
+                  <YAxis dataKey="name" type="category" tick={{fontSize:10,fill:C.sub}}/>
+                  <Tooltip contentStyle={{fontSize:11,borderRadius:8}}/>
+                  <Bar dataKey="FCM" stackId="a" fill={C.pri}/>
+                  <Bar dataKey="SMS" stackId="a" fill={C.acc}/>
+                  <Bar dataKey="카카오" stackId="a" fill="#A78BFA" radius={[0,4,4,0]}/>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+        {/* KPI 카드 */}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16}}>
+          {[
+            {label:'일 평균 발송량',value:'38,421건',icon:'📊'},
+            {label:'피크 시간대',value:'14:00 - 15:00',icon:'⚡'},
+            {label:'평균 전송 지연',value:'284ms',icon:'⏱️'},
+            {label:'채널 장애 발생',value:'월 1.2회',icon:'🔔'},
+          ].map(k=>(
+            <div key={k.label} style={{background:C.surf,borderRadius:12,padding:20,
+              border:`1px solid ${C.border}`,boxShadow:'0 4px 12px rgba(124,58,237,0.08)',
+              display:'flex',alignItems:'center',gap:14}}>
+              <div style={{width:40,height:40,borderRadius:10,background:'#F3F0FF',
+                display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}}>{k.icon}</div>
+              <div>
+                <div style={{fontSize:11,color:C.sub}}>{k.label}</div>
+                <div style={{fontSize:15,fontWeight:700,color:C.txt,marginTop:2}}>{k.value}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 발송 이력 ──
+function SendHistory(){
+  const [loading,setLoading]=useState(true);
+  const [ch,setCh]=useState('전체');
+  const [st,setSt]=useState('전체');
+  const [page,setPage]=useState(1);
+  const [detail,setDetail]=useState(null);
+  const [selected,setSelected]=useState([]);
+
+  useEffect(()=>{const t=setTimeout(()=>setLoading(false),1500);return()=>clearTimeout(t);},[]);
+  useEffect(()=>setPage(1),[ch,st]);
+
+  const filtered=ALL_HISTORY.filter(h=>
+    (ch==='전체'||h.channel===ch)&&(st==='전체'||h.status===st));
+  const total=filtered.length;
+  const totalPages=Math.max(1,Math.ceil(total/PER));
+  const pageData=filtered.slice((page-1)*PER,page*PER);
+
+  return(
+    <div>
+      <Hero title="발송 이력" subtitle="주문번호 · 수신자 · 채널 · 배송단계별 발송 이력 상세 조회"/>
+
+      {detail&&(
+        <>
+          <div onClick={()=>setDetail(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:100}}/>
+          <div style={{position:'fixed',top:'50%',left:'50%',
+            transform:'translate(-50%,-50%)',zIndex:101,width:480,
+            background:C.surf,borderRadius:16,boxShadow:'0 20px 60px rgba(0,0,0,0.25)',
+            animation:'fadeInScale 0.2s ease',overflow:'hidden'}}>
+            <div style={{padding:'20px 24px',background:C.pri,color:'#fff',
+              display:'flex',justifyContent:'space-between'}}>
+              <div style={{fontWeight:700,fontSize:15}}>발송 상세 — {detail.orderId}</div>
+              <button onClick={()=>setDetail(null)} style={{background:'rgba(255,255,255,0.2)',
+                border:'none',color:'#fff',width:28,height:28,borderRadius:'50%',cursor:'pointer',fontSize:16}}>✕</button>
+            </div>
+            <div style={{padding:24}}>
+              {[
+                ['주문번호',detail.orderId],['수신자',detail.receiver],
+                ['연락처',detail.phone],['채널',detail.channel],
+                ['배송단계',detail.stage],['발송시각',detail.sentAt],
+                ['전송 지연',detail.latency],['상태',detail.status],
+              ].map(([k,v])=>(
+                <div key={k} style={{display:'flex',justifyContent:'space-between',
+                  padding:'8px 0',borderBottom:`1px solid ${C.border}`}}>
+                  <span style={{fontSize:12,color:C.sub}}>{k}</span>
+                  <span style={{fontSize:12,fontWeight:600,color:C.txt}}>{v}</span>
+                </div>
+              ))}
+              <button onClick={()=>{setDetail(null);}}
+                style={{width:'100%',marginTop:16,padding:10,background:C.acc,color:'#78350F',
+                  border:'none',borderRadius:8,fontSize:13,fontWeight:700,cursor:'pointer'}}>
+                재발송 요청
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      <div style={{maxWidth:1400,margin:'0 auto',padding:28}}>
+        {/* 필터 */}
+        <div style={{background:C.surf,borderRadius:12,padding:16,border:`1px solid ${C.border}`,
+          boxShadow:'0 4px 12px rgba(124,58,237,0.08)',marginBottom:20,
+          display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          {[
+            {label:'채널',val:ch,set:setCh,opts:['전체','FCM','SMS','카카오알림톡']},
+            {label:'상태',val:st,set:setSt,opts:['전체','성공','실패','재시도','최종실패']},
+          ].map(f=>(
+            <div key={f.label} style={{display:'flex',alignItems:'center',gap:8}}>
+              <span style={{fontSize:12,color:C.sub,fontWeight:500}}>{f.label}</span>
+              <select value={f.val} onChange={e=>f.set(e.target.value)}
+                style={{padding:'6px 10px',borderRadius:6,border:`1px solid ${C.border}`,
+                  fontSize:12,background:'#fff',cursor:'pointer'}}>
+                {f.opts.map(o=><option key={o}>{o}</option>)}
+              </select>
+            </div>
+          ))}
+          <div style={{marginLeft:'auto',display:'flex',gap:8}}>
+            {selected.length>0&&(
+              <button onClick={()=>setSelected([])}
+                style={{padding:'6px 14px',background:C.acc,color:'#78350F',border:'none',
+                  borderRadius:6,fontSize:12,fontWeight:600,cursor:'pointer'}}>
+                선택 재발송 ({selected.length})
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* 테이블 */}
+        <div style={{background:C.surf,borderRadius:12,border:`1px solid ${C.border}`,
+          boxShadow:'0 4px 12px rgba(124,58,237,0.08)',overflow:'hidden'}}>
+          <div style={{padding:'14px 20px',borderBottom:`1px solid ${C.border}`,
+            display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div style={{fontWeight:700,fontSize:14}}>발송 이력</div>
+            <span style={{fontSize:12,color:C.sub}}>총 {total}건</span>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr style={{background:'#F8F4FF'}}>
+              <th style={{padding:'10px 12px',width:36}}>
+                <input type="checkbox" onChange={e=>setSelected(e.target.checked?pageData.map(d=>d.id):[])}
+                  checked={selected.length===pageData.length&&pageData.length>0}/>
+              </th>
+              {['주문번호','수신자','채널','배송단계','발송 시각','전송 지연','상태','상세'].map(h=>(
+                <th key={h} style={{padding:'10px 12px',textAlign:'left',fontSize:11,
+                  color:C.sub,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {loading?Array.from({length:8},(_,i)=>(
+                <tr key={i}><td colSpan={9} style={{padding:'12px 16px'}}><Sk h={14}/></td></tr>
+              )):pageData.map(h=>(
+                <tr key={h.id} style={{borderBottom:`1px solid ${C.border}`,
+                  background:selected.includes(h.id)?'#F3F0FF':'transparent'}}>
+                  <td style={{padding:'10px 12px'}}>
+                    <input type="checkbox" checked={selected.includes(h.id)}
+                      onChange={()=>setSelected(s=>s.includes(h.id)?s.filter(x=>x!==h.id):[...s,h.id])}/>
+                  </td>
+                  <td style={{padding:'10px 12px',fontSize:12,fontFamily:'monospace',color:C.sub}}>{h.orderId}</td>
+                  <td style={{padding:'10px 12px',fontSize:12,fontWeight:500}}>{h.receiver}</td>
+                  <td style={{padding:'10px 12px',fontSize:12}}>
+                    <span style={{padding:'2px 8px',borderRadius:8,fontSize:11,fontWeight:600,
+                      background:h.channel==='FCM'?'#EDE9FE':h.channel==='SMS'?'#FFFBEB':'#FEF9C3',
+                      color:h.channel==='FCM'?C.pri:h.channel==='SMS'?'#92400E':'#713F12'}}>
+                      {h.channel}
+                    </span>
+                  </td>
+                  <td style={{padding:'10px 12px',fontSize:12,color:C.sub}}>{h.stage}</td>
+                  <td style={{padding:'10px 12px',fontSize:12,color:C.sub}}>{h.sentAt}</td>
+                  <td style={{padding:'10px 12px',fontSize:12,fontFamily:'monospace',
+                    color:parseInt(h.latency)>1000?C.red:C.sub}}>{h.latency}</td>
+                  <td style={{padding:'10px 12px'}}><Badge st={h.status}/></td>
+                  <td style={{padding:'10px 12px'}}>
+                    <button onClick={()=>setDetail(h)}
+                      style={{padding:'4px 10px',background:'#EDE9FE',color:C.pri,
+                        border:'none',borderRadius:6,fontSize:11,cursor:'pointer',fontWeight:500}}>
+                      상세
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{padding:'12px 20px',borderTop:`1px solid ${C.border}`,
+            display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span style={{fontSize:12,color:C.sub}}>{((page-1)*PER+1)} — {Math.min(page*PER,total)} / {total}</span>
+            <div style={{display:'flex',gap:4}}>
+              <button onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1}
+                style={{padding:'4px 10px',border:`1px solid ${C.border}`,borderRadius:6,
+                  background:page===1?'#F8FAFC':'#fff',color:page===1?C.sub:C.txt,
+                  cursor:page===1?'default':'pointer',fontSize:12}}>← 이전</button>
+              {Array.from({length:Math.min(5,totalPages)},(_,i)=>{
+                const pg=Math.max(1,Math.min(totalPages-4,page-2))+i;
+                return(
+                  <button key={pg} onClick={()=>setPage(pg)}
+                    style={{padding:'4px 10px',border:`1px solid ${page===pg?C.pri:C.border}`,
+                      borderRadius:6,background:page===pg?C.pri:'#fff',
+                      color:page===pg?'#fff':C.txt,cursor:'pointer',fontSize:12,fontWeight:page===pg?700:400}}>
+                    {pg}
+                  </button>
+                );
+              })}
+              <button onClick={()=>setPage(p=>Math.min(totalPages,p+1))} disabled={page===totalPages}
+                style={{padding:'4px 10px',border:`1px solid ${C.border}`,borderRadius:6,
+                  background:page===totalPages?'#F8FAFC':'#fff',color:page===totalPages?C.sub:C.txt,
+                  cursor:page===totalPages?'default':'pointer',fontSize:12}}>다음 →</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App(){
+  const [page,setPage]=useState('main');
+  return(
+    <div style={{minHeight:'100vh',background:C.bg}}>
+      <TopNav cur={page} onNav={setPage}/>
+      {page==='main'    &&<MainDash/>}
+      {page==='channel' &&<ChannelManager/>}
+      {page==='analytics'&&<TrafficAnalytics/>}
+      {page==='history' &&<SendHistory/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
