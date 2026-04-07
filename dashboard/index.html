@@ -39,25 +39,21 @@
   @keyframes toastIn { from { opacity: 0; transform: translateY(16px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-  /* 모바일 대응 — 컬럼: 1체크 2상태 3프로젝트 4예산 5생성일 6미팅일 7메모 */
   @media (max-width: 768px) {
     html { font-size: 13px; }
     #root { padding: 1rem 0.75rem; }
     table th, table td { padding: 0.5rem 0.5rem !important; }
-    /* 768px 이하: 생성일(5), 미팅일(6), 메모(7) 숨김 */
     table td:nth-child(5), table th:nth-child(5),
     table td:nth-child(6), table th:nth-child(6),
     table td:nth-child(7), table th:nth-child(7) { display: none; }
   }
   @media (max-width: 480px) {
-    /* 480px 이하: 예산(4), 체크박스(1)도 숨김 */
     table td:nth-child(1), table th:nth-child(1),
     table td:nth-child(4), table th:nth-child(4) { display: none; }
   }
 </style>
 <script type="text/babel" data-type="module">
-const { useState, useEffect, useMemo, useCallback } = React;
-
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
 // ─── Supabase ───
 const SUPABASE_URL = 'https://ucwtmheysdrgrmeaubuy.supabase.co';
@@ -68,7 +64,6 @@ if (!window.supabase) {
   throw new Error('Supabase SDK not loaded');
 }
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
-
 const TABLE = 'wishket_projects';
 
 // ─── Constants ───
@@ -82,26 +77,70 @@ const STATUS_META = {
 };
 const STATUS_ORDER = ['generated', 'applied', 'interview', 'meeting_done', 'won', 'lost'];
 const TRANSITION_TARGETS = {
-  generated:    ['applied'],
-  applied:      ['interview', 'lost'],
-  interview:    ['meeting_done', 'lost'],
-  meeting_done: ['interview', 'won', 'lost'],
-  won:          [],
-  lost:         ['applied', 'interview'],
+  generated: ['applied'], applied: ['interview', 'lost'], interview: ['meeting_done', 'lost'],
+  meeting_done: ['interview', 'won', 'lost'], won: [], lost: ['applied', 'interview'],
 };
-
 const MEETING_TYPES = [
   { key: 'video', label: '화상', emoji: '💻' },
   { key: 'inperson', label: '대면', emoji: '🏢' },
   { key: 'phone', label: '전화', emoji: '📞' },
 ];
 
-// 미팅 상태: 예정/완료 자동 판별
+// ─── Utils ───
 function getMeetingStatus(meetingAt) {
   if (!meetingAt) return null;
   const d = new Date(meetingAt);
+  return isNaN(d) ? null : d > new Date() ? 'upcoming' : 'done';
+}
+function getMeetingUrgency(meetingAt) {
+  if (!meetingAt) return null;
+  const m = new Date(meetingAt);
+  if (isNaN(m)) return null;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+  const dayAfter = new Date(today); dayAfter.setDate(today.getDate() + 2);
+  if (m >= today && m < tomorrow) return 'today';
+  if (m >= tomorrow && m < dayAfter) return 'tomorrow';
+  return null;
+}
+function toLocalInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function formatMeetingAt(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
   if (isNaN(d)) return null;
-  return d > new Date() ? 'upcoming' : 'done';
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function parseBudgetNum(v) {
+  const d = (v || '').replace(/[^0-9]/g, '');
+  return d ? Number(d) : 0;
+}
+function daysBetween(d1, d2) {
+  return Math.round((new Date(d2) - new Date(d1)) / 86400000);
+}
+
+// ─── [8] CSV 내보내기 ───
+function exportCSV(data) {
+  const headers = ['slug','title','status','budget','timeline','created_at','meeting_at','meeting_type','memo','wishket_url'];
+  const rows = data.map(d => headers.map(h => {
+    let v = d[h] || '';
+    if (h === 'status') v = d.current_status || '';
+    if (typeof v === 'string' && (v.includes(',') || v.includes('"') || v.includes('\n'))) v = '"' + v.replace(/"/g, '""') + '"';
+    return v;
+  }).join(','));
+  const csv = '\uFEFF' + [headers.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `wishket-dashboard-${new Date().toISOString().split('T')[0]}.csv`;
+  a.click(); URL.revokeObjectURL(url);
 }
 
 // ─── Toast ───
@@ -119,7 +158,6 @@ function ToastContainer({ toasts }) {
     </div>
   );
 }
-
 function useToast() {
   const [toasts, setToasts] = useState([]);
   const add = useCallback((message, type = 'info') => {
@@ -145,10 +183,10 @@ function StatCard({ title, value, sub, color, delay }) {
   return (
     <div className={`fade-in delay-${delay}`} style={{
       background: 'var(--surface)', borderRadius: 12, padding: '1.25rem 1.5rem',
-      border: '1px solid var(--border)', flex: '1 1 200px', minWidth: 180,
+      border: '1px solid var(--border)', flex: '1 1 180px', minWidth: 160,
     }}>
       <div style={{ fontSize: '0.85rem', color: 'var(--text2)', marginBottom: 4 }}>{title}</div>
-      <div style={{ fontSize: '2rem', fontWeight: 700, color: color || 'var(--text)', lineHeight: 1.2 }}>{value}</div>
+      <div style={{ fontSize: '1.8rem', fontWeight: 700, color: color || 'var(--text)', lineHeight: 1.2 }}>{value}</div>
       {sub && <div style={{ fontSize: '0.8rem', color: 'var(--text2)', marginTop: 4 }}>{sub}</div>}
     </div>
   );
@@ -157,26 +195,23 @@ function StatCard({ title, value, sub, color, delay }) {
 // ─── Funnel ───
 function Funnel({ data }) {
   const stages = [
-    { key: 'generated',    label: '생성', color: '#636e72' },
-    { key: 'applied',      label: '지원', color: '#6c5ce7' },
-    { key: 'interview',    label: '미팅', color: '#fdcb6e' },
+    { key: 'generated', label: '생성', color: '#636e72' },
+    { key: 'applied', label: '지원', color: '#6c5ce7' },
+    { key: 'interview', label: '미팅', color: '#fdcb6e' },
     { key: 'meeting_done', label: '완료', color: '#74b9ff' },
-    { key: 'won',          label: '수주', color: '#00b894' },
+    { key: 'won', label: '수주', color: '#00b894' },
   ];
   const ORDER = ['generated', 'applied', 'interview', 'meeting_done', 'won'];
   const counts = stages.map(s => {
     const idx = ORDER.indexOf(s.key);
-    return {
-      ...s,
-      count: data.filter(d => {
-        const dIdx = ORDER.indexOf(d.current_status);
-        if (d.current_status === 'lost') {
-          const maxIdx = Math.max(...(d.history || []).map(h => ORDER.indexOf(h.status)).filter(i => i >= 0), -1);
-          return maxIdx >= idx;
-        }
-        return dIdx >= idx;
-      }).length,
-    };
+    return { ...s, count: data.filter(d => {
+      const dIdx = ORDER.indexOf(d.current_status);
+      if (d.current_status === 'lost') {
+        const maxIdx = Math.max(...(d.history || []).map(h => ORDER.indexOf(h.status)).filter(i => i >= 0), -1);
+        return maxIdx >= idx;
+      }
+      return dIdx >= idx;
+    }).length };
   });
   const maxCount = Math.max(...counts.map(c => c.count), 1);
 
@@ -191,10 +226,7 @@ function Funnel({ data }) {
             <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ width: 50, fontSize: '0.85rem', color: 'var(--text2)', textAlign: 'right', flexShrink: 0 }}>{s.label}</div>
               <div style={{ flex: 1, background: 'var(--surface2)', borderRadius: 6, height: 32, overflow: 'hidden' }}>
-                <div style={{
-                  width: `${Math.max(pct, 3)}%`, height: '100%', background: s.color, borderRadius: 6,
-                  transition: 'width 0.8s ease-out', display: 'flex', alignItems: 'center', paddingLeft: 10,
-                }}>
+                <div style={{ width: `${Math.max(pct, 3)}%`, height: '100%', background: s.color, borderRadius: 6, transition: 'width 0.8s ease-out', display: 'flex', alignItems: 'center', paddingLeft: 10 }}>
                   <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}>{s.count}</span>
                 </div>
               </div>
@@ -202,6 +234,88 @@ function Funnel({ data }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// ─── [6] 월별 추이 차트 ───
+function MonthlyChart({ data }) {
+  const monthData = useMemo(() => {
+    const months = {};
+    data.forEach(d => {
+      const m = (d.created_at || '').substring(0, 7); // YYYY-MM
+      if (!m) return;
+      if (!months[m]) months[m] = { applied: 0, won: 0, lost: 0 };
+      months[m].applied++;
+      if (d.current_status === 'won') months[m].won++;
+      if (d.current_status === 'lost') months[m].lost++;
+    });
+    return Object.entries(months).sort((a, b) => a[0].localeCompare(b[0])).slice(-6);
+  }, [data]);
+  if (monthData.length === 0) return null;
+  const maxVal = Math.max(...monthData.map(([, v]) => v.applied), 1);
+
+  return (
+    <div style={{ background: 'var(--surface)', borderRadius: 12, padding: '1.5rem', border: '1px solid var(--border)', marginTop: '1rem' }}>
+      <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1.25rem' }}>월별 추이 (최근 6개월)</h3>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 140 }}>
+        {monthData.map(([month, v]) => (
+          <div key={month} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+            <div style={{ fontSize: '0.7rem', color: 'var(--text2)' }}>{v.applied}</div>
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1, alignItems: 'center' }}>
+              <div style={{ width: '70%', height: Math.max((v.applied / maxVal) * 100, 4), background: 'var(--accent)', borderRadius: '4px 4px 0 0', position: 'relative' }}>
+                {v.won > 0 && <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: Math.max((v.won / v.applied) * 100, 10) + '%', background: 'var(--green)', borderRadius: '0 0 0 0' }} />}
+              </div>
+            </div>
+            <div style={{ fontSize: '0.65rem', color: 'var(--text2)' }}>{month.substring(5)}월</div>
+            {v.won > 0 && <div style={{ fontSize: '0.6rem', color: 'var(--green)' }}>수주 {v.won}</div>}
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 12, marginTop: '0.75rem', justifyContent: 'center' }}>
+        <span style={{ fontSize: '0.7rem', color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--accent)' }} /> 지원</span>
+        <span style={{ fontSize: '0.7rem', color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--green)' }} /> 수주</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── [7] 예산 구간별 수주율 ───
+function BudgetAnalysis({ data }) {
+  const ranges = useMemo(() => {
+    const buckets = [
+      { label: '~500만', min: 0, max: 500 },
+      { label: '500~1000만', min: 500, max: 1000 },
+      { label: '1000~2000만', min: 1000, max: 2000 },
+      { label: '2000~5000만', min: 2000, max: 5000 },
+      { label: '5000만+', min: 5000, max: Infinity },
+    ];
+    return buckets.map(b => {
+      const inRange = data.filter(d => {
+        const budget = parseBudgetNum(d.budget);
+        return budget > 0 && budget >= b.min && budget < b.max && d.current_status !== 'generated';
+      });
+      const won = inRange.filter(d => d.current_status === 'won').length;
+      return { ...b, total: inRange.length, won, rate: inRange.length > 0 ? ((won / inRange.length) * 100).toFixed(0) : '—' };
+    }).filter(b => b.total > 0);
+  }, [data]);
+  if (ranges.length === 0) return null;
+
+  return (
+    <div style={{ background: 'var(--surface)', borderRadius: 12, padding: '1.5rem', border: '1px solid var(--border)', marginTop: '1rem' }}>
+      <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem' }}>예산 구간별 수주율</h3>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {ranges.map(r => (
+          <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 90, fontSize: '0.8rem', color: 'var(--text2)', textAlign: 'right', flexShrink: 0 }}>{r.label}</div>
+            <div style={{ flex: 1, background: 'var(--surface2)', borderRadius: 4, height: 24, overflow: 'hidden' }}>
+              {r.total > 0 && <div style={{ width: `${Math.max((r.won / r.total) * 100, 3)}%`, height: '100%', background: 'var(--green)', borderRadius: 4, minWidth: r.won > 0 ? 20 : 0 }} />}
+            </div>
+            <div style={{ width: 50, fontSize: '0.8rem', color: 'var(--text2)', flexShrink: 0 }}>{r.rate}%</div>
+            <div style={{ width: 50, fontSize: '0.75rem', color: 'var(--text2)', flexShrink: 0 }}>{r.won}/{r.total}</div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -230,25 +344,33 @@ function FilterTabs({ active, onChange, counts }) {
   );
 }
 
-// ─── datetime-local 변환 유틸 ───
-function toLocalInput(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d)) return '';
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-function formatMeetingAt(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (isNaN(d)) return null;
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+// ─── [4] 인라인 메모 편집 ───
+function InlineMemo({ value, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(value || '');
+  const inputRef = useRef(null);
+  useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
+  if (!editing) {
+    return (
+      <span onClick={e => { e.stopPropagation(); setVal(value || ''); setEditing(true); }}
+        style={{ cursor: 'text', minWidth: 40, display: 'inline-block' }}
+        title="클릭하여 메모 편집">{value || '—'}</span>
+    );
+  }
+  return (
+    <input ref={inputRef} type="text" value={val}
+      onClick={e => e.stopPropagation()}
+      onChange={e => setVal(e.target.value)}
+      onBlur={() => { if (val !== (value || '')) onSave(val); setEditing(false); }}
+      onKeyDown={e => { if (e.key === 'Enter') { if (val !== (value || '')) onSave(val); setEditing(false); } if (e.key === 'Escape') setEditing(false); }}
+      style={{ width: '100%', padding: '0.2rem 0.4rem', borderRadius: 4, border: '1px solid var(--accent)', background: 'var(--surface2)', color: 'var(--text)', fontSize: '0.8rem', outline: 'none' }}
+    />
+  );
 }
 
-// ─── Project Edit Modal (탭 기반) ───
+// ─── Project Edit Modal ───
 function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }) {
-  const [tab, setTab] = useState('info');
+  const [tab, setTab] = useState(project?.current_status === 'meeting_done' ? 'meeting' : 'info');
   const [newStatus, setNewStatus] = useState('');
   const [note, setNote] = useState('');
   const [editTitle, setEditTitle] = useState(project?.title || '');
@@ -265,6 +387,14 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
   const [dateChanged, setDateChanged] = useState(false);
   const [meetingChanged, setMeetingChanged] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // [1] ESC 키로 모달 닫기
+  useEffect(() => {
+    const handler = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   if (!project) return null;
   const targets = TRANSITION_TARGETS[project.current_status] || [];
   const meta = STATUS_META[project.current_status] || {};
@@ -285,11 +415,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
     checkInfoChanged(editTitle, full, editTimeline);
   };
 
-  const tabs = [
-    { key: 'info', label: '정보' },
-    { key: 'meeting', label: '미팅' },
-    { key: 'status', label: '상태' },
-  ];
+  const tabs = [{ key: 'info', label: '정보' }, { key: 'meeting', label: '미팅' }, { key: 'status', label: '상태' }];
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
@@ -298,7 +424,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
         border: '1px solid var(--border)', animation: 'slideUp 0.25s ease-out',
         boxShadow: '0 20px 60px rgba(0,0,0,0.5)', maxHeight: '85vh', display: 'flex', flexDirection: 'column',
       }}>
-        {/* Header — 고정 */}
+        {/* Header */}
         <div style={{ padding: '1.25rem 1.5rem 0', flexShrink: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -311,7 +437,12 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
             <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', fontSize: '1.1rem', padding: '2px 4px', flexShrink: 0 }}>&#x2715;</button>
           </div>
 
-          {/* 포트폴리오 미리보기 */}
+          {project.wishket_url && (
+            <a href={project.wishket_url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0.5rem 0.75rem', borderRadius: 8, fontSize: '0.8rem', fontWeight: 500, background: '#fdcb6e15', color: 'var(--yellow)', textDecoration: 'none', border: '1px solid #fdcb6e33', marginBottom: '0.5rem' }}
+            >📋 위시켓 공고 보기 <span style={{ fontSize: '0.7rem', color: 'var(--text2)', marginLeft: 'auto' }}>{project.wishket_url.split('/project/')[1]?.replace('/', '')}</span></a>
+          )}
+
           {(project.portfolio_count || 0) > 0 && (
             <div style={{ display: 'flex', gap: 4, marginBottom: '0.75rem' }}>
               {Array.from({ length: project.portfolio_count }, (_, i) => i + 1).map(n => (
@@ -320,15 +451,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
                   style={{ flex: 1, padding: '0.3rem', borderRadius: 6, fontSize: '0.75rem', fontWeight: 500, background: 'var(--surface2)', color: 'var(--accent2)', textDecoration: 'none', textAlign: 'center', border: '1px solid var(--border)' }}
                 >P{n}</a>
               ))}
-              {project.wishket_url && (
-                <a href={project.wishket_url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
-                  style={{ padding: '0.3rem 0.6rem', borderRadius: 6, fontSize: '0.75rem', fontWeight: 500, background: 'var(--surface2)', color: 'var(--yellow)', textDecoration: 'none', border: '1px solid var(--border)' }}
-                >공고</a>
-              )}
             </div>
           )}
 
-          {/* 탭 */}
           <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
             {tabs.map(t => (
               <button key={t.key} onClick={() => setTab(t.key)} style={{
@@ -339,46 +464,21 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
           </div>
         </div>
 
-        {/* 탭 콘텐츠 — 스크롤 */}
+        {/* Tab Content */}
         <div style={{ padding: '1.25rem 1.5rem', overflowY: 'auto', flex: 1 }}>
 
           {/* ── 정보 탭 ── */}
           {tab === 'info' && (
             <>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div>
-                  <div style={labelStyle}>프로젝트명</div>
-                  <input type="text" value={editTitle} onChange={e => { setEditTitle(e.target.value); checkInfoChanged(e.target.value, editBudget, editTimeline); }} style={inputStyle} />
-                </div>
+                <div><div style={labelStyle}>프로젝트명</div><input type="text" value={editTitle} onChange={e => { setEditTitle(e.target.value); checkInfoChanged(e.target.value, editBudget, editTimeline); }} style={inputStyle} /></div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                  <div>
-                    <div style={labelStyle}>예산</div>
-                    <div style={{ display: 'flex', alignItems: 'center' }}>
-                      <input type="text" value={budgetNum} placeholder="2,000" onChange={e => handleBudgetChange(e.target.value)}
-                        style={{ ...inputStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0, borderRight: 'none' }} />
-                      <span style={{ padding: '0.5rem 0.6rem', borderRadius: '0 8px 8px 0', fontSize: '0.85rem', background: 'var(--border)', color: 'var(--text2)', border: '1px solid var(--border)' }}>만원</span>
-                    </div>
-                  </div>
-                  <div>
-                    <div style={labelStyle}>기간</div>
-                    <input type="text" value={editTimeline} placeholder="90일" onChange={e => { setEditTimeline(e.target.value); checkInfoChanged(editTitle, editBudget, e.target.value); }} style={inputStyle} />
-                  </div>
+                  <div><div style={labelStyle}>예산</div><div style={{ display: 'flex', alignItems: 'center' }}><input type="text" value={budgetNum} placeholder="2,000" onChange={e => handleBudgetChange(e.target.value)} style={{ ...inputStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0, borderRight: 'none' }} /><span style={{ padding: '0.5rem 0.6rem', borderRadius: '0 8px 8px 0', fontSize: '0.85rem', background: 'var(--border)', color: 'var(--text2)', border: '1px solid var(--border)', lineHeight: 1.5, boxSizing: 'border-box', whiteSpace: 'nowrap' }}>만원</span></div></div>
+                  <div><div style={labelStyle}>기간</div><input type="text" value={editTimeline} placeholder="90일" onChange={e => { setEditTimeline(e.target.value); checkInfoChanged(editTitle, editBudget, e.target.value); }} style={inputStyle} /></div>
                 </div>
-                <div>
-                  <div style={labelStyle}>생성일</div>
-                  <input type="date" value={editDate} onChange={e => { setEditDate(e.target.value); setDateChanged(e.target.value !== (project.created_at || '')); }} style={inputStyle} />
-                </div>
-                <div>
-                  <div style={labelStyle}>위시켓 공고 URL</div>
-                  <input type="url" value={editUrl} placeholder="https://www.wishket.com/project/..."
-                    onChange={e => { setEditUrl(e.target.value); setUrlChanged(e.target.value !== (project.wishket_url || '')); }} style={inputStyle} />
-                </div>
-                <div>
-                  <div style={labelStyle}>메모</div>
-                  <textarea value={editMemo} placeholder="자유롭게 메모..."
-                    onChange={e => { setEditMemo(e.target.value); setMemoChanged(e.target.value !== (project.memo || '')); }}
-                    style={{ ...inputStyle, minHeight: 56, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }} />
-                </div>
+                <div><div style={labelStyle}>생성일</div><input type="date" value={editDate} onChange={e => { setEditDate(e.target.value); setDateChanged(e.target.value !== (project.created_at || '')); }} style={inputStyle} /></div>
+                <div><div style={labelStyle}>위시켓 공고 URL</div><input type="url" value={editUrl} placeholder="https://www.wishket.com/project/..." onChange={e => { setEditUrl(e.target.value); setUrlChanged(e.target.value !== (project.wishket_url || '')); }} style={inputStyle} /></div>
+                <div><div style={labelStyle}>메모</div><textarea value={editMemo} placeholder="자유롭게 메모..." onChange={e => { setEditMemo(e.target.value); setMemoChanged(e.target.value !== (project.memo || '')); }} style={{ ...inputStyle, minHeight: 56, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }} /></div>
               </div>
               {(infoChanged || dateChanged || urlChanged || memoChanged) && (
                 <button onClick={() => {
@@ -393,8 +493,6 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
                   {saving ? '저장 중...' : '저장'}
                 </button>
               )}
-
-              {/* 삭제 */}
               <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
                 {!showDeleteConfirm ? (
                   <button onClick={() => setShowDeleteConfirm(true)} style={{ width: '100%', padding: '0.45rem', borderRadius: 8, border: '1px solid #e1705544', background: 'transparent', color: '#e17055', cursor: 'pointer', fontSize: '0.8rem' }}>프로젝트 삭제</button>
@@ -412,81 +510,99 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
           )}
 
           {/* ── 미팅 탭 ── */}
-          {tab === 'meeting' && (
+          {tab === 'meeting' && (() => {
+            const meetingHistory = (project.history || []).filter(h => h.meeting_at).sort((a, b) => new Date(b.meeting_at) - new Date(a.meeting_at));
+            const currentMeeting = project.meeting_at ? { meeting_at: project.meeting_at, meeting_type: project.meeting_type } : null;
+            return (
             <>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div>
-                  <div style={labelStyle}>미팅 일시</div>
-                  <input type="datetime-local" value={editMeeting}
-                    onChange={e => { setEditMeeting(e.target.value); setMeetingChanged(true); }} style={inputStyle} />
-                </div>
-                <div>
-                  <div style={labelStyle}>미팅 종류</div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {MEETING_TYPES.map(mt => {
-                      const sel = editMeetingType === mt.key;
+              {currentMeeting && (() => {
+                const ms = getMeetingStatus(currentMeeting.meeting_at);
+                const mt = MEETING_TYPES.find(t => t.key === currentMeeting.meeting_type);
+                const mStr = formatMeetingAt(currentMeeting.meeting_at);
+                const isDone = ms === 'done';
+                return (
+                  <div style={{ padding: '0.7rem 0.9rem', borderRadius: 8, background: isDone ? '#74b9ff12' : '#fdcb6e12', border: `1px solid ${isDone ? '#74b9ff33' : '#fdcb6e33'}`, marginBottom: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text2)', marginBottom: 2 }}>{isDone ? '최근 미팅' : '다음 미팅'}</div>
+                      <div style={{ fontSize: '0.9rem', fontWeight: 600, color: isDone ? '#74b9ff' : '#fdcb6e' }}>{mt && mt.emoji + ' '}{mStr}</div>
+                    </div>
+                    <span style={{ padding: '0.15rem 0.45rem', borderRadius: 5, fontSize: '0.7rem', fontWeight: 600, background: isDone ? '#74b9ff22' : '#fdcb6e22', color: isDone ? '#74b9ff' : '#fdcb6e' }}>{isDone ? '완료' : '예정'}</span>
+                  </div>
+                );
+              })()}
+
+              {meetingHistory.length > 0 && (
+                <div style={{ marginBottom: '1rem' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text2)', marginBottom: 6, fontWeight: 600 }}>미팅 이력</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {meetingHistory.map((h, i) => {
+                      const mt = MEETING_TYPES.find(t => t.key === h.meeting_type);
                       return (
-                        <button key={mt.key} onClick={() => { setEditMeetingType(mt.key); setMeetingChanged(true); }}
-                          style={{
-                            flex: 1, padding: '0.5rem', borderRadius: 8, fontSize: '0.85rem', cursor: 'pointer',
-                            border: sel ? '2px solid var(--yellow)' : '2px solid transparent', transition: 'all 0.15s',
-                            background: sel ? 'var(--yellow)' + '22' : 'var(--surface2)',
-                            color: sel ? 'var(--yellow)' : 'var(--text2)', fontWeight: sel ? 600 : 400,
-                          }}>{mt.emoji} {mt.label}</button>
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0.35rem 0.6rem', borderRadius: 6, background: 'var(--surface2)', fontSize: '0.8rem' }}>
+                          <span>{mt ? mt.emoji : '📅'}</span>
+                          <span style={{ color: 'var(--text2)' }}>{formatMeetingAt(h.meeting_at)}</span>
+                          {h.note && <span style={{ color: 'var(--text2)', opacity: 0.6, fontSize: '0.75rem' }}>— {h.note}</span>}
+                        </div>
                       );
                     })}
                   </div>
                 </div>
-              </div>
-              {meetingChanged && (
-                <button onClick={() => {
-                  const iso = editMeeting ? new Date(editMeeting).toISOString() : null;
-                  // 계약 논의 중 + 미래 미팅일 → 자동으로 미팅 예정 전환
-                  if (project.current_status === 'meeting_done' && iso && new Date(iso) > new Date()) {
-                    onFieldSave(project, { meeting_at: iso, meeting_type: editMeetingType || null });
-                    onSave(project, 'interview', '추가 미팅 예정');
-                  } else {
-                    onFieldSave(project, { meeting_at: iso, meeting_type: editMeetingType || null });
-                  }
-                  setMeetingChanged(false);
-                }} disabled={saving} style={{ ...saveBtnStyle(true), width: '100%', marginTop: 12 }}>
-                  {saving ? '저장 중...' : project.current_status === 'meeting_done' && editMeeting && new Date(editMeeting) > new Date() ? '미팅 저장 + 미팅 예정 전환' : '미팅 저장'}
-                </button>
               )}
 
-              {/* 미팅 관련 상태 변경 바로가기 */}
+              <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 8 }}>{currentMeeting ? (project.current_status === 'meeting_done' ? '추가 미팅 등록' : '미팅 수정') : '미팅 등록'}</div>
+              {project.current_status === 'meeting_done' && (
+                <div style={{ padding: '0.5rem 0.7rem', borderRadius: 8, background: '#fdcb6e10', border: '1px solid #fdcb6e22', marginBottom: '0.75rem', fontSize: '0.75rem', color: 'var(--yellow)' }}>
+                  💡 미래 일정을 등록하면 자동으로 '미팅 예정'으로 전환됩니다
+                </div>
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div><div style={labelStyle}>미팅 일시</div><input type="datetime-local" value={editMeeting} onChange={e => { setEditMeeting(e.target.value); setMeetingChanged(true); }} style={inputStyle} /></div>
+                <div><div style={labelStyle}>미팅 종류</div><div style={{ display: 'flex', gap: 6 }}>
+                  {MEETING_TYPES.map(mt => {
+                    const sel = editMeetingType === mt.key;
+                    return (<button key={mt.key} onClick={() => { setEditMeetingType(mt.key); setMeetingChanged(true); }} style={{ flex: 1, padding: '0.5rem', borderRadius: 8, fontSize: '0.85rem', cursor: 'pointer', border: sel ? '2px solid var(--yellow)' : '2px solid transparent', transition: 'all 0.15s', background: sel ? 'var(--yellow)22' : 'var(--surface2)', color: sel ? 'var(--yellow)' : 'var(--text2)', fontWeight: sel ? 600 : 400 }}>{mt.emoji} {mt.label}</button>);
+                  })}
+                </div></div>
+              </div>
+              {meetingChanged && (() => {
+                const iso = editMeeting ? new Date(editMeeting).toISOString() : null;
+                const willTransition = project.current_status === 'meeting_done' && iso && new Date(iso) > new Date();
+                const shouldArchive = willTransition && currentMeeting;
+                return (
+                  <button onClick={() => {
+                    const today = new Date().toISOString().split('T')[0];
+                    let newHistory = [...(project.history || [])];
+                    if (shouldArchive) newHistory.push({ status: 'meeting_done', date: today, note: '미팅 완료 (아카이브)', meeting_at: currentMeeting.meeting_at, meeting_type: currentMeeting.meeting_type });
+                    if (willTransition) {
+                      newHistory.push({ status: 'interview', date: today, note: '추가 미팅 예정', meeting_at: iso, meeting_type: editMeetingType || null });
+                      onFieldSave(project, { meeting_at: iso, meeting_type: editMeetingType || null, current_status: 'interview', history: newHistory });
+                    } else {
+                      onFieldSave(project, { meeting_at: iso, meeting_type: editMeetingType || null });
+                    }
+                    setMeetingChanged(false);
+                  }} disabled={saving} style={{ ...saveBtnStyle(true), width: '100%', marginTop: 12 }}>
+                    {saving ? '저장 중...' : willTransition ? '📅 미팅 등록 + 미팅 예정 전환' : '미팅 저장'}
+                  </button>
+                );
+              })()}
+
               {(project.current_status === 'applied' || project.current_status === 'interview' || project.current_status === 'meeting_done') && (
                 <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text2)', marginBottom: 8 }}>빠른 상태 변경</div>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    {project.current_status === 'applied' && (
-                      <button onClick={() => onSave(project, 'interview', '미팅 예정')} disabled={saving} style={{
-                        flex: 1, padding: '0.5rem', borderRadius: 8, border: 'none', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer',
-                        background: '#fdcb6e22', color: '#fdcb6e',
-                      }}>📅 미팅 예정으로 변경</button>
-                    )}
-                    {project.current_status === 'interview' && (
-                      <button onClick={() => onSave(project, 'meeting_done', '미팅 완료')} disabled={saving} style={{
-                        flex: 1, padding: '0.5rem', borderRadius: 8, border: 'none', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer',
-                        background: '#74b9ff22', color: '#74b9ff',
-                      }}>🤝 계약 논의 중으로 변경</button>
-                    )}
-                    {project.current_status === 'meeting_done' && (
-                      <button onClick={() => onSave(project, 'interview', '추가 미팅 예정')} disabled={saving} style={{
-                        flex: 1, padding: '0.5rem', borderRadius: 8, border: 'none', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer',
-                        background: '#fdcb6e22', color: '#fdcb6e',
-                      }}>📅 추가 미팅 예정으로 변경</button>
-                    )}
+                    {project.current_status === 'applied' && <button onClick={() => onSave(project, 'interview', '미팅 예정')} disabled={saving} style={{ flex: 1, padding: '0.5rem', borderRadius: 8, border: 'none', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', background: '#fdcb6e22', color: '#fdcb6e' }}>📅 미팅 예정으로 변경</button>}
+                    {project.current_status === 'interview' && <button onClick={() => onSave(project, 'meeting_done', '미팅 완료')} disabled={saving} style={{ flex: 1, padding: '0.5rem', borderRadius: 8, border: 'none', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', background: '#74b9ff22', color: '#74b9ff' }}>🤝 계약 논의 중으로 변경</button>}
+                    {project.current_status === 'meeting_done' && <button onClick={() => onSave(project, 'interview', '추가 미팅 예정')} disabled={saving} style={{ flex: 1, padding: '0.5rem', borderRadius: 8, border: 'none', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', background: '#fdcb6e22', color: '#fdcb6e' }}>📅 추가 미팅 예정으로 변경</button>}
                   </div>
                 </div>
               )}
             </>
-          )}
+            );
+          })()}
 
           {/* ── 상태 탭 ── */}
           {tab === 'status' && (
             <>
-              {/* 이력 */}
               {project.history && project.history.length > 0 && (
                 <div style={{ marginBottom: '1.25rem' }}>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text2)', marginBottom: 8, fontWeight: 600 }}>변경 이력</div>
@@ -505,47 +621,24 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
                   </div>
                 </div>
               )}
-
-              {/* 상태 변경 */}
               {targets.length > 0 ? (
                 <>
                   <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 8 }}>상태 변경</div>
                   <div style={{ display: 'flex', gap: 8, marginBottom: '1rem', flexWrap: 'wrap' }}>
                     {targets.map(s => {
-                      const sm = STATUS_META[s];
-                      const selected = newStatus === s;
-                      return (
-                        <button key={s} onClick={() => setNewStatus(s)} style={{
-                          padding: '0.5rem 1rem', borderRadius: 10, cursor: 'pointer', transition: 'all 0.15s',
-                          fontSize: '0.85rem', fontWeight: selected ? 600 : 400,
-                          background: selected ? sm.color + '33' : 'var(--surface2)',
-                          color: selected ? sm.color : 'var(--text2)',
-                          border: selected ? `2px solid ${sm.color}` : '2px solid transparent',
-                        }}>{sm.emoji} {sm.label}</button>
-                      );
+                      const sm = STATUS_META[s]; const selected = newStatus === s;
+                      return (<button key={s} onClick={() => setNewStatus(s)} style={{ padding: '0.5rem 1rem', borderRadius: 10, cursor: 'pointer', transition: 'all 0.15s', fontSize: '0.85rem', fontWeight: selected ? 600 : 400, background: selected ? sm.color + '33' : 'var(--surface2)', color: selected ? sm.color : 'var(--text2)', border: selected ? `2px solid ${sm.color}` : '2px solid transparent' }}>{sm.emoji} {sm.label}</button>);
                     })}
                   </div>
-                  <input type="text" placeholder="메모 (선택)" value={note} onChange={e => setNote(e.target.value)}
-                    style={{ ...inputStyle, marginBottom: '0.75rem' }}
-                    onFocus={e => e.target.style.borderColor = 'var(--accent)'}
-                    onBlur={e => e.target.style.borderColor = 'var(--border)'}
-                    onKeyDown={e => { if (e.key === 'Enter' && newStatus) onSave(project, newStatus, note); }}
-                  />
+                  <input type="text" placeholder="메모 (선택)" value={note} onChange={e => setNote(e.target.value)} style={{ ...inputStyle, marginBottom: '0.75rem' }}
+                    onKeyDown={e => { if (e.key === 'Enter' && newStatus) onSave(project, newStatus, note); }} />
                   <button onClick={() => onSave(project, newStatus, note)} disabled={!newStatus || saving}
-                    style={{
-                      width: '100%', padding: '0.65rem', borderRadius: 10, border: 'none',
-                      cursor: newStatus && !saving ? 'pointer' : 'not-allowed',
-                      fontSize: '0.9rem', fontWeight: 600,
-                      background: newStatus && !saving ? 'var(--accent)' : 'var(--surface2)',
-                      color: newStatus && !saving ? '#fff' : 'var(--text2)', opacity: saving ? 0.7 : 1,
-                    }}>
+                    style={{ width: '100%', padding: '0.65rem', borderRadius: 10, border: 'none', cursor: newStatus && !saving ? 'pointer' : 'not-allowed', fontSize: '0.9rem', fontWeight: 600, background: newStatus && !saving ? 'var(--accent)' : 'var(--surface2)', color: newStatus && !saving ? '#fff' : 'var(--text2)', opacity: saving ? 0.7 : 1 }}>
                     {saving ? '저장 중...' : '상태 변경'}
                   </button>
                 </>
               ) : (
-                <div style={{ textAlign: 'center', padding: '1rem', color: 'var(--text2)', fontSize: '0.85rem', background: 'var(--surface2)', borderRadius: 8 }}>
-                  현재 전환 가능한 상태가 없습니다
-                </div>
+                <div style={{ textAlign: 'center', padding: '1rem', color: 'var(--text2)', fontSize: '0.85rem', background: 'var(--surface2)', borderRadius: 8 }}>현재 전환 가능한 상태가 없습니다</div>
               )}
             </>
           )}
@@ -556,64 +649,62 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
 }
 
 // ─── Project Table ───
-// 미팅 임박 판별: 오늘/내일 미팅이면 'today'/'tomorrow', 아니면 null
-function getMeetingUrgency(meetingAt) {
-  if (!meetingAt) return null;
-  const m = new Date(meetingAt);
-  if (isNaN(m)) return null;
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
-  const dayAfter = new Date(today); dayAfter.setDate(today.getDate() + 2);
-  if (m >= today && m < tomorrow) return 'today';
-  if (m >= tomorrow && m < dayAfter) return 'tomorrow';
-  return null;
-}
-
-function ProjectTable({ data, filter, search, dateRange, onRowClick, sortOrder, onToggleSort, onBatchLost }) {
+function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, sortOrder, onSort, onBatchLost, onMemoSave }) {
   const [selected, setSelected] = useState(new Set());
   const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s = new Set(prev); s.has(slug) ? s.delete(slug) : s.add(slug); return s; }); };
-  const toggleAll = () => { setSelected(prev => prev.size === filtered.length ? new Set() : new Set(filtered.map(r => r.slug))); };
+
   const filtered = useMemo(() => {
     let list = filter === 'all' ? data : data.filter(d => d.current_status === filter);
     if (search.trim()) {
       const q = search.toLowerCase();
-      list = list.filter(d => (d.title || '').toLowerCase().includes(q) || (d.slug || '').toLowerCase().includes(q));
+      list = list.filter(d => (d.title || '').toLowerCase().includes(q) || (d.slug || '').toLowerCase().includes(q) || (d.memo || '').toLowerCase().includes(q));
     }
-    // 기간 필터
     if (dateRange && dateRange !== 'all') {
       const days = parseInt(dateRange);
       if (days > 0) {
-        const cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - days);
+        const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - days);
         const cutoffStr = cutoff.toISOString().split('T')[0];
         list = list.filter(d => (d.created_at || '') >= cutoffStr);
       }
     }
-    // 미팅 임박 프로젝트를 최상단에 고정
-    const urgent = [];
-    const rest = [];
+    // [9] 장기 미응답 표시를 위한 플래그
+    const now = new Date();
+    list = list.map(r => {
+      const stale = r.current_status === 'applied' && r.created_at && daysBetween(r.created_at, now) >= 7;
+      return { ...r, _stale: stale };
+    });
+    // 미팅 임박 → 장기미응답 → 나머지
+    const urgent = []; const stale = []; const rest = [];
     for (const r of list) {
       const urg = getMeetingUrgency(r.meeting_at);
       if (urg) { urgent.push({ ...r, _urgency: urg }); }
+      else if (r._stale) { stale.push(r); }
       else { rest.push(r); }
     }
-    // 임박 내에서는 미팅 시간순 정렬
     urgent.sort((a, b) => new Date(a.meeting_at) - new Date(b.meeting_at));
-    // 나머지는 생성일 정렬
-    rest.sort((a, b) => {
-      const dateA = a.created_at || ''; const dateB = b.created_at || '';
-      return sortOrder === 'desc' ? dateB.localeCompare(dateA) : dateA.localeCompare(dateB);
-    });
-    return [...urgent, ...rest];
-  }, [data, filter, search, sortOrder, dateRange]);
+    // [2] 정렬 키 지원
+    const sortFn = (a, b) => {
+      let va, vb;
+      if (sortKey === 'budget') { va = parseBudgetNum(a.budget); vb = parseBudgetNum(b.budget); }
+      else if (sortKey === 'meeting_at') { va = a.meeting_at || ''; vb = b.meeting_at || ''; }
+      else { va = a.created_at || ''; vb = b.created_at || ''; }
+      if (typeof va === 'number') return sortOrder === 'desc' ? vb - va : va - vb;
+      return sortOrder === 'desc' ? vb.localeCompare(va) : va.localeCompare(vb);
+    };
+    stale.sort(sortFn);
+    rest.sort(sortFn);
+    return [...urgent, ...stale, ...rest];
+  }, [data, filter, search, sortKey, sortOrder, dateRange]);
 
+  const toggleAll = () => { setSelected(prev => prev.size === filtered.length ? new Set() : new Set(filtered.map(r => r.slug))); };
+
+  // [2] 정렬 가능 컬럼
   const cols = [
     { key: 'status', label: '상태', sortable: false, width: '90px' },
     { key: 'title', label: '프로젝트', sortable: false, width: '' },
-    { key: 'budget', label: '예산', sortable: false, width: '100px' },
+    { key: 'budget', label: '예산', sortable: true, width: '100px' },
     { key: 'created_at', label: '생성일', sortable: true, width: '95px' },
-    { key: 'interview', label: '미팅일', sortable: false, width: '180px' },
+    { key: 'meeting_at', label: '미팅일', sortable: true, width: '180px' },
     { key: 'note', label: '메모', sortable: false, width: '150px' },
   ];
 
@@ -621,43 +712,26 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortOrder, 
 
   return (
     <div style={{ background: 'var(--surface)', borderRadius: 12, border: '1px solid var(--border)', overflow: 'hidden' }}>
-      {/* 일괄 처리 바 */}
       {selectedCount > 0 && (
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '0.6rem 1rem', background: '#e1705515', borderBottom: '1px solid #e1705533',
-        }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 1rem', background: '#e1705515', borderBottom: '1px solid #e1705533' }}>
           <span style={{ fontSize: '0.85rem', color: 'var(--text)' }}>{selectedCount}건 선택됨</span>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => setSelected(new Set())} style={{
-              padding: '0.35rem 0.7rem', borderRadius: 6, border: '1px solid var(--border)',
-              background: 'transparent', color: 'var(--text2)', cursor: 'pointer', fontSize: '0.8rem',
-            }}>선택 해제</button>
-            <button onClick={() => { onBatchLost([...selected]); setSelected(new Set()); }} style={{
-              padding: '0.35rem 0.7rem', borderRadius: 6, border: 'none',
-              background: '#e17055', color: '#fff', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
-            }}>일괄 미선정</button>
+            <button onClick={() => setSelected(new Set())} style={{ padding: '0.35rem 0.7rem', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text2)', cursor: 'pointer', fontSize: '0.8rem' }}>선택 해제</button>
+            <button onClick={() => { onBatchLost([...selected]); setSelected(new Set()); }} style={{ padding: '0.35rem 0.7rem', borderRadius: 6, border: 'none', background: '#e17055', color: '#fff', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600 }}>일괄 미선정</button>
           </div>
         </div>
       )}
-      <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 220px)', minHeight: 420 }}>
+      <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 260px)', minHeight: 420 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', tableLayout: 'fixed' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)' }}>
               <th style={{ padding: '0.75rem 0.5rem 0.75rem 1rem', width: '36px' }}>
-                <input type="checkbox" checked={filtered.length > 0 && selectedCount === filtered.length}
-                  onChange={toggleAll} style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} />
+                <input type="checkbox" checked={filtered.length > 0 && selectedCount === filtered.length} onChange={toggleAll} style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} />
               </th>
               {cols.map(c => (
-                <th key={c.key}
-                  onClick={c.sortable ? onToggleSort : undefined}
-                  style={{
-                    padding: '0.75rem 1rem', textAlign: 'left', fontWeight: 600, color: 'var(--text2)',
-                    fontSize: '0.8rem', whiteSpace: 'nowrap', width: c.width || 'auto',
-                    cursor: c.sortable ? 'pointer' : 'default', userSelect: c.sortable ? 'none' : 'auto',
-                  }}
-                >
-                  {c.label}{c.sortable && (sortOrder === 'desc' ? ' ▼' : ' ▲')}
+                <th key={c.key} onClick={c.sortable ? () => onSort(c.key) : undefined}
+                  style={{ padding: '0.75rem 1rem', textAlign: 'left', fontWeight: 600, color: 'var(--text2)', fontSize: '0.8rem', whiteSpace: 'nowrap', width: c.width || 'auto', cursor: c.sortable ? 'pointer' : 'default', userSelect: c.sortable ? 'none' : 'auto' }}>
+                  {c.label}{c.sortable && sortKey === c.key && (sortOrder === 'desc' ? ' ▼' : ' ▲')}
                 </th>
               ))}
             </tr>
@@ -667,29 +741,24 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortOrder, 
               <tr><td colSpan={cols.length + 1} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text2)' }}>결과 없음</td></tr>
             ) : filtered.map(r => {
               const meta = STATUS_META[r.current_status] || {};
-              const history = r.history || [];
-              const lastH = history[history.length - 1];
               const meetingStr = formatMeetingAt(r.meeting_at);
               const urgency = r._urgency || getMeetingUrgency(r.meeting_at);
-              const urgBg = urgency === 'today' ? '#fdcb6e18' : urgency === 'tomorrow' ? '#74b9ff12' : 'transparent';
-              const urgBorder = urgency === 'today' ? '#fdcb6e44' : urgency === 'tomorrow' ? '#74b9ff33' : 'var(--border)';
+              const urgBg = urgency === 'today' ? '#fdcb6e18' : urgency === 'tomorrow' ? '#74b9ff12' : r._stale ? '#e1705508' : 'transparent';
+              const urgBorder = urgency === 'today' ? '#fdcb6e44' : urgency === 'tomorrow' ? '#74b9ff33' : r._stale ? '#e1705522' : 'var(--border)';
               return (
-                <tr key={r.slug}
-                  onClick={() => onRowClick(r)}
+                <tr key={r.slug} onClick={() => onRowClick(r)}
                   style={{ borderBottom: `1px solid ${urgBorder}`, cursor: 'pointer', transition: 'background 0.1s', background: urgBg }}
                   onMouseEnter={e => e.currentTarget.style.background = urgency ? (urgency === 'today' ? '#fdcb6e25' : '#74b9ff20') : 'var(--surface2)'}
-                  onMouseLeave={e => e.currentTarget.style.background = urgBg}
-                >
+                  onMouseLeave={e => e.currentTarget.style.background = urgBg}>
                   <td style={{ padding: '0.65rem 0.5rem 0.65rem 1rem', width: 32 }} onClick={e => e.stopPropagation()}>
-                    <input type="checkbox" checked={selected.has(r.slug)}
-                      onChange={e => toggleSelect(r.slug, e)}
-                      style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} />
+                    <input type="checkbox" checked={selected.has(r.slug)} onChange={e => toggleSelect(r.slug, e)} style={{ cursor: 'pointer', accentColor: 'var(--accent)' }} />
                   </td>
                   <td style={{ padding: '0.65rem 1rem', whiteSpace: 'nowrap' }}>
-                    <span style={{
-                      display: 'inline-block', padding: '0.2rem 0.6rem', borderRadius: 6, fontSize: '0.75rem', fontWeight: 500,
-                      background: meta.color + '22', color: meta.color, border: `1px solid ${meta.color}44`,
-                    }}>{meta.emoji} {meta.label}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '0.2rem 0.6rem', borderRadius: 6, fontSize: '0.75rem', fontWeight: 500, background: meta.color + '22', color: meta.color, border: `1px solid ${meta.color}44` }}>
+                      {meta.emoji} {meta.label}
+                      {/* [9] 장기 미응답 뱃지 */}
+                      {r._stale && <span title={`지원 후 ${daysBetween(r.created_at, new Date())}일 경과`} style={{ marginLeft: 2, width: 6, height: 6, borderRadius: '50%', background: '#e17055', animation: 'pulse 2s infinite' }} />}
+                    </span>
                   </td>
                   <td style={{ padding: '0.65rem 1rem', maxWidth: 320 }}>
                     <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title || r.slug}</div>
@@ -706,29 +775,19 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortOrder, 
                       return (
                         <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                           {urgLabel ? (
-                            <span style={{
-                              padding: '0.1rem 0.35rem', borderRadius: 4, fontSize: '0.7rem', fontWeight: 700,
-                              background: urgency === 'today' ? '#fdcb6e33' : '#74b9ff22',
-                              color: urgency === 'today' ? '#fdcb6e' : '#74b9ff',
-                              animation: urgency === 'today' ? 'pulse 2s infinite' : 'none',
-                            }}>{urgLabel}</span>
+                            <span style={{ padding: '0.1rem 0.35rem', borderRadius: 4, fontSize: '0.7rem', fontWeight: 700, background: urgency === 'today' ? '#fdcb6e33' : '#74b9ff22', color: urgency === 'today' ? '#fdcb6e' : '#74b9ff', animation: urgency === 'today' ? 'pulse 2s infinite' : 'none' }}>{urgLabel}</span>
                           ) : (
-                            <span style={{
-                              padding: '0.1rem 0.35rem', borderRadius: 4, fontSize: '0.7rem', fontWeight: 600,
-                              background: isDone ? '#00b89422' : '#fdcb6e22',
-                              color: isDone ? '#00b894' : '#fdcb6e',
-                            }}>{isDone ? '완료' : '예정'}</span>
+                            <span style={{ padding: '0.1rem 0.35rem', borderRadius: 4, fontSize: '0.7rem', fontWeight: 600, background: isDone ? '#00b89422' : '#fdcb6e22', color: isDone ? '#00b894' : '#fdcb6e' }}>{isDone ? '완료' : '예정'}</span>
                           )}
                           {mt && <span>{mt.emoji}</span>}
                           <span style={{ color: isDone ? 'var(--text2)' : 'var(--yellow)' }}>{meetingStr}</span>
                         </span>
                       );
-                    })() : (
-                      <span style={{ color: 'var(--text2)' }}>—</span>
-                    )}
+                    })() : <span style={{ color: 'var(--text2)' }}>—</span>}
                   </td>
+                  {/* [4] 인라인 메모 */}
                   <td style={{ padding: '0.65rem 1rem', fontSize: '0.8rem', color: 'var(--text2)', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {r.memo || '—'}
+                    <InlineMemo value={r.memo} onSave={val => onMemoSave(r, val)} />
                   </td>
                 </tr>
               );
@@ -751,111 +810,90 @@ function App() {
   const [selectedProject, setSelectedProject] = useState(null);
   const [saving, setSaving] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [sortKey, setSortKey] = useState('created_at');
   const [sortOrder, setSortOrder] = useState('desc');
   const [dateRange, setDateRange] = useState('all');
   const [showStats, setShowStats] = useState(false);
   const { toasts, toast } = useToast();
+  const searchRef = useRef(null);
 
-  // Supabase에서 전체 데이터 로드
-  const loadData = useCallback(async () => {
-    const { data: rows, error } = await supabase
-      .from(TABLE)
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      toast('데이터 로드 실패: ' + error.message, 'error');
-      setData([]);
-    } else {
-      setData(rows);
-      setConnected(true);
-
-      // 자동 전환: interview + meeting_at이 과거 → meeting_done
-      const now = new Date();
-      const toTransition = rows.filter(r =>
-        r.current_status === 'interview' && r.meeting_at && new Date(r.meeting_at) < now
-      );
-      if (toTransition.length > 0) {
-        const today = now.toISOString().split('T')[0];
-        for (const r of toTransition) {
-          const newHistory = [...(r.history || []), { status: 'meeting_done', date: today, note: '미팅 일시 경과 — 자동 전환' }];
-          supabase.from(TABLE).update({ current_status: 'meeting_done', history: newHistory, updated_at: today }).eq('slug', r.slug).then(() => {});
-        }
-        // 로컬 state도 즉시 반영
-        setData(prev => prev.map(d => {
-          const match = toTransition.find(t => t.slug === d.slug);
-          if (!match) return d;
-          return { ...d, current_status: 'meeting_done', history: [...(d.history || []), { status: 'meeting_done', date: today, note: '미팅 일시 경과 — 자동 전환' }], updated_at: today };
-        }));
-        console.log(`자동 전환: ${toTransition.length}건 interview → meeting_done`);
+  // [1] 키보드 단축키: / → 검색 포커스
+  useEffect(() => {
+    const handler = e => {
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        searchRef.current?.focus();
       }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
-      // 자동 전환: meeting_done + meeting_at이 미래 → interview (추가 미팅 잡힌 경우)
-      const toInterview = rows.filter(r =>
-        r.current_status === 'meeting_done' && r.meeting_at && new Date(r.meeting_at) > now
-      );
+  const loadData = useCallback(async () => {
+    const { data: rows, error } = await supabase.from(TABLE).select('*').order('created_at', { ascending: false });
+    if (error) { toast('데이터 로드 실패: ' + error.message, 'error'); setData([]); } else {
+      setData(rows); setConnected(true);
+      const now = new Date();
+      // 자동 전환: interview + meeting_at 과거 → meeting_done
+      const toMeetingDone = rows.filter(r => r.current_status === 'interview' && r.meeting_at && new Date(r.meeting_at) < now);
+      if (toMeetingDone.length > 0) {
+        const today = now.toISOString().split('T')[0];
+        for (const r of toMeetingDone) {
+          const entry = { status: 'meeting_done', date: today, note: '미팅 일시 경과 — 자동 전환', meeting_at: r.meeting_at, meeting_type: r.meeting_type || null };
+          supabase.from(TABLE).update({ current_status: 'meeting_done', history: [...(r.history || []), entry], updated_at: today }).eq('slug', r.slug).then(() => {});
+        }
+        setData(prev => prev.map(d => {
+          if (!toMeetingDone.find(t => t.slug === d.slug)) return d;
+          const entry = { status: 'meeting_done', date: today, note: '미팅 일시 경과 — 자동 전환', meeting_at: d.meeting_at, meeting_type: d.meeting_type || null };
+          return { ...d, current_status: 'meeting_done', history: [...(d.history || []), entry], updated_at: today };
+        }));
+      }
+      // 자동 전환: meeting_done + meeting_at 미래 → interview
+      const toInterview = rows.filter(r => r.current_status === 'meeting_done' && r.meeting_at && new Date(r.meeting_at) > now);
       if (toInterview.length > 0) {
         const today = now.toISOString().split('T')[0];
         for (const r of toInterview) {
-          const newHistory = [...(r.history || []), { status: 'interview', date: today, note: '추가 미팅 예정 — 자동 전환' }];
-          supabase.from(TABLE).update({ current_status: 'interview', history: newHistory, updated_at: today }).eq('slug', r.slug).then(() => {});
+          supabase.from(TABLE).update({ current_status: 'interview', history: [...(r.history || []), { status: 'interview', date: today, note: '추가 미팅 예정 — 자동 전환' }], updated_at: today }).eq('slug', r.slug).then(() => {});
         }
         setData(prev => prev.map(d => {
-          const match = toInterview.find(t => t.slug === d.slug);
-          if (!match) return d;
+          if (!toInterview.find(t => t.slug === d.slug)) return d;
           return { ...d, current_status: 'interview', history: [...(d.history || []), { status: 'interview', date: today, note: '추가 미팅 예정 — 자동 전환' }], updated_at: today };
         }));
-        console.log(`자동 전환: ${toInterview.length}건 meeting_done → interview (미래 미팅일)`);
       }
     }
   }, [toast]);
 
-  // 초기 로드 + Realtime 구독
   useEffect(() => {
     loadData();
-
-    const channel = supabase
-      .channel('wishket-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, (payload) => {
-        // UPDATE 이벤트: 로컬 state 즉시 반영
-        if (payload.eventType === 'UPDATE') {
-          setData(prev => prev ? prev.map(d => d.slug === payload.new.slug ? payload.new : d) : prev);
-        } else if (payload.eventType === 'INSERT') {
-          setData(prev => prev ? [payload.new, ...prev] : [payload.new]);
-        } else if (payload.eventType === 'DELETE') {
-          setData(prev => prev ? prev.filter(d => d.id !== payload.old.id) : prev);
-        }
-      })
-      .subscribe();
-
+    const channel = supabase.channel('wishket-realtime').on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, (payload) => {
+      if (payload.eventType === 'UPDATE') setData(prev => prev ? prev.map(d => d.slug === payload.new.slug ? payload.new : d) : prev);
+      else if (payload.eventType === 'INSERT') setData(prev => prev ? [payload.new, ...prev] : [payload.new]);
+      else if (payload.eventType === 'DELETE') setData(prev => prev ? prev.filter(d => d.id !== payload.old.id) : prev);
+    }).subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [loadData]);
 
-  const handleRowClick = useCallback((project) => {
-    setSelectedProject(project);
-  }, []);
+  const handleRowClick = useCallback((project) => setSelectedProject(project), []);
 
-  // Supabase에 필드 업데이트 (생성일, 미팅일 등)
   const handleFieldSave = useCallback(async (project, fields) => {
     setSaving(true);
     try {
-      const { error } = await supabase
-        .from(TABLE)
-        .update({ ...fields, updated_at: new Date().toISOString().split('T')[0] })
-        .eq('slug', project.slug);
+      const { error } = await supabase.from(TABLE).update({ ...fields, updated_at: new Date().toISOString().split('T')[0] }).eq('slug', project.slug);
       if (error) throw error;
       setData(prev => prev.map(d => d.slug === project.slug ? { ...d, ...fields } : d));
       setSelectedProject(prev => prev ? { ...prev, ...fields } : prev);
-      const label = Object.keys(fields).map(k => k === 'created_at' ? '생성일' : k === 'meeting_at' ? '미팅일' : k).join(', ');
-      toast(`${label} 저장 완료`, 'success');
-    } catch (err) {
-      toast('저장 실패: ' + err.message, 'error');
-    } finally {
-      setSaving(false);
-    }
+      toast('저장 완료', 'success');
+    } catch (err) { toast('저장 실패: ' + err.message, 'error'); } finally { setSaving(false); }
   }, [toast]);
 
-  // 일괄 미선정 처리
+  // [4] 인라인 메모 저장
+  const handleMemoSave = useCallback(async (project, memo) => {
+    const { error } = await supabase.from(TABLE).update({ memo, updated_at: new Date().toISOString().split('T')[0] }).eq('slug', project.slug);
+    if (error) { toast('메모 저장 실패', 'error'); return; }
+    setData(prev => prev.map(d => d.slug === project.slug ? { ...d, memo } : d));
+    toast('메모 저장', 'success');
+  }, [toast]);
+
   const handleBatchLost = useCallback(async (slugs) => {
     if (!confirm(`${slugs.length}건을 미선정 처리하시겠습니까?`)) return;
     const today = new Date().toISOString().split('T')[0];
@@ -867,14 +905,10 @@ function App() {
       const { error } = await supabase.from(TABLE).update({ current_status: 'lost', history: newHistory, updated_at: today }).eq('slug', slug);
       if (!error) success++;
     }
-    setData(prev => prev.map(d => slugs.includes(d.slug) && d.current_status !== 'won' ? {
-      ...d, current_status: 'lost', history: [...(d.history || []), { status: 'lost', date: today, note: '일괄 미선정 처리' }], updated_at: today,
-    } : d));
+    setData(prev => prev.map(d => slugs.includes(d.slug) && d.current_status !== 'won' ? { ...d, current_status: 'lost', history: [...(d.history || []), { status: 'lost', date: today, note: '일괄 미선정 처리' }], updated_at: today } : d));
     toast(`${success}건 미선정 처리 완료`, 'success');
-    if (success > 0) setTimeout(() => toast(`로컬 정리: node scripts/cleanup-lost.js --all`, 'info'), 500);
   }, [data, toast]);
 
-  // Supabase에서 프로젝트 삭제
   const handleDelete = useCallback(async (project) => {
     setSaving(true);
     try {
@@ -883,48 +917,45 @@ function App() {
       setData(prev => prev.filter(d => d.slug !== project.slug));
       setSelectedProject(null);
       toast(`삭제 완료: ${project.slug}`, 'success');
-    } catch (err) {
-      toast('삭제 실패: ' + err.message, 'error');
-    } finally {
-      setSaving(false);
-    }
+    } catch (err) { toast('삭제 실패: ' + err.message, 'error'); } finally { setSaving(false); }
   }, [toast]);
 
-  // Supabase에 상태 업데이트
   const handleSave = useCallback(async (project, newStatus, note) => {
     setSaving(true);
     try {
       const today = new Date().toISOString().split('T')[0];
-      const newHistory = [...(project.history || []), { status: newStatus, date: today, note: note || '' }];
-
-      const { error } = await supabase
-        .from(TABLE)
-        .update({
-          current_status: newStatus,
-          history: newHistory,
-          updated_at: today,
-        })
-        .eq('slug', project.slug);
-
+      const historyEntry = { status: newStatus, date: today, note: note || '' };
+      if (newStatus === 'meeting_done' && project.meeting_at) {
+        historyEntry.meeting_at = project.meeting_at;
+        historyEntry.meeting_type = project.meeting_type || null;
+      }
+      const newHistory = [...(project.history || []), historyEntry];
+      const { error } = await supabase.from(TABLE).update({ current_status: newStatus, history: newHistory, updated_at: today }).eq('slug', project.slug);
       if (error) throw error;
-
-      // 로컬 state 즉시 반영 (Realtime 도착 전)
-      setData(prev => prev.map(d => d.slug === project.slug ? {
-        ...d, current_status: newStatus, history: newHistory, updated_at: today,
-      } : d));
-
+      setData(prev => prev.map(d => d.slug === project.slug ? { ...d, current_status: newStatus, history: newHistory, updated_at: today } : d));
       setSelectedProject(null);
       const sm = STATUS_META[newStatus];
       toast(`${sm.emoji} ${project.slug} → ${sm.label}`, 'success');
-      if (newStatus === 'lost') {
-        setTimeout(() => toast(`로컬 정리: node scripts/cleanup-lost.js ${project.slug}`, 'info'), 500);
-      }
-    } catch (err) {
-      toast('저장 실패: ' + err.message, 'error');
-    } finally {
-      setSaving(false);
-    }
+    } catch (err) { toast('저장 실패: ' + err.message, 'error'); } finally { setSaving(false); }
   }, [toast]);
+
+  // [2] 정렬 핸들러
+  const handleSort = useCallback((key) => {
+    if (sortKey === key) setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc');
+    else { setSortKey(key); setSortOrder('desc'); }
+  }, [sortKey]);
+
+  // [5] 평균 수주 소요일 (hook은 early return 전에 호출)
+  const avgWonDays = useMemo(() => {
+    if (!data) return null;
+    const wonProjects = data.filter(d => d.current_status === 'won' && d.created_at);
+    if (wonProjects.length === 0) return null;
+    const total = wonProjects.reduce((sum, d) => {
+      const wonDate = (d.history || []).filter(h => h.status === 'won').pop()?.date;
+      return sum + (wonDate ? daysBetween(d.created_at, wonDate) : 0);
+    }, 0);
+    return Math.round(total / wonProjects.length);
+  }, [data]);
 
   if (!data) return <Loading />;
 
@@ -933,39 +964,60 @@ function App() {
   const appliedOrBeyond = data.filter(d => d.current_status !== 'generated').length;
   const wonCount = counts.won || 0;
   const winRate = appliedOrBeyond > 0 ? ((wonCount / appliedOrBeyond) * 100).toFixed(1) : '0.0';
-  const interviewCount = data.filter(d => (d.history || []).some(h => h.status === 'interview' || h.status === 'meeting_done')).length;
-  const interviewRate = appliedOrBeyond > 0 ? ((interviewCount / appliedOrBeyond) * 100).toFixed(1) : '0.0';
-  const lastUpdated = data.reduce((max, r) => (r.updated_at || '') > max ? r.updated_at : max, '');
+
+  // [3] 이번 주 미팅 계산
+  const now = new Date();
+  const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay());
+  const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 7);
+  const thisWeekMeetings = data.filter(d => d.meeting_at && new Date(d.meeting_at) >= weekStart && new Date(d.meeting_at) < weekEnd);
+
+  // [9] 장기 미응답 건수
+  const staleCount = data.filter(d => d.current_status === 'applied' && d.created_at && daysBetween(d.created_at, now) >= 7).length;
 
   return (
     <div>
       <ToastContainer toasts={toasts} />
       {selectedProject && <StatusModal project={selectedProject} onClose={() => setSelectedProject(null)} onSave={handleSave} onFieldSave={handleFieldSave} onDelete={handleDelete} saving={saving} />}
 
-      {/* Header — 컴팩트 */}
+      {/* Header */}
       <div className="fade-in" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
         <h1 style={{ fontSize: '1.25rem', fontWeight: 700, letterSpacing: '-0.02em' }}>위시켓 현황 대시보드</h1>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* [8] CSV 내보내기 */}
+          <button onClick={() => exportCSV(data)} style={{ padding: '0.3rem 0.6rem', borderRadius: 6, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text2)', cursor: 'pointer', fontSize: '0.7rem' }}>CSV</button>
           <span style={{ fontSize: '0.75rem', color: 'var(--text2)' }}>{data.length}건</span>
-          <div style={{
-            padding: '0.3rem 0.6rem', borderRadius: 6, fontSize: '0.75rem', fontWeight: 500,
-            background: connected ? '#00b89422' : '#e1705522',
-            color: connected ? '#00b894' : '#e17055',
-            display: 'flex', alignItems: 'center', gap: 5,
-          }}>
+          <div style={{ padding: '0.3rem 0.6rem', borderRadius: 6, fontSize: '0.75rem', fontWeight: 500, background: connected ? '#00b89422' : '#e1705522', color: connected ? '#00b894' : '#e17055', display: 'flex', alignItems: 'center', gap: 5 }}>
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: connected ? '#00b894' : '#e17055', animation: connected ? 'pulse 2s infinite' : 'none' }} />
             {connected ? 'Live' : 'Offline'}
           </div>
         </div>
       </div>
 
-      {/* 검색 + 상태필터 + 기간필터 — 한 줄 통합 */}
+      {/* [3] 이번 주 미팅 알림 + [9] 장기 미응답 알림 */}
+      {(thisWeekMeetings.length > 0 || staleCount > 0) && (
+        <div className="fade-in" style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+          {thisWeekMeetings.length > 0 && (
+            <div style={{ padding: '0.5rem 0.8rem', borderRadius: 8, background: '#fdcb6e12', border: '1px solid #fdcb6e33', fontSize: '0.8rem', color: 'var(--yellow)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              📅 이번 주 미팅 {thisWeekMeetings.length}건
+              <span style={{ fontSize: '0.7rem', color: 'var(--text2)' }}>
+                {thisWeekMeetings.map(m => (m.title || m.slug).substring(0, 15)).join(', ')}
+              </span>
+            </div>
+          )}
+          {staleCount > 0 && (
+            <div onClick={() => setFilter('applied')} style={{ padding: '0.5rem 0.8rem', borderRadius: 8, background: '#e1705510', border: '1px solid #e1705533', fontSize: '0.8rem', color: '#e17055', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+              ⏰ 7일+ 무응답 {staleCount}건
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 검색 + 필터 */}
       <div className="fade-in delay-1" style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
-        <input type="text" placeholder="검색..." value={search} onChange={e => setSearch(e.target.value)}
-          style={{ padding: '0.4rem 0.75rem', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface2)', color: 'var(--text)', fontSize: '0.8rem', width: 160, outline: 'none' }}
+        <input ref={searchRef} type="text" placeholder="검색... ( / )" value={search} onChange={e => setSearch(e.target.value)}
+          style={{ padding: '0.4rem 0.75rem', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface2)', color: 'var(--text)', fontSize: '0.8rem', width: 170, outline: 'none' }}
           onFocus={e => e.target.style.borderColor = 'var(--accent)'}
-          onBlur={e => e.target.style.borderColor = 'var(--border)'}
-        />
+          onBlur={e => e.target.style.borderColor = 'var(--border)'} />
         <FilterTabs active={filter} onChange={setFilter} counts={counts} />
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 3 }}>
           {[{ key: 'all', label: '전체' }, { key: '7d', label: '7일' }, { key: '30d', label: '30일' }, { key: '90d', label: '90일' }].map(d => (
@@ -979,9 +1031,10 @@ function App() {
         </div>
       </div>
 
-      {/* 테이블 — 최우선 */}
+      {/* 테이블 */}
       <div className="fade-in delay-2" style={{ marginBottom: '1.5rem' }}>
-        <ProjectTable data={data} filter={filter} search={search} dateRange={dateRange} onRowClick={handleRowClick} sortOrder={sortOrder} onToggleSort={() => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')} onBatchLost={handleBatchLost} />
+        <ProjectTable data={data} filter={filter} search={search} dateRange={dateRange} onRowClick={handleRowClick}
+          sortKey={sortKey} sortOrder={sortOrder} onSort={handleSort} onBatchLost={handleBatchLost} onMemoSave={handleMemoSave} />
       </div>
 
       {/* 통계 — 접이식 */}
@@ -996,22 +1049,25 @@ function App() {
         {showStats && (
           <div style={{ animation: 'fadeIn 0.25s ease-out' }}>
             {(() => {
-              const wonBudgetTotal = data.filter(d => d.current_status === 'won').reduce((sum, d) => {
-                const digits = (d.budget || '').replace(/[^0-9]/g, '');
-                return sum + (digits ? Number(digits) : 0);
-              }, 0);
+              const wonBudgetTotal = data.filter(d => d.current_status === 'won').reduce((sum, d) => sum + parseBudgetNum(d.budget), 0);
               const wonBudgetStr = wonBudgetTotal > 0 ? wonBudgetTotal.toLocaleString() + '만원' : '—';
               return (
-                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginTop: '0.75rem', marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '0.75rem', marginBottom: '1rem' }}>
                   <StatCard title="총 프로젝트" value={data.length} sub={`생성 ${counts.generated || 0} / 지원 ${appliedOrBeyond}`} delay={1} />
                   <StatCard title="수주율" value={`${winRate}%`} sub={`${wonCount} / ${appliedOrBeyond} (지원 기준)`} color="var(--green)" delay={1} />
                   <StatCard title="수주 금액" value={wonBudgetStr} sub={`${wonCount}건 합산`} color="var(--green)" delay={1} />
                   <StatCard title="진행 중" value={(counts.applied || 0) + (counts.interview || 0) + (counts.meeting_done || 0)}
                     sub={`지원 ${counts.applied || 0} + 미팅 ${(counts.interview || 0) + (counts.meeting_done || 0)}`} color="var(--accent2)" delay={1} />
+                  {/* [5] 평균 수주 소요일 */}
+                  {avgWonDays !== null && <StatCard title="평균 수주 소요" value={`${avgWonDays}일`} sub={`${wonCount}건 평균`} color="var(--blue)" delay={1} />}
                 </div>
               );
             })()}
             <Funnel data={data} />
+            {/* [6] 월별 추이 */}
+            <MonthlyChart data={data} />
+            {/* [7] 예산 구간별 수주율 */}
+            <BudgetAnalysis data={data} />
           </div>
         )}
       </div>
