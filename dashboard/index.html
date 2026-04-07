@@ -85,7 +85,7 @@ const TRANSITION_TARGETS = {
   generated:    ['applied'],
   applied:      ['interview', 'lost'],
   interview:    ['meeting_done', 'lost'],
-  meeting_done: ['won', 'lost'],
+  meeting_done: ['interview', 'won', 'lost'],
   won:          [],
   lost:         ['applied', 'interview'],
 };
@@ -441,14 +441,21 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
               {meetingChanged && (
                 <button onClick={() => {
                   const iso = editMeeting ? new Date(editMeeting).toISOString() : null;
-                  onFieldSave(project, { meeting_at: iso, meeting_type: editMeetingType || null }); setMeetingChanged(false);
+                  // 계약 논의 중 + 미래 미팅일 → 자동으로 미팅 예정 전환
+                  if (project.current_status === 'meeting_done' && iso && new Date(iso) > new Date()) {
+                    onFieldSave(project, { meeting_at: iso, meeting_type: editMeetingType || null });
+                    onSave(project, 'interview', '추가 미팅 예정');
+                  } else {
+                    onFieldSave(project, { meeting_at: iso, meeting_type: editMeetingType || null });
+                  }
+                  setMeetingChanged(false);
                 }} disabled={saving} style={{ ...saveBtnStyle(true), width: '100%', marginTop: 12 }}>
-                  {saving ? '저장 중...' : '미팅 저장'}
+                  {saving ? '저장 중...' : project.current_status === 'meeting_done' && editMeeting && new Date(editMeeting) > new Date() ? '미팅 저장 + 미팅 예정 전환' : '미팅 저장'}
                 </button>
               )}
 
               {/* 미팅 관련 상태 변경 바로가기 */}
-              {(project.current_status === 'applied' || project.current_status === 'interview') && (
+              {(project.current_status === 'applied' || project.current_status === 'interview' || project.current_status === 'meeting_done') && (
                 <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text2)', marginBottom: 8 }}>빠른 상태 변경</div>
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -463,6 +470,12 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
                         flex: 1, padding: '0.5rem', borderRadius: 8, border: 'none', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer',
                         background: '#74b9ff22', color: '#74b9ff',
                       }}>🤝 계약 논의 중으로 변경</button>
+                    )}
+                    {project.current_status === 'meeting_done' && (
+                      <button onClick={() => onSave(project, 'interview', '추가 미팅 예정')} disabled={saving} style={{
+                        flex: 1, padding: '0.5rem', borderRadius: 8, border: 'none', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer',
+                        background: '#fdcb6e22', color: '#fdcb6e',
+                      }}>📅 추가 미팅 예정으로 변경</button>
                     )}
                   </div>
                 </div>
@@ -775,6 +788,24 @@ function App() {
           return { ...d, current_status: 'meeting_done', history: [...(d.history || []), { status: 'meeting_done', date: today, note: '미팅 일시 경과 — 자동 전환' }], updated_at: today };
         }));
         console.log(`자동 전환: ${toTransition.length}건 interview → meeting_done`);
+      }
+
+      // 자동 전환: meeting_done + meeting_at이 미래 → interview (추가 미팅 잡힌 경우)
+      const toInterview = rows.filter(r =>
+        r.current_status === 'meeting_done' && r.meeting_at && new Date(r.meeting_at) > now
+      );
+      if (toInterview.length > 0) {
+        const today = now.toISOString().split('T')[0];
+        for (const r of toInterview) {
+          const newHistory = [...(r.history || []), { status: 'interview', date: today, note: '추가 미팅 예정 — 자동 전환' }];
+          supabase.from(TABLE).update({ current_status: 'interview', history: newHistory, updated_at: today }).eq('slug', r.slug).then(() => {});
+        }
+        setData(prev => prev.map(d => {
+          const match = toInterview.find(t => t.slug === d.slug);
+          if (!match) return d;
+          return { ...d, current_status: 'interview', history: [...(d.history || []), { status: 'interview', date: today, note: '추가 미팅 예정 — 자동 전환' }], updated_at: today };
+        }));
+        console.log(`자동 전환: ${toInterview.length}건 meeting_done → interview (미래 미팅일)`);
       }
     }
   }, [toast]);
