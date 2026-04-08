@@ -101,8 +101,9 @@ CREATE POLICY "anon_all" ON team_members
 
 -- 3. 프로젝트에 담당자 컬럼 추가
 ALTER TABLE wishket_projects
-  ADD COLUMN IF NOT EXISTS assigned_main UUID,
-  ADD COLUMN IF NOT EXISTS assigned_sub  UUID;`;
+  ADD COLUMN IF NOT EXISTS assigned_manager UUID,
+  ADD COLUMN IF NOT EXISTS assigned_main    UUID,
+  ADD COLUMN IF NOT EXISTS assigned_sub     UUID;`;
 
 // ─── Utils ───
 function getMeetingStatus(meetingAt) {
@@ -408,7 +409,7 @@ function MemberBadge({ member, role }) {
     }}>
       <MemberAvatar member={member} size={16} />
       {member.name}
-      {role && <span style={{ fontSize:'0.6rem', opacity:0.7, marginLeft:1 }}>{role==='main'?'주':'부'}</span>}
+      {role && <span style={{ fontSize:'0.6rem', opacity:0.7, marginLeft:1 }}>{role==='mgr'?'PM':role==='main'?'주':'부'}</span>}
     </span>
   );
 }
@@ -466,8 +467,9 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
     const wl = {};
     if (!projects) return wl;
     projects.filter(p => ['interview','meeting_done'].includes(p.current_status)).forEach(p => {
-      if (p.assigned_main) wl[p.assigned_main] = (wl[p.assigned_main]||0) + 1;
-      if (p.assigned_sub)  wl[p.assigned_sub]  = (wl[p.assigned_sub] ||0) + 1;
+      if (p.assigned_manager) wl[p.assigned_manager] = (wl[p.assigned_manager]||0) + 1;
+      if (p.assigned_main)    wl[p.assigned_main]    = (wl[p.assigned_main]   ||0) + 1;
+      if (p.assigned_sub)     wl[p.assigned_sub]     = (wl[p.assigned_sub]    ||0) + 1;
     });
     return wl;
   }, [projects]);
@@ -651,8 +653,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
   const parseBN = (v) => { const d=(v||'').replace(/[^0-9]/g,''); return d ? Number(d).toLocaleString() : ''; };
   const [budgetNum, setBudgetNum] = useState(() => parseBN(project?.budget));
   // Assignment
-  const [assignMain, setAssignMain] = useState(project?.assigned_main||null);
-  const [assignSub,  setAssignSub]  = useState(project?.assigned_sub ||null);
+  const [assignManager, setAssignManager] = useState(project?.assigned_manager||null);
+  const [assignMain,    setAssignMain]    = useState(project?.assigned_main||null);
+  const [assignSub,     setAssignSub]     = useState(project?.assigned_sub ||null);
   const [assignChanged, setAssignChanged] = useState(false);
 
   useEffect(() => {
@@ -679,8 +682,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
     checkInfo(editTitle, full, editTimeline);
   };
 
-  const mainMember = teamMembers?.find(m => m.id === project.assigned_main);
-  const subMember  = teamMembers?.find(m => m.id === project.assigned_sub);
+  const managerMember = teamMembers?.find(m => m.id === project.assigned_manager);
+  const mainMember    = teamMembers?.find(m => m.id === project.assigned_main);
+  const subMember     = teamMembers?.find(m => m.id === project.assigned_sub);
   const hasTeam = teamMembers && teamMembers.length > 0;
 
   const tabs = [{ key:'info', label:'정보' }, { key:'meeting', label:'미팅' }, { key:'status', label:'상태' }];
@@ -700,8 +704,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
               <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:4, flexWrap:'wrap' }}>
                 <span style={{ fontSize:'0.75rem', color:'var(--text2)', fontFamily:'monospace' }}>{project.slug}</span>
                 <span style={{ display:'inline-block', padding:'0.1rem 0.45rem', borderRadius:5, fontSize:'0.7rem', fontWeight:500, background:meta.color+'22', color:meta.color }}>{meta.emoji} {meta.label}</span>
-                {mainMember && <MemberBadge member={mainMember} role="main" />}
-                {subMember  && <MemberBadge member={subMember}  role="sub"  />}
+                {managerMember && <MemberBadge member={managerMember} role="mgr"  />}
+                {mainMember    && <MemberBadge member={mainMember}    role="main" />}
+                {subMember     && <MemberBadge member={subMember}     role="sub"  />}
               </div>
             </div>
             <button onClick={onClose} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem', padding:'2px 4px', flexShrink:0 }}>&#x2715;</button>
@@ -787,6 +792,31 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                 }} disabled={saving} style={{ ...saveBtnS(true), width:'100%', marginTop:10 }}>
                   {saving ? '저장 중...' : '저장'}
                 </button>
+              )}
+              {/* 매니저 지정 */}
+              {hasTeam && (
+                <div style={{ marginTop:'1.25rem', borderTop:'1px solid var(--border)', paddingTop:'1.25rem' }}>
+                  <div style={{ fontSize:'0.85rem', fontWeight:600, marginBottom:10 }}>프로젝트 매니저</div>
+                  <AssignPicker
+                    label="Manager (프로젝트 총괄)"
+                    members={teamMembers||[]}
+                    value={assignManager}
+                    onChange={id => { setAssignManager(id); setAssignChanged(id!==(project.assigned_manager||null) || assignMain!==(project.assigned_main||null) || assignSub!==(project.assigned_sub||null)); }}
+                    exclude={null}
+                  />
+                  {assignChanged && assignManager !== (project.assigned_manager||null) && (
+                    <button onClick={() => {
+                      const today = new Date().toISOString().split('T')[0];
+                      const mgrName = (teamMembers||[]).find(m => m.id===assignManager)?.name;
+                      const noteStr = mgrName ? `매니저 배정 — ${mgrName}` : '매니저 해제';
+                      const newHistory = [...(project.history||[]), { status:project.current_status, date:today, note:noteStr }];
+                      onFieldSave(project, { assigned_manager:assignManager||null, history:newHistory });
+                      setAssignChanged(false);
+                    }} disabled={saving} style={{ ...saveBtnS(true), width:'100%', marginTop:10, background:'var(--accent)' }}>
+                      {saving?'저장 중...':'매니저 저장'}
+                    </button>
+                  )}
+                </div>
               )}
               <div style={{ marginTop:'1.5rem', borderTop:'1px solid var(--border)', paddingTop:'1rem' }}>
                 {!showDeleteConfirm ? (
@@ -900,18 +930,18 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                       label="주 담당자 (Main)"
                       members={teamMembers||[]}
                       value={assignMain}
-                      onChange={id => { setAssignMain(id); setAssignChanged(id!==(project.assigned_main||null) || assignSub!==(project.assigned_sub||null)); }}
+                      onChange={id => { setAssignMain(id); setAssignChanged(id!==(project.assigned_main||null) || assignSub!==(project.assigned_sub||null) || assignManager!==(project.assigned_manager||null)); }}
                       exclude={assignSub}
                     />
                     <AssignPicker
                       label="보조 담당자 (Sub)"
                       members={teamMembers||[]}
                       value={assignSub}
-                      onChange={id => { setAssignSub(id); setAssignChanged(assignMain!==(project.assigned_main||null) || id!==(project.assigned_sub||null)); }}
+                      onChange={id => { setAssignSub(id); setAssignChanged(assignMain!==(project.assigned_main||null) || id!==(project.assigned_sub||null) || assignManager!==(project.assigned_manager||null)); }}
                       exclude={assignMain}
                     />
                   </div>
-                  {assignChanged && (
+                  {assignChanged && (assignMain!==(project.assigned_main||null) || assignSub!==(project.assigned_sub||null)) && (
                     <button onClick={() => {
                       const today = new Date().toISOString().split('T')[0];
                       const mName = (teamMembers||[]).find(m => m.id===assignMain)?.name;
@@ -919,7 +949,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                       const parts = [];
                       if (mName) parts.push(`주담당: ${mName}`);
                       if (sName) parts.push(`보조: ${sName}`);
-                      const noteStr = parts.length ? `담당 배정 — ${parts.join(', ')}` : '담당자 해제';
+                      const noteStr = parts.length ? `미팅 담당 배정 — ${parts.join(', ')}` : '미팅 담당자 해제';
                       const newHistory = [...(project.history||[]), { status:project.current_status, date:today, note:noteStr }];
                       onFieldSave(project, { assigned_main:assignMain||null, assigned_sub:assignSub||null, history:newHistory });
                       setAssignChanged(false);
@@ -1011,7 +1041,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
       }
     }
     if (memberFilter) {
-      list = list.filter(d => d.assigned_main===memberFilter || d.assigned_sub===memberFilter);
+      list = list.filter(d => d.assigned_manager===memberFilter || d.assigned_main===memberFilter || d.assigned_sub===memberFilter);
     }
     const now = new Date();
     list = list.map(r => ({ ...r, _stale: r.current_status==='applied' && r.created_at && daysBetween(r.created_at,now)>=7 }));
@@ -1081,6 +1111,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
               const urgency = r._urgency||getMeetingUrgency(r.meeting_at);
               const urgBg  = urgency==='today'?'#fdcb6e18':urgency==='tomorrow'?'#74b9ff12':r._stale?'#e1705508':'transparent';
               const urgBdr = urgency==='today'?'#fdcb6e44':urgency==='tomorrow'?'#74b9ff33':r._stale?'#e1705522':'var(--border)';
+              const mgrM  = teamMembers?.find(m => m.id===r.assigned_manager);
               const mainM = teamMembers?.find(m => m.id===r.assigned_main);
               const subM  = teamMembers?.find(m => m.id===r.assigned_sub);
               return (
@@ -1124,12 +1155,19 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                   </td>
                   {/* 담당 컬럼 */}
                   <td style={{ padding:'0.65rem 0.75rem', whiteSpace:'nowrap' }}>
-                    {(mainM||subM) ? (
+                    {(mgrM||mainM||subM) ? (
                       <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+                        {mgrM && (
+                          <span style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
+                            <MemberAvatar member={mgrM} size={16} />
+                            <span style={{ fontSize:'0.72rem', color:mgrM.color, fontWeight:600 }}>{mgrM.name}</span>
+                            <span style={{ fontSize:'0.6rem', color:'var(--text2)' }}>PM</span>
+                          </span>
+                        )}
                         {mainM && (
                           <span style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
-                            <MemberAvatar member={mainM} size={16} />
-                            <span style={{ fontSize:'0.72rem', color:mainM.color, fontWeight:600 }}>{mainM.name}</span>
+                            <MemberAvatar member={mainM} size={14} />
+                            <span style={{ fontSize:'0.7rem', color:mainM.color }}>{mainM.name}</span>
                             <span style={{ fontSize:'0.6rem', color:'var(--text2)' }}>주</span>
                           </span>
                         )}
@@ -1458,7 +1496,7 @@ function App() {
           }}>전체</button>
           {activeMembers.map(m => {
             const sel = memberFilter===m.id;
-            const cnt = data.filter(d => (d.assigned_main===m.id||d.assigned_sub===m.id) && ['interview','meeting_done'].includes(d.current_status)).length;
+            const cnt = data.filter(d => (d.assigned_manager===m.id||d.assigned_main===m.id||d.assigned_sub===m.id) && ['interview','meeting_done'].includes(d.current_status)).length;
             return (
               <button key={m.id} onClick={() => setMemberFilter(sel?'':m.id)} style={{
                 padding:'0.25rem 0.6rem 0.25rem 0.3rem', borderRadius:20, cursor:'pointer',
