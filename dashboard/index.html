@@ -68,13 +68,26 @@ const STATUS_META = {
   applied:      { label: '지원완료',     emoji: '📤', color: '#6c5ce7' },
   interview:    { label: '미팅 예정',    emoji: '📅', color: '#fdcb6e' },
   meeting_done: { label: '계약 논의 중', emoji: '🤝', color: '#74b9ff' },
-  won:          { label: '수주 성공',    emoji: '🎉', color: '#00b894' },
-  lost:         { label: '미선정',       emoji: '❌', color: '#e17055' },
+  won:          { label: '수주 성공',  emoji: '🎉', color: '#00b894' },
+  contracted:   { label: '계약 완료',  emoji: '📝', color: '#00b894' },
+  in_progress:  { label: '개발 중',    emoji: '⚙️',  color: '#a29bfe' },
+  delivered:    { label: '납품 완료',  emoji: '📦', color: '#74b9ff' },
+  settled:      { label: '정산 완료',  emoji: '✅', color: '#00cec9' },
+  lost:         { label: '미선정',     emoji: '❌', color: '#e17055' },
 };
-const STATUS_ORDER = ['generated','applied','interview','meeting_done','won','lost'];
+const STATUS_ORDER = ['generated','applied','interview','meeting_done','won','contracted','in_progress','delivered','settled','lost'];
+const POST_WON = ['contracted','in_progress','delivered','settled'];
 const TRANSITION_TARGETS = {
-  generated: ['applied'], applied: ['interview','lost'], interview: ['meeting_done','lost'],
-  meeting_done: ['interview','won','lost'], won: [], lost: ['applied','interview'],
+  generated:   ['applied'],
+  applied:     ['interview','lost'],
+  interview:   ['meeting_done','lost'],
+  meeting_done:['interview','won','lost'],
+  won:         ['contracted'],
+  contracted:  ['in_progress'],
+  in_progress: ['delivered'],
+  delivered:   ['settled'],
+  settled:     [],
+  lost:        ['applied','interview'],
 };
 const MEETING_TYPES = [
   { key: 'video',    label: '화상', emoji: '💻' },
@@ -214,19 +227,21 @@ function StatCard({ title, value, sub, color, delay }) {
 // ─── Funnel ───
 function Funnel({ data }) {
   const stages = [
-    { key:'generated',    label:'생성', color:'#636e72' },
     { key:'applied',      label:'지원', color:'#6c5ce7' },
     { key:'interview',    label:'미팅', color:'#fdcb6e' },
-    { key:'meeting_done', label:'완료', color:'#74b9ff' },
+    { key:'meeting_done', label:'논의', color:'#74b9ff' },
     { key:'won',          label:'수주', color:'#00b894' },
   ];
-  const ORDER = ['generated','applied','interview','meeting_done','won'];
+  const ORDER = ['applied','interview','meeting_done','won'];
   const counts = stages.map(s => {
     const idx = ORDER.indexOf(s.key);
     return { ...s, count: data.filter(d => {
-      const dIdx = ORDER.indexOf(d.current_status);
-      if (d.current_status === 'lost') {
-        const maxIdx = Math.max(...(d.history||[]).map(h => ORDER.indexOf(h.status)).filter(i => i >= 0), -1);
+      const st = d.current_status;
+      // post-won 단계도 수주 성공으로 카운트
+      const effectiveStatus = POST_WON.includes(st) ? 'won' : st;
+      const dIdx = ORDER.indexOf(effectiveStatus);
+      if (st === 'lost') {
+        const maxIdx = Math.max(...(d.history||[]).map(h => ORDER.indexOf(POST_WON.includes(h.status)?'won':h.status)).filter(i => i >= 0), -1);
         return maxIdx >= idx;
       }
       return dIdx >= idx;
@@ -649,6 +664,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
   const [infoChanged, setInfoChanged] = useState(false);
   const [dateChanged, setDateChanged] = useState(false);
   const [meetingChanged, setMeetingChanged] = useState(false);
+  const [editMeetingMemo, setEditMeetingMemo] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const parseBN = (v) => { const d=(v||'').replace(/[^0-9]/g,''); return d ? Number(d).toLocaleString() : ''; };
   const [budgetNum, setBudgetNum] = useState(() => parseBN(project?.budget));
@@ -864,10 +880,13 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                       {meetingHistory.map((h,i) => {
                         const mt = MEETING_TYPES.find(t => t.key===h.meeting_type);
                         return (
-                          <div key={i} style={{ display:'flex', alignItems:'center', gap:8, padding:'0.35rem 0.6rem', borderRadius:6, background:'var(--surface2)', fontSize:'0.8rem' }}>
-                            <span>{mt?mt.emoji:'📅'}</span>
-                            <span style={{ color:'var(--text2)' }}>{formatMeetingAt(h.meeting_at)}</span>
-                            {h.note && <span style={{ color:'var(--text2)', opacity:0.6, fontSize:'0.75rem' }}>— {h.note}</span>}
+                          <div key={i} style={{ padding:'0.45rem 0.6rem', borderRadius:6, background:'var(--surface2)', fontSize:'0.8rem' }}>
+                            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                              <span>{mt?mt.emoji:'📅'}</span>
+                              <span style={{ color:'var(--text2)' }}>{formatMeetingAt(h.meeting_at)}</span>
+                              {h.note && <span style={{ color:'var(--text2)', opacity:0.6, fontSize:'0.75rem' }}>— {h.note}</span>}
+                            </div>
+                            {h.meeting_memo && <div style={{ marginTop:4, fontSize:'0.78rem', color:'var(--text2)', lineHeight:1.5, paddingLeft:22, whiteSpace:'pre-wrap' }}>{h.meeting_memo}</div>}
                           </div>
                         );
                       })}
@@ -895,6 +914,12 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                       })}
                     </div>
                   </div>
+                  <div>
+                    <div style={labelS}>미팅 메모</div>
+                    <textarea value={editMeetingMemo} placeholder="논의 내용, 다음 액션 등..."
+                      onChange={e => { setEditMeetingMemo(e.target.value); setMeetingChanged(true); }}
+                      style={{ ...inputS, minHeight:72, resize:'vertical', fontFamily:'inherit', lineHeight:1.5 }} />
+                  </div>
                 </div>
                 {meetingChanged && (() => {
                   const iso = editMeeting ? new Date(editMeeting).toISOString() : null;
@@ -904,13 +929,14 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                     <button onClick={() => {
                       const today = new Date().toISOString().split('T')[0];
                       let newHistory = [...(project.history||[])];
-                      if (shouldArchive) newHistory.push({ status:'meeting_done', date:today, note:'미팅 완료 (아카이브)', meeting_at:currentMeeting.meeting_at, meeting_type:currentMeeting.meeting_type });
+                      if (shouldArchive) newHistory.push({ status:'meeting_done', date:today, note:'미팅 완료 (아카이브)', meeting_at:currentMeeting.meeting_at, meeting_type:currentMeeting.meeting_type, meeting_memo:editMeetingMemo||null });
                       if (willTransition) {
-                        newHistory.push({ status:'interview', date:today, note:'추가 미팅 예정', meeting_at:iso, meeting_type:editMeetingType||null });
+                        newHistory.push({ status:'interview', date:today, note:'추가 미팅 예정', meeting_at:iso, meeting_type:editMeetingType||null, meeting_memo:editMeetingMemo||null });
                         onFieldSave(project, { meeting_at:iso, meeting_type:editMeetingType||null, current_status:'interview', history:newHistory });
                       } else {
-                        onFieldSave(project, { meeting_at:iso, meeting_type:editMeetingType||null });
+                        onFieldSave(project, { meeting_at:iso, meeting_type:editMeetingType||null, history:[...(project.history||[]), { status:project.current_status, date:today, note:'미팅 등록', meeting_at:iso, meeting_type:editMeetingType||null, meeting_memo:editMeetingMemo||null }] });
                       }
+                      setEditMeetingMemo('');
                       setMeetingChanged(false);
                     }} disabled={saving} style={{ ...saveBtnS(true), width:'100%', marginTop:12 }}>
                       {saving?'저장 중...':willTransition?'📅 미팅 등록 + 미팅 예정 전환':'미팅 저장'}
@@ -1205,6 +1231,7 @@ function App({ session }) {
   const [teamMembers, setTeamMembers]     = useState([]);
   const [teamSetupNeeded, setTeamSetupNeeded] = useState(false);
   const [showTeamMgr, setShowTeamMgr]     = useState(false);
+  const [showQuickAdd, setShowQuickAdd]   = useState(false);
   const [memberFilter, setMemberFilter]   = useState('');
   const [filter, setFilter]               = useState('all');
   const [search, setSearch]               = useState('');
@@ -1228,6 +1255,27 @@ function App({ session }) {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
+  const checkMeetingNotifications = useCallback((rows) => {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const todayStr = new Date().toISOString().split('T')[0];
+    const key = `notified_${todayStr}`;
+    const notified = JSON.parse(localStorage.getItem(key)||'[]');
+    const now = new Date();
+    rows.forEach(p => {
+      if (!p.meeting_at) return;
+      const m = new Date(p.meeting_at);
+      const diffH = (m - now) / 3600000;
+      if (diffH >= 0 && diffH <= 24 && !notified.includes(p.slug)) {
+        new Notification('📅 미팅 알림', {
+          body: `${p.title||p.slug}\n${formatMeetingAt(p.meeting_at)}`,
+          icon: 'https://firstpip.github.io/portfolio-showcase/dashboard/icon.png',
+        });
+        notified.push(p.slug);
+      }
+    });
+    localStorage.setItem(key, JSON.stringify(notified));
+  }, []);
+
   const loadTeamMembers = useCallback(async () => {
     const { data:rows, error } = await supabase.from(TEAM_TABLE).select('*').order('created_at', { ascending:true });
     if (error) {
@@ -1244,6 +1292,7 @@ function App({ session }) {
     const { data:rows, error } = await supabase.from(TABLE).select('*').order('created_at', { ascending:false });
     if (error) { toast('데이터 로드 실패: '+error.message,'error'); setData([]); return; }
     setData(rows); setConnected(true);
+    checkMeetingNotifications(rows);
     const now = new Date();
     const today = now.toISOString().split('T')[0];
     const toMeetingDone = rows.filter(r => r.current_status==='interview' && r.meeting_at && new Date(r.meeting_at)<now);
@@ -1268,7 +1317,7 @@ function App({ session }) {
         return { ...d, current_status:'interview', history:[...(d.history||[]),{ status:'interview', date:today, note:'추가 미팅 예정 — 자동 전환' }], updated_at:today };
       }));
     }
-  }, [toast]);
+  }, [toast, checkMeetingNotifications]);
 
   useEffect(() => {
     loadData();
@@ -1370,6 +1419,16 @@ function App({ session }) {
     } catch(err) { toast('저장 실패: '+err.message,'error'); } finally { setSaving(false); }
   }, [toast]);
 
+  const handleQuickAdd = useCallback(async (fields) => {
+    setSaving(true);
+    try {
+      const { data:newRow, error } = await supabase.from(TABLE).insert([fields]).select().single();
+      if (error) throw error;
+      setData(prev => [newRow, ...prev]);
+      toast(`✅ ${fields.title} 등록 완료`, 'success');
+    } catch(err) { toast('등록 실패: '+err.message, 'error'); } finally { setSaving(false); }
+  }, [toast]);
+
   const handleSort = useCallback((key) => {
     if (sortKey===key) setSortOrder(prev => prev==='desc'?'asc':'desc');
     else { setSortKey(key); setSortOrder('desc'); }
@@ -1415,6 +1474,13 @@ function App({ session }) {
           teamMembers={teamMembers}
         />
       )}
+      {showQuickAdd && (
+        <QuickAddModal
+          onClose={() => setShowQuickAdd(false)}
+          onAdd={handleQuickAdd}
+          saving={saving}
+        />
+      )}
       {showTeamMgr && (
         <TeamMgrModal
           members={teamMembers}
@@ -1430,6 +1496,11 @@ function App({ session }) {
       <div className="fade-in" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1rem', flexWrap:'wrap', gap:'0.5rem' }}>
         <h1 style={{ fontSize:'1.25rem', fontWeight:700, letterSpacing:'-0.02em' }}>위시켓 현황 대시보드</h1>
         <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <button onClick={() => setShowQuickAdd(true)} style={{
+            padding:'0.3rem 0.7rem', borderRadius:6, border:'none',
+            background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.8rem', fontWeight:600,
+            display:'flex', alignItems:'center', gap:4,
+          }}>＋ 등록</button>
           <button onClick={() => setShowTeamMgr(true)} style={{
             padding:'0.3rem 0.7rem', borderRadius:6, border:'1px solid var(--border)',
             background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.75rem',
@@ -1437,7 +1508,6 @@ function App({ session }) {
           }}>
             👥 팀원{activeMembers.length>0?` ${activeMembers.length}명`:''}
           </button>
-          <button onClick={() => exportCSV(data)} style={{ padding:'0.3rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.7rem' }}>CSV</button>
           <span style={{ fontSize:'0.75rem', color:'var(--text2)' }}>{data.length}건</span>
           <div style={{ padding:'0.3rem 0.6rem', borderRadius:6, fontSize:'0.75rem', fontWeight:500, background:connected?'#00b89422':'#e1705522', color:connected?'#00b894':'#e17055', display:'flex', alignItems:'center', gap:5 }}>
             <span style={{ width:6, height:6, borderRadius:'50%', background:connected?'#00b894':'#e17055', animation:connected?'pulse 2s infinite':'none' }} />
@@ -1548,8 +1618,8 @@ function App({ session }) {
                   <StatCard title="총 프로젝트" value={data.length} sub={`생성 ${counts.generated||0} / 지원 ${appliedOrBeyond}`} delay={1} />
                   <StatCard title="수주율" value={`${winRate}%`} sub={`${wonCount} / ${appliedOrBeyond} (지원 기준)`} color="var(--green)" delay={1} />
                   <StatCard title="수주 금액" value={wonBudgetStr} sub={`${wonCount}건 합산`} color="var(--green)" delay={1} />
-                  <StatCard title="진행 중" value={(counts.applied||0)+(counts.interview||0)+(counts.meeting_done||0)}
-                    sub={`지원 ${counts.applied||0} + 미팅 ${(counts.interview||0)+(counts.meeting_done||0)}`} color="var(--accent2)" delay={1} />
+                  <StatCard title="수주 후 진행" value={POST_WON.reduce((s,k)=>s+(counts[k]||0),0)}
+                    sub={POST_WON.map(k=>counts[k]>0?`${STATUS_META[k].label} ${counts[k]}`:'').filter(Boolean).join(' · ')||'없음'} color="var(--accent2)" delay={1} />
                   {avgWonDays!==null && <StatCard title="평균 수주 소요" value={`${avgWonDays}일`} sub={`${wonCount}건 평균`} color="var(--blue)" delay={1} />}
                 </div>
               );
@@ -1563,6 +1633,124 @@ function App({ session }) {
 
       <div style={{ textAlign:'center', padding:'1rem 0', color:'var(--text2)', fontSize:'0.7rem' }}>
         Wishket Portfolio Tracker — Firstpip
+      </div>
+    </div>
+  );
+}
+
+// ─── QuickAddModal ───
+function QuickAddModal({ onClose, onAdd, saving }) {
+  const [url, setUrl]     = useState('');
+  const [title, setTitle] = useState('');
+  const [budget, setBudget] = useState('');
+  const [slug, setSlug]   = useState('');
+  const [slugEdited, setSlugEdited] = useState(false);
+
+  useEffect(() => {
+    const handler = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const extractSlug = (inputUrl) => {
+    const match = inputUrl.match(/\/project\/(\d+)/);
+    if (match && !slugEdited) {
+      const d = new Date();
+      const pad = n => String(n).padStart(2,'0');
+      const prefix = `${String(d.getFullYear()).slice(2)}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
+      setSlug(`${prefix}_${match[1]}`);
+    }
+  };
+
+  const handleUrlChange = (val) => {
+    setUrl(val);
+    extractSlug(val);
+  };
+
+  const handleBudgetChange = (val) => {
+    const digits = val.replace(/[^0-9]/g,'');
+    setBudget(digits ? Number(digits).toLocaleString() : '');
+  };
+
+  const handleSubmit = async () => {
+    if (!slug.trim() || !title.trim()) return;
+    const today = new Date().toISOString().split('T')[0];
+    const budgetVal = budget ? budget.replace(/,/g,'')+'만원' : null;
+    await onAdd({
+      slug: slug.trim(),
+      title: title.trim(),
+      budget: budgetVal,
+      wishket_url: url||null,
+      current_status: 'applied',
+      created_at: today,
+      updated_at: today,
+      history: [{ status:'applied', date:today, note:'대시보드에서 등록' }],
+    });
+    onClose();
+  };
+
+  const inputS = { width:'100%', padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.85rem', outline:'none', colorScheme:'dark' };
+  const canSubmit = slug.trim() && title.trim() && !saving;
+
+  return (
+    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:440,
+        border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
+        boxShadow:'0 20px 60px rgba(0,0,0,0.5)',
+      }}>
+        <div style={{ padding:'1.25rem 1.5rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div style={{ fontWeight:700, fontSize:'1rem' }}>프로젝트 빠른 등록</div>
+          <button onClick={onClose} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem' }}>✕</button>
+        </div>
+        <div style={{ padding:'1.25rem 1.5rem', display:'flex', flexDirection:'column', gap:12 }}>
+          <div>
+            <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>위시켓 공고 URL</div>
+            <input type="url" value={url} onChange={e => handleUrlChange(e.target.value)}
+              placeholder="https://www.wishket.com/project/123456/"
+              style={inputS}
+              onFocus={e => e.target.style.borderColor='var(--accent)'}
+              onBlur={e  => e.target.style.borderColor='var(--border)'} />
+            {slug && <div style={{ fontSize:'0.72rem', color:'var(--accent2)', marginTop:4 }}>슬러그 자동 생성: <code>{slug}</code></div>}
+          </div>
+          <div>
+            <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>슬러그 <span style={{ color:'#e17055' }}>*</span></div>
+            <input type="text" value={slug} onChange={e => { setSlug(e.target.value); setSlugEdited(true); }}
+              placeholder="260409_project-name"
+              style={inputS}
+              onFocus={e => e.target.style.borderColor='var(--accent)'}
+              onBlur={e  => e.target.style.borderColor='var(--border)'} />
+          </div>
+          <div>
+            <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>프로젝트명 <span style={{ color:'#e17055' }}>*</span></div>
+            <input type="text" value={title} onChange={e => setTitle(e.target.value)}
+              placeholder="AI 챗봇 개발"
+              onKeyDown={e => e.key==='Enter' && canSubmit && handleSubmit()}
+              style={inputS}
+              onFocus={e => e.target.style.borderColor='var(--accent)'}
+              onBlur={e  => e.target.style.borderColor='var(--border)'} />
+          </div>
+          <div>
+            <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>예산 (선택)</div>
+            <div style={{ display:'flex', alignItems:'center' }}>
+              <input type="text" value={budget} onChange={e => handleBudgetChange(e.target.value)}
+                placeholder="2,000"
+                style={{ ...inputS, borderTopRightRadius:0, borderBottomRightRadius:0, borderRight:'none' }}
+                onFocus={e => e.target.style.borderColor='var(--accent)'}
+                onBlur={e  => e.target.style.borderColor='var(--border)'} />
+              <span style={{ padding:'0.55rem 0.7rem', borderRadius:'0 8px 8px 0', fontSize:'0.85rem', background:'var(--border)', color:'var(--text2)', border:'1px solid var(--border)', whiteSpace:'nowrap' }}>만원</span>
+            </div>
+          </div>
+          <button onClick={handleSubmit} disabled={!canSubmit} style={{
+            marginTop:4, padding:'0.65rem', borderRadius:10, border:'none',
+            cursor:canSubmit?'pointer':'not-allowed',
+            background:canSubmit?'var(--accent)':'var(--surface2)',
+            color:canSubmit?'#fff':'var(--text2)',
+            fontSize:'0.9rem', fontWeight:700, opacity:saving?0.7:1,
+          }}>
+            {saving?'등록 중...':'등록 (지원완료 상태로 시작)'}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1637,6 +1825,10 @@ function Root() {
 
   if (session === undefined) return <Loading />;
   if (!session) return <LoginScreen />;
+  // 로그인 후 알림 권한 요청 (비차단)
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
   return <App session={session} />;
 }
 
