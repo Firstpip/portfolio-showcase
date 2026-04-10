@@ -40,14 +40,15 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "GITHUB_TOKEN not set" }), { status: 500 });
   }
 
-  const { slug } = await req.json();
+  const { slug, all } = await req.json();
   if (!slug) {
     return new Response(JSON.stringify({ error: "slug is required" }), { status: 400 });
   }
 
   const results: Record<string, boolean> = {};
+  const targets = all ? [1, 2, 3] : [2, 3];
 
-  for (const n of [2, 3]) {
+  for (const n of targets) {
     const path = `${slug}/portfolio-${n}/index.html`;
     results[`portfolio-${n}`] = await deleteFile(token, path);
   }
