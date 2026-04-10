@@ -77,19 +77,32 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "GITHUB_TOKEN not set" }), { status: 500 });
   }
 
-  const { slug, slugs, all } = await req.json();
+  let body: { slug?: string; slugs?: string[]; all?: boolean };
+  try {
+    body = await req.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400 });
+  }
+  const { slug, slugs, all } = body;
 
   if (all) {
     // 프로젝트 폴더 전체 삭제 (단일)
     if (!slug) return new Response(JSON.stringify({ error: "slug is required" }), { status: 400 });
-    const ok = await deleteByTreeFilter(
-      token,
-      (path) => path.startsWith(`${slug}/`),
-      `chore: delete project ${slug}`,
-    );
-    return new Response(JSON.stringify({ slug, deleted: ok }), {
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-    });
+    try {
+      const ok = await deleteByTreeFilter(
+        token,
+        (path) => path.startsWith(`${slug}/`),
+        `chore: delete project ${slug}`,
+      );
+      return new Response(JSON.stringify({ slug, deleted: ok }), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      });
+    } catch (err) {
+      return new Response(JSON.stringify({ error: String(err) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      });
+    }
   }
 
   // P2/P3 삭제 (단일 또는 일괄) — 단일 커밋으로 처리
@@ -98,13 +111,20 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "slug or slugs is required" }), { status: 400 });
   }
 
-  const ok = await deleteByTreeFilter(
-    token,
-    (path) => targetSlugs.some(s => path.startsWith(`${s}/portfolio-2/`) || path.startsWith(`${s}/portfolio-3/`)),
-    `chore: remove P2/P3 for ${targetSlugs.length > 1 ? `${targetSlugs.length}건 일괄 미선정` : targetSlugs[0]}`,
-  );
+  try {
+    const ok = await deleteByTreeFilter(
+      token,
+      (path) => targetSlugs.some(s => path.startsWith(`${s}/portfolio-2/`) || path.startsWith(`${s}/portfolio-3/`)),
+      `chore: remove P2/P3 for ${targetSlugs.length > 1 ? `${targetSlugs.length}건 일괄 미선정` : targetSlugs[0]}`,
+    );
 
-  return new Response(JSON.stringify({ slugs: targetSlugs, deleted: ok }), {
-    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-  });
+    return new Response(JSON.stringify({ slugs: targetSlugs, deleted: ok }), {
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: String(err) }), {
+      status: 500,
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+    });
+  }
 });
