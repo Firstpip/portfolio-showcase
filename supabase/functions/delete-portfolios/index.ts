@@ -53,6 +53,11 @@ Deno.serve(async (req) => {
     results[`portfolio-${n}`] = await deleteFile(token, path);
   }
 
+  if (all) {
+    const demoPath = `${slug}/demo/index.html`;
+    results["demo"] = await deleteFile(token, demoPath);
+  }
+
   return new Response(JSON.stringify({ slug, results }), {
     headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
   });
