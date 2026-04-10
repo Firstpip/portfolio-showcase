@@ -900,11 +900,31 @@ function App() {
       const project = data.find(d => d.slug === slug);
       if (!project || project.current_status === 'lost' || project.current_status === 'won') continue;
       const newHistory = [...(project.history || []), { status: 'lost', date: today, note: '일괄 미선정 처리' }];
-      const { error } = await supabase.from(TABLE).update({ current_status: 'lost', history: newHistory, updated_at: today }).eq('slug', slug);
+      const batchPayload = { current_status: 'lost', history: newHistory, updated_at: today };
+      if ((project.portfolio_count || 0) > 1) batchPayload.portfolio_count = 1;
+      const { error } = await supabase.from(TABLE).update(batchPayload).eq('slug', slug);
       if (!error) success++;
     }
-    setData(prev => prev.map(d => slugs.includes(d.slug) && d.current_status !== 'won' ? { ...d, current_status: 'lost', history: [...(d.history || []), { status: 'lost', date: today, note: '일괄 미선정 처리' }], updated_at: today } : d));
+    setData(prev => prev.map(d => {
+      if (!slugs.includes(d.slug) || d.current_status === 'won') return d;
+      const newHistory = [...(d.history || []), { status: 'lost', date: today, note: '일괄 미선정 처리' }];
+      const updated = { ...d, current_status: 'lost', history: newHistory, updated_at: today };
+      if ((d.portfolio_count || 0) > 1) updated.portfolio_count = 1;
+      return updated;
+    }));
     toast(`${success}건 미선정 처리 완료`, 'success');
+    const toDelete = slugs.filter(slug => {
+      const p = data.find(d => d.slug === slug);
+      return p && p.current_status !== 'won' && (p.portfolio_count || 0) > 1;
+    });
+    if (toDelete.length > 0) {
+      Promise.all(toDelete.map(slug => supabase.functions.invoke('delete-portfolios', { body: { slug } })))
+        .then(results => {
+          const failed = results.filter(r => r.error).length;
+          if (failed > 0) toast(`P2/P3 파일 삭제 실패: ${failed}건`, 'error');
+          else toast(`P2/P3 파일 삭제 완료 (${toDelete.length}건)`, 'success');
+        });
+    }
   }, [data, toast]);
 
   const handleDelete = useCallback(async (project) => {
@@ -928,12 +948,21 @@ function App() {
         historyEntry.meeting_type = project.meeting_type || null;
       }
       const newHistory = [...(project.history || []), historyEntry];
-      const { error } = await supabase.from(TABLE).update({ current_status: newStatus, history: newHistory, updated_at: today }).eq('slug', project.slug);
+      const updatePayload = { current_status: newStatus, history: newHistory, updated_at: today };
+      if (newStatus === 'lost' && (project.portfolio_count || 0) > 1) updatePayload.portfolio_count = 1;
+      const { error } = await supabase.from(TABLE).update(updatePayload).eq('slug', project.slug);
       if (error) throw error;
-      setData(prev => prev.map(d => d.slug === project.slug ? { ...d, current_status: newStatus, history: newHistory, updated_at: today } : d));
+      setData(prev => prev.map(d => d.slug === project.slug ? { ...d, ...updatePayload } : d));
       setSelectedProject(null);
       const sm = STATUS_META[newStatus];
       toast(`${sm.emoji} ${project.slug} → ${sm.label}`, 'success');
+      if (newStatus === 'lost' && (project.portfolio_count || 0) > 1) {
+        supabase.functions.invoke('delete-portfolios', { body: { slug: project.slug } })
+          .then(({ error: fnErr }) => {
+            if (fnErr) toast('P2/P3 파일 삭제 실패: ' + fnErr.message, 'error');
+            else toast(`P2/P3 파일 삭제 완료 (${project.slug})`, 'success');
+          });
+      }
     } catch (err) { toast('저장 실패: ' + err.message, 'error'); } finally { setSaving(false); }
   }, [toast]);
 
