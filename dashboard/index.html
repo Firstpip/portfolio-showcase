@@ -87,15 +87,20 @@ const MEETING_TYPES = [
 ];
 
 // ─── Utils ───
+const pad2 = n => String(n).padStart(2, '0');
+function todayStr() { return new Date().toISOString().split('T')[0]; }
+function parseDateSafe(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return isNaN(d) ? null : d;
+}
 function getMeetingStatus(meetingAt) {
-  if (!meetingAt) return null;
-  const d = new Date(meetingAt);
-  return isNaN(d) ? null : d > new Date() ? 'upcoming' : 'done';
+  const d = parseDateSafe(meetingAt);
+  return d ? (d > new Date() ? 'upcoming' : 'done') : null;
 }
 function getMeetingUrgency(meetingAt) {
-  if (!meetingAt) return null;
-  const m = new Date(meetingAt);
-  if (isNaN(m)) return null;
+  const m = parseDateSafe(meetingAt);
+  if (!m) return null;
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
@@ -105,22 +110,22 @@ function getMeetingUrgency(meetingAt) {
   return null;
 }
 function toLocalInput(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d)) return '';
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const d = parseDateSafe(iso);
+  if (!d) return '';
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 function formatMeetingAt(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (isNaN(d)) return null;
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const d = parseDateSafe(iso);
+  if (!d) return null;
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 function parseBudgetNum(v) {
   const d = (v || '').replace(/[^0-9]/g, '');
   return d ? Number(d) : 0;
+}
+function formatBudgetInput(v) {
+  const digits = (v || '').replace(/[^0-9]/g, '');
+  return digits ? Number(digits).toLocaleString() : '';
 }
 function daysBetween(d1, d2) {
   return Math.round((new Date(d2) - new Date(d1)) / 86400000);
@@ -139,7 +144,7 @@ function exportCSV(data) {
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = `wishket-dashboard-${new Date().toISOString().split('T')[0]}.csv`;
+  a.href = url; a.download = `wishket-dashboard-${todayStr()}.csv`;
   a.click(); URL.revokeObjectURL(url);
 }
 
@@ -404,11 +409,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
   const saveBtnStyle = (active) => ({ padding: '0.5rem 0.85rem', borderRadius: 8, border: 'none', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600, background: active ? 'var(--blue)' : 'var(--surface2)', color: active ? '#fff' : 'var(--text2)', opacity: saving ? 0.7 : 1 });
   const checkInfoChanged = (t, b, tl) => setInfoChanged(t !== (project.title || '') || b !== (project.budget || '') || tl !== (project.timeline || ''));
 
-  const parseBudgetNumber = (v) => { const d = (v || '').replace(/[^0-9]/g, ''); return d ? Number(d).toLocaleString() : ''; };
-  const [budgetNum, setBudgetNum] = useState(parseBudgetNumber(project?.budget));
+  const [budgetNum, setBudgetNum] = useState(formatBudgetInput(project?.budget));
   const handleBudgetChange = (val) => {
-    const digits = val.replace(/[^0-9]/g, '');
-    const formatted = digits ? Number(digits).toLocaleString() : '';
+    const formatted = formatBudgetInput(val);
     setBudgetNum(formatted);
     const full = formatted ? formatted + '만원' : '';
     setEditBudget(full);
@@ -570,7 +573,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving }
                 const shouldArchive = willTransition && currentMeeting;
                 return (
                   <button onClick={() => {
-                    const today = new Date().toISOString().split('T')[0];
+                    const today = todayStr();
                     let newHistory = [...(project.history || [])];
                     if (shouldArchive) newHistory.push({ status: 'meeting_done', date: today, note: '미팅 완료 (아카이브)', meeting_at: currentMeeting.meeting_at, meeting_type: currentMeeting.meeting_type });
                     if (willTransition) {
@@ -827,37 +830,34 @@ function App() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
+  const autoTransition = useCallback((rows) => {
+    const now = new Date();
+    const today = todayStr();
+    const transitions = [
+      { from: 'interview', to: 'meeting_done', filter: r => new Date(r.meeting_at) < now, note: '미팅 일시 경과 — 자동 전환', withMeeting: true },
+      { from: 'meeting_done', to: 'interview', filter: r => new Date(r.meeting_at) > now, note: '추가 미팅 예정 — 자동 전환', withMeeting: false },
+    ];
+    for (const t of transitions) {
+      const targets = rows.filter(r => r.current_status === t.from && r.meeting_at && t.filter(r));
+      if (targets.length === 0) continue;
+      const slugSet = new Set(targets.map(r => r.slug));
+      for (const r of targets) {
+        const entry = { status: t.to, date: today, note: t.note, ...(t.withMeeting ? { meeting_at: r.meeting_at, meeting_type: r.meeting_type || null } : {}) };
+        supabase.from(TABLE).update({ current_status: t.to, history: [...(r.history || []), entry], updated_at: today }).eq('slug', r.slug).then(() => {});
+      }
+      setData(prev => prev.map(d => {
+        if (!slugSet.has(d.slug)) return d;
+        const entry = { status: t.to, date: today, note: t.note, ...(t.withMeeting ? { meeting_at: d.meeting_at, meeting_type: d.meeting_type || null } : {}) };
+        return { ...d, current_status: t.to, history: [...(d.history || []), entry], updated_at: today };
+      }));
+    }
+  }, []);
+
   const loadData = useCallback(async () => {
     const { data: rows, error } = await supabase.from(TABLE).select('*').order('created_at', { ascending: false });
     if (error) { toast('데이터 로드 실패: ' + error.message, 'error'); setData([]); } else {
       setData(rows); setConnected(true);
-      const now = new Date();
-      // 자동 전환: interview + meeting_at 과거 → meeting_done
-      const toMeetingDone = rows.filter(r => r.current_status === 'interview' && r.meeting_at && new Date(r.meeting_at) < now);
-      if (toMeetingDone.length > 0) {
-        const today = now.toISOString().split('T')[0];
-        for (const r of toMeetingDone) {
-          const entry = { status: 'meeting_done', date: today, note: '미팅 일시 경과 — 자동 전환', meeting_at: r.meeting_at, meeting_type: r.meeting_type || null };
-          supabase.from(TABLE).update({ current_status: 'meeting_done', history: [...(r.history || []), entry], updated_at: today }).eq('slug', r.slug).then(() => {});
-        }
-        setData(prev => prev.map(d => {
-          if (!toMeetingDone.find(t => t.slug === d.slug)) return d;
-          const entry = { status: 'meeting_done', date: today, note: '미팅 일시 경과 — 자동 전환', meeting_at: d.meeting_at, meeting_type: d.meeting_type || null };
-          return { ...d, current_status: 'meeting_done', history: [...(d.history || []), entry], updated_at: today };
-        }));
-      }
-      // 자동 전환: meeting_done + meeting_at 미래 → interview
-      const toInterview = rows.filter(r => r.current_status === 'meeting_done' && r.meeting_at && new Date(r.meeting_at) > now);
-      if (toInterview.length > 0) {
-        const today = now.toISOString().split('T')[0];
-        for (const r of toInterview) {
-          supabase.from(TABLE).update({ current_status: 'interview', history: [...(r.history || []), { status: 'interview', date: today, note: '추가 미팅 예정 — 자동 전환' }], updated_at: today }).eq('slug', r.slug).then(() => {});
-        }
-        setData(prev => prev.map(d => {
-          if (!toInterview.find(t => t.slug === d.slug)) return d;
-          return { ...d, current_status: 'interview', history: [...(d.history || []), { status: 'interview', date: today, note: '추가 미팅 예정 — 자동 전환' }], updated_at: today };
-        }));
-      }
+      autoTransition(rows);
     }
   }, [toast]);
 
@@ -876,7 +876,7 @@ function App() {
   const handleFieldSave = useCallback(async (project, fields) => {
     setSaving(true);
     try {
-      const { error } = await supabase.from(TABLE).update({ ...fields, updated_at: new Date().toISOString().split('T')[0] }).eq('slug', project.slug);
+      const { error } = await supabase.from(TABLE).update({ ...fields, updated_at: todayStr() }).eq('slug', project.slug);
       if (error) throw error;
       setData(prev => prev.map(d => d.slug === project.slug ? { ...d, ...fields } : d));
       setSelectedProject(prev => prev ? { ...prev, ...fields } : prev);
@@ -886,7 +886,7 @@ function App() {
 
   // [4] 인라인 메모 저장
   const handleMemoSave = useCallback(async (project, memo) => {
-    const { error } = await supabase.from(TABLE).update({ memo, updated_at: new Date().toISOString().split('T')[0] }).eq('slug', project.slug);
+    const { error } = await supabase.from(TABLE).update({ memo, updated_at: todayStr() }).eq('slug', project.slug);
     if (error) { toast('메모 저장 실패', 'error'); return; }
     setData(prev => prev.map(d => d.slug === project.slug ? { ...d, memo } : d));
     toast('메모 저장', 'success');
@@ -894,7 +894,7 @@ function App() {
 
   const handleBatchLost = useCallback(async (slugs) => {
     if (!confirm(`${slugs.length}건을 미선정 처리하시겠습니까?`)) return;
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayStr();
     let success = 0;
     for (const slug of slugs) {
       const project = data.find(d => d.slug === slug);
@@ -945,7 +945,7 @@ function App() {
   const handleSave = useCallback(async (project, newStatus, note) => {
     setSaving(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = todayStr();
       const historyEntry = { status: newStatus, date: today, note: note || '' };
       if (newStatus === 'meeting_done' && project.meeting_at) {
         historyEntry.meeting_at = project.meeting_at;
@@ -990,20 +990,27 @@ function App() {
 
   if (!data) return <Loading />;
 
-  const counts = { total: data.length };
-  STATUS_ORDER.forEach(s => counts[s] = data.filter(d => d.current_status === s).length);
-  const appliedOrBeyond = data.filter(d => d.current_status !== 'generated').length;
-  const wonCount = counts.won || 0;
-  const winRate = appliedOrBeyond > 0 ? ((wonCount / appliedOrBeyond) * 100).toFixed(1) : '0.0';
+  const { counts, appliedOrBeyond, wonCount, winRate } = useMemo(() => {
+    const c = { total: data.length };
+    STATUS_ORDER.forEach(s => c[s] = data.filter(d => d.current_status === s).length);
+    const ab = data.filter(d => d.current_status !== 'generated').length;
+    const wc = c.won || 0;
+    return { counts: c, appliedOrBeyond: ab, wonCount: wc, winRate: ab > 0 ? ((wc / ab) * 100).toFixed(1) : '0.0' };
+  }, [data]);
 
   // [3] 이번 주 미팅 계산
-  const now = new Date();
-  const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay());
-  const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 7);
-  const thisWeekMeetings = data.filter(d => d.meeting_at && new Date(d.meeting_at) >= weekStart && new Date(d.meeting_at) < weekEnd);
+  const thisWeekMeetings = useMemo(() => {
+    const now = new Date();
+    const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay());
+    const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 7);
+    return data.filter(d => d.meeting_at && new Date(d.meeting_at) >= weekStart && new Date(d.meeting_at) < weekEnd);
+  }, [data]);
 
   // [9] 장기 미응답 건수
-  const staleCount = data.filter(d => d.current_status === 'applied' && d.created_at && daysBetween(d.created_at, now) >= 7).length;
+  const staleCount = useMemo(() => {
+    const now = new Date();
+    return data.filter(d => d.current_status === 'applied' && d.created_at && daysBetween(d.created_at, now) >= 7).length;
+  }, [data]);
 
   return (
     <div>
