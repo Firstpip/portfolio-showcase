@@ -1,0 +1,67 @@
+name: 미선정 프로젝트 자동 삭제
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 매일 새벽 2시 (UTC) = 오전 11시 KST
+  workflow_dispatch:        # 수동 실행 가능
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 한 달 지난 미선정 프로젝트 조회
+        id: query
+        run: |
+          CUTOFF=$(date -u -d '30 days ago' '+%Y-%m-%d')
+          echo "기준 날짜: $CUTOFF"
+
+          PROJECTS=$(curl -s \
+            "$SUPABASE_URL/rest/v1/wishket_projects?current_status=eq.lost&created_at=lt.$CUTOFF&select=slug,title" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+
+          COUNT=$(echo "$PROJECTS" | jq length)
+          echo "삭제 대상: $COUNT 건"
+          echo "projects=$PROJECTS" >> $GITHUB_OUTPUT
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+      - name: GitHub 파일 및 DB 삭제
+        if: steps.query.outputs.count != '0'
+        run: |
+          PROJECTS='${{ steps.query.outputs.projects }}'
+          SLUGS=$(echo "$PROJECTS" | jq -r '.[].slug')
+
+          echo "$PROJECTS" | jq -r '.[] | "- \(.slug)  [\(.title)]"'
+
+          for SLUG in $SLUGS; do
+            echo ""
+            echo "▶ 처리 중: $SLUG"
+
+            # 1. GitHub 파일 전체 삭제 (portfolio-1/2/3 포함 프로젝트 폴더 전체)
+            GH_RESULT=$(curl -s -X POST \
+              "$SUPABASE_URL/functions/v1/delete-portfolios" \
+              -H "apikey: $SUPABASE_ANON_KEY" \
+              -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"slug\": \"$SLUG\", \"all\": true}")
+            echo "  GitHub: $GH_RESULT"
+
+            # 2. Supabase DB에서 삭제
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+              "$SUPABASE_URL/rest/v1/wishket_projects?slug=eq.$SLUG" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY")
+            echo "  DB 삭제: HTTP $HTTP_STATUS"
+          done
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      - name: 삭제 대상 없음
+        if: steps.query.outputs.count == '0'
+        run: echo "한 달 이상 된 미선정 프로젝트가 없습니다."
