@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>모빌리티 플랫폼 확장 운영 시스템</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif; background: #F7F9FC; }
+  #root { display: flex; width: 100%; height: 100vh; overflow: hidden; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)} }
+  @keyframes slideUp { from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)} }
+  @keyframes chatAppear { from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)} }
+  @keyframes typing { 0%,80%,100%{opacity:0.3}40%{opacity:1} }
+</style>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;
+
+// ── Design tokens ──
+const C = {
+  primary:'#06B6D4', primaryLight:'#ECFEFF', primaryDark:'#0891B2',
+  secondary:'#0F172A', accent:'#67E8F9',
+  success:'#10B981', successLight:'#ECFDF5',
+  warning:'#F59E0B', warningLight:'#FFFBEB',
+  danger:'#EF4444', dangerLight:'#FEF2F2',
+  purple:'#8B5CF6', orange:'#F97316',
+  bg:'#F7F9FC', surface:'#FFFFFF', border:'#E2ECF0',
+  text:'#0F172A', text2:'#64748B', text3:'#94A3B8',
+  sidebarBg:'#FFFFFF',
+};
+
+// ── Data ──
+const OTA_CHANNELS = [
+  { id:'ota-1', name:'Klook', icon:'🎫', status:'connected', bookings_today:14, revenue_today:1240000, sync_at:'09:32', logo_color:'#FF5533' },
+  { id:'ota-2', name:'KKday', icon:'🗺️', status:'connected', bookings_today:8, revenue_today:680000, sync_at:'09:28', logo_color:'#FF8C00' },
+  { id:'ota-3', name:'GetYourGuide', icon:'🌍', status:'pending', bookings_today:0, revenue_today:0, sync_at:'-', logo_color:'#FF6900' },
+  { id:'ota-4', name:'Viator', icon:'✈️', status:'pending', bookings_today:0, revenue_today:0, sync_at:'-', logo_color:'#00AF87' },
+];
+
+const OTA_BOOKINGS = [
+  { id:'OTA-K001', channel:'Klook', customer:'Maria Chen', from:'인천국제공항 T2', to:'Myeongdong Hotel', vehicle:'대형 콜밴', date:'2026-04-10 14:30', lang:'zh', price:120000, status:'confirmed' },
+  { id:'OTA-K002', channel:'Klook', customer:'Tanaka Hiroshi', from:'인천국제공항 T1', to:'Hongdae Guesthouse', vehicle:'소형 콜밴', date:'2026-04-10 16:00', lang:'ja', price:82000, status:'dispatched' },
+  { id:'OTA-K003', channel:'KKday', customer:'Nguyen Van An', from:'김포국제공항', to:'Insadong Inn', vehicle:'리무진 밴', date:'2026-04-10 17:20', lang:'vi', price:95000, status:'confirmed' },
+  { id:'OTA-K004', channel:'Klook', customer:'李明', from:'인천국제공항 T1', to:'강남 N Hotel', vehicle:'대형 콜밴', date:'2026-04-11 09:00', lang:'zh', price:110000, status:'pending' },
+  { id:'OTA-K005', channel:'KKday', customer:'Park Ji-yeon', from:'인천국제공항 T2', to:'Hongik Univ. Area', vehicle:'소형 콜밴', date:'2026-04-11 10:15', lang:'ko', price:75000, status:'pending' },
+];
+
+const BID_REQUESTS = [
+  { id:'BR-041', route:'인천 T1 → 강남 호텔 (4인)', vehicle:'대형 콜밴', time:'2026-04-10 15:00', budget_max:95000, bids:[{driver:'이창호',price:88000,rating:4.9},{driver:'정우성',price:85000,rating:4.8},{driver:'최한결',price:92000,rating:4.7}], status:'open', ends_in:'08:24' },
+  { id:'BR-040', route:'김포공항 → 마포구 (2인)', vehicle:'소형 콜밴', time:'2026-04-10 16:30', budget_max:70000, bids:[{driver:'박태양',price:65000,rating:4.5},{driver:'김도현',price:62000,rating:4.6}], status:'awarded', winner:'김도현' },
+  { id:'BR-039', route:'인천 T2 → 송파구 (6인)', vehicle:'미니버스', time:'2026-04-10 18:00', budget_max:140000, bids:[{driver:'윤서준',price:132000,rating:4.7}], status:'open', ends_in:'14:38' },
+];
+
+const ANALYTICS_DATA = [
+  { date:'4/4', bookings:58, ota:12, direct:46 }, { date:'4/5', bookings:63, ota:18, direct:45 },
+  { date:'4/6', bookings:71, ota:21, direct:50 }, { date:'4/7', bookings:82, ota:28, direct:54 },
+  { date:'4/8', bookings:76, ota:24, direct:52 }, { date:'4/9', bookings:88, ota:31, direct:57 },
+  { date:'4/10', bookings:94, ota:36, direct:58 },
+];
+
+const LANGS = [
+  { code:'ko', label:'한국어', flag:'🇰🇷', coverage:100, keys:312 },
+  { code:'en', label:'English', flag:'🇺🇸', coverage:98, keys:306 },
+  { code:'zh', label:'中文', flag:'🇨🇳', coverage:94, keys:293 },
+  { code:'ja', label:'日本語', flag:'🇯🇵', coverage:91, keys:284 },
+  { code:'vi', label:'Tiếng Việt', flag:'🇻🇳', coverage:87, keys:271 },
+];
+
+const CHAT_INIT = [
+  { role:'bot', msg:'안녕하세요! 에어포트모빌 AI 상담봇입니다. 공항 픽업, 드롭, 그룹 이동에 대해 도와드릴게요. 어떤 서비스가 필요하신가요?', time:'09:30' },
+];
+
+const BOT_REPLIES = {
+  '예약': '출발지와 목적지, 탑승 인원을 알려주시면 요금과 가능한 차량을 안내해 드립니다!',
+  '요금': '인천공항 → 강남 기준 소형 콜밴 약 6~7만원, 대형 콜밴 약 8~9만원입니다. 정확한 요금은 출발지·목적지·인원을 입력해 주세요.',
+  '인천': '인천국제공항 T1, T2 모두 운행 가능합니다. 도착 터미널과 항공편 번호를 알려주시면 실시간 도착 정보를 반영해 드릴게요!',
+  '김포': '김포국제공항 픽업도 운영합니다. 출발 시간과 목적지를 알려주시면 바로 예약 도와드릴게요.',
+  'default': '죄송합니다, 해당 내용을 확인 중입니다. 더 구체적인 내용을 입력해 주시거나, 아래 빠른 선택 버튼을 눌러주세요!',
+};
+
+const fmtNum = n => n?.toLocaleString?.() ?? n;
+const statusColor = s => ({connected:C.success,pending:C.warning,open:C.primary,awarded:C.success,confirmed:'#2563EB',dispatched:C.success,cancelled:C.danger}[s]||C.text2);
+const statusLabel = s => ({connected:'연결됨',pending:'연동 준비중',open:'입찰 중',awarded:'낙찰 완료',confirmed:'예약확정',dispatched:'배차완료',cancelled:'취소'}[s]||s);
+
+// ── UI components ──
+function Badge({ label, color }) {
+  return <span style={{ display:'inline-flex', padding:'3px 10px', borderRadius:20, background:`${color}18`, color, fontSize:11, fontWeight:600 }}>{label}</span>;
+}
+
+function Modal({ title, onClose, children, width=560 }) {
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(15,23,42,0.55)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }} onClick={onClose}>
+      <div style={{ background:C.surface, borderRadius:16, width, maxWidth:'100%', maxHeight:'90vh', overflowY:'auto', boxShadow:'0 24px 80px rgba(15,23,42,0.3)', animation:'slideUp 200ms ease' }} onClick={e=>e.stopPropagation()}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px 16px', borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ fontSize:16, fontWeight:700, color:C.text }}>{title}</span>
+          <button onClick={onClose} style={{ width:32, height:32, border:'none', borderRadius:8, background:C.bg, cursor:'pointer', fontSize:16, color:C.text2, display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
+        </div>
+        <div style={{ padding:'20px 24px' }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Toast({ msg, onClose }) {
+  useEffect(()=>{const t=setTimeout(onClose,2500);return()=>clearTimeout(t);},[]);
+  return <div style={{ position:'fixed', bottom:28, right:28, background:C.secondary, color:'#fff', padding:'12px 20px', borderRadius:10, zIndex:2000, fontSize:13, fontWeight:500, boxShadow:'0 8px 24px rgba(0,0,0,0.2)', animation:'slideUp 200ms ease' }}>✅ {msg}</div>;
+}
+
+// ── Sidebar ──
+const NAV = [
+  { id:'analytics-dashboard', icon:'📊', label:'운영 분석' },
+  { id:'ota-integration', icon:'🌐', label:'OTA 연동' },
+  { id:'ai-chatbot', icon:'🤖', label:'AI 상담봇' },
+  { id:'bid-dispatch', icon:'🔨', label:'역경매 배차' },
+  { id:'i18n', icon:'🌍', label:'다국어 설정' },
+  { id:'logs', icon:'📋', label:'API 로그' },
+  { id:'settings', icon:'⚙️', label:'고급 설정' },
+];
+
+function Sidebar({ section, setSection }) {
+  return (
+    <nav style={{ width:240, background:C.sidebarBg, borderRight:`1px solid ${C.border}`, display:'flex', flexDirection:'column', paddingTop:0, flexShrink:0 }}>
+      {/* Logo */}
+      <div style={{ padding:'18px 18px 14px', borderBottom:`1px solid ${C.border}` }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:`linear-gradient(135deg,${C.primary},${C.accent})`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>✈️</div>
+          <div>
+            <div style={{ fontSize:14, fontWeight:800, color:C.text }}>에어포트모빌</div>
+            <div style={{ fontSize:10, color:C.text3 }}>확장 운영 시스템</div>
+          </div>
+        </div>
+      </div>
+      {/* Status */}
+      <div style={{ margin:'12px 12px 4px', padding:'9px 12px', borderRadius:8, background:C.primaryLight, border:`1px solid ${C.primary}22` }}>
+        <div style={{ fontSize:11, fontWeight:600, color:C.primary, marginBottom:2 }}>🟢 연동 상태</div>
+        <div style={{ fontSize:10, color:C.text2 }}>Klook/KKday 실시간 동기화 중</div>
+      </div>
+      {/* Nav items */}
+      <div style={{ flex:1, padding:'8px 8px', display:'flex', flexDirection:'column', gap:2 }}>
+        {NAV.map(n=>(
+          <div key={n.id} onClick={()=>setSection(n.id)} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 12px', borderRadius:8, cursor:'pointer', fontSize:13, fontWeight:500, background: section===n.id?C.primaryLight:'transparent', color: section===n.id?C.primaryDark:C.text2, borderLeft: section===n.id?`3px solid ${C.primary}`:'3px solid transparent', transition:'all 0.15s', fontWeight:section===n.id?700:500 }}>
+            <span style={{ fontSize:15 }}>{n.icon}</span>
+            {n.label}
+            {n.id==='ota-integration' && <span style={{ marginLeft:'auto', fontSize:10, fontWeight:700, color:C.success }}>2연결</span>}
+            {n.id==='bid-dispatch' && <span style={{ marginLeft:'auto', width:16, height:16, background:C.primary, borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, color:'#fff', fontWeight:700 }}>2</span>}
+          </div>
+        ))}
+      </div>
+      {/* User */}
+      <div style={{ padding:'12px 14px 16px', borderTop:`1px solid ${C.border}` }}>
+        <div style={{ display:'flex', alignItems:'center', gap:9 }}>
+          <div style={{ width:32, height:32, borderRadius:'50%', background:`linear-gradient(135deg,${C.primary},${C.purple})`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:15 }}>👨‍💼</div>
+          <div>
+            <div style={{ fontSize:12, fontWeight:700, color:C.text }}>김관리자</div>
+            <div style={{ fontSize:10, color:C.text3 }}>슈퍼 관리자</div>
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+// ── App bar ──
+function AppBar({ section }) {
+  const labels = { 'analytics-dashboard':'운영 분석 대시보드', 'ota-integration':'OTA 연동 관리', 'ai-chatbot':'AI 자동 상담봇', 'bid-dispatch':'역경매 배차 시스템', 'i18n':'다국어(i18n) 설정', logs:'API 로그', settings:'고급 설정' };
+  return (
+    <div style={{ height:48, background:C.surface, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', padding:'0 22px', gap:8, flexShrink:0 }}>
+      <span style={{ fontSize:12, color:C.text3 }}>에어포트모빌</span>
+      <span style={{ fontSize:12, color:C.text3 }}>›</span>
+      <span style={{ fontSize:13, fontWeight:600, color:C.text, flex:1 }}>{labels[section]||section}</span>
+      <div style={{ display:'flex', alignItems:'center', gap:8, background:C.bg, borderRadius:7, padding:'5px 10px', border:`1px solid ${C.border}`, width:200 }}>
+        <span style={{ color:C.text3, fontSize:13 }}>🔍</span>
+        <span style={{ fontSize:12, color:C.text3 }}>검색...</span>
+      </div>
+      <div style={{ width:32, height:32, borderRadius:8, background:C.bg, border:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}>🔔</div>
+    </div>
+  );
+}
+
+// ── Analytics Dashboard ──
+function AnalyticsDashboardPage() {
+  return (
+    <div style={{ padding:22, animation:'fadeIn 250ms ease', overflow:'auto' }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:20 }}>
+        {[{icon:'📋',l:'오늘 총 예약',v:'94건',sub:'OTA 36 + 직접 58',c:C.primary},{icon:'🌐',l:'OTA 연동 예약',v:'36건',sub:'전체의 38%',c:C.success},{icon:'🤖',l:'AI 상담 건수',v:'128건',sub:'자동 해결 89%',c:C.purple},{icon:'🔨',l:'역경매 완료',v:'12건',sub:'평균 낙찰 -8%',c:C.orange}].map(s=>(
+          <div key={s.l} style={{ background:C.surface, borderRadius:12, padding:'18px 20px', border:`1px solid ${C.border}` }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+              <span style={{ fontSize:12, fontWeight:600, color:C.text2 }}>{s.l}</span>
+              <span style={{ width:36, height:36, borderRadius:9, background:`${s.c}18`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:17 }}>{s.icon}</span>
+            </div>
+            <div style={{ fontSize:24, fontWeight:800, color:C.text }}>{s.v}</div>
+            <div style={{ fontSize:11, color:C.text2, marginTop:5 }}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:16, marginBottom:20 }}>
+        <div style={{ background:C.surface, borderRadius:12, padding:20, border:`1px solid ${C.border}` }}>
+          <div style={{ fontSize:14, fontWeight:700, color:C.text, marginBottom:14 }}>최근 7일 예약 추이 (직접 vs OTA)</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={ANALYTICS_DATA}>
+              <defs>
+                <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={C.primary} stopOpacity={0.2}/>
+                  <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                </linearGradient>
+                <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={C.success} stopOpacity={0.2}/>
+                  <stop offset="95%" stopColor={C.success} stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="date" tick={{ fontSize:11, fill:C.text2 }} />
+              <YAxis tick={{ fontSize:11, fill:C.text2 }} />
+              <Tooltip contentStyle={{ borderRadius:8, border:'none' }} />
+              <Area type="monotone" dataKey="direct" stroke={C.primary} fill="url(#g1)" strokeWidth={2} name="직접 예약" />
+              <Area type="monotone" dataKey="ota" stroke={C.success} fill="url(#g2)" strokeWidth={2} name="OTA 예약" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{ background:C.surface, borderRadius:12, padding:20, border:`1px solid ${C.border}` }}>
+          <div style={{ fontSize:14, fontWeight:700, color:C.text, marginBottom:14 }}>OTA 채널 현황</div>
+          {OTA_CHANNELS.map(c=>(
+            <div key={c.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 0', borderBottom:`1px solid ${C.border}` }}>
+              <span style={{ fontSize:20 }}>{c.icon}</span>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:C.text }}>{c.name}</div>
+                <div style={{ fontSize:11, color:C.text2 }}>{c.status==='connected'?`오늘 ${c.bookings_today}건`:'연동 준비 중'}</div>
+              </div>
+              <Badge label={statusLabel(c.status)} color={statusColor(c.status)} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── OTA Integration ──
+function OtaIntegrationPage({ toast }) {
+  const [modal, setModal] = useState(null);
+  const [detail, setDetail] = useState(null);
+
+  return (
+    <div style={{ padding:22, animation:'fadeIn 250ms ease', overflow:'auto' }}>
+      {/* OTA Cards */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:22 }}>
+        {OTA_CHANNELS.map(c=>(
+          <div key={c.id} style={{ background:C.surface, borderRadius:12, padding:18, border:`1px solid ${c.status==='connected'?C.success+'44':C.border}`, cursor:'pointer', transition:'all 0.15s' }} onClick={()=>setModal(c)}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+              <span style={{ fontSize:26 }}>{c.icon}</span>
+              <Badge label={statusLabel(c.status)} color={statusColor(c.status)} />
+            </div>
+            <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:2 }}>{c.name}</div>
+            {c.status==='connected'
+              ? <>
+                  <div style={{ fontSize:12, color:C.text2, marginBottom:10 }}>오늘 {c.bookings_today}건 · {(c.revenue_today/10000).toFixed(0)}만원</div>
+                  <div style={{ fontSize:10, color:C.text3 }}>마지막 동기화 {c.sync_at}</div>
+                </>
+              : <div style={{ fontSize:12, color:C.text3 }}>API 키 설정 후 연동 가능</div>
+            }
+            {c.status==='pending' && (
+              <button onClick={e=>{e.stopPropagation();toast(`${c.name} 연동 요청이 전송되었습니다.`);}} style={{ marginTop:10, width:'100%', padding:'6px', borderRadius:7, border:`1px solid ${C.primary}`, background:'transparent', color:C.primary, fontSize:11, fontWeight:600, cursor:'pointer' }}>
+                연동 설정
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+      {/* OTA Bookings Table */}
+      <div style={{ background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, overflow:'hidden', marginBottom:20 }}>
+        <div style={{ padding:'16px 20px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <span style={{ fontSize:14, fontWeight:700, color:C.text }}>OTA 수신 예약 목록</span>
+          <span style={{ fontSize:12, color:C.text2 }}>총 {OTA_BOOKINGS.length}건</span>
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ background:C.bg }}>
+              {['예약ID','채널','고객명','언어','출발지','목적지','일시','금액','상태'].map(h=>(
+                <th key={h} style={{ padding:'10px 14px', textAlign:'left', fontSize:11, fontWeight:700, color:C.text2, borderBottom:`1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {OTA_BOOKINGS.map(b=>(
+              <tr key={b.id} onClick={()=>setDetail(b)} style={{ borderBottom:`1px solid ${C.border}`, cursor:'pointer' }} onMouseEnter={e=>e.currentTarget.style.background=C.bg} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{ padding:'11px 14px', fontSize:11, fontWeight:700, color:C.primary }}>{b.id}</td>
+                <td style={{ padding:'11px 14px', fontSize:12, color:C.text }}>{b.channel}</td>
+                <td style={{ padding:'11px 14px', fontSize:12, fontWeight:600, color:C.text }}>{b.customer}</td>
+                <td style={{ padding:'11px 14px', fontSize:14 }}>{{ko:'🇰🇷',en:'🇺🇸',zh:'🇨🇳',ja:'🇯🇵',vi:'🇻🇳'}[b.lang]}</td>
+                <td style={{ padding:'11px 14px', fontSize:11, color:C.text2, maxWidth:130 }}><div style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.from}</div></td>
+                <td style={{ padding:'11px 14px', fontSize:11, color:C.text2 }}>{b.to}</td>
+                <td style={{ padding:'11px 14px', fontSize:11, color:C.text2, whiteSpace:'nowrap' }}>{b.date}</td>
+                <td style={{ padding:'11px 14px', fontSize:12, fontWeight:700, color:C.text }}>{fmtNum(b.price)}원</td>
+                <td style={{ padding:'11px 14px' }}><Badge label={statusLabel(b.status)} color={statusColor(b.status)} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {/* OTA detail modal */}
+      {modal && modal.id && (
+        <Modal title={`${modal.name} 채널 설정`} onClose={()=>setModal(null)}>
+          <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:18, padding:'14px 16px', background:C.bg, borderRadius:10 }}>
+            <span style={{ fontSize:32 }}>{modal.icon}</span>
+            <div>
+              <div style={{ fontSize:18, fontWeight:700, color:C.text }}>{modal.name}</div>
+              <Badge label={statusLabel(modal.status)} color={statusColor(modal.status)} />
+            </div>
+          </div>
+          {['API 키','Secret Key','Webhook URL','공급사 ID'].map(k=>(
+            <div key={k} style={{ marginBottom:14 }}>
+              <div style={{ fontSize:12, color:C.text2, marginBottom:5 }}>{k}</div>
+              <input type={k.includes('Key')||k.includes('Secret')?'password':'text'} placeholder={`${k}를 입력하세요`} style={{ width:'100%', padding:'9px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, outline:'none' }} />
+            </div>
+          ))}
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:6 }}>
+            <button onClick={()=>setModal(null)} style={{ padding:'9px 20px', borderRadius:8, border:`1px solid ${C.border}`, background:'transparent', color:C.text2, fontSize:13, cursor:'pointer' }}>취소</button>
+            <button onClick={()=>{setModal(null);toast(`${modal.name} 연동 설정이 저장되었습니다.`);}} style={{ padding:'9px 20px', borderRadius:8, border:'none', background:C.primary, color:'#fff', fontSize:13, fontWeight:600, cursor:'pointer' }}>저장 및 테스트</button>
+          </div>
+        </Modal>
+      )}
+      {detail && (
+        <Modal title={`예약 상세 — ${detail.id}`} onClose={()=>setDetail(null)}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+            {[['예약 ID',detail.id],['채널',detail.channel],['고객명',detail.customer],['언어',{{ko:'한국어',en:'English',zh:'中文',ja:'日本語',vi:'Tiếng Việt'}[detail.lang]}],['출발지',detail.from],['목적지',detail.to],['차량 유형',detail.vehicle],['예약 일시',detail.date],['금액',fmtNum(detail.price)+'원']].map(([k,v])=>(
+              <div key={k}>
+                <div style={{ fontSize:11, color:C.text2, marginBottom:3 }}>{k}</div>
+                <div style={{ fontSize:13, fontWeight:600, color:C.text }}>{v}</div>
+              </div>
+            ))}
+            <div>
+              <div style={{ fontSize:11, color:C.text2, marginBottom:3 }}>상태</div>
+              <Badge label={statusLabel(detail.status)} color={statusColor(detail.status)} />
+            </div>
+          </div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:18 }}>
+            <button onClick={()=>setDetail(null)} style={{ padding:'9px 20px', borderRadius:8, border:`1px solid ${C.border}`, background:'transparent', color:C.text2, fontSize:13, cursor:'pointer' }}>닫기</button>
+            <button onClick={()=>{setDetail(null);toast('배차가 시작되었습니다.');}} style={{ padding:'9px 20px', borderRadius:8, border:'none', background:C.primary, color:'#fff', fontSize:13, fontWeight:600, cursor:'pointer' }}>배차 시작</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── AI Chatbot ──
+function AiChatbotPage() {
+  const [msgs, setMsgs] = useState(CHAT_INIT);
+  const [input, setInput] = useState('');
+  const [typing, setTyping] = useState(false);
+  const bottomRef = useRef(null);
+
+  useEffect(()=>{ bottomRef.current?.scrollIntoView({ behavior:'smooth' }); },[msgs]);
+
+  const sendMsg = (text) => {
+    const userMsg = text || input.trim();
+    if(!userMsg) return;
+    setInput('');
+    setMsgs(m=>[...m,{role:'user',msg:userMsg,time:new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}]);
+    setTyping(true);
+    setTimeout(()=>{
+      setTyping(false);
+      const key = Object.keys(BOT_REPLIES).find(k=>userMsg.includes(k));
+      const reply = BOT_REPLIES[key||'default'];
+      setMsgs(m=>[...m,{role:'bot',msg:reply,time:new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}]);
+    },1200);
+  };
+
+  const QUICK = ['예약하기','요금 문의','인천공항','김포공항'];
+
+  return (
+    <div style={{ padding:22, animation:'fadeIn 250ms ease', height:'calc(100vh - 48px - 44px)', display:'flex', gap:20 }}>
+      {/* Chat window */}
+      <div style={{ flex:1, background:C.surface, borderRadius:16, border:`1px solid ${C.border}`, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        {/* Header */}
+        <div style={{ padding:'14px 18px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:38, height:38, borderRadius:'50%', background:`linear-gradient(135deg,${C.primary},${C.purple})`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>🤖</div>
+          <div>
+            <div style={{ fontSize:14, fontWeight:700, color:C.text }}>에어모빌 AI 상담봇</div>
+            <div style={{ fontSize:11, color:C.success }}>● 온라인 · Claude API 연동</div>
+          </div>
+          <div style={{ marginLeft:'auto', fontSize:11, color:C.text3 }}>한국어 · English · 中文 · 日本語 · Tiếng Việt</div>
+        </div>
+        {/* Messages */}
+        <div style={{ flex:1, overflowY:'auto', padding:'16px 18px', display:'flex', flexDirection:'column', gap:12 }}>
+          {msgs.map((m,i)=>(
+            <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start', animation:'chatAppear 200ms ease' }}>
+              {m.role==='bot' && <div style={{ width:28, height:28, borderRadius:'50%', background:C.primaryLight, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, marginRight:8, flexShrink:0 }}>🤖</div>}
+              <div>
+                <div style={{ maxWidth:360, padding:'10px 14px', borderRadius: m.role==='bot'?'4px 14px 14px 14px':'14px 4px 14px 14px', background:m.role==='bot'?C.bg:`linear-gradient(135deg,${C.primary},${C.primaryDark})`, color:m.role==='bot'?C.text:'#fff', fontSize:13, lineHeight:1.6 }}>{m.msg}</div>
+                <div style={{ fontSize:10, color:C.text3, marginTop:3, textAlign:m.role==='user'?'right':'left' }}>{m.time}</div>
+              </div>
+            </div>
+          ))}
+          {typing && (
+            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <div style={{ width:28, height:28, borderRadius:'50%', background:C.primaryLight, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14 }}>🤖</div>
+              <div style={{ padding:'10px 16px', borderRadius:'4px 14px 14px 14px', background:C.bg, display:'flex', gap:4 }}>
+                {[0,1,2].map(i=><span key={i} style={{ width:7, height:7, borderRadius:'50%', background:C.text3, display:'inline-block', animation:`typing 1s ${i*0.2}s infinite` }}></span>)}
+              </div>
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
+        {/* Quick replies */}
+        <div style={{ padding:'8px 18px', display:'flex', gap:8, flexWrap:'wrap', borderTop:`1px solid ${C.border}` }}>
+          {QUICK.map(q=>(
+            <button key={q} onClick={()=>sendMsg(q)} style={{ padding:'5px 12px', borderRadius:16, border:`1px solid ${C.primary}44`, background:C.primaryLight, color:C.primary, fontSize:12, fontWeight:600, cursor:'pointer' }}>{q}</button>
+          ))}
+        </div>
+        {/* Input */}
+        <div style={{ padding:'10px 14px', borderTop:`1px solid ${C.border}`, display:'flex', gap:10 }}>
+          <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sendMsg()} placeholder="메시지를 입력하세요 (한국어, English, 中文 모두 가능)..." style={{ flex:1, padding:'9px 14px', border:`1px solid ${C.border}`, borderRadius:10, fontSize:13, outline:'none', color:C.text }} />
+          <button onClick={()=>sendMsg()} style={{ padding:'9px 18px', borderRadius:10, border:'none', background:`linear-gradient(135deg,${C.primary},${C.primaryDark})`, color:'#fff', fontSize:13, fontWeight:700, cursor:'pointer' }}>전송</button>
+        </div>
+      </div>
+      {/* Stats panel */}
+      <div style={{ width:260, display:'flex', flexDirection:'column', gap:14 }}>
+        {[{l:'오늘 상담 건수',v:'128건',c:C.primary},{l:'자동 해결률',v:'89%',c:C.success},{l:'평균 응답 시간',v:'0.9초',c:C.text},{l:'미해결 에스컬레이션',v:'14건',c:C.warning}].map(s=>(
+          <div key={s.l} style={{ background:C.surface, borderRadius:12, padding:'16px 18px', border:`1px solid ${C.border}` }}>
+            <div style={{ fontSize:11, color:C.text2, marginBottom:5 }}>{s.l}</div>
+            <div style={{ fontSize:22, fontWeight:800, color:s.c }}>{s.v}</div>
+          </div>
+        ))}
+        <div style={{ background:C.surface, borderRadius:12, padding:'16px 18px', border:`1px solid ${C.border}`, flex:1 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:C.text, marginBottom:10 }}>언어별 상담 비율</div>
+          {[['🇰🇷 한국어',45],['🇨🇳 中文',28],['🇯🇵 日本語',16],['🇺🇸 English',8],['🇻🇳 Tiếng Việt',3]].map(([l,v])=>(
+            <div key={l} style={{ marginBottom:8 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
+                <span style={{ fontSize:11, color:C.text }}>{l}</span>
+                <span style={{ fontSize:11, fontWeight:700, color:C.text }}>{v}%</span>
+              </div>
+              <div style={{ height:5, background:C.border, borderRadius:3 }}>
+                <div style={{ width:`${v}%`, height:'100%', background:C.primary, borderRadius:3 }}></div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Bid Dispatch ──
+function BidDispatchPage({ toast }) {
+  const [detail, setDetail] = useState(null);
+  const [modal, setModal] = useState(null);
+
+  return (
+    <div style={{ padding:22, animation:'fadeIn 250ms ease', overflow:'auto' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+        <div style={{ fontSize:14, fontWeight:700, color:C.text }}>🔨 역경매(입찰) 배차 현황</div>
+        <button onClick={()=>setModal('create')} style={{ padding:'8px 18px', borderRadius:8, border:'none', background:C.primary, color:'#fff', fontSize:13, fontWeight:600, cursor:'pointer' }}>+ 입찰 공고 등록</button>
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+        {BID_REQUESTS.map(r=>(
+          <div key={r.id} style={{ background:C.surface, borderRadius:14, border:`1px solid ${r.status==='open'?C.primary+'44':C.border}`, overflow:'hidden' }}>
+            <div style={{ padding:'16px 20px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:12 }}>
+              <div style={{ flex:1 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:4 }}>
+                  <span style={{ fontSize:14, fontWeight:700, color:C.text }}>{r.route}</span>
+                  <Badge label={statusLabel(r.status)} color={statusColor(r.status)} />
+                </div>
+                <div style={{ display:'flex', gap:20 }}>
+                  {[['차량',r.vehicle],['시간',r.time],['최대 예산',fmtNum(r.budget_max)+'원'],['입찰 수',`${r.bids.length}건`]].map(([k,v])=>(
+                    <div key={k}><span style={{ fontSize:11, color:C.text3 }}>{k}: </span><span style={{ fontSize:12, fontWeight:600, color:C.text }}>{v}</span></div>
+                  ))}
+                </div>
+              </div>
+              {r.status==='open' && <div style={{ fontSize:12, fontWeight:700, color:C.warning }}>마감 {r.ends_in}</div>}
+              {r.status==='awarded' && <div style={{ fontSize:12, fontWeight:700, color:C.success }}>낙찰: {r.winner}</div>}
+            </div>
+            {/* Bids */}
+            <div style={{ padding:'12px 20px', display:'flex', gap:12, flexWrap:'wrap' }}>
+              {r.bids.map((b,i)=>(
+                <div key={i} onClick={()=>setDetail({bid:b,request:r})} style={{ padding:'10px 16px', borderRadius:10, border:`1px solid ${i===0&&r.status==='open'?C.success:C.border}`, background: i===0&&r.status==='open'?C.successLight:'transparent', cursor:'pointer', minWidth:160, transition:'all 0.15s' }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:C.text }}>{b.driver}</div>
+                  <div style={{ fontSize:11, color:C.text2 }}>⭐{b.rating}</div>
+                  <div style={{ fontSize:16, fontWeight:800, color:i===0&&r.status==='open'?C.success:C.text, marginTop:4 }}>{fmtNum(b.price)}원</div>
+                  {i===0&&r.status==='open' && <div style={{ fontSize:10, fontWeight:700, color:C.success, marginTop:2 }}>🏆 최저가</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      {detail && (
+        <Modal title={`입찰 상세 — ${detail.request.id}`} onClose={()=>setDetail(null)}>
+          <div style={{ marginBottom:14 }}>
+            <div style={{ fontSize:12, color:C.text2, marginBottom:6 }}>노선</div>
+            <div style={{ fontSize:14, fontWeight:700, color:C.text }}>{detail.request.route}</div>
+          </div>
+          <div style={{ background:C.bg, borderRadius:10, padding:'14px 16px', marginBottom:16 }}>
+            <div style={{ fontSize:13, fontWeight:700, color:C.text, marginBottom:8 }}>{detail.bid.driver} 기사 입찰 정보</div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              {[['입찰 금액',fmtNum(detail.bid.price)+'원'],['기사 평점',`⭐${detail.bid.rating}`],['최대 예산',fmtNum(detail.request.budget_max)+'원'],['절감액',fmtNum(detail.request.budget_max-detail.bid.price)+'원']].map(([k,v])=>(
+                <div key={k}><div style={{ fontSize:11, color:C.text2, marginBottom:2 }}>{k}</div><div style={{ fontSize:14, fontWeight:700, color:C.text }}>{v}</div></div>
+              ))}
+            </div>
+          </div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setDetail(null)} style={{ padding:'9px 20px', borderRadius:8, border:`1px solid ${C.border}`, background:'transparent', color:C.text2, fontSize:13, cursor:'pointer' }}>닫기</button>
+            <button onClick={()=>{setDetail(null);toast('낙찰 처리가 완료되었습니다.');}} style={{ padding:'9px 20px', borderRadius:8, border:'none', background:C.success, color:'#fff', fontSize:13, fontWeight:600, cursor:'pointer' }}>낙찰 처리</button>
+          </div>
+        </Modal>
+      )}
+      {modal==='create' && (
+        <Modal title="입찰 공고 등록" onClose={()=>setModal(null)}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+            {[['출발지','text','인천국제공항 T1'],['목적지','text','강남구 역삼동'],['서비스 일시','datetime-local',''],['최대 예산(원)','number','90000'],['탑승 인원','number','4'],['입찰 마감(분)','number','30']].map(([l,t,p])=>(
+              <div key={l}>
+                <div style={{ fontSize:12, color:C.text2, marginBottom:5 }}>{l}</div>
+                <input type={t} placeholder={p} style={{ width:'100%', padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, outline:'none' }} />
+              </div>
+            ))}
+            <div>
+              <div style={{ fontSize:12, color:C.text2, marginBottom:5 }}>차량 유형</div>
+              <select style={{ width:'100%', padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, outline:'none' }}>
+                {['소형 콜밴','대형 콜밴','리무진 밴','미니버스'].map(v=><option key={v}>{v}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:20 }}>
+            <button onClick={()=>setModal(null)} style={{ padding:'9px 20px', borderRadius:8, border:`1px solid ${C.border}`, background:'transparent', color:C.text2, fontSize:13, cursor:'pointer' }}>취소</button>
+            <button onClick={()=>{setModal(null);toast('입찰 공고가 등록되었습니다.');}} style={{ padding:'9px 20px', borderRadius:8, border:'none', background:C.primary, color:'#fff', fontSize:13, fontWeight:600, cursor:'pointer' }}>등록</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── i18n ──
+function I18nPage({ toast }) {
+  const [selected, setSelected] = useState('en');
+  const sel = LANGS.find(l=>l.code===selected);
+  const SAMPLE_KEYS = [
+    { key:'booking.confirm', ko:'예약이 확정되었습니다.', en:'Your booking has been confirmed.', zh:'您的预订已确认。', ja:'ご予約が確定しました。', vi:'Đặt chỗ của bạn đã được xác nhận.' },
+    { key:'driver.assigned', ko:'기사가 배정되었습니다.', en:'A driver has been assigned.', zh:'已为您分配司机。', ja:'ドライバーが配定されました。', vi:'Tài xế đã được phân công.' },
+    { key:'price.estimate', ko:'예상 요금', en:'Estimated Fare', zh:'预计费用', ja:'予想料金', vi:'Giá ước tính' },
+    { key:'vehicle.type', ko:'차량 유형', en:'Vehicle Type', zh:'车辆类型', ja:'車両タイプ', vi:'Loại xe' },
+    { key:'pickup.time', ko:'픽업 시간', en:'Pickup Time', zh:'接送时间', ja:'ピックアップ時刻', vi:'Giờ đón' },
+  ];
+
+  return (
+    <div style={{ padding:22, animation:'fadeIn 250ms ease', overflow:'auto' }}>
+      {/* Language list */}
+      <div style={{ display:'flex', gap:14, marginBottom:22 }}>
+        {LANGS.map(l=>(
+          <div key={l.code} onClick={()=>setSelected(l.code)} style={{ flex:1, background:C.surface, borderRadius:12, padding:'16px', border:`2px solid ${selected===l.code?C.primary:C.border}`, cursor:'pointer', transition:'all 0.15s', boxShadow:selected===l.code?`0 0 0 3px ${C.primaryLight}`:'none' }}>
+            <div style={{ fontSize:24, marginBottom:6 }}>{l.flag}</div>
+            <div style={{ fontSize:13, fontWeight:700, color:C.text }}>{l.label}</div>
+            <div style={{ marginTop:8, height:5, background:C.border, borderRadius:3 }}>
+              <div style={{ width:`${l.coverage}%`, height:'100%', background:l.coverage>95?C.success:l.coverage>90?C.warning:C.danger, borderRadius:3 }}></div>
+            </div>
+            <div style={{ display:'flex', justifyContent:'space-between', marginTop:4 }}>
+              <span style={{ fontSize:10, color:C.text3 }}>{l.keys}/{LANGS[0].keys}개</span>
+              <span style={{ fontSize:11, fontWeight:700, color:l.coverage>95?C.success:l.coverage>90?C.warning:C.danger }}>{l.coverage}%</span>
+            </div>
+          </div>
+        ))}
+      </div>
+      {/* Translation table */}
+      <div style={{ background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, overflow:'hidden' }}>
+        <div style={{ padding:'14px 20px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <span style={{ fontSize:13, fontWeight:700, color:C.text }}>{sel.flag} {sel.label} 번역 편집</span>
+          <button onClick={()=>toast('번역이 저장되었습니다.')} style={{ padding:'6px 16px', borderRadius:7, border:'none', background:C.primary, color:'#fff', fontSize:12, fontWeight:600, cursor:'pointer' }}>변경 저장</button>
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ background:C.bg }}>
+              {['키','한국어(원본)',`${sel.flag} 번역`].map(h=>(
+                <th key={h} style={{ padding:'10px 16px', textAlign:'left', fontSize:11, fontWeight:700, color:C.text2, borderBottom:`1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {SAMPLE_KEYS.map(k=>(
+              <tr key={k.key} style={{ borderBottom:`1px solid ${C.border}` }}>
+                <td style={{ padding:'10px 16px', fontSize:11, color:C.primary, fontFamily:'monospace', fontWeight:600 }}>{k.key}</td>
+                <td style={{ padding:'10px 16px', fontSize:12, color:C.text2 }}>{k.ko}</td>
+                <td style={{ padding:'10px 16px' }}>
+                  <input defaultValue={k[selected]||''} placeholder="번역 없음" style={{ width:'100%', padding:'6px 10px', border:`1px solid ${C.border}`, borderRadius:7, fontSize:12, outline:'none', color:C.text }} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function PlaceholderPage({ name }) {
+  return (
+    <div style={{ padding:48, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16, color:C.text2 }}>
+      <div style={{ fontSize:48 }}>🔧</div>
+      <div style={{ fontSize:16, fontWeight:600, color:C.text }}>{name}</div>
+      <div style={{ fontSize:13 }}>구현 데모 — 실제 프로젝트에서 상세 구현 예정</div>
+    </div>
+  );
+}
+
+// ── App ──
+function App() {
+  const [section, setSection] = useState('analytics-dashboard');
+  const [toast, setToast] = useState(null);
+  const showToast = msg => setToast(msg);
+
+  const render = () => {
+    if(section==='analytics-dashboard') return <AnalyticsDashboardPage />;
+    if(section==='ota-integration') return <OtaIntegrationPage toast={showToast} />;
+    if(section==='ai-chatbot') return <AiChatbotPage />;
+    if(section==='bid-dispatch') return <BidDispatchPage toast={showToast} />;
+    if(section==='i18n') return <I18nPage toast={showToast} />;
+    return <PlaceholderPage name={{logs:'API 로그',settings:'고급 설정'}[section]||section} />;
+  };
+
+  return (
+    <div style={{ display:'flex', width:'100%', height:'100vh', overflow:'hidden' }}>
+      <Sidebar section={section} setSection={setSection} />
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <AppBar section={section} />
+        <main style={{ flex:1, overflow:'auto', background:C.bg }}>
+          {render()}
+        </main>
+      </div>
+      {toast && <Toast msg={toast} onClose={()=>setToast(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
