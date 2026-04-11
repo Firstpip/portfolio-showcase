@@ -160,6 +160,7 @@ CREATE TABLE IF NOT EXISTS project_milestones (
   actual_end TIMESTAMPTZ,
   assignee UUID,
   note TEXT,
+  week_number INT,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -167,8 +168,58 @@ CREATE INDEX IF NOT EXISTS idx_project_milestones_slug ON project_milestones(pro
 
 ALTER TABLE project_milestones ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "anon_all_milestones" ON project_milestones;
-CREATE POLICY "anon_all_milestones" ON project_milestones
-  FOR ALL TO anon USING (true) WITH CHECK (true);`;
+DROP POLICY IF EXISTS "all_milestones" ON project_milestones;
+CREATE POLICY "all_milestones" ON project_milestones
+  FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+-- 주차별 마일스톤 컬럼 추가 (이미 테이블이 있는 경우)
+ALTER TABLE project_milestones ADD COLUMN IF NOT EXISTS week_number INT;
+
+-- 프로젝트에 주차별 에픽(마일스톤 플랜) 저장 컬럼 추가
+ALTER TABLE wishket_projects ADD COLUMN IF NOT EXISTS weekly_plan JSONB;`;
+
+const WEEKLY_MILESTONE_EXAMPLE = `1주차: 기획 및 설계
+- 요구사항 분석 및 정리
+- 와이어프레임 / 스토리보드 작성
+- DB 스키마 설계
+
+2주차: 디자인
+- UI/UX 디자인 시안 제작
+- 디자인 리뷰 및 수정
+- 디자인 확정 및 에셋 전달
+
+3주차: 프론트엔드 개발
+- 메인 페이지 퍼블리싱
+- 서브 페이지 퍼블리싱
+- 반응형 작업
+
+4주차: 백엔드 개발
+- API 설계 및 구현
+- DB 연동
+- 인증/권한 처리
+
+5주차: 통합 및 QA
+- 프론트-백 연동
+- 테스트 및 버그 수정
+- 배포 및 인수인계`;
+
+function parseWeeklyMilestones(text) {
+  const lines = text.split('\n');
+  const weeks = [];
+  let current = null;
+  for (const line of lines) {
+    const weekMatch = line.match(/^(\d+)주차\s*[:：]?\s*(.*)$/);
+    if (weekMatch) {
+      if (current) weeks.push(current);
+      current = { week: parseInt(weekMatch[1]), title: (weekMatch[2] || '').trim(), description: [] };
+    } else if (current) {
+      const taskMatch = line.match(/^[-·•]\s*(.+)/);
+      if (taskMatch) current.description.push(taskMatch[1].trim());
+    }
+  }
+  if (current) weeks.push(current);
+  return weeks;
+}
 
 // ─── Utils ───
 function getMeetingStatus(meetingAt) {
@@ -210,6 +261,18 @@ function daysBetween(d1, d2) {
   return Math.round((new Date(d2) - new Date(d1)) / 86400000);
 }
 
+// ─── Hash routing ───
+function parseHash() {
+  const h = (window.location.hash || '').replace(/^#/, '');
+  const m = h.match(/^project\/([^/]+)\/tasks$/);
+  if (m) return { name: 'project', slug: decodeURIComponent(m[1]) };
+  return { name: 'table' };
+}
+function navigate(route) {
+  if (route.name === 'project') window.location.hash = `project/${encodeURIComponent(route.slug)}/tasks`;
+  else window.location.hash = '';
+}
+
 // ─── CSV ───
 function exportCSV(data) {
   const headers = ['slug','title','status','budget','timeline','created_at','meeting_at','meeting_type','memo','wishket_url'];
@@ -225,6 +288,40 @@ function exportCSV(data) {
   const a = document.createElement('a');
   a.href = url; a.download = `wishket-dashboard-${new Date().toISOString().split('T')[0]}.csv`;
   a.click(); URL.revokeObjectURL(url);
+}
+
+// ─── ConfirmModal ───
+function ConfirmModal({ state, onCancel }) {
+  useEffect(() => {
+    if (!state) return;
+    const h = e => { if (e.key === 'Escape') onCancel(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [state, onCancel]);
+  if (!state) return null;
+  const { title, message, confirmLabel = '확인', cancelLabel = '취소', destructive, onConfirm } = state;
+  const accent = destructive ? '#e17055' : 'var(--accent)';
+  return (
+    <div onClick={onCancel} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', backdropFilter:'blur(3px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:2000, padding:'1rem' }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background:'var(--surface)', borderRadius:14, width:'100%', maxWidth:420,
+        border:'1px solid var(--border)', animation:'slideUp 0.2s ease-out',
+        boxShadow:'0 20px 50px rgba(0,0,0,0.5)', overflow:'hidden',
+      }}>
+        <div style={{ padding:'1.1rem 1.3rem 0.8rem' }}>
+          <div style={{ fontSize:'0.98rem', fontWeight:600, color:'var(--text)', marginBottom:6 }}>{title}</div>
+          <div style={{ fontSize:'0.82rem', color:'var(--text2)', lineHeight:1.55, whiteSpace:'pre-wrap' }}>{message}</div>
+        </div>
+        <div style={{ display:'flex', gap:8, padding:'0.9rem 1.1rem 1rem', justifyContent:'flex-end' }}>
+          <button onClick={onCancel} style={{ padding:'0.55rem 1.1rem', borderRadius:8, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.82rem' }}>{cancelLabel}</button>
+          <button onClick={() => { onConfirm && onConfirm(); onCancel(); }} autoFocus
+            style={{ padding:'0.55rem 1.2rem', borderRadius:8, border:'none', background:accent, color:'#fff', cursor:'pointer', fontSize:'0.82rem', fontWeight:600 }}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Toast ───
@@ -699,9 +796,462 @@ function DBSetupBanner({ sql }) {
 }
 
 // ─── MilestonePanel ───
-function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving, onUpdate, onDelete, onAdd, onCreateFromTemplate }) {
+// ─── StructureWeekRow ───
+function StructureWeekRow({ week, index, isFirst, isLast, linkedCount = 0, onUpdateNumber, onUpdateTitle, onUpdateDescription, onMove, onRemove }) {
+  const [showDesc, setShowDesc] = useState(false);
+  const [numDraft, setNumDraft] = useState(String(week.week));
+  const [titleDraft, setTitleDraft] = useState(week.title || '');
+  const [descDraft, setDescDraft] = useState((week.description || []).join('\n'));
+  // Sync drafts when week changes externally (reorder/delete)
+  useEffect(() => { setNumDraft(String(week.week)); }, [week.week]);
+  useEffect(() => { setTitleDraft(week.title || ''); }, [week.title]);
+  useEffect(() => { setDescDraft((week.description || []).join('\n')); }, [week.description]);
+
+  const descCount = (week.description || []).length;
+  const iconBtn = (disabled) => ({
+    padding:'2px 6px', borderRadius:4, border:'1px solid var(--border)', background:'var(--surface)',
+    color:'var(--text2)', cursor: disabled ? 'not-allowed' : 'pointer', fontSize:'0.68rem', opacity: disabled ? 0.3 : 1,
+  });
+  return (
+    <div style={{ padding:'0.6rem 0.7rem', borderRadius:6, background:'var(--surface)', border:'1px solid var(--border)', display:'flex', flexDirection:'column', gap:6 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+        <input type="number" min="1" value={numDraft}
+          onChange={e => setNumDraft(e.target.value)}
+          onBlur={() => { if (numDraft !== String(week.week)) onUpdateNumber(index, numDraft); }}
+          style={{ width:44, padding:'0.3rem 0.35rem', borderRadius:4, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--accent2)', fontSize:'0.75rem', fontWeight:600, outline:'none', textAlign:'center' }} />
+        <span style={{ fontSize:'0.72rem', color:'var(--text2)', flexShrink:0 }}>주차</span>
+        <input type="text" value={titleDraft} placeholder="주차 제목 (예: 기획 및 설계)"
+          onChange={e => setTitleDraft(e.target.value)}
+          onBlur={() => { if (titleDraft !== (week.title || '')) onUpdateTitle(index, titleDraft); }}
+          style={{ flex:1, minWidth:0, padding:'0.3rem 0.55rem', borderRadius:4, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.78rem', outline:'none' }} />
+        <button onClick={() => setShowDesc(v => !v)} title="계획 항목 편집"
+          style={{ padding:'2px 6px', borderRadius:4, border:'1px solid var(--border)', background: showDesc ? 'var(--accent)22' : 'var(--surface)', color: showDesc ? 'var(--accent2)' : 'var(--text2)', cursor:'pointer', fontSize:'0.66rem' }}>
+          📝 {descCount}
+        </button>
+        {linkedCount > 0 && (
+          <span title={`이 주차에 ${linkedCount}개 티켓이 연결됨`}
+            style={{ padding:'2px 6px', borderRadius:4, border:'1px solid var(--accent)44', background:'var(--accent)11', color:'var(--accent2)', fontSize:'0.66rem', fontWeight:600 }}>
+            🎫 {linkedCount}
+          </span>
+        )}
+        <button onClick={() => onMove(index, -1)} disabled={isFirst} style={iconBtn(isFirst)} title="위로">▲</button>
+        <button onClick={() => onMove(index, 1)} disabled={isLast} style={iconBtn(isLast)} title="아래로">▼</button>
+        <button onClick={() => onRemove(index)} title="이 주차 삭제"
+          style={{ padding:'2px 6px', borderRadius:4, border:'1px solid #e1705544', background:'transparent', color:'#e17055', cursor:'pointer', fontSize:'0.68rem' }}>✕</button>
+      </div>
+      {showDesc && (
+        <div>
+          <div style={{ fontSize:'0.62rem', color:'var(--text2)', marginBottom:4, opacity:0.7 }}>계획 항목 (한 줄에 하나씩)</div>
+          <textarea value={descDraft}
+            placeholder={"요구사항 분석\n와이어프레임 작성\nDB 스키마 설계"}
+            onChange={e => setDescDraft(e.target.value)}
+            onBlur={() => {
+              const normalized = descDraft.split('\n').map(s => s.replace(/^[-·•]\s*/, '').trim()).filter(Boolean).join('\n');
+              const current = (week.description || []).join('\n');
+              if (normalized !== current) onUpdateDescription(index, descDraft);
+            }}
+            style={{ width:'100%', minHeight:70, padding:'0.45rem 0.6rem', borderRadius:4, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.74rem', resize:'vertical', fontFamily:'inherit', lineHeight:1.5, outline:'none' }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── WeeklyMilestoneInput ───
+function WeeklyMilestoneInput({ project, saving, milestones, onBulkCreate, onClearPlan, onClose, onRequestConfirm }) {
+  const existingPlan = Array.isArray(project?.weekly_plan) ? project.weekly_plan : null;
+  const initialText = useMemo(() => {
+    if (!existingPlan || existingPlan.length === 0) return WEEKLY_MILESTONE_EXAMPLE;
+    return existingPlan.map(w => {
+      const lines = [`${w.week}주차: ${w.title || ''}`];
+      (w.description || []).forEach(d => lines.push(`- ${d}`));
+      return lines.join('\n');
+    }).join('\n\n');
+  }, [existingPlan]);
+  const [text, setText] = useState(initialText);
+  const [mode, setMode] = useState(existingPlan && existingPlan.length > 0 ? 'structure' : 'text');
+  const baselineRef = useRef(initialText);
+  const isDirty = text.trim() !== baselineRef.current.trim();
+
+  const safeClose = useCallback(() => {
+    if (!isDirty) { onClose(); return; }
+    if (onRequestConfirm) {
+      onRequestConfirm({
+        title: '저장하지 않은 변경사항',
+        message: '편집 중인 내용이 있습니다.\n저장하지 않고 닫을까요?',
+        confirmLabel: '닫기',
+        destructive: true,
+        onConfirm: () => onClose(),
+      });
+    } else {
+      onClose();
+    }
+  }, [isDirty, onClose, onRequestConfirm]);
+
+  useEffect(() => {
+    const h = e => { if (e.key === 'Escape') safeClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [safeClose]);
+
+  // Serialize a structured week array back to textarea format
+  const serializeWeeks = (weeks) => weeks.map(w => {
+    const lines = [`${w.week}주차: ${w.title || ''}`];
+    (w.description || []).forEach(d => { if (d.trim()) lines.push(`- ${d}`); });
+    return lines.join('\n');
+  }).join('\n\n');
+
+  const switchMode = (target) => {
+    if (target === mode) return;
+    if (target === 'text') {
+      // Structure → text: keep current text as-is (structure mode edits text directly via updateWeek)
+      setMode('text');
+    } else {
+      // Text → structure: parse current text; if parse produces valid result, switch
+      setMode('structure');
+    }
+  };
+
+  const parsed = useMemo(() => parseWeeklyMilestones(text), [text]);
+
+  // Structure-mode helpers: each edit reconstructs text so parsed stays in sync
+  const updateWeekTitle = (index, newTitle) => {
+    const weeks = parseWeeklyMilestones(text);
+    if (!weeks[index]) return;
+    weeks[index] = { ...weeks[index], title: newTitle };
+    setText(serializeWeeks(weeks));
+  };
+  const updateWeekNumber = (index, newNumber) => {
+    const weeks = parseWeeklyMilestones(text);
+    if (!weeks[index]) return;
+    const n = parseInt(newNumber);
+    if (!Number.isFinite(n) || n < 1) return;
+    weeks[index] = { ...weeks[index], week: n };
+    setText(serializeWeeks(weeks));
+  };
+  const updateWeekDescription = (index, newDescText) => {
+    const weeks = parseWeeklyMilestones(text);
+    if (!weeks[index]) return;
+    const items = newDescText.split('\n').map(s => s.replace(/^[-·•]\s*/, '').trim()).filter(Boolean);
+    weeks[index] = { ...weeks[index], description: items };
+    setText(serializeWeeks(weeks));
+  };
+  const linkedCountByWeek = useMemo(() => {
+    const map = {};
+    (milestones || []).forEach(m => {
+      if (m.week_number != null) map[m.week_number] = (map[m.week_number] || 0) + 1;
+    });
+    return map;
+  }, [milestones]);
+  const removeWeek = (index) => {
+    const weeks = parseWeeklyMilestones(text);
+    const target = weeks[index];
+    if (!target) return;
+    const linked = linkedCountByWeek[target.week] || 0;
+    const descCount = (target.description || []).length;
+    const doRemove = () => {
+      const next = parseWeeklyMilestones(text);
+      next.splice(index, 1);
+      setText(serializeWeeks(next));
+    };
+    if ((linked > 0 || descCount > 0) && onRequestConfirm) {
+      const parts = [];
+      if (descCount > 0) parts.push(`${descCount}개의 계획 항목`);
+      if (linked > 0) parts.push(`${linked}개의 연결된 티켓`);
+      onRequestConfirm({
+        title: `${target.week}주차 삭제`,
+        message: `이 주차에 ${parts.join('과 ')}이 있습니다.\n삭제 후 저장하면 티켓의 주차 연결이 해제됩니다.\n\n계속할까요?`,
+        confirmLabel: '주차 삭제',
+        destructive: true,
+        onConfirm: doRemove,
+      });
+    } else {
+      doRemove();
+    }
+  };
+  const moveWeek = (index, dir) => {
+    const weeks = parseWeeklyMilestones(text);
+    const target = index + dir;
+    if (target < 0 || target >= weeks.length) return;
+    [weeks[index], weeks[target]] = [weeks[target], weeks[index]];
+    setText(serializeWeeks(weeks));
+  };
+  const addWeek = () => {
+    const weeks = parseWeeklyMilestones(text);
+    const maxWeek = weeks.reduce((mx, w) => Math.max(mx, w.week), 0);
+    weeks.push({ week: maxWeek + 1, title: '', description: [] });
+    setText(serializeWeeks(weeks));
+  };
+  const hasPlan = parsed.length > 0;
+  const isEdit = !!(existingPlan && existingPlan.length > 0);
+  const isUnchangedExample = !isEdit && text.trim() === WEEKLY_MILESTONE_EXAMPLE.trim();
+  // Detect duplicate week numbers
+  const duplicateWeeks = useMemo(() => {
+    const seen = new Set();
+    const dups = new Set();
+    parsed.forEach(w => { if (seen.has(w.week)) dups.add(w.week); else seen.add(w.week); });
+    return [...dups].sort((a,b)=>a-b);
+  }, [parsed]);
+  const emptyTitleWeeks = useMemo(() => parsed.filter(w => !w.title || !w.title.trim()).map(w => w.week), [parsed]);
+  const canSave = hasPlan && !isUnchangedExample && duplicateWeeks.length === 0;
+
+  const handleSubmit = useCallback(() => {
+    if (saving || !canSave) return;
+    baselineRef.current = text;
+    onBulkCreate(project.slug, parsed);
+  }, [saving, canSave, text, parsed, onBulkCreate, project?.slug]);
+
+  useEffect(() => {
+    const h = e => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        handleSubmit();
+      }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [handleSubmit]);
+
+  const textareaRef = useRef(null);
+  useEffect(() => {
+    if (mode === 'text' && textareaRef.current) {
+      textareaRef.current.focus();
+      if (!isEdit) textareaRef.current.select();
+    }
+  }, [mode, isEdit]);
+
+  return (
+    <div style={{ padding:'1rem', borderRadius:12, background:'var(--surface)', border:'1px solid var(--border)', marginBottom:16 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+        <div style={{ fontSize:'0.92rem', fontWeight:600 }}>📅 주차별 마일스톤 {isEdit ? '수정' : '등록'} (Epic){isDirty && <span style={{ marginLeft:6, color:'var(--yellow)', fontSize:'0.7rem' }}>● 편집 중</span>}</div>
+        <button onClick={safeClose} style={{ background:'transparent', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'0.85rem' }}>✕</button>
+      </div>
+      <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:8, lineHeight:1.6 }}>
+        주차별 작업은 Jira의 <b>에픽</b>처럼 상위 그룹입니다. 개별 작업 티켓은 따로 생성하고 각 티켓에 주차를 지정하세요.
+      </div>
+      {/* Mode toggle */}
+      <div style={{ display:'flex', gap:4, marginBottom:8, padding:3, background:'var(--bg)', borderRadius:6, border:'1px solid var(--border)', width:'fit-content' }}>
+        <button onClick={() => switchMode('structure')}
+          style={{ padding:'0.3rem 0.8rem', borderRadius:4, border:'none', background: mode==='structure' ? 'var(--accent)' : 'transparent', color: mode==='structure' ? '#fff' : 'var(--text2)', cursor:'pointer', fontSize:'0.72rem', fontWeight:500 }}>
+          🧩 구조 편집
+        </button>
+        <button onClick={() => switchMode('text')}
+          style={{ padding:'0.3rem 0.8rem', borderRadius:4, border:'none', background: mode==='text' ? 'var(--accent)' : 'transparent', color: mode==='text' ? '#fff' : 'var(--text2)', cursor:'pointer', fontSize:'0.72rem', fontWeight:500 }}>
+          📝 텍스트 (AI 붙여넣기)
+        </button>
+      </div>
+      {mode === 'text' ? (
+        <textarea ref={textareaRef} value={text} onChange={e => setText(e.target.value)}
+          placeholder="AI에게 '이 프로젝트의 주차별 계획을 이 형식으로 만들어줘' 요청 후 붙여넣으세요"
+          style={{ width:'100%', minHeight:240, padding:'0.75rem 0.9rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.82rem', resize:'vertical', fontFamily:'inherit', lineHeight:1.7, outline:'none' }} />
+      ) : (
+        <div style={{ display:'flex', flexDirection:'column', gap:8, padding:'0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', maxHeight:420, overflowY:'auto' }}>
+          {parsed.length === 0 && (
+            <div style={{ padding:'1.5rem 0.5rem', textAlign:'center', color:'var(--text2)', fontSize:'0.78rem' }}>
+              등록된 주차가 없습니다
+            </div>
+          )}
+          {parsed.map((w, i) => (
+            <StructureWeekRow key={`${w.week}-${i}`}
+              week={w} index={i}
+              isFirst={i===0} isLast={i===parsed.length-1}
+              linkedCount={linkedCountByWeek[w.week] || 0}
+              onUpdateNumber={updateWeekNumber}
+              onUpdateTitle={updateWeekTitle}
+              onUpdateDescription={updateWeekDescription}
+              onMove={moveWeek}
+              onRemove={removeWeek} />
+          ))}
+          <button onClick={addWeek}
+            style={{ padding:'0.55rem', borderRadius:6, border:'1px dashed var(--accent)66', background:'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.78rem', fontWeight:500 }}>
+            + 주차 추가
+          </button>
+        </div>
+      )}
+      {isUnchangedExample && (
+        <div style={{ marginTop:10, padding:'0.5rem 0.75rem', borderRadius:6, background:'#fdcb6e12', border:'1px solid #fdcb6e44', fontSize:'0.72rem', color:'var(--yellow)' }}>
+          ⚠️ 예시 데이터를 그대로 저장할 수 없습니다. 실제 계획을 입력하거나 AI로 생성해 붙여넣으세요.
+        </div>
+      )}
+      {duplicateWeeks.length > 0 && (
+        <div style={{ marginTop:10, padding:'0.5rem 0.75rem', borderRadius:6, background:'#e1705512', border:'1px solid #e1705544', fontSize:'0.72rem', color:'#e17055' }}>
+          ⚠️ 중복된 주차 번호가 있습니다: {duplicateWeeks.join(', ')}주차
+        </div>
+      )}
+      {emptyTitleWeeks.length > 0 && duplicateWeeks.length === 0 && hasPlan && (
+        <div style={{ marginTop:10, padding:'0.5rem 0.75rem', borderRadius:6, background:'#fdcb6e10', border:'1px solid #fdcb6e33', fontSize:'0.72rem', color:'var(--text2)' }}>
+          💡 제목이 비어있는 주차: {emptyTitleWeeks.join(', ')}주차 (저장은 가능하지만 채우면 더 명확합니다)
+        </div>
+      )}
+      {hasPlan && (
+        <div style={{ marginTop:10, padding:'0.65rem 0.85rem', borderRadius:8, background:'var(--surface2)', border:'1px solid var(--border)' }}>
+          <div style={{ fontSize:'0.78rem', fontWeight:600, marginBottom:6 }}>미리보기: 총 {parsed.length}주차</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+            {parsed.map(w => (
+              <div key={w.week} style={{ fontSize:'0.75rem', color:'var(--text2)' }}>
+                <span style={{ fontWeight:600, color:'var(--accent2)' }}>{w.week}주차</span> {w.title}
+                {w.description.length > 0 && <span style={{ opacity:0.6 }}> — {w.description.length}개 항목</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{ display:'flex', gap:8, marginTop:12, justifyContent:'flex-end', alignItems:'center' }}>
+        {isEdit && onClearPlan && (
+          <button onClick={() => onClearPlan(project.slug)}
+            disabled={saving}
+            style={{ padding:'0.5rem 0.9rem', borderRadius:8, border:'1px solid #e1705544', background:'transparent', color:'#e17055', cursor:'pointer', fontSize:'0.78rem', marginRight:'auto' }}>
+            🗑️ 계획 전체 삭제
+          </button>
+        )}
+        <button onClick={safeClose} style={{ padding:'0.5rem 1rem', borderRadius:8, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.82rem' }}>취소</button>
+        <button onClick={handleSubmit} disabled={saving || !canSave}
+          title={isUnchangedExample ? '예시 데이터를 편집하거나 AI로 생성해 붙여넣으세요' : duplicateWeeks.length > 0 ? `중복된 주차: ${duplicateWeeks.join(', ')}주차` : `${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+Enter로 저장`}
+          style={{ padding:'0.5rem 1.2rem', borderRadius:8, border:'none', background: canSave ? 'var(--accent)' : 'var(--border)', color:'#fff', cursor: canSave ? 'pointer' : 'not-allowed', fontSize:'0.82rem', fontWeight:600 }}>
+          📅 {parsed.length}주차 계획 {isEdit ? '업데이트' : '저장'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── WeeklyProgressBars ───
+// weeklyPlan: [{week, title, description}] — epics defined on project.weekly_plan
+// milestones: individual task tickets; progress = done tickets / tickets assigned to the week
+// onAddTicket(label, weekNumber): optional — shows "+ 티켓" action on description items
+function WeeklyProgressBars({ weeklyPlan, milestones, onAddTicket, onFilterWeek, activeFilter, focusWeek }) {
+  const [expandedWeek, setExpandedWeek] = useState(null);
+  const planWeeks = Array.isArray(weeklyPlan) && weeklyPlan.length > 0 ? weeklyPlan : null;
+  const weeks = useMemo(() => {
+    if (planWeeks) {
+      return [...planWeeks].sort((a,b) => (a.week||0) - (b.week||0)).map(w => ({
+        week: w.week,
+        title: w.title || '',
+        description: Array.isArray(w.description) ? w.description : [],
+      }));
+    }
+    const nums = new Set();
+    (milestones||[]).forEach(m => { if (m.week_number != null) nums.add(m.week_number); });
+    return [...nums].sort((a,b)=>a-b).map(w => ({ week:w, title:'', description:[] }));
+  }, [planWeeks, milestones]);
+
+  if (weeks.length === 0) return null;
+
+  const counts = {};
+  const labelsByWeek = {};
+  const blockedByWeek = {};
+  const norm = (s) => (s||'').trim().toLowerCase();
+  (milestones||[]).forEach(m => {
+    if (m.week_number == null) return;
+    if (!counts[m.week_number]) counts[m.week_number] = { total:0, done:0 };
+    counts[m.week_number].total++;
+    if (m.status === 'done') counts[m.week_number].done++;
+    if (m.blocked) blockedByWeek[m.week_number] = (blockedByWeek[m.week_number] || 0) + 1;
+    if (!labelsByWeek[m.week_number]) labelsByWeek[m.week_number] = new Set();
+    labelsByWeek[m.week_number].add(norm(m.phase_label));
+  });
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+      {weeks.map(({ week, title, description }) => {
+        const c = counts[week] || { total:0, done:0 };
+        const pct = c.total > 0 ? Math.round((c.done/c.total)*100) : 0;
+        const allDone = c.total > 0 && c.done === c.total;
+        const empty = c.total === 0;
+        const blockedCount = blockedByWeek[week] || 0;
+        const hasDetails = description.length > 0;
+        const isExpanded = expandedWeek === week;
+        const isFocus = focusWeek === week;
+        const barColor = blockedCount > 0 ? '#e17055' : allDone ? 'var(--green)' : 'var(--accent)';
+        return (
+          <div key={week} style={{ display:'flex', flexDirection:'column' }}>
+            <div onClick={() => hasDetails && setExpandedWeek(isExpanded ? null : week)}
+              style={{ display:'flex', alignItems:'center', gap:8, cursor: hasDetails ? 'pointer' : 'default', padding:'2px 4px', borderRadius:4, background: isFocus ? 'var(--accent)0d' : 'transparent', borderLeft: isFocus ? '2px solid var(--accent)' : '2px solid transparent' }}>
+              {hasDetails ? (
+                <span style={{ fontSize:'0.58rem', color:'var(--text2)', width:10, flexShrink:0, transform: isExpanded ? 'rotate(90deg)' : 'none', transition:'transform 0.15s' }}>▶</span>
+              ) : <span style={{ width:10, flexShrink:0 }} />}
+              <div style={{ fontSize:'0.72rem', fontWeight:600, color: allDone ? 'var(--green)' : 'var(--accent2)', minWidth:42, flexShrink:0 }}>
+                {week}주차{isFocus && <span title="다음 진행 주차" style={{ marginLeft:3, fontSize:'0.6rem' }}>👈</span>}
+              </div>
+              {title && <div title={title} style={{ fontSize:'0.65rem', color:'var(--text2)', minWidth:60, maxWidth:140, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flexShrink:0 }}>{title}</div>}
+              <div style={{ flex:1, height:6, background:'var(--bg)', borderRadius:3, overflow:'hidden' }}>
+                <div style={{ width:pct+'%', height:'100%', background: barColor, transition:'width 0.3s', borderRadius:3 }} />
+              </div>
+              {blockedCount > 0 && <span title={`${blockedCount}개 블로킹됨`} style={{ fontSize:'0.65rem', color:'#e17055', flexShrink:0 }}>🔴{blockedCount}</span>}
+              <div title={empty ? '배정된 티켓 없음' : undefined} style={{ fontSize:'0.68rem', fontWeight:600, color: allDone ? 'var(--green)' : empty ? 'var(--text2)' : 'var(--text2)', minWidth:50, textAlign:'right', flexShrink:0, opacity: empty ? 0.5 : 1 }}>
+                {empty ? '0 tickets' : `${c.done}/${c.total}`}
+              </div>
+              {onFilterWeek && !empty && (
+                <button onClick={(e) => { e.stopPropagation(); onFilterWeek(activeFilter === week ? 'all' : week); }}
+                  title={activeFilter === week ? '필터 해제' : '이 주차로 칸반 필터링'}
+                  style={{ padding:'1px 5px', borderRadius:3, border:'1px solid var(--border)', background: activeFilter === week ? 'var(--accent)22' : 'transparent', color: activeFilter === week ? 'var(--accent2)' : 'var(--text2)', cursor:'pointer', fontSize:'0.6rem', flexShrink:0 }}>
+                  ⛁
+                </button>
+              )}
+            </div>
+            {isExpanded && hasDetails && (
+              <div style={{ marginLeft:18, marginTop:4, marginBottom:4, padding:'0.5rem 0.7rem', background:'var(--bg)', borderRadius:6, border:'1px solid var(--border)' }}>
+                <div style={{ fontSize:'0.6rem', color:'var(--text2)', fontWeight:600, marginBottom:5, opacity:0.7, letterSpacing:'0.03em' }}>계획 항목</div>
+                {description.map((d, i) => {
+                  const exists = labelsByWeek[week]?.has(norm(d));
+                  return (
+                    <div key={i} style={{ display:'flex', alignItems:'center', gap:6, fontSize:'0.72rem', color:'var(--text2)', padding:'2px 0' }}>
+                      <span style={{ color:'var(--accent2)', opacity:0.6, flexShrink:0 }}>•</span>
+                      <span style={{ flex:1, lineHeight:1.4, textDecoration: exists ? 'line-through' : 'none', opacity: exists ? 0.6 : 1 }}>{d}</span>
+                      {onAddTicket && (
+                        exists ? (
+                          <span title="이미 같은 이름의 티켓이 이 주차에 있습니다"
+                            style={{ padding:'1px 6px', borderRadius:3, border:'1px solid var(--green)44', background:'transparent', color:'var(--green)', fontSize:'0.6rem', flexShrink:0 }}>
+                            ✓ 생성됨
+                          </span>
+                        ) : (
+                          <button onClick={(e) => { e.stopPropagation(); onAddTicket(d, week); }}
+                            title="이 항목으로 티켓 생성"
+                            style={{ padding:'1px 6px', borderRadius:3, border:'1px solid var(--accent)44', background:'transparent', color:'var(--accent2)', fontSize:'0.6rem', cursor:'pointer', flexShrink:0 }}>
+                            + 티켓
+                          </button>
+                        )
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving, onUpdate, onDelete, onAdd, onReorder, onCreateFromTemplate, weeklyMilestones, onBulkCreateWeekly, onClearWeeklyPlan }) {
   const [expandedId, setExpandedId] = useState(null);
+  const [editingLabelId, setEditingLabelId] = useState(null);
+  const [editingLabelVal, setEditingLabelVal] = useState('');
   const [newLabel, setNewLabel] = useState('');
+  const [showWeeklyInput, setShowWeeklyInput] = useState(false);
+
+  const cycleStatus = (m) => {
+    const next = m.status === 'planned' ? 'in_progress' : m.status === 'in_progress' ? 'done' : 'planned';
+    onUpdate(m, { status: next });
+  };
+  const beginEditLabel = (m) => { setEditingLabelId(m.id); setEditingLabelVal(m.phase_label); };
+  const commitLabel = (m) => {
+    const v = editingLabelVal.trim();
+    if (v && v !== m.phase_label) onUpdate(m, { phase_label: v });
+    setEditingLabelId(null); setEditingLabelVal('');
+  };
+  const cancelEditLabel = () => { setEditingLabelId(null); setEditingLabelVal(''); };
+
+  // Weeks are defined on project.weekly_plan (epics). Fallback to milestones for legacy projects.
+  const weekOptions = useMemo(() => {
+    if (Array.isArray(project?.weekly_plan) && project.weekly_plan.length > 0) {
+      return [...project.weekly_plan].sort((a,b)=>(a.week||0)-(b.week||0)).map(w => ({ week:w.week, title:w.title||'' }));
+    }
+    const nums = new Set();
+    (milestones||[]).forEach(m => { if (m.week_number != null) nums.add(m.week_number); });
+    return [...nums].sort((a,b)=>a-b).map(w => ({ week:w, title:'' }));
+  }, [project?.weekly_plan, milestones]);
 
   if (setupNeeded) {
     return (
@@ -727,11 +1277,17 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
   if (sorted.length === 0) {
     return (
       <div>
+        {showWeeklyInput && (
+          <WeeklyMilestoneInput project={project} saving={saving} milestones={milestones} onBulkCreate={(slug, weeks) => { onBulkCreateWeekly(slug, weeks); setShowWeeklyInput(false); }} onClearPlan={(slug) => { onClearWeeklyPlan && onClearWeeklyPlan(slug); setShowWeeklyInput(false); }} onClose={() => setShowWeeklyInput(false)} onRequestConfirm={onRequestConfirm} />
+        )}
         <div style={{ textAlign:'center', padding:'1.5rem 0.5rem', color:'var(--text2)' }}>
           <div style={{ fontSize:'2rem', marginBottom:8 }}>📋</div>
           <div style={{ fontSize:'0.85rem', marginBottom:4 }}>등록된 작업이 없습니다</div>
           <div style={{ fontSize:'0.75rem', opacity:0.7, marginBottom:16 }}>템플릿을 적용하거나 직접 추가할 수 있어요</div>
           <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            <button onClick={() => setShowWeeklyInput(true)} disabled={saving} style={{ padding:'0.65rem', borderRadius:10, border:'1px solid var(--accent)', background:'var(--accent)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.85rem', fontWeight:600 }}>
+              📅 주차별 마일스톤 등록
+            </button>
             {Object.entries(MILESTONE_TEMPLATES).map(([key,tpl]) => (
               <button key={key} onClick={() => onCreateFromTemplate(project.slug, key)} disabled={saving} style={{ padding:'0.65rem', borderRadius:10, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.85rem', fontWeight:600 }}>
                 📋 {tpl.label} 템플릿 ({tpl.phases.length}개 작업)
@@ -751,6 +1307,9 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
 
   return (
     <div>
+      {showWeeklyInput && (
+        <WeeklyMilestoneInput project={project} saving={saving} onBulkCreate={(slug, weeks) => { onBulkCreateWeekly(slug, weeks); setShowWeeklyInput(false); }} onClearPlan={(slug) => { onClearWeeklyPlan && onClearWeeklyPlan(slug); setShowWeeklyInput(false); }} onClose={() => setShowWeeklyInput(false)} />
+      )}
       {/* Progress summary */}
       <div style={{ padding:'0.75rem 0.9rem', borderRadius:10, background:'var(--surface2)', border:'1px solid var(--border)', marginBottom:'1rem' }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
@@ -761,66 +1320,104 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
           <div style={{ width:pct+'%', height:'100%', background:hasBlocked?'#e17055':'var(--green)', transition:'width 0.3s' }} />
         </div>
         {hasBlocked && <div style={{ marginTop:6, fontSize:'0.72rem', color:'#e17055' }}>🔴 블로킹된 작업이 있습니다</div>}
+        {/* Weekly progress */}
+        {weekOptions.length > 0 && (
+          <div style={{ marginTop:10, paddingTop:8, borderTop:'1px solid var(--border)' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+              <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontWeight:600 }}>주차별 진행률</div>
+              <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.15rem 0.5rem', borderRadius:4, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.62rem' }}>수정</button>
+            </div>
+            <WeeklyProgressBars weeklyPlan={project?.weekly_plan} milestones={sorted} onAddTicket={(label, week) => onAdd(project.slug, label, week)} />
+          </div>
+        )}
+      </div>
+
+      {/* Hint + weekly button */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+        <div style={{ fontSize:'0.68rem', color:'var(--text2)', opacity:0.7, lineHeight:1.5 }}>
+          💡 <b>상태 아이콘</b> 클릭 → 순환 · <b>라벨</b> 클릭 → 수정 · <b>▲▼</b> 순서 · <b>⌄</b> 상세 · <b>✕</b> 삭제
+        </div>
+        {weekOptions.length === 0 && (
+          <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.25rem 0.55rem', borderRadius:6, border:'1px solid var(--accent)44', background:'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.68rem', fontWeight:500, flexShrink:0 }}>📅 주차 계획 등록</button>
+        )}
       </div>
 
       {/* Phase list */}
-      <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-        {sorted.map(m => {
+      <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
+        {sorted.map((m, rowIdx) => {
           const stage = MILESTONE_STAGES[m.status] || MILESTONE_STAGES.planned;
           const expanded = expandedId === m.id;
+          const editing = editingLabelId === m.id;
           const assignee = teamMembers?.find(tm => tm.id === m.assignee);
-          // D-n / 지연 계산 — 미완료일 때만
           let deadlineBadge = null;
           if (m.planned_end && m.status !== 'done') {
             const today = new Date(); today.setHours(0,0,0,0);
             const end = new Date(m.planned_end); end.setHours(0,0,0,0);
             const diff = Math.round((end - today) / 86400000);
-            if (diff < 0) deadlineBadge = { text:`지연 +${-diff}일`, color:'#e17055' };
+            if (diff < 0) deadlineBadge = { text:`+${-diff}`, color:'#e17055', title:`${-diff}일 지연` };
             else if (diff === 0) deadlineBadge = { text:'D-Day', color:'#fdcb6e' };
             else if (diff <= 3) deadlineBadge = { text:`D-${diff}`, color:'#fdcb6e' };
             else deadlineBadge = { text:`D-${diff}`, color:'var(--text2)' };
           }
+          const iconBtn = (extra) => ({ padding:'2px 5px', borderRadius:4, border:'none', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.68rem', lineHeight:1, ...extra });
+          const disabledBtn = { ...iconBtn(), opacity:0.2, cursor:'not-allowed' };
           return (
-            <div key={m.id} style={{ borderRadius:8, border:`1px solid ${m.blocked?'#e1705544':'var(--border)'}`, background: m.blocked?'#e1705508':'var(--surface2)' }}>
-              <div style={{ display:'flex', alignItems:'center', gap:8, padding:'0.55rem 0.7rem', cursor:'pointer' }} onClick={()=>setExpandedId(expanded?null:m.id)}>
-                <span style={{ fontSize:'0.9rem', flexShrink:0 }}>{m.blocked?'🔴':stage.emoji}</span>
+            <div key={m.id} style={{ borderRadius:8, border:`1px solid ${m.blocked?'#e1705544':'var(--border)'}`, background: m.blocked?'#e1705508':'var(--surface2)', overflow:'hidden' }}>
+              {/* Row */}
+              <div style={{ display:'flex', alignItems:'center', gap:6, padding:'0.5rem 0.55rem' }}>
+                {/* Status icon — click cycles */}
+                <button onClick={()=>cycleStatus(m)} disabled={saving}
+                  title={`${stage.label} · 클릭으로 다음 단계 (${stage.label==='예정'?'진행중':stage.label==='진행중'?'완료':'예정'})`}
+                  style={{ background:'transparent', border:'none', cursor:'pointer', padding:'2px 4px', fontSize:'1rem', lineHeight:1, flexShrink:0 }}>
+                  {m.blocked ? '🔴' : stage.emoji}
+                </button>
+                {/* Label — click to edit inline */}
                 <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:'0.85rem', fontWeight:500, color:m.status==='done'?'var(--text2)':'var(--text)', textDecoration:m.status==='done'?'line-through':'none' }}>{m.phase_label}</div>
-                  {(m.planned_start || m.planned_end) && (
-                    <div style={{ fontSize:'0.68rem', color:'var(--text2)', marginTop:2, display:'flex', alignItems:'center', gap:6 }}>
-                      <span>{m.planned_start||'—'} ~ {m.planned_end||'—'}</span>
-                      {deadlineBadge && <span style={{ padding:'0.05rem 0.35rem', borderRadius:4, background:deadlineBadge.color+'22', color:deadlineBadge.color, fontWeight:600 }}>{deadlineBadge.text}</span>}
+                  {editing ? (
+                    <input type="text" autoFocus value={editingLabelVal}
+                      onChange={e=>setEditingLabelVal(e.target.value)}
+                      onBlur={()=>commitLabel(m)}
+                      onKeyDown={e=>{ if(e.key==='Enter') commitLabel(m); else if(e.key==='Escape') cancelEditLabel(); }}
+                      style={{ width:'100%', padding:'0.25rem 0.45rem', borderRadius:4, border:`1px solid ${stage.color}`, background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', outline:'none', fontWeight:500, fontFamily:'inherit' }} />
+                  ) : (
+                    <div onClick={()=>beginEditLabel(m)} title="클릭으로 이름 수정"
+                      style={{ fontSize:'0.85rem', fontWeight:500, color:m.status==='done'?'var(--text2)':'var(--text)', textDecoration:m.status==='done'?'line-through':'none', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'text' }}>
+                      {m.phase_label}
                     </div>
                   )}
-                  {(m.blocked && m.blocked_reason) && <div style={{ fontSize:'0.7rem', color:'#e17055', marginTop:2 }}>{m.blocked_reason}</div>}
+                  {(m.planned_start || m.planned_end) && !editing && (
+                    <div style={{ fontSize:'0.65rem', color:'var(--text2)', marginTop:1, opacity:0.7, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                      {m.planned_start||'—'} ~ {m.planned_end||'—'}
+                    </div>
+                  )}
+                  {m.blocked && m.blocked_reason && !editing && (
+                    <div style={{ fontSize:'0.65rem', color:'#e17055', marginTop:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{m.blocked_reason}</div>
+                  )}
                 </div>
-                {assignee && <MemberAvatar member={assignee} size={16} />}
-                <span style={{ fontSize:'0.7rem', color:stage.color, fontWeight:600 }}>{stage.label}</span>
+                {/* Right side */}
+                {m.week_number != null && <span style={{ padding:'0.05rem 0.35rem', borderRadius:4, background:'var(--accent)22', color:'var(--accent2)', fontWeight:600, fontSize:'0.63rem', flexShrink:0 }}>{m.week_number}W</span>}
+                {deadlineBadge && <span title={deadlineBadge.title||deadlineBadge.text} style={{ padding:'0.05rem 0.35rem', borderRadius:4, background:deadlineBadge.color+'22', color:deadlineBadge.color, fontWeight:700, fontSize:'0.63rem', flexShrink:0 }}>{deadlineBadge.text}</span>}
+                {assignee && <MemberAvatar member={assignee} size={14} />}
+                <div style={{ display:'flex', flexShrink:0, borderLeft:'1px solid var(--border)', paddingLeft:4, marginLeft:2 }}>
+                  <button onClick={()=>onReorder(m,'up')} disabled={rowIdx===0} style={rowIdx===0?disabledBtn:iconBtn()} title="위로">▲</button>
+                  <button onClick={()=>onReorder(m,'down')} disabled={rowIdx===sorted.length-1} style={rowIdx===sorted.length-1?disabledBtn:iconBtn()} title="아래로">▼</button>
+                  <button onClick={()=>setExpandedId(expanded?null:m.id)} style={iconBtn({ fontSize:'0.75rem' })} title="상세">{expanded?'⌃':'⌄'}</button>
+                  <button onClick={()=>onDelete(m)} style={iconBtn({ color:'#e17055' })} title="삭제">✕</button>
+                </div>
               </div>
+              {/* Expanded — details only */}
               {expanded && (
-                <div style={{ padding:'0.7rem 0.8rem', borderTop:'1px solid var(--border)', display:'flex', flexDirection:'column', gap:10 }}>
-                  {/* Status selector */}
-                  <div style={{ display:'flex', gap:4 }}>
-                    {MILESTONE_STAGE_ORDER.map(s => {
-                      const st = MILESTONE_STAGES[s];
-                      const sel = m.status === s;
-                      return (
-                        <button key={s} onClick={()=>onUpdate(m,{status:s})} disabled={saving} style={{ flex:1, padding:'0.4rem', borderRadius:6, border:sel?`1px solid ${st.color}`:'1px solid var(--border)', background:sel?st.color+'22':'transparent', color:sel?st.color:'var(--text2)', cursor:'pointer', fontSize:'0.75rem', fontWeight:sel?600:400 }}>
-                          {st.emoji} {st.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {/* Blocked toggle */}
+                <div style={{ padding:'0.7rem 0.8rem', borderTop:'1px solid var(--border)', background:'var(--bg)', display:'flex', flexDirection:'column', gap:10 }}>
+                  {/* Blocked */}
                   <div>
                     <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:'0.78rem', color:'var(--text2)', cursor:'pointer' }}>
                       <input type="checkbox" checked={!!m.blocked} onChange={e=>onUpdate(m,{blocked:e.target.checked, blocked_reason:e.target.checked?m.blocked_reason:null})} style={{ accentColor:'#e17055' }} />
-                      블로킹 표시
+                      🔴 블로킹 표시
                     </label>
                     {m.blocked && (
                       <input type="text" placeholder="블로킹 사유" defaultValue={m.blocked_reason||''}
                         onBlur={e=>{ if(e.target.value!==(m.blocked_reason||'')) onUpdate(m,{blocked_reason:e.target.value||null}); }}
-                        style={{ width:'100%', marginTop:6, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid #e1705544', background:'var(--bg)', color:'var(--text)', fontSize:'0.78rem', outline:'none' }} />
+                        style={{ width:'100%', marginTop:6, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid #e1705544', background:'var(--surface2)', color:'var(--text)', fontSize:'0.78rem', outline:'none' }} />
                     )}
                   </div>
                   {/* Assignee */}
@@ -828,29 +1425,43 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
                     <div>
                       <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:4 }}>담당</div>
                       <select value={m.assignee||''} onChange={e=>onUpdate(m,{assignee:e.target.value||null})}
-                        style={{ width:'100%', padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.78rem', outline:'none' }}>
+                        style={{ width:'100%', padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.78rem', outline:'none' }}>
                         <option value="">— 미지정 —</option>
                         {teamMembers.filter(tm=>tm.is_active).map(tm => <option key={tm.id} value={tm.id}>{tm.name}</option>)}
                       </select>
                     </div>
                   )}
+                  {/* Week number */}
+                  {weekOptions.length > 0 && (
+                    <div>
+                      <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:4 }}>주차 (Epic)</div>
+                      <select value={m.week_number==null?'':m.week_number} onChange={e=>onUpdate(m,{week_number:e.target.value?parseInt(e.target.value):null})}
+                        style={{ width:'100%', padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.78rem', outline:'none' }}>
+                        <option value="">— 미지정 —</option>
+                        {weekOptions.map(w => <option key={w.week} value={w.week}>{w.week}주차{w.title?` — ${w.title}`:''}</option>)}
+                      </select>
+                    </div>
+                  )}
                   {/* Note */}
-                  <textarea placeholder="메모 / 서브태스크 (마크다운 체크리스트 OK)" defaultValue={m.note||''}
-                    onBlur={e=>{ if(e.target.value!==(m.note||'')) onUpdate(m,{note:e.target.value||null}); }}
-                    style={{ width:'100%', minHeight:50, padding:'0.45rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.78rem', resize:'vertical', fontFamily:'inherit', lineHeight:1.5, outline:'none' }} />
+                  <div>
+                    <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:4 }}>메모 / 서브태스크</div>
+                    <textarea placeholder="- [ ] 서브태스크 1&#10;- [ ] 서브태스크 2" defaultValue={m.note||''}
+                      onBlur={e=>{ if(e.target.value!==(m.note||'')) onUpdate(m,{note:e.target.value||null}); }}
+                      style={{ width:'100%', minHeight:60, padding:'0.45rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.78rem', resize:'vertical', fontFamily:'inherit', lineHeight:1.5, outline:'none' }} />
+                  </div>
                   {/* Planned dates */}
                   <div>
                     <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:4 }}>예정 기간</div>
                     <div style={{ display:'flex', gap:6 }}>
                       <input type="date" defaultValue={m.planned_start||''}
                         onBlur={e=>{ const v=e.target.value||null; if(v!==(m.planned_start||null)) onUpdate(m,{planned_start:v}); }}
-                        style={{ flex:1, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.75rem', outline:'none', colorScheme:'dark' }} />
+                        style={{ flex:1, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.75rem', outline:'none', colorScheme:'dark' }} />
                       <input type="date" defaultValue={m.planned_end||''}
                         onBlur={e=>{ const v=e.target.value||null; if(v!==(m.planned_end||null)) onUpdate(m,{planned_end:v}); }}
-                        style={{ flex:1, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.75rem', outline:'none', colorScheme:'dark' }} />
+                        style={{ flex:1, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.75rem', outline:'none', colorScheme:'dark' }} />
                     </div>
                   </div>
-                  {/* Actual dates (manual edit) */}
+                  {/* Actual dates */}
                   {(m.actual_start || m.actual_end) && (
                     <div style={{ fontSize:'0.7rem', color:'var(--text2)', display:'flex', gap:8, flexWrap:'wrap' }}>
                       {m.actual_start && <span>실제 시작 {m.actual_start.split('T')[0]}</span>}
@@ -858,7 +1469,6 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
                       {m.actual_start && m.actual_end && <span style={{ color:'var(--accent2)' }}>({daysBetween(m.actual_start,m.actual_end)}일)</span>}
                     </div>
                   )}
-                  <button onClick={()=>onDelete(m)} style={{ padding:'0.35rem', borderRadius:6, border:'1px solid #e1705544', background:'transparent', color:'#e17055', cursor:'pointer', fontSize:'0.72rem' }}>작업 삭제</button>
                 </div>
               )}
             </div>
@@ -866,19 +1476,700 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
         })}
       </div>
 
-      {/* Add new */}
-      <div style={{ marginTop:10, display:'flex', gap:6 }}>
-        <input type="text" placeholder="작업 추가" value={newLabel} onChange={e=>setNewLabel(e.target.value)}
+      {/* Add new — prominent dashed row */}
+      <div style={{ marginTop:12, padding:'0.45rem 0.55rem', borderRadius:8, border:'1px dashed var(--border)', display:'flex', gap:6, alignItems:'center', transition:'border-color 0.15s' }}>
+        <span style={{ fontSize:'1rem', color:'var(--text2)', lineHeight:1, paddingLeft:2, flexShrink:0 }}>＋</span>
+        <input type="text" placeholder="작업 추가 (Enter)" value={newLabel} onChange={e=>setNewLabel(e.target.value)}
           onKeyDown={e=>{ if(e.key==='Enter' && newLabel.trim()){ onAdd(project.slug,newLabel); setNewLabel(''); } }}
-          style={{ flex:1, padding:'0.45rem 0.65rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', outline:'none' }} />
-        <button onClick={()=>{ if(newLabel.trim()){ onAdd(project.slug,newLabel); setNewLabel(''); } }} disabled={!newLabel.trim()} style={{ padding:'0.45rem 0.8rem', borderRadius:8, border:'none', background:newLabel.trim()?'var(--accent)':'var(--border)', color:'#fff', cursor:newLabel.trim()?'pointer':'not-allowed', fontSize:'0.78rem', fontWeight:600 }}>+</button>
+          style={{ flex:1, padding:'0.3rem 0.4rem', borderRadius:6, border:'none', background:'transparent', color:'var(--text)', fontSize:'0.82rem', outline:'none', fontFamily:'inherit' }} />
+        {newLabel.trim() && (
+          <button onClick={()=>{ onAdd(project.slug,newLabel); setNewLabel(''); }}
+            style={{ padding:'0.3rem 0.75rem', borderRadius:6, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.75rem', fontWeight:600, flexShrink:0 }}>추가</button>
+        )}
       </div>
     </div>
   );
 }
 
+// ─── PhaseDetail (right panel in ProjectView) ───
+function PhaseDetail({ milestone, teamMembers, saving, onUpdate, onDelete, weekOptions }) {
+  const m = milestone;
+  const [label, setLabel] = useState(m.phase_label);
+  const [note, setNote] = useState(m.note || '');
+  const [blockedReason, setBlockedReason] = useState(m.blocked_reason || '');
+
+  useEffect(() => {
+    setLabel(m.phase_label);
+    setNote(m.note || '');
+    setBlockedReason(m.blocked_reason || '');
+  }, [m.id, m.phase_label, m.note, m.blocked_reason]);
+
+  const commitLabel = () => {
+    const v = label.trim();
+    if (v && v !== m.phase_label) onUpdate(m, { phase_label: v });
+    else setLabel(m.phase_label);
+  };
+  const commitNote = () => { if (note !== (m.note || '')) onUpdate(m, { note: note || null }); };
+  const commitBlockedReason = () => { if (blockedReason !== (m.blocked_reason || '')) onUpdate(m, { blocked_reason: blockedReason || null }); };
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
+      <input type="text" value={label} onChange={e=>setLabel(e.target.value)} onBlur={commitLabel}
+        onKeyDown={e=>{ if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){ setLabel(m.phase_label); e.target.blur(); } }}
+        style={{ width:'100%', padding:'0.7rem 0.9rem', borderRadius:10, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'1.15rem', fontWeight:600, outline:'none', fontFamily:'inherit' }} />
+
+      <div>
+        <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.04em' }}>상태</div>
+        <div style={{ display:'flex', gap:6 }}>
+          {MILESTONE_STAGE_ORDER.map(s => {
+            const st = MILESTONE_STAGES[s];
+            const sel = m.status === s;
+            return (
+              <button key={s} onClick={()=>onUpdate(m,{status:s})} disabled={saving}
+                style={{ flex:1, padding:'0.75rem', borderRadius:8, border:sel?`2px solid ${st.color}`:'2px solid var(--border)', background:sel?st.color+'22':'transparent', color:sel?st.color:'var(--text2)', cursor:'pointer', fontSize:'0.9rem', fontWeight:sel?700:500, transition:'all 0.1s' }}>
+                {st.emoji} {st.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:'0.85rem', color:'var(--text2)', cursor:'pointer' }}>
+          <input type="checkbox" checked={!!m.blocked} onChange={e=>onUpdate(m,{blocked:e.target.checked, blocked_reason:e.target.checked?m.blocked_reason:null})} style={{ accentColor:'#e17055' }} />
+          🔴 블로킹 표시
+        </label>
+        {m.blocked && (
+          <input type="text" placeholder="블로킹 사유" value={blockedReason} onChange={e=>setBlockedReason(e.target.value)} onBlur={commitBlockedReason}
+            style={{ width:'100%', marginTop:6, padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid #e1705544', background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', outline:'none' }} />
+        )}
+      </div>
+
+      {teamMembers && teamMembers.length > 0 && (
+        <div>
+          <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.04em' }}>담당</div>
+          <select value={m.assignee||''} onChange={e=>onUpdate(m,{assignee:e.target.value||null})}
+            style={{ width:'100%', padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', outline:'none' }}>
+            <option value="">— 미지정 —</option>
+            {teamMembers.filter(tm=>tm.is_active).map(tm => <option key={tm.id} value={tm.id}>{tm.name}</option>)}
+          </select>
+        </div>
+      )}
+
+      {weekOptions && weekOptions.length > 0 && (
+        <div>
+          <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.04em' }}>주차 (Epic)</div>
+          <select value={m.week_number==null?'':m.week_number} onChange={e=>onUpdate(m,{week_number:e.target.value?parseInt(e.target.value):null})}
+            style={{ width:'100%', padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', outline:'none' }}>
+            <option value="">— 미지정 —</option>
+            {weekOptions.map(w => <option key={w.week} value={w.week}>{w.week}주차{w.title?` — ${w.title}`:''}</option>)}
+          </select>
+        </div>
+      )}
+
+      <div>
+        <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.04em' }}>예정 기간</div>
+        <div style={{ display:'flex', gap:8 }}>
+          <input type="date" defaultValue={m.planned_start||''}
+            onBlur={e=>{ const v=e.target.value||null; if(v!==(m.planned_start||null)) onUpdate(m,{planned_start:v}); }}
+            style={{ flex:1, padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', outline:'none', colorScheme:'dark' }} />
+          <input type="date" defaultValue={m.planned_end||''}
+            onBlur={e=>{ const v=e.target.value||null; if(v!==(m.planned_end||null)) onUpdate(m,{planned_end:v}); }}
+            style={{ flex:1, padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', outline:'none', colorScheme:'dark' }} />
+        </div>
+      </div>
+
+      <div>
+        <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.04em' }}>메모 / 서브태스크</div>
+        <textarea value={note} onChange={e=>setNote(e.target.value)} onBlur={commitNote}
+          placeholder={"- [ ] 서브태스크 1\n- [ ] 서브태스크 2\n\n자유롭게 메모..."}
+          style={{ width:'100%', minHeight:260, padding:'0.8rem 0.95rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.88rem', resize:'vertical', fontFamily:'inherit', lineHeight:1.6, outline:'none' }} />
+      </div>
+
+      {(m.actual_start || m.actual_end) && (
+        <div style={{ padding:'0.7rem 0.9rem', borderRadius:8, background:'var(--surface2)', fontSize:'0.78rem', color:'var(--text2)', display:'flex', gap:14, flexWrap:'wrap' }}>
+          {m.actual_start && <span>실제 시작 <b style={{color:'var(--text)'}}>{m.actual_start.split('T')[0]}</b></span>}
+          {m.actual_end && <span>실제 완료 <b style={{color:'var(--text)'}}>{m.actual_end.split('T')[0]}</b></span>}
+          {m.actual_start && m.actual_end && <span style={{ color:'var(--accent2)' }}>({daysBetween(m.actual_start,m.actual_end)}일 소요)</span>}
+        </div>
+      )}
+
+      <div style={{ borderTop:'1px solid var(--border)', paddingTop:16 }}>
+        <button onClick={()=>onDelete(m)} style={{ padding:'0.6rem 1rem', borderRadius:8, border:'1px solid #e1705544', background:'transparent', color:'#e17055', cursor:'pointer', fontSize:'0.82rem', fontWeight:500 }}>작업 삭제</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── MilestoneEditModal ───
+function MilestoneEditModal({ milestone, teamMembers, saving, onUpdate, onDelete, onClose, weekOptions }) {
+  useEffect(() => {
+    const h = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+
+  if (!milestone) return null;
+  const stage = MILESTONE_STAGES[milestone.status] || MILESTONE_STAGES.planned;
+
+  const wrappedDelete = (m) => { onDelete(m); onClose(); };
+
+  return (
+    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1500, padding:'2rem 1rem' }}>
+      <div onClick={e=>e.stopPropagation()} style={{
+        background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:640,
+        border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
+        boxShadow:'0 20px 60px rgba(0,0,0,0.5)', maxHeight:'90vh', display:'flex', flexDirection:'column',
+      }}>
+        <div style={{ padding:'0.95rem 1.25rem', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:10, flexShrink:0 }}>
+          <span style={{ fontSize:'1.2rem' }}>{milestone.blocked?'🔴':stage.emoji}</span>
+          <span style={{ fontSize:'0.72rem', fontWeight:700, color:stage.color, textTransform:'uppercase', letterSpacing:'0.05em', padding:'0.22rem 0.6rem', borderRadius:12, background:stage.color+'22', flexShrink:0 }}>{stage.label}</span>
+          <div style={{ flex:1 }} />
+          <button onClick={onClose} title="닫기 (Esc)" style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem', padding:'4px 8px', lineHeight:1 }}>✕</button>
+        </div>
+        <div style={{ padding:'1.3rem 1.4rem', overflowY:'auto', flex:1 }}>
+          <PhaseDetail milestone={milestone} teamMembers={teamMembers} saving={saving} onUpdate={onUpdate} onDelete={wrappedDelete} weekOptions={weekOptions} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ProjectView (Jira-style full-screen project page) ───
+function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, onUpdate, onDelete, onAdd, onBulkAdd, onReorder, onCreateFromTemplate, onBack, onBulkCreateWeekly, onClearWeeklyPlan, onRequestConfirm }) {
+  // Sort: by week_number asc (unassigned last), then by order_idx asc.
+  // 같은 컬럼 안에서 주차별로 자동 클러스터링되어 시각적으로 묶임.
+  const sortedAll = useMemo(() => {
+    const wkKey = (m) => (m.week_number == null ? Number.POSITIVE_INFINITY : m.week_number);
+    return [...(milestones||[])].sort((a,b) => {
+      const wa = wkKey(a), wb = wkKey(b);
+      if (wa !== wb) return wa - wb;
+      return (a.order_idx||0) - (b.order_idx||0);
+    });
+  }, [milestones]);
+  const [editingId, setEditingId] = useState(null);
+  const [newLabel, setNewLabel] = useState('');
+  const [newWeek, setNewWeek] = useState('');
+  const [draggingId, setDraggingId] = useState(null);
+  const [dragOverCol, setDragOverCol] = useState(null);
+  const [showWeeklyInput, setShowWeeklyInput] = useState(false);
+  const [weekFilter, setWeekFilter] = useState('all'); // 'all' | number | 'none'
+
+  const sorted = useMemo(() => {
+    if (weekFilter === 'all') return sortedAll;
+    if (weekFilter === 'none') return sortedAll.filter(m => m.week_number == null);
+    return sortedAll.filter(m => m.week_number === weekFilter);
+  }, [sortedAll, weekFilter]);
+
+  const weekOptions = useMemo(() => {
+    if (Array.isArray(project?.weekly_plan) && project.weekly_plan.length > 0) {
+      return [...project.weekly_plan].sort((a,b)=>(a.week||0)-(b.week||0)).map(w => ({ week:w.week, title:w.title||'' }));
+    }
+    const nums = new Set();
+    (milestones||[]).forEach(m => { if (m.week_number != null) nums.add(m.week_number); });
+    return [...nums].sort((a,b)=>a-b).map(w => ({ week:w, title:'' }));
+  }, [project?.weekly_plan, milestones]);
+
+  const handleDragStart = (e, m) => {
+    setDraggingId(m.id);
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', m.id); } catch (err) {}
+  };
+  const handleDragEnd = () => { setDraggingId(null); setDragOverCol(null); };
+  const handleColDragOver = (e, stageKey) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverCol !== stageKey) setDragOverCol(stageKey);
+  };
+  const handleColDrop = (e, stageKey) => {
+    e.preventDefault();
+    const id = draggingId;
+    setDraggingId(null); setDragOverCol(null);
+    if (!id) return;
+    const m = sorted.find(x => x.id === id);
+    if (m && m.status !== stageKey) onUpdate(m, { status: stageKey });
+  };
+
+  // If the currently-edited milestone is deleted elsewhere, close modal
+  useEffect(() => {
+    if (editingId && !sortedAll.find(m => m.id === editingId)) setEditingId(null);
+  }, [sortedAll, editingId]);
+
+  // Keyboard navigation: [ / ] to step through week filter (skips when typing or modal open)
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key !== '[' && e.key !== ']') return;
+      if (editingId || showWeeklyInput) return;
+      const tag = (e.target?.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
+      if (weekOptions.length === 0) return;
+      const order = weekOptions.map(w => w.week);
+      const noneCount = sortedAll.filter(m => m.week_number == null).length;
+      if (noneCount > 0) order.push('none');
+      const idx = weekFilter === 'all' ? -1 : order.indexOf(weekFilter);
+      if (e.key === ']') {
+        const next = idx < 0 ? order[0] : (idx < order.length - 1 ? order[idx + 1] : null);
+        if (next != null) { e.preventDefault(); setWeekFilter(next); }
+      } else {
+        if (idx > 0) { e.preventDefault(); setWeekFilter(order[idx - 1]); }
+        else if (idx === 0) { e.preventDefault(); setWeekFilter('all'); }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [weekFilter, weekOptions, sortedAll, editingId, showWeeklyInput]);
+
+  const editing = sortedAll.find(m => m.id === editingId);
+  const doneCount = sortedAll.filter(m => m.status==='done').length;
+  const pct = sortedAll.length ? Math.round((doneCount/sortedAll.length)*100) : 0;
+  const hasBlocked = sortedAll.some(m => m.blocked);
+
+  // Week progress: 완료된 주차 수 / 전체 주차
+  // 한 주차가 "완료"되려면 그 주차에 티켓이 있고 모두 done이어야 함.
+  // 고아 티켓(weekOptions에 없는 week_number)은 무시.
+  const totalWeeks = weekOptions.length;
+  const { completedWeeks, focusWeek, staleWeeks } = (() => {
+    if (totalWeeks === 0) return { completedWeeks: 0, focusWeek: null, staleWeeks: [] };
+    const tally = {};
+    weekOptions.forEach(w => { tally[w.week] = { total: 0, done: 0 }; });
+    sortedAll.forEach(m => {
+      if (m.week_number != null && tally[m.week_number]) {
+        tally[m.week_number].total++;
+        if (m.status === 'done') tally[m.week_number].done++;
+      }
+    });
+    let completed = 0;
+    let focus = null;
+    const sortedWeekNums = weekOptions.map(w => w.week);
+    sortedWeekNums.forEach(wn => {
+      const t = tally[wn];
+      if (t.total > 0 && t.done === t.total) completed++;
+      else if (focus == null) focus = wn;
+    });
+    // Stale: 이 주차가 미완료인데, 이후 주차에 done 티켓이 존재하는 경우
+    const stale = [];
+    sortedWeekNums.forEach((wn, i) => {
+      const t = tally[wn];
+      const isUnfinished = !(t.total > 0 && t.done === t.total);
+      if (!isUnfinished) return;
+      const laterHasDone = sortedWeekNums.slice(i+1).some(wn2 => tally[wn2].done > 0);
+      if (laterHasDone) stale.push(wn);
+    });
+    return { completedWeeks: completed, focusWeek: focus, staleWeeks: stale };
+  })();
+  const weekPct = totalWeeks > 0 ? Math.round((completedWeeks / totalWeeks) * 100) : 0;
+
+  const cycleStatus = (m) => {
+    const next = m.status === 'planned' ? 'in_progress' : m.status === 'in_progress' ? 'done' : 'planned';
+    onUpdate(m, { status: next });
+  };
+
+  const meta = STATUS_META[project?.current_status] || {};
+  const mgrM  = teamMembers?.find(tm => tm.id===project?.assigned_manager);
+  const mainM = teamMembers?.find(tm => tm.id===project?.assigned_main);
+  const subM  = teamMembers?.find(tm => tm.id===project?.assigned_sub);
+
+  const backBtn = (
+    <button onClick={onBack} style={{ padding:'0.5rem 0.85rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface)', color:'var(--text)', cursor:'pointer', fontSize:'0.85rem', fontWeight:500, flexShrink:0 }}>← 대시보드로</button>
+  );
+
+  if (!project) {
+    return (
+      <div style={{ maxWidth:800, margin:'0 auto', padding:'2rem 1rem' }}>
+        {backBtn}
+        <div style={{ marginTop:24, padding:'2rem', textAlign:'center', color:'var(--text2)', background:'var(--surface)', borderRadius:12, border:'1px solid var(--border)' }}>프로젝트를 찾을 수 없습니다</div>
+      </div>
+    );
+  }
+
+  if (setupNeeded) {
+    return (
+      <div style={{ maxWidth:900, margin:'0 auto', padding:'1.5rem 1rem' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:16 }}>
+          {backBtn}
+          <h1 style={{ fontSize:'1.15rem', fontWeight:600, margin:0 }}>{project.title||project.slug}</h1>
+        </div>
+        <div style={{ padding:'0.9rem 1.1rem', borderRadius:10, background:'#fdcb6e12', border:'1px solid #fdcb6e33', marginBottom:'0.75rem' }}>
+          <div style={{ fontSize:'0.9rem', fontWeight:600, color:'var(--yellow)', marginBottom:4 }}>⚠️ DB 설정 필요</div>
+          <div style={{ fontSize:'0.8rem', color:'var(--text2)', lineHeight:1.5 }}>작업 트래커를 사용하려면 project_milestones 테이블을 먼저 생성하세요.</div>
+        </div>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+          <div style={{ fontSize:'0.78rem', color:'var(--text2)' }}>Supabase SQL 에디터에서 실행</div>
+          <button onClick={() => { navigator.clipboard.writeText(MILESTONE_SETUP_SQL); }} style={{ padding:'0.35rem 0.7rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', cursor:'pointer', fontSize:'0.78rem' }}>📋 SQL 복사</button>
+        </div>
+        <pre style={{ background:'var(--bg)', padding:'0.9rem', borderRadius:8, fontSize:'0.72rem', color:'var(--text2)', overflow:'auto', maxHeight:360, border:'1px solid var(--border)', lineHeight:1.5 }}>{MILESTONE_SETUP_SQL}</pre>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ maxWidth:1400, margin:'0 auto', padding:'1rem 1.25rem' }}>
+      {/* Header */}
+      <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:10, flexWrap:'wrap' }}>
+        {backBtn}
+        <h1 style={{ fontSize:'1.2rem', fontWeight:600, margin:0, flex:1, minWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{project.title || project.slug}</h1>
+        <span style={{ padding:'0.3rem 0.7rem', borderRadius:6, fontSize:'0.78rem', fontWeight:500, background:meta.color+'22', color:meta.color, border:`1px solid ${meta.color}44`, flexShrink:0 }}>
+          {meta.emoji} {meta.label}
+        </span>
+        {mgrM && <MemberBadge member={mgrM} role="mgr" />}
+        {mainM && <MemberBadge member={mainM} role="main" />}
+        {subM && <MemberBadge member={subM} role="sub" />}
+      </div>
+      <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontFamily:'monospace', marginBottom:14, paddingLeft:2 }}>
+        {project.slug}
+        {project.wishket_url && <> · <a href={project.wishket_url} target="_blank" rel="noopener" style={{ color:'var(--yellow)', textDecoration:'none' }}>위시켓 공고 ↗</a></>}
+      </div>
+
+      {/* Weekly milestone input */}
+      {showWeeklyInput && (
+        <div style={{ marginBottom:14 }}>
+          <WeeklyMilestoneInput project={project} saving={saving} milestones={milestones} onBulkCreate={(slug, weeks) => { onBulkCreateWeekly(slug, weeks); setShowWeeklyInput(false); }} onClearPlan={(slug) => { onClearWeeklyPlan && onClearWeeklyPlan(slug); setShowWeeklyInput(false); }} onClose={() => setShowWeeklyInput(false)} onRequestConfirm={onRequestConfirm} />
+        </div>
+      )}
+
+      {/* Progress summary */}
+      <div style={{ padding:'0.9rem 1.1rem', borderRadius:12, background:'var(--surface)', border:'1px solid var(--border)', marginBottom:14 }}>
+        {/* Week timeline (muted, secondary) */}
+        {totalWeeks > 0 && (
+          <div style={{ marginBottom:12 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
+              <div style={{ fontSize:'0.7rem', color:'var(--text2)', fontWeight:500, letterSpacing:'0.02em', textTransform:'uppercase', opacity:0.8 }}>
+                📅 타임라인 {completedWeeks}/{totalWeeks}
+                {focusWeek != null && (
+                  <button onClick={() => setWeekFilter(weekFilter === focusWeek ? 'all' : focusWeek)}
+                    title="이 주차로 칸반 필터링"
+                    style={{ marginLeft:8, padding:'1px 6px', borderRadius:4, border:'1px solid var(--accent)44', background: weekFilter===focusWeek ? 'var(--accent)22' : 'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.65rem', fontWeight:600, textTransform:'none', letterSpacing:0 }}>
+                    👉 다음 {focusWeek}주차
+                  </button>
+                )}
+              </div>
+              <div style={{ fontSize:'0.72rem', fontWeight:600, color:'var(--text2)' }}>{weekPct}%</div>
+            </div>
+            <div style={{ height:4, background:'var(--bg)', borderRadius:2, overflow:'hidden' }}>
+              <div style={{ width:weekPct+'%', height:'100%', background:'var(--text2)', opacity:0.5, transition:'width 0.3s' }} />
+            </div>
+            {staleWeeks.length > 0 && (
+              <div style={{ marginTop:6, fontSize:'0.65rem', color:'var(--yellow)', opacity:0.85 }}>
+                ⚠️ {staleWeeks.join(', ')}주차가 미완료인데 이후 주차 작업이 진행됨 — 작업 순서 점검 필요
+              </div>
+            )}
+          </div>
+        )}
+        {/* Ticket completion (primary KPI) */}
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+          <div style={{ fontSize:'0.95rem', fontWeight:700 }}>
+            🎫 완료율 {sortedAll.length === 0 ? <span style={{ color:'var(--text2)', fontWeight:500, fontSize:'0.85rem' }}>티켓 없음</span> : `${doneCount}/${sortedAll.length}`}
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            {weekOptions.length === 0 && (
+              <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.3rem 0.65rem', borderRadius:6, border:'1px solid var(--accent)44', background:'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.72rem', fontWeight:500 }}>📅 주차 계획 등록</button>
+            )}
+            {sortedAll.length > 0 && <div style={{ fontSize:'1.2rem', fontWeight:700, color:hasBlocked?'#e17055':'var(--green)' }}>{pct}%</div>}
+          </div>
+        </div>
+        <div style={{ height:10, background:'var(--bg)', borderRadius:5, overflow:'hidden' }}>
+          <div style={{ width:pct+'%', height:'100%', background:hasBlocked?'#e17055':'var(--green)', transition:'width 0.3s' }} />
+        </div>
+        {hasBlocked && <div style={{ marginTop:8, fontSize:'0.75rem', color:'#e17055' }}>🔴 블로킹된 작업이 있습니다</div>}
+        {/* Per-week breakdown (detail of the timeline shown above) */}
+        {weekOptions.length > 0 && (
+          <div style={{ marginTop:12, paddingTop:10, borderTop:'1px dashed var(--border)' }}>
+            <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:6 }}>
+              <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.2rem 0.55rem', borderRadius:5, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.68rem' }}>주차 계획 수정</button>
+            </div>
+            <WeeklyProgressBars weeklyPlan={project?.weekly_plan} milestones={sortedAll} focusWeek={focusWeek} activeFilter={weekFilter} onFilterWeek={setWeekFilter} onAddTicket={(label, week) => onAdd(project.slug, label, week)} />
+          </div>
+        )}
+      </div>
+
+      {/* Week filter bar */}
+      {weekOptions.length > 0 && sortedAll.length > 0 && (
+        <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:12, flexWrap:'wrap' }}>
+          <span style={{ fontSize:'0.68rem', color:'var(--text2)', marginRight:4 }}>주차 필터</span>
+          {(() => {
+            const chipStyle = (active) => ({
+              padding:'0.25rem 0.65rem', borderRadius:14, fontSize:'0.7rem', fontWeight:500,
+              border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
+              background: active ? 'var(--accent)22' : 'var(--surface)',
+              color: active ? 'var(--accent2)' : 'var(--text2)',
+              cursor:'pointer',
+            });
+            const chips = [
+              <button key="all" onClick={() => setWeekFilter('all')} style={chipStyle(weekFilter==='all')}>전체 ({sortedAll.length})</button>,
+              ...weekOptions.map(w => {
+                const count = sortedAll.filter(m => m.week_number === w.week).length;
+                return (
+                  <button key={w.week} onClick={() => setWeekFilter(w.week)} title={w.title} style={chipStyle(weekFilter===w.week)}>
+                    {w.week}주차 ({count})
+                  </button>
+                );
+              }),
+            ];
+            const noneCount = sortedAll.filter(m => m.week_number == null).length;
+            if (noneCount > 0) chips.push(
+              <button key="none" onClick={() => setWeekFilter('none')} style={chipStyle(weekFilter==='none')}>미지정 ({noneCount})</button>
+            );
+            return chips;
+          })()}
+        </div>
+      )}
+
+      {/* Active filter banner — makes the hidden context obvious */}
+      {weekFilter !== 'all' && sortedAll.length > 0 && (() => {
+        const activeLabel = weekFilter === 'none' ? '주차 미지정' :
+          (() => {
+            const w = weekOptions.find(o => o.week === weekFilter);
+            return w ? `${w.week}주차${w.title ? ` · ${w.title}` : ''}` : `${weekFilter}주차`;
+          })();
+        const hidden = sortedAll.length - sorted.length;
+        // prev/next: weekOptions 순서 기반. 'none'은 마지막에 위치한다고 간주.
+        const filterOrder = [...weekOptions.map(w => w.week)];
+        const noneCount = sortedAll.filter(m => m.week_number == null).length;
+        if (noneCount > 0) filterOrder.push('none');
+        const idx = filterOrder.indexOf(weekFilter);
+        const prevFilter = idx > 0 ? filterOrder[idx - 1] : null;
+        const nextFilter = idx >= 0 && idx < filterOrder.length - 1 ? filterOrder[idx + 1] : null;
+        const navBtn = (enabled) => ({
+          padding:'0.25rem 0.55rem', borderRadius:6, border:'1px solid var(--accent)44',
+          background: enabled ? 'var(--surface)' : 'transparent', color: enabled ? 'var(--accent2)' : 'var(--text2)',
+          cursor: enabled ? 'pointer' : 'not-allowed', fontSize:'0.7rem', fontWeight:600, opacity: enabled ? 1 : 0.4,
+        });
+        return (
+          <div style={{ display:'flex', alignItems:'center', gap:10, padding:'0.5rem 0.8rem', marginBottom:10, borderRadius:8, background:'var(--accent)11', border:'1px solid var(--accent)44' }}>
+            <span style={{ fontSize:'0.75rem', color:'var(--accent2)', fontWeight:600 }}>🔍 {activeLabel} 필터링 중</span>
+            <span style={{ fontSize:'0.7rem', color:'var(--text2)' }}>{sorted.length}개 표시 · {hidden}개 숨김</span>
+            <div style={{ flex:1 }} />
+            <button onClick={() => prevFilter != null && setWeekFilter(prevFilter)} disabled={prevFilter == null}
+              title="이전 주차 (단축키: [)" style={navBtn(prevFilter != null)}>← 이전</button>
+            <button onClick={() => nextFilter != null && setWeekFilter(nextFilter)} disabled={nextFilter == null}
+              title="다음 주차 (단축키: ])" style={navBtn(nextFilter != null)}>다음 →</button>
+            <button onClick={() => setWeekFilter('all')}
+              style={{ padding:'0.25rem 0.7rem', borderRadius:6, border:'1px solid var(--accent)44', background:'var(--surface)', color:'var(--accent2)', cursor:'pointer', fontSize:'0.7rem', fontWeight:600 }}>
+              ✕ 해제
+            </button>
+          </div>
+        );
+      })()}
+
+      {sortedAll.length === 0 ? (
+        <div style={{ padding:'3rem 1.5rem', textAlign:'center', background:'var(--surface)', borderRadius:12, border:'1px solid var(--border)' }}>
+          <div style={{ fontSize:'3rem', marginBottom:12 }}>📋</div>
+          <div style={{ fontSize:'1rem', marginBottom:6, color:'var(--text)' }}>등록된 작업이 없습니다</div>
+          <div style={{ fontSize:'0.85rem', color:'var(--text2)', marginBottom:24 }}>
+            {(() => {
+              const planItems = (project?.weekly_plan || []).reduce((s, w) => s + (Array.isArray(w.description) ? w.description.length : 0), 0);
+              return planItems > 0
+                ? `등록된 주차 계획에 ${planItems}개의 항목이 있습니다 — 한 번에 티켓으로 만들 수 있어요`
+                : '템플릿으로 시작하거나 직접 추가할 수 있어요';
+            })()}
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8, maxWidth:360, margin:'0 auto' }}>
+            {(() => {
+              const plan = project?.weekly_plan || [];
+              const allItems = plan.flatMap(w => (w.description || []).map(label => ({ label, week: w.week })));
+              if (allItems.length === 0) return null;
+              return (
+                <button onClick={() => {
+                  const doBulk = () => {
+                    if (onBulkAdd) onBulkAdd(project.slug, allItems);
+                    else allItems.forEach(it => onAdd(project.slug, it.label, it.week));
+                  };
+                  if (onRequestConfirm) {
+                    onRequestConfirm({
+                      title: '주차 계획에서 티켓 생성',
+                      message: `${allItems.length}개의 항목을 티켓으로 생성합니다.\n각 티켓은 해당 주차에 자동 배정됩니다.`,
+                      confirmLabel: '생성',
+                      onConfirm: doBulk,
+                    });
+                  } else {
+                    doBulk();
+                  }
+                }} disabled={saving}
+                  style={{ padding:'0.8rem', borderRadius:10, border:'1px solid var(--accent2)', background:'var(--accent2)22', color:'var(--accent2)', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>
+                  ✨ 주차 계획에서 {allItems.length}개 티켓 일괄 생성
+                </button>
+              );
+            })()}
+            <button onClick={() => setShowWeeklyInput(true)} disabled={saving}
+              style={{ padding:'0.8rem', borderRadius:10, border:'1px solid var(--accent)', background:'var(--accent)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>
+              📅 주차 계획 (Epic) {(project?.weekly_plan || []).length > 0 ? '수정' : '등록'}
+            </button>
+            {Object.entries(MILESTONE_TEMPLATES).map(([key,tpl]) => (
+              <button key={key} onClick={() => onCreateFromTemplate(project.slug, key)} disabled={saving}
+                style={{ padding:'0.8rem', borderRadius:10, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>
+                📋 {tpl.label} 템플릿 ({tpl.phases.length}개 작업)
+              </button>
+            ))}
+          </div>
+          <div style={{ marginTop:20, maxWidth:360, margin:'20px auto 0', display:'flex', gap:6 }}>
+            <input type="text" placeholder="또는 직접 작업 이름 입력" value={newLabel} onChange={e=>setNewLabel(e.target.value)}
+              onKeyDown={e=>{ if(e.key==='Enter' && newLabel.trim()){ onAdd(project.slug,newLabel); setNewLabel(''); } }}
+              style={{ flex:1, padding:'0.6rem 0.8rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.85rem', outline:'none' }} />
+            <button onClick={()=>{ if(newLabel.trim()){ onAdd(project.slug,newLabel); setNewLabel(''); } }} disabled={!newLabel.trim()} style={{ padding:'0.6rem 1rem', borderRadius:8, border:'none', background:newLabel.trim()?'var(--surface2)':'var(--border)', color:'var(--text)', cursor:newLabel.trim()?'pointer':'not-allowed', fontSize:'0.82rem' }}>+ 추가</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, minmax(0, 1fr))', gap:14 }}>
+          {MILESTONE_STAGE_ORDER.map(stageKey => {
+            const stage = MILESTONE_STAGES[stageKey];
+            const cards = sorted.filter(m => m.status === stageKey);
+            const isPlannedCol = stageKey === 'planned';
+            const isDragOver = dragOverCol === stageKey && draggingId && sorted.find(x=>x.id===draggingId)?.status !== stageKey;
+            return (
+              <div key={stageKey}
+                onDragOver={(e) => handleColDragOver(e, stageKey)}
+                onDrop={(e) => handleColDrop(e, stageKey)}
+                style={{
+                  background: isDragOver ? stage.color+'10' : 'var(--surface)',
+                  border: `${isDragOver ? '2px dashed ' + stage.color : '1px solid var(--border)'}`,
+                  borderRadius:12,
+                  padding: isDragOver ? '0.78rem 0.68rem' : '0.85rem 0.75rem', // compensate border width change
+                  display:'flex', flexDirection:'column', minHeight:320,
+                  transition:'background 0.12s',
+                }}>
+                {/* Column header */}
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0.15rem 0.35rem 0.7rem', borderBottom:`2px solid ${stage.color}33`, marginBottom:10, flexShrink:0 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:7, minWidth:0 }}>
+                    <span style={{ fontSize:'0.95rem' }}>{stage.emoji}</span>
+                    <span style={{ fontSize:'0.78rem', fontWeight:700, color:stage.color, textTransform:'uppercase', letterSpacing:'0.05em', whiteSpace:'nowrap' }}>{stage.label}</span>
+                  </div>
+                  <span style={{ fontSize:'0.72rem', fontWeight:700, color:stage.color, padding:'0.12rem 0.55rem', borderRadius:10, background:stage.color+'22', flexShrink:0 }}>{cards.length}</span>
+                </div>
+                {/* Cards */}
+                <div style={{ display:'flex', flexDirection:'column', gap:7, overflowY:'auto', maxHeight:'65vh', paddingRight:2, flex:1 }}>
+                  {cards.length === 0 ? (
+                    <div style={{ padding:'1.1rem 0.5rem', textAlign:'center', color:'var(--text2)', fontSize:'0.72rem', opacity:0.4, border:'1px dashed var(--border)', borderRadius:6 }}>
+                      {weekFilter !== 'all' && sortedAll.filter(m => m.status === stageKey).length > 0 ? '필터에 해당 없음' : '비어 있음'}
+                    </div>
+                  ) : cards.map((m, ci) => {
+                    const prev = ci > 0 ? cards[ci - 1] : null;
+                    const showWeekDivider = weekFilter === 'all' && (!prev || prev.week_number !== m.week_number);
+                    const assignee = teamMembers?.find(tm => tm.id === m.assignee);
+                    let deadlineBadge = null;
+                    if (m.planned_end && m.status !== 'done') {
+                      const today = new Date(); today.setHours(0,0,0,0);
+                      const end = new Date(m.planned_end); end.setHours(0,0,0,0);
+                      const diff = Math.round((end - today) / 86400000);
+                      if (diff < 0) deadlineBadge = { text:`+${-diff}`, color:'#e17055', title:`${-diff}일 지연` };
+                      else if (diff === 0) deadlineBadge = { text:'D-Day', color:'#fdcb6e' };
+                      else if (diff <= 3) deadlineBadge = { text:`D-${diff}`, color:'#fdcb6e' };
+                      else deadlineBadge = { text:`D-${diff}`, color:'var(--text2)' };
+                    }
+                    const nextStageLabel = m.status==='planned'?'진행중':m.status==='in_progress'?'완료':'예정';
+                    const noteHasSub = m.note && m.note.includes('- [');
+                    const isDragging = draggingId === m.id;
+                    return (
+                      <React.Fragment key={m.id}>
+                      {showWeekDivider && (
+                        <div style={{ display:'flex', alignItems:'center', gap:6, padding:'2px 2px', marginTop: ci === 0 ? 0 : 4 }}>
+                          <span style={{ fontSize:'0.6rem', fontWeight:600, color:'var(--text2)', letterSpacing:'0.04em', textTransform:'uppercase', opacity:0.6 }}>
+                            {m.week_number != null ? `${m.week_number}주차` : '주차 미지정'}
+                          </span>
+                          <div style={{ flex:1, height:1, background:'var(--border)', opacity:0.5 }} />
+                        </div>
+                      )}
+                      <div
+                        draggable
+                        onDragStart={(e)=>handleDragStart(e, m)}
+                        onDragEnd={handleDragEnd}
+                        onClick={()=>setEditingId(m.id)}
+                        style={{
+                          borderRadius:8,
+                          border: m.blocked?'1px solid #e1705555':'1px solid var(--border)',
+                          background: m.blocked?'#e1705510':'var(--surface2)',
+                          cursor: isDragging ? 'grabbing' : 'grab',
+                          padding:'0.65rem 0.7rem',
+                          transition:'transform 0.1s, box-shadow 0.1s, border-color 0.1s, opacity 0.1s',
+                          display:'flex', flexDirection:'column', gap:5,
+                          opacity: isDragging ? 0.4 : 1,
+                        }}
+                        onMouseEnter={e=>{ if(!isDragging){ e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 10px rgba(0,0,0,0.18)'; e.currentTarget.style.borderColor=m.blocked?'#e17055aa':'var(--accent)88'; } }}
+                        onMouseLeave={e=>{ e.currentTarget.style.transform='none'; e.currentTarget.style.boxShadow='none'; e.currentTarget.style.borderColor=m.blocked?'#e1705555':'var(--border)'; }}
+                        title="드래그로 컬럼 이동 · 클릭으로 상세 편집">
+                        {/* Line 1: emoji + label + delete */}
+                        <div style={{ display:'flex', alignItems:'flex-start', gap:7 }}>
+                          <button onClick={(e)=>{ e.stopPropagation(); cycleStatus(m); }} disabled={saving}
+                            title={`→ ${nextStageLabel}(으)로 이동`}
+                            style={{ background:'transparent', border:'none', cursor:'pointer', padding:0, fontSize:'1rem', lineHeight:1.2, flexShrink:0 }}>
+                            {m.blocked ? '🔴' : stage.emoji}
+                          </button>
+                          <div style={{ flex:1, minWidth:0, fontSize:'0.86rem', fontWeight:500, color:m.status==='done'?'var(--text2)':'var(--text)', textDecoration:m.status==='done'?'line-through':'none', lineHeight:1.4, wordBreak:'break-word' }}>
+                            {m.phase_label}
+                          </div>
+                          <button onClick={(e)=>{ e.stopPropagation(); onDelete(m); }}
+                            style={{ background:'transparent', border:'none', cursor:'pointer', padding:'0 3px', color:'var(--text2)', fontSize:'0.72rem', lineHeight:1, flexShrink:0, opacity:0.4 }}
+                            onMouseEnter={e=>{ e.stopPropagation(); e.currentTarget.style.opacity='1'; e.currentTarget.style.color='#e17055'; }}
+                            onMouseLeave={e=>{ e.currentTarget.style.opacity='0.4'; e.currentTarget.style.color='var(--text2)'; }}
+                            title="삭제">✕</button>
+                        </div>
+                        {/* Line 2: badges */}
+                        {(deadlineBadge || assignee || noteHasSub || m.week_number != null) && (
+                          <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap', paddingLeft:23 }}>
+                            {m.week_number != null && <span style={{ padding:'0.08rem 0.4rem', borderRadius:4, background:'var(--accent)22', color:'var(--accent2)', fontWeight:600, fontSize:'0.62rem' }}>{m.week_number}W</span>}
+                            {deadlineBadge && <span title={deadlineBadge.title||deadlineBadge.text} style={{ padding:'0.08rem 0.4rem', borderRadius:4, background:deadlineBadge.color+'22', color:deadlineBadge.color, fontWeight:700, fontSize:'0.62rem' }}>{deadlineBadge.text}</span>}
+                            {assignee && <MemberAvatar member={assignee} size={14} />}
+                            {noteHasSub && <span title="서브태스크 있음" style={{ fontSize:'0.62rem', color:'var(--text2)', opacity:0.7 }}>📝</span>}
+                          </div>
+                        )}
+                        {/* Blocked reason */}
+                        {m.blocked && m.blocked_reason && (
+                          <div style={{ fontSize:'0.65rem', color:'#e17055', paddingLeft:23, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} title={m.blocked_reason}>{m.blocked_reason}</div>
+                        )}
+                        {/* Line 3: dates */}
+                        {(m.planned_start || m.planned_end) && (
+                          <div style={{ fontSize:'0.62rem', color:'var(--text2)', opacity:0.55, paddingLeft:23, lineHeight:1.2 }}>
+                            {(m.planned_start||'').slice(5)||'—'} ~ {(m.planned_end||'').slice(5)||'—'}
+                          </div>
+                        )}
+                      </div>
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+                {/* Add card (only in planned column) */}
+                {isPlannedCol && (
+                  <div style={{ marginTop:10, padding:'0.45rem 0.55rem', borderRadius:6, border:'1px dashed var(--border)', display:'flex', flexDirection:'column', gap:4, flexShrink:0, transition:'border-color 0.15s' }}
+                    onMouseEnter={e=>e.currentTarget.style.borderColor='var(--accent)66'}
+                    onMouseLeave={e=>e.currentTarget.style.borderColor='var(--border)'}>
+                    <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                      <span style={{ fontSize:'0.95rem', color:'var(--text2)', lineHeight:1, flexShrink:0 }}>＋</span>
+                      <input type="text" placeholder="작업 추가 (Enter)" value={newLabel} onChange={e=>setNewLabel(e.target.value)}
+                        onKeyDown={e=>{ if(e.key==='Enter' && newLabel.trim()){ onAdd(project.slug,newLabel,newWeek?parseInt(newWeek):null); setNewLabel(''); setNewWeek(''); } }}
+                        style={{ flex:1, minWidth:0, padding:'0.28rem 0.4rem', borderRadius:4, border:'none', background:'transparent', color:'var(--text)', fontSize:'0.78rem', outline:'none', fontFamily:'inherit' }} />
+                      {weekOptions.length > 0 && (
+                        <select value={newWeek} onChange={e=>setNewWeek(e.target.value)}
+                          style={{ padding:'0.2rem 0.3rem', borderRadius:4, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text2)', fontSize:'0.68rem', outline:'none', flexShrink:0 }}>
+                          <option value="">주차</option>
+                          {weekOptions.map(w => <option key={w.week} value={w.week} title={w.title}>{w.week}W</option>)}
+                        </select>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Card edit modal */}
+      {editing && (
+        <MilestoneEditModal
+          milestone={editing}
+          teamMembers={teamMembers}
+          saving={saving}
+          onUpdate={onUpdate}
+          onDelete={onDelete}
+          onClose={() => setEditingId(null)}
+          weekOptions={weekOptions}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── StatusModal ───
-function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, teamMembers, milestones, milestonesSetupNeeded, onMilestoneUpdate, onMilestoneDelete, onMilestoneAdd, onCreateFromTemplate }) {
+function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, teamMembers, milestones, milestonesSetupNeeded, onMilestoneUpdate, onMilestoneDelete, onMilestoneAdd, onMilestoneReorder, onCreateFromTemplate, onOpenProjectView, onBulkCreateWeekly, onClearWeeklyPlan }) {
   const isPostWon = HAS_MILESTONES.includes(project?.current_status);
   const [tab, setTab] = useState(
     project?.current_status === 'meeting_done' ? 'meeting' : isPostWon ? 'tasks' : 'info'
@@ -1239,20 +2530,74 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
             );
           })()}
 
-          {/* 작업 탭 */}
-          {tab === 'tasks' && (
-            <MilestonePanel
-              project={project}
-              milestones={milestones||[]}
-              setupNeeded={milestonesSetupNeeded}
-              teamMembers={teamMembers}
-              saving={saving}
-              onUpdate={onMilestoneUpdate}
-              onDelete={onMilestoneDelete}
-              onAdd={onMilestoneAdd}
-              onCreateFromTemplate={onCreateFromTemplate}
-            />
-          )}
+          {/* 작업 탭 - 요약 + 전체 화면 링크 */}
+          {tab === 'tasks' && (() => {
+            const list = [...(milestones||[])].sort((a,b)=>(a.order_idx||0)-(b.order_idx||0));
+            const doneCount = list.filter(m => m.status==='done').length;
+            const pct = list.length ? Math.round((doneCount/list.length)*100) : 0;
+            const hasBlocked = list.some(m => m.blocked);
+            const current = list.find(m => m.status==='in_progress') || list.find(m => m.status!=='done');
+            const openFull = () => { onOpenProjectView(project.slug); onClose(); };
+            if (milestonesSetupNeeded) {
+              return (
+                <div>
+                  <div style={{ padding:'0.7rem 0.9rem', borderRadius:8, background:'#fdcb6e12', border:'1px solid #fdcb6e33', marginBottom:'0.75rem' }}>
+                    <div style={{ fontSize:'0.85rem', fontWeight:600, color:'var(--yellow)', marginBottom:4 }}>⚠️ DB 설정 필요</div>
+                    <div style={{ fontSize:'0.75rem', color:'var(--text2)', lineHeight:1.5 }}>전체 화면에서 설정 SQL을 복사할 수 있습니다.</div>
+                  </div>
+                  <button onClick={openFull} style={{ width:'100%', padding:'0.75rem', borderRadius:10, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.88rem', fontWeight:600 }}>🎯 전체 화면에서 열기</button>
+                </div>
+              );
+            }
+            return (
+              <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+                {list.length > 0 ? (
+                  <>
+                    <div style={{ padding:'0.9rem 1rem', borderRadius:10, background:'var(--surface2)', border:'1px solid var(--border)' }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+                        <div style={{ fontSize:'0.85rem', fontWeight:600 }}>진행률 {doneCount}/{list.length}</div>
+                        <div style={{ fontSize:'0.95rem', fontWeight:700, color:hasBlocked?'#e17055':'var(--green)' }}>{pct}%</div>
+                      </div>
+                      <div style={{ height:6, background:'var(--bg)', borderRadius:3, overflow:'hidden' }}>
+                        <div style={{ width:pct+'%', height:'100%', background:hasBlocked?'#e17055':'var(--green)', transition:'width 0.3s' }} />
+                      </div>
+                      {current && (
+                        <div style={{ marginTop:10, fontSize:'0.78rem', color:'var(--text2)' }}>
+                          현재 작업: <b style={{ color: hasBlocked&&current.blocked?'#e17055':MILESTONE_STAGES[current.status]?.color }}>
+                            {current.blocked?'🔴 ':''}{current.phase_label}
+                          </b>
+                        </div>
+                      )}
+                      {hasBlocked && <div style={{ marginTop:6, fontSize:'0.72rem', color:'#e17055' }}>🔴 블로킹된 작업이 있습니다</div>}
+                      {/* Weekly progress in summary */}
+                      {(() => {
+                        const hasPlan = Array.isArray(project?.weekly_plan) && project.weekly_plan.length > 0;
+                        const hasWeeks = hasPlan || list.some(m => m.week_number != null);
+                        if (!hasWeeks) return null;
+                        return (
+                          <div style={{ marginTop:8, paddingTop:6, borderTop:'1px solid var(--border)' }}>
+                            <div style={{ fontSize:'0.68rem', color:'var(--text2)', fontWeight:600, marginBottom:4 }}>주차별 (Epic)</div>
+                            <WeeklyProgressBars weeklyPlan={project?.weekly_plan} milestones={list} />
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ padding:'1.25rem', borderRadius:10, background:'var(--surface2)', border:'1px solid var(--border)', textAlign:'center', color:'var(--text2)' }}>
+                    <div style={{ fontSize:'1.8rem', marginBottom:6 }}>📋</div>
+                    <div style={{ fontSize:'0.85rem' }}>등록된 작업이 없습니다</div>
+                  </div>
+                )}
+                <button onClick={openFull} style={{ width:'100%', padding:'0.85rem', borderRadius:10, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>
+                  🎯 전체 화면에서 {list.length > 0 ? '작업 관리' : '시작하기'} →
+                </button>
+                <div style={{ fontSize:'0.68rem', color:'var(--text2)', textAlign:'center', opacity:0.7 }}>
+                  상세 편집, 메모, 서브태스크는 전체 화면에서 더 편리합니다
+                </div>
+              </div>
+            );
+          })()}
 
           {/* 상태 탭 */}
           {tab === 'status' && (
@@ -1303,7 +2648,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
 }
 
 // ─── ProjectTable ───
-function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, sortOrder, onSort, onBatchLost, onMemoSave, memberFilter, teamMembers, milestones, milestonesSetupNeeded, onQuickApplyTemplate }) {
+function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, sortOrder, onSort, onBatchLost, onMemoSave, memberFilter, teamMembers, milestones, milestonesSetupNeeded, onQuickApplyTemplate, onOpenProject }) {
   const [selected, setSelected] = useState(new Set());
   const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s=new Set(prev); s.has(slug)?s.delete(slug):s.add(slug); return s; }); };
 
@@ -1414,13 +2759,15 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                     <div style={{ fontSize:'0.75rem', color:'var(--text2)', fontFamily:'monospace' }}>{r.slug}</div>
                     {HAS_MILESTONES.includes(r.current_status) && (() => {
                       const ms = (milestones?.[r.slug])||[];
+                      const goToProject = (e) => { e.stopPropagation(); onOpenProject(r.slug); };
                       if (ms.length === 0) {
                         if (milestonesSetupNeeded) {
                           return <div style={{ fontSize:'0.68rem', color:'var(--text2)', marginTop:4, opacity:0.7 }}>📋 작업 트래커 DB 미설정</div>;
                         }
                         return (
                           <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, fontSize:'0.68rem' }}>
-                            <span style={{ color:'var(--text2)' }}>📋 작업 설정 안 됨</span>
+                            <span onClick={goToProject} title="클릭: 작업 페이지 열기"
+                              style={{ color:'var(--text2)', cursor:'pointer', textDecoration:'underline', textDecorationColor:'var(--border)', textUnderlineOffset:2 }}>📋 작업 설정 안 됨</span>
                             <button onClick={e=>{ e.stopPropagation(); onQuickApplyTemplate(r.slug,'web_standard'); }}
                               style={{ padding:'0.1rem 0.45rem', borderRadius:4, border:'1px solid var(--accent)44', background:'var(--accent)15', color:'var(--accent)', cursor:'pointer', fontSize:'0.65rem', fontWeight:600 }}>
                               웹 표준 적용
@@ -1434,12 +2781,16 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                       const current = sorted.find(m => m.status==='in_progress') || sorted.find(m => m.status!=='done');
                       const blocked = sorted.some(m => m.blocked);
                       return (
-                        <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, fontSize:'0.7rem' }}>
-                          <div style={{ flex:'0 0 80px', height:5, background:'var(--surface2)', borderRadius:3, overflow:'hidden' }}>
+                        <div onClick={goToProject} title="클릭: 작업 페이지 열기"
+                          style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, fontSize:'0.7rem', cursor:'pointer', padding:'2px 4px', marginLeft:-4, borderRadius:4, transition:'background 0.12s' }}
+                          onMouseEnter={e=>e.currentTarget.style.background='var(--surface2)'}
+                          onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                          <div style={{ flex:'0 0 80px', height:5, background:'var(--bg)', borderRadius:3, overflow:'hidden' }}>
                             <div style={{ width:pct+'%', height:'100%', background:blocked?'#e17055':'var(--green)', transition:'width 0.3s' }} />
                           </div>
                           <span style={{ color:'var(--text2)' }}>{doneCount}/{sorted.length}</span>
                           {current && <span style={{ color: blocked?'#e17055':(MILESTONE_STAGES[current.status]?.color||'var(--text2)') }}>· {blocked?'🔴 ':''}{current.phase_label}</span>}
+                          <span style={{ color:'var(--accent2)', fontSize:'0.62rem', marginLeft:'auto', opacity:0.6 }}>→</span>
                         </div>
                       );
                     })()}
@@ -1517,6 +2868,12 @@ function App({ session }) {
   const [teamSetupNeeded, setTeamSetupNeeded] = useState(false);
   const [milestones, setMilestones]       = useState({}); // { [slug]: Milestone[] }
   const [milestonesSetupNeeded, setMilestonesSetupNeeded] = useState(false);
+  const [route, setRoute]                 = useState(() => parseHash());
+  useEffect(() => {
+    const h = () => setRoute(parseHash());
+    window.addEventListener('hashchange', h);
+    return () => window.removeEventListener('hashchange', h);
+  }, []);
   const [showTeamMgr, setShowTeamMgr]     = useState(false);
   const [showQuickAdd, setShowQuickAdd]   = useState(false);
   const [memberFilter, setMemberFilter]   = useState('');
@@ -1530,6 +2887,7 @@ function App({ session }) {
   const [dateRange, setDateRange]         = useState('all');
   const [showStats, setShowStats]         = useState(false);
   const { toasts, toast } = useToast();
+  const [confirmState, setConfirmState] = useState(null); // { title, message, confirmLabel, destructive, onConfirm }
   const searchRef = useRef(null);
 
   useEffect(() => {
@@ -1680,10 +3038,17 @@ function App({ session }) {
     toast('비활성화 완료','success');
   }, [toast]);
 
+  // Default assignee: project's main engineer → manager → sub
+  const defaultAssigneeFor = useCallback((slug) => {
+    const project = data?.find(d => d.slug === slug);
+    return project?.assigned_main || project?.assigned_manager || project?.assigned_sub || null;
+  }, [data]);
+
   // Milestone CRUD
   const handleCreateMilestonesFromTemplate = useCallback(async (slug, templateKey) => {
     const tpl = MILESTONE_TEMPLATES[templateKey];
     if (!tpl) return;
+    const assignee = defaultAssigneeFor(slug);
     // Cumulative planned dates from today, using phase default_days
     const toISODate = (d) => d.toISOString().split('T')[0];
     let cursor = new Date(); cursor.setHours(0,0,0,0);
@@ -1700,6 +3065,7 @@ function App({ session }) {
         blocked: false,
         planned_start: toISODate(start),
         planned_end: toISODate(end),
+        assignee,
       };
     });
     const { data:inserted, error } = await supabase.from(MILESTONES_TABLE).insert(rows).select();
@@ -1712,7 +3078,7 @@ function App({ session }) {
     }
     setMilestones(prev => ({ ...prev, [slug]: [...(inserted||[])].sort((a,b)=>a.order_idx-b.order_idx) }));
     toast(`📋 ${tpl.label} 템플릿 적용 (${rows.length}개 작업)`,'success');
-  }, [toast]);
+  }, [toast, defaultAssigneeFor]);
 
   const handleMilestoneUpdate = useCallback(async (milestone, fields) => {
     const payload = { ...fields, updated_at:new Date().toISOString() };
@@ -1762,7 +3128,33 @@ function App({ session }) {
     toast('작업 삭제','success');
   }, [toast]);
 
-  const handleMilestoneAdd = useCallback(async (slug, label) => {
+  const handleMilestoneReorder = useCallback(async (milestone, direction) => {
+    const list = [...(milestones[milestone.project_slug]||[])].sort((a,b)=>(a.order_idx||0)-(b.order_idx||0));
+    const idx = list.findIndex(m => m.id === milestone.id);
+    const nIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (idx < 0 || nIdx < 0 || nIdx >= list.length) return;
+    const neighbor = list[nIdx];
+    const aOrder = milestone.order_idx;
+    const bOrder = neighbor.order_idx;
+    // Optimistic swap
+    setMilestones(prev => {
+      const next = { ...prev };
+      next[milestone.project_slug] = (next[milestone.project_slug]||[]).map(m => {
+        if (m.id === milestone.id) return { ...m, order_idx: bOrder };
+        if (m.id === neighbor.id) return { ...m, order_idx: aOrder };
+        return m;
+      }).sort((a,b)=>(a.order_idx||0)-(b.order_idx||0));
+      return next;
+    });
+    // Two-step persist; temporarily park milestone at sentinel to avoid unique-order conflicts if ever enforced
+    const [r1, r2] = await Promise.all([
+      supabase.from(MILESTONES_TABLE).update({ order_idx: bOrder }).eq('id', milestone.id),
+      supabase.from(MILESTONES_TABLE).update({ order_idx: aOrder }).eq('id', neighbor.id),
+    ]);
+    if (r1.error || r2.error) toast('순서 변경 실패: '+(r1.error||r2.error).message,'error');
+  }, [milestones, toast]);
+
+  const handleMilestoneAdd = useCallback(async (slug, label, weekNumber) => {
     if (!label?.trim()) return;
     const existing = milestones[slug] || [];
     const maxOrder = existing.reduce((mx,m) => Math.max(mx, m.order_idx||0), -1);
@@ -1773,11 +3165,151 @@ function App({ session }) {
       order_idx: maxOrder+1,
       status: 'planned',
       blocked: false,
+      assignee: defaultAssigneeFor(slug),
     };
+    if (weekNumber != null) row.week_number = weekNumber;
     const { data:inserted, error } = await supabase.from(MILESTONES_TABLE).insert([row]).select().single();
     if (error) { toast('추가 실패: '+error.message,'error'); return; }
     setMilestones(prev => ({ ...prev, [slug]: [...(prev[slug]||[]), inserted] }));
-  }, [milestones, toast]);
+  }, [milestones, toast, defaultAssigneeFor]);
+
+  // Bulk add: 단일 DB insert로 order_idx 충돌 없이 여러 티켓을 한 번에 생성
+  const handleMilestoneBulkAdd = useCallback(async (slug, items) => {
+    const cleaned = (items || []).filter(it => it?.label?.trim());
+    if (cleaned.length === 0) return;
+    const existing = milestones[slug] || [];
+    const baseOrder = existing.reduce((mx,m) => Math.max(mx, m.order_idx||0), -1) + 1;
+    const tsBase = Date.now();
+    const assignee = defaultAssigneeFor(slug);
+    const rows = cleaned.map((it, i) => {
+      const row = {
+        project_slug: slug,
+        phase_key: 'custom_' + (tsBase + i),
+        phase_label: it.label.trim(),
+        order_idx: baseOrder + i,
+        status: 'planned',
+        blocked: false,
+        assignee,
+      };
+      if (it.week != null) row.week_number = it.week;
+      return row;
+    });
+    const { data:inserted, error } = await supabase.from(MILESTONES_TABLE).insert(rows).select();
+    if (error) { toast('일괄 생성 실패: '+error.message,'error'); return; }
+    setMilestones(prev => ({ ...prev, [slug]: [...(prev[slug]||[]), ...(inserted||[])] }));
+    toast(`✨ ${inserted?.length||cleaned.length}개 티켓 생성 완료`,'success');
+  }, [milestones, toast, defaultAssigneeFor]);
+
+  const handleBulkCreateWeekly = useCallback(async (slug, weeks) => {
+    if (!weeks || weeks.length === 0) return;
+    const weeklyPlan = weeks.map(w => ({
+      week: w.week,
+      title: w.title || '',
+      description: Array.isArray(w.description) ? w.description : [],
+    }));
+    // Orphan detection: weeks that existed in the prior plan (or were referenced by tickets) but are missing from the new plan
+    const project = data?.find(d => d.slug === slug);
+    const prevPlan = Array.isArray(project?.weekly_plan) ? project.weekly_plan : [];
+    const newWeekSet = new Set(weeklyPlan.map(w => w.week));
+    const ticketList = milestones[slug] || [];
+    const orphanGroups = {};
+    ticketList.forEach(t => {
+      if (t.week_number != null && !newWeekSet.has(t.week_number)) {
+        if (!orphanGroups[t.week_number]) orphanGroups[t.week_number] = [];
+        orphanGroups[t.week_number].push(t);
+      }
+    });
+    const totalOrphan = Object.values(orphanGroups).reduce((s, arr) => s + arr.length, 0);
+
+    const doSave = async () => {
+      const prevPlan = project.weekly_plan ?? null;
+      const { error } = await supabase.from(TABLE).update({ weekly_plan: weeklyPlan, updated_at:new Date().toISOString().split('T')[0] }).eq('slug', slug);
+      if (error) {
+        if (error.code === '42703' || /weekly_plan/.test(error.message||'')) {
+          toast('weekly_plan 컬럼이 없습니다. 작업 트래커 설정 SQL을 다시 실행하세요 (전체 화면 → DB 설정).','error');
+        } else {
+          toast('주차별 계획 저장 실패: '+error.message,'error');
+        }
+        return;
+      }
+      let orphanIds = [];
+      if (totalOrphan > 0) {
+        orphanIds = Object.values(orphanGroups).flat().map(t => t.id);
+        const { error: mErr } = await supabase.from(MILESTONES_TABLE).update({ week_number: null }).in('id', orphanIds);
+        if (mErr) {
+          // rollback weekly_plan to keep DB consistent
+          await supabase.from(TABLE).update({ weekly_plan: prevPlan }).eq('slug', slug);
+          toast('고아 티켓 주차 해제 실패: '+mErr.message+' · 계획 저장 롤백됨','error');
+          return;
+        }
+      }
+      setData(prev => prev.map(d => d.slug===slug ? { ...d, weekly_plan: weeklyPlan } : d));
+      setSelectedProject(prev => prev && prev.slug===slug ? { ...prev, weekly_plan: weeklyPlan } : prev);
+      if (orphanIds.length > 0) {
+        setMilestones(prev => ({
+          ...prev,
+          [slug]: (prev[slug]||[]).map(m => orphanIds.includes(m.id) ? { ...m, week_number: null } : m),
+        }));
+      }
+      toast(`📅 ${weeks.length}주차 계획 저장 완료${totalOrphan>0 ? ` · ${totalOrphan}개 티켓 주차 해제` : ''}`,'success');
+    };
+
+    if (totalOrphan > 0) {
+      const weekList = Object.keys(orphanGroups).map(Number).sort((a,b)=>a-b).join(', ');
+      setConfirmState({
+        title: '사라지는 주차가 있습니다',
+        message: `${weekList}주차가 새 계획에 포함되지 않습니다.\n해당 주차에 배정된 ${totalOrphan}개 티켓의 주차 연결이 해제됩니다.\n\n계속할까요?`,
+        confirmLabel: '저장하고 주차 해제',
+        destructive: true,
+        onConfirm: () => { doSave(); },
+      });
+    } else {
+      await doSave();
+    }
+  }, [data, milestones, toast]);
+
+  const handleClearWeeklyPlan = useCallback((slug) => {
+    const linkedCount = (milestones[slug]||[]).filter(m => m.week_number != null).length;
+    const prevPlan = data.find(d => d.slug===slug)?.weekly_plan ?? null;
+    const doClear = async () => {
+      const { error } = await supabase.from(TABLE).update({ weekly_plan: null, updated_at:new Date().toISOString().split('T')[0] }).eq('slug', slug);
+      if (error) {
+        if (error.code === '42703' || /weekly_plan/.test(error.message||'')) {
+          toast('weekly_plan 컬럼이 없습니다. 설정 SQL을 다시 실행하세요.','error');
+        } else {
+          toast('주차 계획 삭제 실패: '+error.message,'error');
+        }
+        return;
+      }
+      if (linkedCount > 0) {
+        const { error: mErr } = await supabase.from(MILESTONES_TABLE).update({ week_number: null }).eq('project_slug', slug);
+        if (mErr) {
+          // rollback weekly_plan
+          await supabase.from(TABLE).update({ weekly_plan: prevPlan }).eq('slug', slug);
+          toast('티켓 주차 해제 실패: '+mErr.message+' · 삭제 롤백됨','error');
+          return;
+        }
+      }
+      setData(prev => prev.map(d => d.slug===slug ? { ...d, weekly_plan: null } : d));
+      setSelectedProject(prev => prev && prev.slug===slug ? { ...prev, weekly_plan: null } : prev);
+      if (linkedCount > 0) {
+        setMilestones(prev => ({
+          ...prev,
+          [slug]: (prev[slug]||[]).map(m => m.week_number != null ? { ...m, week_number: null } : m),
+        }));
+      }
+      toast('📅 주차 계획 삭제 완료','success');
+    };
+    setConfirmState({
+      title: '주차 계획 전체 삭제',
+      message: linkedCount > 0
+        ? `주차 계획을 삭제합니다.\n배정된 ${linkedCount}개 티켓의 주차 연결도 모두 해제됩니다.`
+        : '주차 계획을 삭제합니다.',
+      confirmLabel: '삭제',
+      destructive: true,
+      onConfirm: () => { doClear(); },
+    });
+  }, [toast, milestones, data]);
 
   const handleRowClick    = useCallback((p)  => setSelectedProject(p), []);
 
@@ -1915,6 +3447,34 @@ function App({ session }) {
 
   if (!data) return <Loading />;
 
+  // Project view route
+  if (route.name === 'project') {
+    const proj = data.find(d => d.slug === route.slug);
+    return (
+      <div>
+        <ToastContainer toasts={toasts} />
+        <ConfirmModal state={confirmState} onCancel={() => setConfirmState(null)} />
+        <ProjectView
+          project={proj}
+          milestones={milestones[route.slug] || []}
+          setupNeeded={milestonesSetupNeeded}
+          teamMembers={teamMembers}
+          saving={saving}
+          onUpdate={handleMilestoneUpdate}
+          onDelete={handleMilestoneDelete}
+          onAdd={handleMilestoneAdd}
+          onBulkAdd={handleMilestoneBulkAdd}
+          onReorder={handleMilestoneReorder}
+          onCreateFromTemplate={handleCreateMilestonesFromTemplate}
+          onBulkCreateWeekly={handleBulkCreateWeekly}
+          onClearWeeklyPlan={handleClearWeeklyPlan}
+          onRequestConfirm={setConfirmState}
+          onBack={() => navigate({ name:'table' })}
+        />
+      </div>
+    );
+  }
+
   const counts = { total:data.length };
   STATUS_ORDER.forEach(s => counts[s]=data.filter(d=>d.current_status===s).length);
   const appliedOrBeyond = data.filter(d=>d.current_status!=='generated').length;
@@ -1931,6 +3491,7 @@ function App({ session }) {
   return (
     <div>
       <ToastContainer toasts={toasts} />
+      <ConfirmModal state={confirmState} onCancel={() => setConfirmState(null)} />
       {selectedProject && (
         <StatusModal
           key={selectedProject.slug+'-'+selectedProject.current_status}
@@ -1946,7 +3507,11 @@ function App({ session }) {
           onMilestoneUpdate={handleMilestoneUpdate}
           onMilestoneDelete={handleMilestoneDelete}
           onMilestoneAdd={handleMilestoneAdd}
+          onMilestoneReorder={handleMilestoneReorder}
           onCreateFromTemplate={handleCreateMilestonesFromTemplate}
+          onBulkCreateWeekly={handleBulkCreateWeekly}
+          onClearWeeklyPlan={handleClearWeeklyPlan}
+          onOpenProjectView={(slug) => navigate({ name:'project', slug })}
         />
       )}
       {showQuickAdd && (
@@ -2074,6 +3639,7 @@ function App({ session }) {
           milestones={milestones}
           milestonesSetupNeeded={milestonesSetupNeeded}
           onQuickApplyTemplate={handleCreateMilestonesFromTemplate}
+          onOpenProject={(slug) => navigate({ name:'project', slug })}
         />
       </div>
 
