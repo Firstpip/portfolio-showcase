@@ -61,6 +61,7 @@ if (!window.supabase) {
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 const TABLE = 'wishket_projects';
 const TEAM_TABLE = 'team_members';
+const MILESTONES_TABLE = 'project_milestones';
 
 // ─── Constants ───
 const STATUS_META = {
@@ -96,6 +97,28 @@ const MEETING_TYPES = [
 ];
 const MEMBER_COLORS = ['#6c5ce7','#00b894','#e17055','#fdcb6e','#74b9ff','#fd79a8','#a29bfe','#00cec9'];
 
+// ─── Milestones ───
+const MILESTONE_STAGES = {
+  planned:     { label: '예정',   color: '#636e72', emoji: '⚪' },
+  in_progress: { label: '진행중', color: '#74b9ff', emoji: '🔵' },
+  done:        { label: '완료',   color: '#00b894', emoji: '✅' },
+};
+const MILESTONE_STAGE_ORDER = ['planned','in_progress','done'];
+const MILESTONE_TEMPLATES = {
+  web_standard: {
+    label: '웹 표준',
+    phases: [
+      { key: 'plan',    label: '기획 확정',  default_days: 3  },
+      { key: 'design',  label: '디자인',     default_days: 7  },
+      { key: 'publish', label: '퍼블리싱',   default_days: 5  },
+      { key: 'front',   label: '프론트엔드', default_days: 10 },
+      { key: 'back',    label: '백엔드',     default_days: 10 },
+      { key: 'qa',      label: 'QA',         default_days: 3  },
+      { key: 'deploy',  label: '배포',       default_days: 1  },
+    ],
+  },
+};
+
 const SETUP_SQL = `-- Supabase SQL 에디터에서 실행 후 새로고침하세요
 
 -- 1. 팀원 테이블 생성
@@ -117,6 +140,34 @@ ALTER TABLE wishket_projects
   ADD COLUMN IF NOT EXISTS assigned_manager UUID,
   ADD COLUMN IF NOT EXISTS assigned_main    UUID,
   ADD COLUMN IF NOT EXISTS assigned_sub     UUID;`;
+
+const MILESTONE_SETUP_SQL = `-- Supabase SQL 에디터에서 실행 후 새로고침하세요
+
+-- 계약 이후 프로젝트의 작업 진행 추적용 테이블
+CREATE TABLE IF NOT EXISTS project_milestones (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  project_slug TEXT NOT NULL REFERENCES wishket_projects(slug) ON DELETE CASCADE,
+  phase_key TEXT NOT NULL,
+  phase_label TEXT NOT NULL,
+  order_idx INT NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'planned',
+  blocked BOOLEAN NOT NULL DEFAULT false,
+  blocked_reason TEXT,
+  planned_start DATE,
+  planned_end DATE,
+  actual_start TIMESTAMPTZ,
+  actual_end TIMESTAMPTZ,
+  assignee UUID,
+  note TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_project_milestones_slug ON project_milestones(project_slug);
+
+ALTER TABLE project_milestones ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "anon_all_milestones" ON project_milestones;
+CREATE POLICY "anon_all_milestones" ON project_milestones
+  FOR ALL TO anon USING (true) WITH CHECK (true);`;
 
 // ─── Utils ───
 function getMeetingStatus(meetingAt) {
@@ -646,9 +697,191 @@ function DBSetupBanner({ sql }) {
   );
 }
 
+// ─── MilestonePanel ───
+function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving, onUpdate, onDelete, onAdd, onCreateFromTemplate }) {
+  const [expandedId, setExpandedId] = useState(null);
+  const [newLabel, setNewLabel] = useState('');
+
+  if (setupNeeded) {
+    return (
+      <div>
+        <div style={{ padding:'0.7rem 0.9rem', borderRadius:8, background:'#fdcb6e12', border:'1px solid #fdcb6e33', marginBottom:'0.75rem' }}>
+          <div style={{ fontSize:'0.85rem', fontWeight:600, color:'var(--yellow)', marginBottom:4 }}>⚠️ DB 설정 필요</div>
+          <div style={{ fontSize:'0.75rem', color:'var(--text2)', lineHeight:1.5 }}>작업 트래커를 사용하려면 project_milestones 테이블을 먼저 생성하세요.</div>
+        </div>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+          <div style={{ fontSize:'0.75rem', color:'var(--text2)' }}>Supabase SQL 에디터에서 실행</div>
+          <button onClick={() => { navigator.clipboard.writeText(MILESTONE_SETUP_SQL); }} style={{ padding:'0.3rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', cursor:'pointer', fontSize:'0.75rem' }}>📋 SQL 복사</button>
+        </div>
+        <pre style={{ background:'var(--bg)', padding:'0.75rem', borderRadius:8, fontSize:'0.7rem', color:'var(--text2)', overflow:'auto', maxHeight:280, border:'1px solid var(--border)', lineHeight:1.5 }}>{MILESTONE_SETUP_SQL}</pre>
+      </div>
+    );
+  }
+
+  const sorted = [...(milestones||[])].sort((a,b)=>(a.order_idx||0)-(b.order_idx||0));
+  const doneCount = sorted.filter(m => m.status==='done').length;
+  const pct = sorted.length ? Math.round((doneCount/sorted.length)*100) : 0;
+  const hasBlocked = sorted.some(m => m.blocked);
+
+  if (sorted.length === 0) {
+    return (
+      <div>
+        <div style={{ textAlign:'center', padding:'1.5rem 0.5rem', color:'var(--text2)' }}>
+          <div style={{ fontSize:'2rem', marginBottom:8 }}>📋</div>
+          <div style={{ fontSize:'0.85rem', marginBottom:4 }}>등록된 작업이 없습니다</div>
+          <div style={{ fontSize:'0.75rem', opacity:0.7, marginBottom:16 }}>템플릿을 적용하거나 직접 추가할 수 있어요</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {Object.entries(MILESTONE_TEMPLATES).map(([key,tpl]) => (
+              <button key={key} onClick={() => onCreateFromTemplate(project.slug, key)} disabled={saving} style={{ padding:'0.65rem', borderRadius:10, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.85rem', fontWeight:600 }}>
+                📋 {tpl.label} 템플릿 ({tpl.phases.length}개 작업)
+              </button>
+            ))}
+          </div>
+          <div style={{ marginTop:16, display:'flex', gap:6 }}>
+            <input type="text" placeholder="커스텀 작업 이름" value={newLabel} onChange={e=>setNewLabel(e.target.value)}
+              onKeyDown={e=>{ if(e.key==='Enter' && newLabel.trim()){ onAdd(project.slug,newLabel); setNewLabel(''); } }}
+              style={{ flex:1, padding:'0.5rem 0.7rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.85rem', outline:'none' }} />
+            <button onClick={()=>{ if(newLabel.trim()){ onAdd(project.slug,newLabel); setNewLabel(''); } }} disabled={!newLabel.trim()} style={{ padding:'0.5rem 0.9rem', borderRadius:8, border:'none', background:newLabel.trim()?'var(--surface2)':'var(--border)', color:'var(--text)', cursor:newLabel.trim()?'pointer':'not-allowed', fontSize:'0.8rem' }}>+ 추가</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Progress summary */}
+      <div style={{ padding:'0.75rem 0.9rem', borderRadius:10, background:'var(--surface2)', border:'1px solid var(--border)', marginBottom:'1rem' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+          <div style={{ fontSize:'0.85rem', fontWeight:600 }}>진행률 {doneCount}/{sorted.length}</div>
+          <div style={{ fontSize:'0.9rem', fontWeight:700, color:hasBlocked?'#e17055':'var(--green)' }}>{pct}%</div>
+        </div>
+        <div style={{ height:6, background:'var(--bg)', borderRadius:3, overflow:'hidden' }}>
+          <div style={{ width:pct+'%', height:'100%', background:hasBlocked?'#e17055':'var(--green)', transition:'width 0.3s' }} />
+        </div>
+        {hasBlocked && <div style={{ marginTop:6, fontSize:'0.72rem', color:'#e17055' }}>🔴 블로킹된 작업이 있습니다</div>}
+      </div>
+
+      {/* Phase list */}
+      <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+        {sorted.map(m => {
+          const stage = MILESTONE_STAGES[m.status] || MILESTONE_STAGES.planned;
+          const expanded = expandedId === m.id;
+          const assignee = teamMembers?.find(tm => tm.id === m.assignee);
+          // D-n / 지연 계산 — 미완료일 때만
+          let deadlineBadge = null;
+          if (m.planned_end && m.status !== 'done') {
+            const today = new Date(); today.setHours(0,0,0,0);
+            const end = new Date(m.planned_end); end.setHours(0,0,0,0);
+            const diff = Math.round((end - today) / 86400000);
+            if (diff < 0) deadlineBadge = { text:`지연 +${-diff}일`, color:'#e17055' };
+            else if (diff === 0) deadlineBadge = { text:'D-Day', color:'#fdcb6e' };
+            else if (diff <= 3) deadlineBadge = { text:`D-${diff}`, color:'#fdcb6e' };
+            else deadlineBadge = { text:`D-${diff}`, color:'var(--text2)' };
+          }
+          return (
+            <div key={m.id} style={{ borderRadius:8, border:`1px solid ${m.blocked?'#e1705544':'var(--border)'}`, background: m.blocked?'#e1705508':'var(--surface2)' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, padding:'0.55rem 0.7rem', cursor:'pointer' }} onClick={()=>setExpandedId(expanded?null:m.id)}>
+                <span style={{ fontSize:'0.9rem', flexShrink:0 }}>{m.blocked?'🔴':stage.emoji}</span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:'0.85rem', fontWeight:500, color:m.status==='done'?'var(--text2)':'var(--text)', textDecoration:m.status==='done'?'line-through':'none' }}>{m.phase_label}</div>
+                  {(m.planned_start || m.planned_end) && (
+                    <div style={{ fontSize:'0.68rem', color:'var(--text2)', marginTop:2, display:'flex', alignItems:'center', gap:6 }}>
+                      <span>{m.planned_start||'—'} ~ {m.planned_end||'—'}</span>
+                      {deadlineBadge && <span style={{ padding:'0.05rem 0.35rem', borderRadius:4, background:deadlineBadge.color+'22', color:deadlineBadge.color, fontWeight:600 }}>{deadlineBadge.text}</span>}
+                    </div>
+                  )}
+                  {(m.blocked && m.blocked_reason) && <div style={{ fontSize:'0.7rem', color:'#e17055', marginTop:2 }}>{m.blocked_reason}</div>}
+                </div>
+                {assignee && <MemberAvatar member={assignee} size={16} />}
+                <span style={{ fontSize:'0.7rem', color:stage.color, fontWeight:600 }}>{stage.label}</span>
+              </div>
+              {expanded && (
+                <div style={{ padding:'0.7rem 0.8rem', borderTop:'1px solid var(--border)', display:'flex', flexDirection:'column', gap:10 }}>
+                  {/* Status selector */}
+                  <div style={{ display:'flex', gap:4 }}>
+                    {MILESTONE_STAGE_ORDER.map(s => {
+                      const st = MILESTONE_STAGES[s];
+                      const sel = m.status === s;
+                      return (
+                        <button key={s} onClick={()=>onUpdate(m,{status:s})} disabled={saving} style={{ flex:1, padding:'0.4rem', borderRadius:6, border:sel?`1px solid ${st.color}`:'1px solid var(--border)', background:sel?st.color+'22':'transparent', color:sel?st.color:'var(--text2)', cursor:'pointer', fontSize:'0.75rem', fontWeight:sel?600:400 }}>
+                          {st.emoji} {st.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {/* Blocked toggle */}
+                  <div>
+                    <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:'0.78rem', color:'var(--text2)', cursor:'pointer' }}>
+                      <input type="checkbox" checked={!!m.blocked} onChange={e=>onUpdate(m,{blocked:e.target.checked, blocked_reason:e.target.checked?m.blocked_reason:null})} style={{ accentColor:'#e17055' }} />
+                      블로킹 표시
+                    </label>
+                    {m.blocked && (
+                      <input type="text" placeholder="블로킹 사유" defaultValue={m.blocked_reason||''}
+                        onBlur={e=>{ if(e.target.value!==(m.blocked_reason||'')) onUpdate(m,{blocked_reason:e.target.value||null}); }}
+                        style={{ width:'100%', marginTop:6, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid #e1705544', background:'var(--bg)', color:'var(--text)', fontSize:'0.78rem', outline:'none' }} />
+                    )}
+                  </div>
+                  {/* Assignee */}
+                  {teamMembers && teamMembers.length > 0 && (
+                    <div>
+                      <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:4 }}>담당</div>
+                      <select value={m.assignee||''} onChange={e=>onUpdate(m,{assignee:e.target.value||null})}
+                        style={{ width:'100%', padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.78rem', outline:'none' }}>
+                        <option value="">— 미지정 —</option>
+                        {teamMembers.filter(tm=>tm.is_active).map(tm => <option key={tm.id} value={tm.id}>{tm.name}</option>)}
+                      </select>
+                    </div>
+                  )}
+                  {/* Note */}
+                  <textarea placeholder="메모 / 서브태스크 (마크다운 체크리스트 OK)" defaultValue={m.note||''}
+                    onBlur={e=>{ if(e.target.value!==(m.note||'')) onUpdate(m,{note:e.target.value||null}); }}
+                    style={{ width:'100%', minHeight:50, padding:'0.45rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.78rem', resize:'vertical', fontFamily:'inherit', lineHeight:1.5, outline:'none' }} />
+                  {/* Planned dates */}
+                  <div>
+                    <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:4 }}>예정 기간</div>
+                    <div style={{ display:'flex', gap:6 }}>
+                      <input type="date" defaultValue={m.planned_start||''}
+                        onBlur={e=>{ const v=e.target.value||null; if(v!==(m.planned_start||null)) onUpdate(m,{planned_start:v}); }}
+                        style={{ flex:1, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.75rem', outline:'none', colorScheme:'dark' }} />
+                      <input type="date" defaultValue={m.planned_end||''}
+                        onBlur={e=>{ const v=e.target.value||null; if(v!==(m.planned_end||null)) onUpdate(m,{planned_end:v}); }}
+                        style={{ flex:1, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.75rem', outline:'none', colorScheme:'dark' }} />
+                    </div>
+                  </div>
+                  {/* Actual dates (manual edit) */}
+                  {(m.actual_start || m.actual_end) && (
+                    <div style={{ fontSize:'0.7rem', color:'var(--text2)', display:'flex', gap:8, flexWrap:'wrap' }}>
+                      {m.actual_start && <span>실제 시작 {m.actual_start.split('T')[0]}</span>}
+                      {m.actual_end && <span>실제 완료 {m.actual_end.split('T')[0]}</span>}
+                      {m.actual_start && m.actual_end && <span style={{ color:'var(--accent2)' }}>({daysBetween(m.actual_start,m.actual_end)}일)</span>}
+                    </div>
+                  )}
+                  <button onClick={()=>onDelete(m)} style={{ padding:'0.35rem', borderRadius:6, border:'1px solid #e1705544', background:'transparent', color:'#e17055', cursor:'pointer', fontSize:'0.72rem' }}>작업 삭제</button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Add new */}
+      <div style={{ marginTop:10, display:'flex', gap:6 }}>
+        <input type="text" placeholder="작업 추가" value={newLabel} onChange={e=>setNewLabel(e.target.value)}
+          onKeyDown={e=>{ if(e.key==='Enter' && newLabel.trim()){ onAdd(project.slug,newLabel); setNewLabel(''); } }}
+          style={{ flex:1, padding:'0.45rem 0.65rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', outline:'none' }} />
+        <button onClick={()=>{ if(newLabel.trim()){ onAdd(project.slug,newLabel); setNewLabel(''); } }} disabled={!newLabel.trim()} style={{ padding:'0.45rem 0.8rem', borderRadius:8, border:'none', background:newLabel.trim()?'var(--accent)':'var(--border)', color:'#fff', cursor:newLabel.trim()?'pointer':'not-allowed', fontSize:'0.78rem', fontWeight:600 }}>+</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── StatusModal ───
-function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, teamMembers }) {
-  const [tab, setTab] = useState(project?.current_status === 'meeting_done' ? 'meeting' : 'info');
+function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, teamMembers, milestones, milestonesSetupNeeded, onMilestoneUpdate, onMilestoneDelete, onMilestoneAdd, onCreateFromTemplate }) {
+  const isPostWon = POST_WON.includes(project?.current_status);
+  const [tab, setTab] = useState(
+    project?.current_status === 'meeting_done' ? 'meeting' : isPostWon ? 'tasks' : 'info'
+  );
   const [newStatus, setNewStatus] = useState('');
   const [note, setNote] = useState('');
   const [editTitle, setEditTitle] = useState(project?.title||'');
@@ -703,7 +936,12 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
   const subMember     = teamMembers?.find(m => m.id === project.assigned_sub);
   const hasTeam = teamMembers && teamMembers.length > 0;
 
-  const tabs = [{ key:'info', label:'정보' }, { key:'meeting', label:'미팅' }, { key:'status', label:'상태' }];
+  const tabs = [
+    { key:'info', label:'정보' },
+    { key:'meeting', label:'미팅' },
+    ...(isPostWon ? [{ key:'tasks', label:'작업' }] : []),
+    { key:'status', label:'상태' },
+  ];
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
@@ -1000,6 +1238,21 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
             );
           })()}
 
+          {/* 작업 탭 */}
+          {tab === 'tasks' && (
+            <MilestonePanel
+              project={project}
+              milestones={milestones||[]}
+              setupNeeded={milestonesSetupNeeded}
+              teamMembers={teamMembers}
+              saving={saving}
+              onUpdate={onMilestoneUpdate}
+              onDelete={onMilestoneDelete}
+              onAdd={onMilestoneAdd}
+              onCreateFromTemplate={onCreateFromTemplate}
+            />
+          )}
+
           {/* 상태 탭 */}
           {tab === 'status' && (
             <>
@@ -1049,7 +1302,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
 }
 
 // ─── ProjectTable ───
-function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, sortOrder, onSort, onBatchLost, onMemoSave, memberFilter, teamMembers }) {
+function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, sortOrder, onSort, onBatchLost, onMemoSave, memberFilter, teamMembers, milestones, milestonesSetupNeeded, onQuickApplyTemplate }) {
   const [selected, setSelected] = useState(new Set());
   const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s=new Set(prev); s.has(slug)?s.delete(slug):s.add(slug); return s; }); };
 
@@ -1158,6 +1411,37 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                   <td style={{ padding:'0.65rem 1rem', maxWidth:320 }}>
                     <div style={{ fontWeight:500, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{r.title||r.slug}</div>
                     <div style={{ fontSize:'0.75rem', color:'var(--text2)', fontFamily:'monospace' }}>{r.slug}</div>
+                    {POST_WON.includes(r.current_status) && (() => {
+                      const ms = (milestones?.[r.slug])||[];
+                      if (ms.length === 0) {
+                        if (milestonesSetupNeeded) {
+                          return <div style={{ fontSize:'0.68rem', color:'var(--text2)', marginTop:4, opacity:0.7 }}>📋 작업 트래커 DB 미설정</div>;
+                        }
+                        return (
+                          <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, fontSize:'0.68rem' }}>
+                            <span style={{ color:'var(--text2)' }}>📋 작업 설정 안 됨</span>
+                            <button onClick={e=>{ e.stopPropagation(); onQuickApplyTemplate(r.slug,'web_standard'); }}
+                              style={{ padding:'0.1rem 0.45rem', borderRadius:4, border:'1px solid var(--accent)44', background:'var(--accent)15', color:'var(--accent)', cursor:'pointer', fontSize:'0.65rem', fontWeight:600 }}>
+                              웹 표준 적용
+                            </button>
+                          </div>
+                        );
+                      }
+                      const sorted = [...ms].sort((a,b)=>(a.order_idx||0)-(b.order_idx||0));
+                      const doneCount = sorted.filter(m => m.status==='done').length;
+                      const pct = Math.round((doneCount/sorted.length)*100);
+                      const current = sorted.find(m => m.status==='in_progress') || sorted.find(m => m.status!=='done');
+                      const blocked = sorted.some(m => m.blocked);
+                      return (
+                        <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, fontSize:'0.7rem' }}>
+                          <div style={{ flex:'0 0 80px', height:5, background:'var(--surface2)', borderRadius:3, overflow:'hidden' }}>
+                            <div style={{ width:pct+'%', height:'100%', background:blocked?'#e17055':'var(--green)', transition:'width 0.3s' }} />
+                          </div>
+                          <span style={{ color:'var(--text2)' }}>{doneCount}/{sorted.length}</span>
+                          {current && <span style={{ color: blocked?'#e17055':(MILESTONE_STAGES[current.status]?.color||'var(--text2)') }}>· {blocked?'🔴 ':''}{current.phase_label}</span>}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td style={{ padding:'0.65rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:r.budget?'var(--text)':'var(--text2)' }}>{r.budget||'—'}</td>
                   <td style={{ padding:'0.65rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:'var(--text2)' }}>{r.created_at||'—'}</td>
@@ -1230,6 +1514,8 @@ function App({ session }) {
   const [data, setData]                   = useState(null);
   const [teamMembers, setTeamMembers]     = useState([]);
   const [teamSetupNeeded, setTeamSetupNeeded] = useState(false);
+  const [milestones, setMilestones]       = useState({}); // { [slug]: Milestone[] }
+  const [milestonesSetupNeeded, setMilestonesSetupNeeded] = useState(false);
   const [showTeamMgr, setShowTeamMgr]     = useState(false);
   const [showQuickAdd, setShowQuickAdd]   = useState(false);
   const [memberFilter, setMemberFilter]   = useState('');
@@ -1274,6 +1560,24 @@ function App({ session }) {
       }
     });
     localStorage.setItem(key, JSON.stringify(notified));
+  }, []);
+
+  const loadMilestones = useCallback(async () => {
+    const { data:rows, error } = await supabase.from(MILESTONES_TABLE).select('*').order('order_idx', { ascending:true });
+    if (error) {
+      if (error.code==='42P01' || error.message?.includes('does not exist') || error.message?.includes('relation')) {
+        setMilestonesSetupNeeded(true);
+        setMilestones({});
+      }
+      return;
+    }
+    const grouped = {};
+    (rows||[]).forEach(m => {
+      if (!grouped[m.project_slug]) grouped[m.project_slug] = [];
+      grouped[m.project_slug].push(m);
+    });
+    setMilestones(grouped);
+    setMilestonesSetupNeeded(false);
   }, []);
 
   const loadTeamMembers = useCallback(async () => {
@@ -1322,7 +1626,25 @@ function App({ session }) {
   useEffect(() => {
     loadData();
     loadTeamMembers();
+    loadMilestones();
     const channel = supabase.channel('wishket-realtime')
+      .on('postgres_changes',{ event:'*', schema:'public', table:MILESTONES_TABLE },(payload) => {
+        setMilestones(prev => {
+          const next = { ...prev };
+          if (payload.eventType==='DELETE') {
+            const slug = payload.old?.project_slug;
+            if (slug && next[slug]) next[slug] = next[slug].filter(m => m.id!==payload.old.id);
+          } else {
+            const row = payload.new;
+            const slug = row.project_slug;
+            const list = (next[slug]||[]).filter(m => m.id!==row.id);
+            list.push(row);
+            list.sort((a,b) => (a.order_idx||0)-(b.order_idx||0));
+            next[slug] = list;
+          }
+          return next;
+        });
+      })
       .on('postgres_changes',{ event:'*', schema:'public', table:TABLE },(payload) => {
         if (payload.eventType==='UPDATE') setData(prev => prev?prev.map(d => d.slug===payload.new.slug?payload.new:d):prev);
         else if (payload.eventType==='INSERT') setData(prev => prev?[payload.new,...prev]:[payload.new]);
@@ -1333,7 +1655,7 @@ function App({ session }) {
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, [loadData, loadTeamMembers]);
+  }, [loadData, loadTeamMembers, loadMilestones]);
 
   // Team CRUD
   const handleAddMember = useCallback(async (fields) => {
@@ -1356,6 +1678,105 @@ function App({ session }) {
     setTeamMembers(prev => prev.map(m => m.id===id?{...m,is_active:false}:m));
     toast('비활성화 완료','success');
   }, [toast]);
+
+  // Milestone CRUD
+  const handleCreateMilestonesFromTemplate = useCallback(async (slug, templateKey) => {
+    const tpl = MILESTONE_TEMPLATES[templateKey];
+    if (!tpl) return;
+    // Cumulative planned dates from today, using phase default_days
+    const toISODate = (d) => d.toISOString().split('T')[0];
+    let cursor = new Date(); cursor.setHours(0,0,0,0);
+    const rows = tpl.phases.map((p,i) => {
+      const start = new Date(cursor);
+      const end = new Date(cursor); end.setDate(end.getDate() + (p.default_days||1));
+      cursor = new Date(end);
+      return {
+        project_slug: slug,
+        phase_key: p.key,
+        phase_label: p.label,
+        order_idx: i,
+        status: 'planned',
+        blocked: false,
+        planned_start: toISODate(start),
+        planned_end: toISODate(end),
+      };
+    });
+    const { data:inserted, error } = await supabase.from(MILESTONES_TABLE).insert(rows).select();
+    if (error) {
+      if (error.code==='42P01' || error.message?.includes('does not exist') || error.message?.includes('relation')) {
+        setMilestonesSetupNeeded(true);
+      }
+      toast('마일스톤 생성 실패: '+error.message,'error');
+      return;
+    }
+    setMilestones(prev => ({ ...prev, [slug]: [...(inserted||[])].sort((a,b)=>a.order_idx-b.order_idx) }));
+    toast(`📋 ${tpl.label} 템플릿 적용 (${rows.length}개 작업)`,'success');
+  }, [toast]);
+
+  const handleMilestoneUpdate = useCallback(async (milestone, fields) => {
+    const payload = { ...fields, updated_at:new Date().toISOString() };
+    // auto-set timestamps when status changes
+    if (fields.status && fields.status !== milestone.status) {
+      if (fields.status === 'in_progress' && !milestone.actual_start) payload.actual_start = new Date().toISOString();
+      if (fields.status === 'done' && !milestone.actual_end) payload.actual_end = new Date().toISOString();
+      if (fields.status !== 'done') payload.actual_end = null;
+    }
+    const { data:updated, error } = await supabase.from(MILESTONES_TABLE).update(payload).eq('id',milestone.id).select().single();
+    if (error) { toast('저장 실패: '+error.message,'error'); return; }
+    setMilestones(prev => {
+      const next = { ...prev };
+      const list = (next[milestone.project_slug]||[]).map(m => m.id===milestone.id?updated:m);
+      next[milestone.project_slug] = list;
+      return next;
+    });
+    // append milestone completion to project history (race-safe: read from latest state)
+    if (fields.status === 'done' && milestone.status !== 'done') {
+      const today = new Date().toISOString().split('T')[0];
+      setData(prev => {
+        if (!prev) return prev;
+        const idx = prev.findIndex(d => d.slug === milestone.project_slug);
+        if (idx < 0) return prev;
+        const project = prev[idx];
+        const entry = { status: project.current_status, date: today, note: `✅ ${milestone.phase_label} 완료` };
+        const newHistory = [...(project.history||[]), entry];
+        supabase.from(TABLE).update({ history:newHistory, updated_at:today }).eq('slug',project.slug).then(({ error:he }) => {
+          if (he) toast('이력 저장 실패: '+he.message,'error');
+        });
+        const next = prev.slice();
+        next[idx] = { ...project, history:newHistory, updated_at:today };
+        return next;
+      });
+    }
+  }, [toast]);
+
+  const handleMilestoneDelete = useCallback(async (milestone) => {
+    if (!confirm(`"${milestone.phase_label}" 작업을 삭제하시겠습니까?`)) return;
+    const { error } = await supabase.from(MILESTONES_TABLE).delete().eq('id',milestone.id);
+    if (error) { toast('삭제 실패: '+error.message,'error'); return; }
+    setMilestones(prev => {
+      const next = { ...prev };
+      next[milestone.project_slug] = (next[milestone.project_slug]||[]).filter(m => m.id!==milestone.id);
+      return next;
+    });
+    toast('작업 삭제','success');
+  }, [toast]);
+
+  const handleMilestoneAdd = useCallback(async (slug, label) => {
+    if (!label?.trim()) return;
+    const existing = milestones[slug] || [];
+    const maxOrder = existing.reduce((mx,m) => Math.max(mx, m.order_idx||0), -1);
+    const row = {
+      project_slug: slug,
+      phase_key: 'custom_'+Date.now(),
+      phase_label: label.trim(),
+      order_idx: maxOrder+1,
+      status: 'planned',
+      blocked: false,
+    };
+    const { data:inserted, error } = await supabase.from(MILESTONES_TABLE).insert([row]).select().single();
+    if (error) { toast('추가 실패: '+error.message,'error'); return; }
+    setMilestones(prev => ({ ...prev, [slug]: [...(prev[slug]||[]), inserted] }));
+  }, [milestones, toast]);
 
   const handleRowClick    = useCallback((p)  => setSelectedProject(p), []);
 
@@ -1441,9 +1862,19 @@ function App({ session }) {
       const { error } = await supabase.from(TABLE).update(updatePayload).eq('slug',project.slug);
       if (error) throw error;
       setData(prev => prev.map(d => d.slug===project.slug?{...d,...updatePayload}:d));
-      setSelectedProject(null);
       const sm = STATUS_META[newStatus];
       toast(`${sm.emoji} ${project.slug} → ${sm.label}`,'success');
+      // Auto-create milestone template on won → contracted transition — keep modal open and remount onto 'tasks' tab
+      const isWonToContracted = newStatus === 'contracted' && project.current_status === 'won';
+      if (isWonToContracted) {
+        setSelectedProject(prev => prev ? { ...prev, ...updatePayload } : prev);
+        if (!milestonesSetupNeeded) {
+          const existing = milestones[project.slug] || [];
+          if (existing.length === 0) handleCreateMilestonesFromTemplate(project.slug, 'web_standard');
+        }
+      } else {
+        setSelectedProject(null);
+      }
       if (newStatus==='lost' && (project.portfolio_count||0) > 1) {
         supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug } })
           .then(({ data:fnData, error:fnErr }) => {
@@ -1453,7 +1884,7 @@ function App({ session }) {
           });
       }
     } catch(err) { toast('저장 실패: '+err.message,'error'); } finally { setSaving(false); }
-  }, [toast]);
+  }, [toast, milestones, milestonesSetupNeeded, handleCreateMilestonesFromTemplate]);
 
   const handleQuickAdd = useCallback(async (fields) => {
     setSaving(true);
@@ -1501,6 +1932,7 @@ function App({ session }) {
       <ToastContainer toasts={toasts} />
       {selectedProject && (
         <StatusModal
+          key={selectedProject.slug+'-'+selectedProject.current_status}
           project={selectedProject}
           onClose={() => setSelectedProject(null)}
           onSave={handleSave}
@@ -1508,6 +1940,12 @@ function App({ session }) {
           onDelete={handleDelete}
           saving={saving}
           teamMembers={teamMembers}
+          milestones={milestones[selectedProject.slug]||[]}
+          milestonesSetupNeeded={milestonesSetupNeeded}
+          onMilestoneUpdate={handleMilestoneUpdate}
+          onMilestoneDelete={handleMilestoneDelete}
+          onMilestoneAdd={handleMilestoneAdd}
+          onCreateFromTemplate={handleCreateMilestonesFromTemplate}
         />
       )}
       {showQuickAdd && (
@@ -1632,6 +2070,9 @@ function App({ session }) {
           onRowClick={handleRowClick} sortKey={sortKey} sortOrder={sortOrder} onSort={handleSort}
           onBatchLost={handleBatchLost} onMemoSave={handleMemoSave}
           memberFilter={memberFilter} teamMembers={teamMembers}
+          milestones={milestones}
+          milestonesSetupNeeded={milestonesSetupNeeded}
+          onQuickApplyTemplate={handleCreateMilestonesFromTemplate}
         />
       </div>
 
