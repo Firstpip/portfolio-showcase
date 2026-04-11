@@ -1636,7 +1636,7 @@ function MilestoneEditModal({ milestone, teamMembers, saving, onUpdate, onDelete
 }
 
 // ─── ProjectView (Jira-style full-screen project page) ───
-function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, onUpdate, onDelete, onAdd, onBulkAdd, onReorder, onCreateFromTemplate, onBack, onBulkCreateWeekly, onClearWeeklyPlan, onRequestConfirm }) {
+function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, onUpdate, onDelete, onAdd, onBulkAdd, onReorder, onCreateFromTemplate, onBack, onBulkCreateWeekly, onClearWeeklyPlan, onBackfillAssignees, onRequestConfirm }) {
   // Sort: by week_number asc (unassigned last), then by order_idx asc.
   // 같은 컬럼 안에서 주차별로 자동 클러스터링되어 시각적으로 묶임.
   const sortedAll = useMemo(() => {
@@ -1861,6 +1861,31 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
             🎫 완료율 {sortedAll.length === 0 ? <span style={{ color:'var(--text2)', fontWeight:500, fontSize:'0.85rem' }}>티켓 없음</span> : `${doneCount}/${sortedAll.length}`}
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            {(() => {
+              const unassigned = sortedAll.filter(m => !m.assignee).length;
+              const hasDefault = !!(project?.assigned_main || project?.assigned_manager || project?.assigned_sub);
+              if (unassigned === 0 || !hasDefault || !onBackfillAssignees) return null;
+              return (
+                <button
+                  onClick={() => {
+                    if (onRequestConfirm) {
+                      onRequestConfirm({
+                        title: '담당자 일괄 배정',
+                        message: `미지정 티켓 ${unassigned}개를 프로젝트 담당자로 배정합니다.\n\n계속할까요?`,
+                        confirmLabel: '배정',
+                        onConfirm: () => onBackfillAssignees(project.slug),
+                      });
+                    } else {
+                      onBackfillAssignees(project.slug);
+                    }
+                  }}
+                  disabled={saving}
+                  title={`미지정 ${unassigned}개를 프로젝트 담당자로 일괄 배정`}
+                  style={{ padding:'0.3rem 0.65rem', borderRadius:6, border:'1px solid var(--accent2)44', background:'var(--accent2)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.72rem', fontWeight:600 }}>
+                  👤 담당자 백필 ({unassigned})
+                </button>
+              );
+            })()}
             {weekOptions.length === 0 && (
               <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.3rem 0.65rem', borderRadius:6, border:'1px solid var(--accent)44', background:'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.72rem', fontWeight:500 }}>📅 주차 계획 등록</button>
             )}
@@ -3200,6 +3225,23 @@ function App({ session }) {
     toast(`✨ ${inserted?.length||cleaned.length}개 티켓 생성 완료`,'success');
   }, [milestones, toast, defaultAssigneeFor]);
 
+  // Backfill: 미지정 담당자를 프로젝트 기본 담당자로 일괄 채움
+  const handleBackfillAssignees = useCallback(async (slug) => {
+    const assignee = defaultAssigneeFor(slug);
+    if (!assignee) { toast('프로젝트에 지정된 담당자가 없습니다','error'); return 0; }
+    const targets = (milestones[slug] || []).filter(m => !m.assignee);
+    if (targets.length === 0) { toast('미지정 티켓이 없습니다','info'); return 0; }
+    const ids = targets.map(m => m.id);
+    const { error } = await supabase.from(MILESTONES_TABLE).update({ assignee, updated_at:new Date().toISOString() }).in('id', ids);
+    if (error) { toast('백필 실패: '+error.message,'error'); return 0; }
+    setMilestones(prev => ({
+      ...prev,
+      [slug]: (prev[slug]||[]).map(m => ids.includes(m.id) ? { ...m, assignee } : m),
+    }));
+    toast(`👤 ${targets.length}개 티켓 담당자 배정 완료`,'success');
+    return targets.length;
+  }, [milestones, toast, defaultAssigneeFor]);
+
   const handleBulkCreateWeekly = useCallback(async (slug, weeks) => {
     if (!weeks || weeks.length === 0) return;
     const weeklyPlan = weeks.map(w => ({
@@ -3468,6 +3510,7 @@ function App({ session }) {
           onCreateFromTemplate={handleCreateMilestonesFromTemplate}
           onBulkCreateWeekly={handleBulkCreateWeekly}
           onClearWeeklyPlan={handleClearWeeklyPlan}
+          onBackfillAssignees={handleBackfillAssignees}
           onRequestConfirm={setConfirmState}
           onBack={() => navigate({ name:'table' })}
         />
