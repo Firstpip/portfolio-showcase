@@ -1862,16 +1862,17 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
             {(() => {
-              const unassigned = sortedAll.filter(m => !m.assignee).length;
-              const hasDefault = !!(project?.assigned_main || project?.assigned_manager || project?.assigned_sub);
-              if (unassigned === 0 || !hasDefault || !onBackfillAssignees) return null;
+              const isActive = (id) => !!id && !!teamMembers?.find(tm => tm.id === id && tm.is_active);
+              const needsFill = sortedAll.filter(m => !isActive(m.assignee)).length;
+              const hasDefault = isActive(project?.assigned_main) || isActive(project?.assigned_sub);
+              if (needsFill === 0 || !hasDefault || !onBackfillAssignees) return null;
               return (
                 <button
                   onClick={() => {
                     if (onRequestConfirm) {
                       onRequestConfirm({
                         title: '담당자 일괄 배정',
-                        message: `미지정 티켓 ${unassigned}개를 프로젝트 담당자로 배정합니다.\n\n계속할까요?`,
+                        message: `담당자 미지정/유효하지 않은 티켓 ${needsFill}개를 프로젝트 담당자로 배정합니다.\n(프로젝트 전체 기준 — 주차 필터와 무관)\n\n계속할까요?`,
                         confirmLabel: '배정',
                         onConfirm: () => onBackfillAssignees(project.slug),
                       });
@@ -1880,9 +1881,9 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                     }
                   }}
                   disabled={saving}
-                  title={`미지정 ${unassigned}개를 프로젝트 담당자로 일괄 배정`}
+                  title={`미지정·고아 담당 ${needsFill}개를 프로젝트 담당자로 일괄 배정 (전체 기준)`}
                   style={{ padding:'0.3rem 0.65rem', borderRadius:6, border:'1px solid var(--accent2)44', background:'var(--accent2)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.72rem', fontWeight:600 }}>
-                  👤 담당자 백필 ({unassigned})
+                  👤 담당자 백필 ({needsFill})
                 </button>
               );
             })()}
@@ -3063,11 +3064,16 @@ function App({ session }) {
     toast('비활성화 완료','success');
   }, [toast]);
 
-  // Default assignee: project's main engineer → manager → sub
+  // Default ticket assignee: main → sub (active members only).
+  // assigned_manager는 "미팅 담당자(영업)"로 티켓 소유와 의미가 달라 폴백에서 제외.
   const defaultAssigneeFor = useCallback((slug) => {
     const project = data?.find(d => d.slug === slug);
-    return project?.assigned_main || project?.assigned_manager || project?.assigned_sub || null;
-  }, [data]);
+    if (!project) return null;
+    const isActive = (id) => !!id && !!teamMembers?.find(tm => tm.id === id && tm.is_active);
+    if (isActive(project.assigned_main)) return project.assigned_main;
+    if (isActive(project.assigned_sub))  return project.assigned_sub;
+    return null;
+  }, [data, teamMembers]);
 
   // Milestone CRUD
   const handleCreateMilestonesFromTemplate = useCallback(async (slug, templateKey) => {
@@ -3225,22 +3231,36 @@ function App({ session }) {
     toast(`✨ ${inserted?.length||cleaned.length}개 티켓 생성 완료`,'success');
   }, [milestones, toast, defaultAssigneeFor]);
 
-  // Backfill: 미지정 담당자를 프로젝트 기본 담당자로 일괄 채움
+  // Backfill: 미지정/고아(삭제·비활성 멤버 참조) 담당자를 프로젝트 기본 담당자로 일괄 채움
+  const backfillInFlightRef = useRef(false);
   const handleBackfillAssignees = useCallback(async (slug) => {
+    if (backfillInFlightRef.current) return 0;
     const assignee = defaultAssigneeFor(slug);
-    if (!assignee) { toast('프로젝트에 지정된 담당자가 없습니다','error'); return 0; }
-    const targets = (milestones[slug] || []).filter(m => !m.assignee);
-    if (targets.length === 0) { toast('미지정 티켓이 없습니다','info'); return 0; }
-    const ids = targets.map(m => m.id);
-    const { error } = await supabase.from(MILESTONES_TABLE).update({ assignee, updated_at:new Date().toISOString() }).in('id', ids);
-    if (error) { toast('백필 실패: '+error.message,'error'); return 0; }
-    setMilestones(prev => ({
-      ...prev,
-      [slug]: (prev[slug]||[]).map(m => ids.includes(m.id) ? { ...m, assignee } : m),
-    }));
-    toast(`👤 ${targets.length}개 티켓 담당자 배정 완료`,'success');
-    return targets.length;
-  }, [milestones, toast, defaultAssigneeFor]);
+    if (!assignee) { toast('프로젝트에 활성 담당자가 없습니다','error'); return 0; }
+    const isActive = (id) => !!id && !!teamMembers?.find(tm => tm.id === id && tm.is_active);
+    const targets = (milestones[slug] || []).filter(m => !isActive(m.assignee));
+    if (targets.length === 0) { toast('백필할 티켓이 없습니다','info'); return 0; }
+    backfillInFlightRef.current = true;
+    try {
+      const ids = targets.map(m => m.id);
+      const { error } = await supabase.from(MILESTONES_TABLE).update({ assignee, updated_at:new Date().toISOString() }).in('id', ids);
+      if (error) {
+        if (error.code === '42P01' || error.message?.includes('does not exist') || error.message?.includes('relation')) {
+          setMilestonesSetupNeeded(true);
+        }
+        toast('백필 실패: '+error.message,'error');
+        return 0;
+      }
+      setMilestones(prev => ({
+        ...prev,
+        [slug]: (prev[slug]||[]).map(m => ids.includes(m.id) ? { ...m, assignee } : m),
+      }));
+      toast(`👤 ${targets.length}개 티켓 담당자 배정 완료`,'success');
+      return targets.length;
+    } finally {
+      backfillInFlightRef.current = false;
+    }
+  }, [milestones, teamMembers, toast, defaultAssigneeFor]);
 
   const handleBulkCreateWeekly = useCallback(async (slug, weeks) => {
     if (!weeks || weeks.length === 0) return;
