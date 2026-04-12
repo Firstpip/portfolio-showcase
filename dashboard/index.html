@@ -2225,7 +2225,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
 }
 
 // ─── StatusModal ───
-function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, teamMembers, milestones, milestonesSetupNeeded, onMilestoneUpdate, onMilestoneDelete, onMilestoneAdd, onMilestoneReorder, onCreateFromTemplate, onOpenProjectView, onBulkCreateWeekly, onClearWeeklyPlan, onRequestConfirm }) {
+function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, teamMembers, milestones, milestonesSetupNeeded, onMilestoneUpdate, onMilestoneDelete, onMilestoneAdd, onMilestoneReorder, onCreateFromTemplate, onOpenProjectView, onBulkCreateWeekly, onClearWeeklyPlan, onRequestConfirm, onBackfillAssignees }) {
   const isPostWon = HAS_MILESTONES.includes(project?.current_status);
   const [tab, setTab] = useState(
     project?.current_status === 'meeting_done' ? 'meeting' : isPostWon ? 'tasks' : 'info'
@@ -2640,6 +2640,32 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                             <div style={{ fontSize:'0.68rem', color:'var(--text2)', fontWeight:600, marginBottom:4 }}>주차별 (Epic)</div>
                             <WeeklyProgressBars weeklyPlan={project?.weekly_plan} milestones={list} />
                           </div>
+                        );
+                      })()}
+                      {/* 백필 버튼 */}
+                      {(() => {
+                        if (!onBackfillAssignees || !teamMembers) return null;
+                        const isActive = (id) => !!id && !!teamMembers.find(tm => tm.id === id && tm.is_active);
+                        const needsFill = list.filter(m => !isActive(m.assignee)).length;
+                        const hasDefault = isActive(project?.assigned_main) || isActive(project?.assigned_sub);
+                        if (needsFill === 0 || !hasDefault) return null;
+                        return (
+                          <button
+                            onClick={() => {
+                              if (onRequestConfirm) {
+                                onRequestConfirm({
+                                  title: '담당자 일괄 배정',
+                                  message: `미지정·유효하지 않은 티켓 ${needsFill}개를 프로젝트 담당자로 배정합니다.\n\n계속할까요?`,
+                                  confirmLabel: '배정',
+                                  onConfirm: () => onBackfillAssignees(project.slug),
+                                });
+                              } else {
+                                onBackfillAssignees(project.slug);
+                              }
+                            }}
+                            style={{ marginTop:8, width:'100%', padding:'0.4rem', borderRadius:6, border:'1px solid var(--accent2)44', background:'var(--accent2)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.72rem', fontWeight:600 }}>
+                            👤 담당자 백필 ({needsFill})
+                          </button>
                         );
                       })()}
                     </div>
@@ -3615,6 +3641,7 @@ function App({ session }) {
           onClearWeeklyPlan={handleClearWeeklyPlan}
           onOpenProjectView={(slug) => navigate({ name:'project', slug })}
           onRequestConfirm={setConfirmState}
+          onBackfillAssignees={handleBackfillAssignees}
         />
       )}
       {showQuickAdd && (
@@ -3904,17 +3931,49 @@ function QuickAddModal({ onClose, onAdd, saving }) {
 }
 
 // ─── LoginScreen ───
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_SEC  = 30;
+
 function LoginScreen() {
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState('');
+  const [attempts, setAttempts] = useState(0);
+  const [lockedUntil, setLockedUntil] = useState(null); // Date
+  const [countdown, setCountdown]     = useState(0);
+
+  // 잠금 카운트다운
+  useEffect(() => {
+    if (!lockedUntil) return;
+    const tick = () => {
+      const rem = Math.ceil((lockedUntil - Date.now()) / 1000);
+      if (rem <= 0) { setLockedUntil(null); setAttempts(0); setCountdown(0); }
+      else setCountdown(rem);
+    };
+    tick();
+    const id = setInterval(tick, 500);
+    return () => clearInterval(id);
+  }, [lockedUntil]);
+
+  const isLocked = !!lockedUntil && Date.now() < lockedUntil;
 
   const handleLogin = async (e) => {
     e.preventDefault();
+    if (isLocked) return;
     setLoading(true); setError('');
     const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) setError(error.message === 'Invalid login credentials' ? '이메일 또는 비밀번호가 올바르지 않습니다.' : error.message);
+    if (error) {
+      const msg = error.message === 'Invalid login credentials' ? '이메일 또는 비밀번호가 올바르지 않습니다.' : error.message;
+      const next = attempts + 1;
+      setAttempts(next);
+      if (next >= MAX_ATTEMPTS) {
+        setLockedUntil(Date.now() + LOCKOUT_SEC * 1000);
+        setError(`로그인 ${MAX_ATTEMPTS}회 실패 — ${LOCKOUT_SEC}초 후 다시 시도하세요.`);
+      } else {
+        setError(`${msg} (${next}/${MAX_ATTEMPTS}회)`);
+      }
+    }
     setLoading(false);
   };
 
@@ -3947,12 +4006,12 @@ function LoginScreen() {
               {error}
             </div>
           )}
-          <button type="submit" disabled={loading} style={{
-            marginTop:4, padding:'0.7rem', borderRadius:10, border:'none', cursor:loading?'not-allowed':'pointer',
-            background:'var(--accent)', color:'#fff', fontSize:'0.95rem', fontWeight:700,
-            opacity:loading?0.7:1, transition:'opacity 0.15s',
+          <button type="submit" disabled={loading || isLocked} style={{
+            marginTop:4, padding:'0.7rem', borderRadius:10, border:'none', cursor:(loading||isLocked)?'not-allowed':'pointer',
+            background: isLocked ? 'var(--surface2)' : 'var(--accent)', color: isLocked ? 'var(--text2)' : '#fff',
+            fontSize:'0.95rem', fontWeight:700, opacity:(loading||isLocked)?0.7:1, transition:'background 0.15s, opacity 0.15s',
           }}>
-            {loading ? '로그인 중...' : '로그인'}
+            {loading ? '로그인 중...' : isLocked ? `잠금 (${countdown}초)` : '로그인'}
           </button>
         </form>
       </div>
