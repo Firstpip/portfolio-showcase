@@ -3746,30 +3746,53 @@ function QuickAddModal({ onClose, onAdd, saving }) {
 // ─── LoginScreen ───
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_SEC  = 30;
+const LS_KEY = 'dashboard_login_lock';
+
+function readLockState() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return { attempts: 0, lockedUntil: null };
+    return JSON.parse(raw);
+  } catch { return { attempts: 0, lockedUntil: null }; }
+}
+
+function writeLockState(state) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch {}
+}
+
+function clearLockState() {
+  try { localStorage.removeItem(LS_KEY); } catch {}
+}
 
 function LoginScreen() {
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState('');
-  const [attempts, setAttempts] = useState(0);
-  const [lockedUntil, setLockedUntil] = useState(null); // Date
-  const [countdown, setCountdown]     = useState(0);
+  const [lockState, setLockState] = useState(() => readLockState());
+  const [countdown, setCountdown] = useState(0);
 
-  // 잠금 카운트다운
+  const { attempts, lockedUntil } = lockState;
+  const isLocked = !!lockedUntil && Date.now() < lockedUntil;
+
+  // 잠금 카운트다운 (새로고침 후에도 localStorage에서 복원)
   useEffect(() => {
     if (!lockedUntil) return;
     const tick = () => {
       const rem = Math.ceil((lockedUntil - Date.now()) / 1000);
-      if (rem <= 0) { setLockedUntil(null); setAttempts(0); setCountdown(0); }
-      else setCountdown(rem);
+      if (rem <= 0) {
+        const next = { attempts: 0, lockedUntil: null };
+        clearLockState();
+        setLockState(next);
+        setCountdown(0);
+      } else {
+        setCountdown(rem);
+      }
     };
     tick();
     const id = setInterval(tick, 500);
     return () => clearInterval(id);
   }, [lockedUntil]);
-
-  const isLocked = !!lockedUntil && Date.now() < lockedUntil;
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -3779,13 +3802,18 @@ function LoginScreen() {
     if (error) {
       const msg = error.message === 'Invalid login credentials' ? '이메일 또는 비밀번호가 올바르지 않습니다.' : error.message;
       const next = attempts + 1;
-      setAttempts(next);
+      const newState = next >= MAX_ATTEMPTS
+        ? { attempts: next, lockedUntil: Date.now() + LOCKOUT_SEC * 1000 }
+        : { attempts: next, lockedUntil: null };
+      writeLockState(newState);
+      setLockState(newState);
       if (next >= MAX_ATTEMPTS) {
-        setLockedUntil(Date.now() + LOCKOUT_SEC * 1000);
         setError(`로그인 ${MAX_ATTEMPTS}회 실패 — ${LOCKOUT_SEC}초 후 다시 시도하세요.`);
       } else {
         setError(`${msg} (${next}/${MAX_ATTEMPTS}회)`);
       }
+    } else {
+      clearLockState();
     }
     setLoading(false);
   };
