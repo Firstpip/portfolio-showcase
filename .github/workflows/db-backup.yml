@@ -1,0 +1,76 @@
+name: DB 일일 백업
+
+on:
+  schedule:
+    - cron: '0 3 * * *'   # 매일 새벽 3시 (UTC) = 오후 12시 KST
+  workflow_dispatch:        # 수동 실행 가능
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 테이블 덤프
+        id: dump
+        run: |
+          DATE=$(date -u '+%Y-%m-%d')
+          mkdir -p backup
+
+          echo "▶ wishket_projects 백업 중..."
+          curl -s \
+            "$SUPABASE_URL/rest/v1/wishket_projects?select=*&order=created_at.asc" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            > backup/wishket_projects.json
+
+          echo "▶ project_milestones 백업 중..."
+          curl -s \
+            "$SUPABASE_URL/rest/v1/project_milestones?select=*&order=created_at.asc" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            > backup/project_milestones.json
+
+          echo "▶ team_members 백업 중..."
+          curl -s \
+            "$SUPABASE_URL/rest/v1/team_members?select=*&order=created_at.asc" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            > backup/team_members.json
+
+          # 각 테이블 행 수 확인
+          P_COUNT=$(jq length backup/wishket_projects.json)
+          M_COUNT=$(jq length backup/project_milestones.json)
+          T_COUNT=$(jq length backup/team_members.json)
+          echo "  wishket_projects: $P_COUNT 행"
+          echo "  project_milestones: $M_COUNT 행"
+          echo "  team_members: $T_COUNT 행"
+
+          # 빈 배열이면 인증 오류 가능성 — 경고 출력
+          if [ "$P_COUNT" = "0" ]; then
+            echo "⚠️  wishket_projects가 0행입니다. 인증 오류 여부를 확인하세요."
+          fi
+
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "projects=$P_COUNT" >> $GITHUB_OUTPUT
+          echo "milestones=$M_COUNT" >> $GITHUB_OUTPUT
+          echo "members=$T_COUNT" >> $GITHUB_OUTPUT
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      - name: Artifact 업로드 (90일 보관)
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ steps.dump.outputs.date }}
+          path: backup/
+          retention-days: 90
+
+      - name: 백업 완료 요약
+        run: |
+          echo "✅ 백업 완료: ${{ steps.dump.outputs.date }}"
+          echo "   wishket_projects : ${{ steps.dump.outputs.projects }}행"
+          echo "   project_milestones: ${{ steps.dump.outputs.milestones }}행"
+          echo "   team_members      : ${{ steps.dump.outputs.members }}행"
+          echo ""
+          echo "복구 시: GitHub Actions → db-backup-YYYY-MM-DD artifact 다운로드"
+          echo "→ Supabase SQL Editor에서 JSON 내용을 INSERT로 재삽입"
