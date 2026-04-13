@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>카카오톡-슬랙 고객상담 통합 브리지 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Pretendard', -apple-system, sans-serif; background: #F5F6FA; color: #1A1D2E; }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #f0f0f0; }
+::-webkit-scrollbar-thumb { background: #c0c0c0; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } = Recharts;
+
+const COLORS = {
+  primary: '#4A3AFF',
+  primaryLight: '#7B6FFF',
+  accent: '#00C896',
+  danger: '#FF4D6D',
+  warning: '#FFB830',
+  bg: '#F5F6FA',
+  surface: '#FFFFFF',
+  sidebar: '#1A1D2E',
+  sidebarHover: '#252A3D',
+  sidebarActive: '#4A3AFF',
+  textPrimary: '#1A1D2E',
+  textSecondary: '#6B7280',
+  border: '#E5E7EB',
+};
+
+const MENU_ITEMS = [
+  { id: 'dashboard', label: '대시보드', icon: '📊' },
+  { id: '상담 목록', label: '상담 목록', icon: '💬' },
+  { id: '채널 관리', label: '채널 관리', icon: '🔗' },
+  { id: '메시지 로그', label: '메시지 로그', icon: '📋' },
+  { id: 'settings', label: 'API 설정', icon: '⚙️' },
+];
+
+const DUMMY_STATS = {
+  total: 142, waiting: 23, active: 38, done: 81, error: 7,
+};
+
+const CHART_DATA = [
+  { date: '04/07', kakao: 24, slack: 22 },
+  { date: '04/08', kakao: 31, slack: 29 },
+  { date: '04/09', kakao: 18, slack: 17 },
+  { date: '04/10', kakao: 42, slack: 40 },
+  { date: '04/11', kakao: 38, slack: 35 },
+  { date: '04/12', kakao: 55, slack: 52 },
+  { date: '04/13', kakao: 47, slack: 45 },
+];
+
+const CONSULTATIONS = [
+  { id: 'KK-2024', customer: '김세무', lastMsg: '종합소득세 신고 관련하여 문의드립니다', time: '2분 전', status: '대기', channel: 'kakao-2024-kim', unread: 3 },
+  { id: 'KK-2023', customer: '이법인', lastMsg: '법인세 납부 기한 연장이 가능한가요?', time: '15분 전', status: '진행', channel: 'kakao-2023-lee', unread: 0 },
+  { id: 'KK-2022', customer: '박회계', lastMsg: '세금계산서 발급 방법을 알려주세요', time: '1시간 전', status: '진행', channel: 'kakao-2022-park', unread: 1 },
+  { id: 'KK-2021', customer: '최대표', lastMsg: '근로소득세 환급 신청 서류가 필요합니다', time: '2시간 전', status: '완료', channel: 'kakao-2021-choi', unread: 0 },
+  { id: 'KK-2020', customer: '정사업자', lastMsg: '부가가치세 신고 기한이 언제인가요?', time: '3시간 전', status: '완료', channel: 'kakao-2020-jung', unread: 0 },
+  { id: 'KK-2019', customer: '한개인', lastMsg: '증여세 계산 방법 문의', time: '5시간 전', status: '오류', channel: 'kakao-2019-han', unread: 0 },
+];
+
+const MESSAGES = {
+  'KK-2024': [
+    { from: 'customer', text: '안녕하세요, 종합소득세 신고 관련하여 문의드립니다', time: '14:22' },
+    { from: 'customer', text: '작년에 프리랜서로 수입이 있었는데 신고 기한이 언제인가요?', time: '14:23' },
+    { from: 'customer', text: '필요한 서류도 함께 알려주시면 감사하겠습니다', time: '14:23' },
+  ],
+  'KK-2023': [
+    { from: 'customer', text: '법인세 납부 기한 연장이 가능한가요?', time: '13:58' },
+    { from: 'agent', text: '네, 안녕하세요. 불가피한 사유가 있는 경우 납부 기한 연장 신청이 가능합니다.', time: '14:05' },
+    { from: 'agent', text: '구체적인 사유를 말씀해 주시면 검토해 드리겠습니다.', time: '14:05' },
+    { from: 'customer', text: '감사합니다. 재해로 인한 피해가 있었는데 이 경우도 해당되나요?', time: '14:10' },
+  ],
+};
+
+const CHANNEL_MAPPINGS = [
+  { kakaoId: 'room-2024', slackChannel: 'kakao-2024-kim', customer: '김세무', created: '2026-04-13 14:22', agent: '상담사 박민준', status: 'active' },
+  { kakaoId: 'room-2023', slackChannel: 'kakao-2023-lee', customer: '이법인', created: '2026-04-13 13:58', agent: '상담사 이수진', status: 'active' },
+  { kakaoId: 'room-2022', slackChannel: 'kakao-2022-park', customer: '박회계', created: '2026-04-13 13:15', agent: '상담사 박민준', status: 'active' },
+  { kakaoId: 'room-2021', slackChannel: 'kakao-2021-choi', customer: '최대표', created: '2026-04-13 12:30', agent: '상담사 김영호', status: 'closed' },
+  { kakaoId: 'room-2020', slackChannel: 'kakao-2020-jung', customer: '정사업자', created: '2026-04-13 11:45', agent: '상담사 이수진', status: 'closed' },
+  { kakaoId: 'room-2019', slackChannel: 'kakao-2019-han', customer: '한개인', created: '2026-04-13 09:10', agent: '미배정', status: 'error' },
+];
+
+const MSG_LOGS = [
+  { id: 'msg-0891', from: 'KakaoTalk', to: 'Slack', content: '종합소득세 신고 관련하여 문의드립니다', status: 'success', retry: 0, time: '14:23:05' },
+  { id: 'msg-0890', from: 'Slack', to: 'KakaoTalk', content: '네, 안녕하세요. 불가피한 사유가 있는 경우...', status: 'success', retry: 0, time: '14:05:12' },
+  { id: 'msg-0889', from: 'KakaoTalk', to: 'Slack', content: '법인세 납부 기한 연장이 가능한가요?', status: 'success', retry: 0, time: '13:58:44' },
+  { id: 'msg-0888', from: 'KakaoTalk', to: 'Slack', content: '[이미지] 세금계산서_사본.jpg', status: 'success', retry: 1, time: '13:45:20' },
+  { id: 'msg-0887', from: 'Slack', to: 'KakaoTalk', content: '세금계산서 발급 방법을 안내드리겠습니다...', status: 'failed', retry: 3, time: '13:30:08' },
+  { id: 'msg-0886', from: 'KakaoTalk', to: 'Slack', content: '증여세 계산 방법 문의드립니다', status: 'dlq', retry: 3, time: '09:12:33' },
+  { id: 'msg-0885', from: 'Slack', to: 'KakaoTalk', content: '근로소득세 환급 서류 목록을 보내드립니다', status: 'success', retry: 0, time: '12:35:50' },
+  { id: 'msg-0884', from: 'KakaoTalk', to: 'Slack', content: '[파일] 환급신청서.pdf (2.1MB)', status: 'success', retry: 0, time: '12:28:17' },
+];
+
+function StatusBadge({ status }) {
+  const map = {
+    '대기': { bg: '#FFF3CD', color: '#92700A', label: '대기' },
+    '진행': { bg: '#D1FAE5', color: '#065F46', label: '진행' },
+    '완료': { bg: '#E0E7FF', color: '#3730A3', label: '완료' },
+    '오류': { bg: '#FEE2E2', color: '#991B1B', label: '오류' },
+    active: { bg: '#D1FAE5', color: '#065F46', label: '연결됨' },
+    closed: { bg: '#E5E7EB', color: '#374151', label: '종료' },
+    error: { bg: '#FEE2E2', color: '#991B1B', label: '오류' },
+    success: { bg: '#D1FAE5', color: '#065F46', label: '성공' },
+    failed: { bg: '#FEE2E2', color: '#991B1B', label: '실패' },
+    dlq: { bg: '#FEF3C7', color: '#92700A', label: 'DLQ' },
+  };
+  const s = map[status] || { bg: '#E5E7EB', color: '#374151', label: status };
+  return (
+    <span style={{ background: s.bg, color: s.color, padding: '2px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
+      {s.label}
+    </span>
+  );
+}
+
+function StatCard({ icon, label, value, color, sub }) {
+  return (
+    <div style={{ background: '#fff', borderRadius: 12, padding: '20px 24px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', flex: 1, minWidth: 150 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <div style={{ width: 36, height: 36, borderRadius: 10, background: color + '18', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{icon}</div>
+        <span style={{ fontSize: 13, color: COLORS.textSecondary, fontWeight: 500 }}>{label}</span>
+      </div>
+      <div style={{ fontSize: 28, fontWeight: 700, color: COLORS.textPrimary }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: COLORS.textSecondary, marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Dashboard() {
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
+        <StatCard icon="📩" label="전체 상담" value={DUMMY_STATS.total} color={COLORS.primary} sub="오늘 기준" />
+        <StatCard icon="⏳" label="대기" value={DUMMY_STATS.waiting} color={COLORS.warning} sub="즉시 응대 필요" />
+        <StatCard icon="🟢" label="진행 중" value={DUMMY_STATS.active} color={COLORS.accent} sub="상담사 배정됨" />
+        <StatCard icon="✅" label="완료" value={DUMMY_STATS.done} color="#6366F1" sub="오늘 처리" />
+        <StatCard icon="⚠️" label="전송 오류" value={DUMMY_STATS.error} color={COLORS.danger} sub="재처리 필요" />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 24 }}>
+        <div style={{ background: '#fff', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          <div style={{ fontWeight: 600, marginBottom: 16, fontSize: 15 }}>일별 메시지 건수 (카카오↔슬랙)</div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={CHART_DATA} barSize={14}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0" />
+              <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} />
+              <Tooltip />
+              <Legend iconType="circle" iconSize={10} />
+              <Bar dataKey="kakao" name="카카오→슬랙" fill={COLORS.primary} radius={[4,4,0,0]} />
+              <Bar dataKey="slack" name="슬랙→카카오" fill={COLORS.accent} radius={[4,4,0,0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div style={{ background: '#fff', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+          <div style={{ fontWeight: 600, marginBottom: 16, fontSize: 15 }}>미응답 상담 알림</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {CONSULTATIONS.filter(c => c.status === '대기').slice(0, 4).map(c => (
+              <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: '#FFF8F0', borderRadius: 10, border: '1px solid #FFE4CC' }}>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: '#FF6B2B', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
+                  {c.customer[0]}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{c.customer}</div>
+                  <div style={{ fontSize: 12, color: COLORS.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.lastMsg}</div>
+                </div>
+                <div style={{ fontSize: 12, color: COLORS.textSecondary, flexShrink: 0 }}>{c.time}</div>
+                {c.unread > 0 && <div style={{ background: COLORS.danger, color: '#fff', borderRadius: 20, fontSize: 11, fontWeight: 700, padding: '2px 7px', flexShrink: 0 }}>{c.unread}</div>}
+              </div>
+            ))}
+            <div style={{ color: COLORS.primary, fontSize: 13, fontWeight: 500, textAlign: 'center', marginTop: 4, cursor: 'pointer' }}>전체 보기 →</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ background: '#fff', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 15 }}>시스템 아키텍처</div>
+        <div style={{ fontSize: 13, color: COLORS.textSecondary, marginBottom: 16 }}>Webhook → Redis 큐 → 브리지 서버 → Slack API</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 0, overflowX: 'auto' }}>
+          {[
+            { label: 'KakaoTalk', sublabel: '채널 Webhook', color: '#FAE100', textColor: '#3C1E1E', icon: '💬' },
+            { arrow: true },
+            { label: 'Bridge Server', sublabel: 'Node.js / Express', color: COLORS.primary, textColor: '#fff', icon: '⚙️' },
+            { arrow: true },
+            { label: 'Redis Queue', sublabel: 'Pub/Sub + DLQ', color: '#DC143C', textColor: '#fff', icon: '🔄' },
+            { arrow: true },
+            { label: 'Slack API', sublabel: 'Web API + Events', color: '#4A154B', textColor: '#fff', icon: '🟣' },
+          ].map((item, i) => (
+            item.arrow
+              ? <div key={i} style={{ fontSize: 24, color: '#9CA3AF', padding: '0 12px', flexShrink: 0 }}>→</div>
+              : <div key={i} style={{ background: item.color, color: item.textColor, borderRadius: 12, padding: '14px 20px', minWidth: 130, flexShrink: 0, textAlign: 'center' }}>
+                  <div style={{ fontSize: 22, marginBottom: 4 }}>{item.icon}</div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{item.label}</div>
+                  <div style={{ fontSize: 11, opacity: 0.8, marginTop: 2 }}>{item.sublabel}</div>
+                </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConsultationList() {
+  const [selected, setSelected] = useState('KK-2024');
+  const c = CONSULTATIONS.find(c => c.id === selected);
+  const msgs = MESSAGES[selected] || [];
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 20, height: 'calc(100vh - 160px)' }}>
+      <div style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid ' + COLORS.border, fontWeight: 600, fontSize: 15 }}>
+          상담 목록 <span style={{ background: '#FEE2E2', color: '#991B1B', borderRadius: 20, fontSize: 12, padding: '2px 8px', marginLeft: 8 }}>{DUMMY_STATS.waiting}</span>
+        </div>
+        <div style={{ overflowY: 'auto', height: 'calc(100% - 57px)' }}>
+          {CONSULTATIONS.map(c => (
+            <div key={c.id} onClick={() => setSelected(c.id)} style={{
+              padding: '14px 20px', cursor: 'pointer', borderBottom: '1px solid ' + COLORS.border,
+              background: selected === c.id ? '#F0EEFF' : '#fff',
+              borderLeft: selected === c.id ? '3px solid ' + COLORS.primary : '3px solid transparent',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 38, height: 38, borderRadius: 10, background: COLORS.primary, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15, flexShrink: 0 }}>
+                  {c.customer[0]}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>{c.customer}</span>
+                    <StatusBadge status={c.status} />
+                    {c.unread > 0 && <span style={{ background: COLORS.danger, color: '#fff', borderRadius: 20, fontSize: 11, fontWeight: 700, padding: '1px 6px', marginLeft: 'auto' }}>{c.unread}</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: COLORS.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.lastMsg}</div>
+                  <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 3 }}>{c.time} · {c.id}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column' }}>
+        {c && (<>
+          <div style={{ padding: '14px 20px', borderBottom: '1px solid ' + COLORS.border, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 38, height: 38, borderRadius: 10, background: COLORS.primary, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 15 }}>
+              {c.customer[0]}
+            </div>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 15 }}>{c.customer}</div>
+              <div style={{ fontSize: 12, color: COLORS.textSecondary }}>슬랙 채널: #{c.channel}</div>
+            </div>
+            <StatusBadge status={c.status} />
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button style={{ padding: '7px 14px', background: COLORS.primary, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>슬랙 채널 열기 ↗</button>
+            </div>
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', padding: 20, background: '#F8F9FB' }}>
+            {msgs.length === 0 && (
+              <div style={{ textAlign: 'center', color: COLORS.textSecondary, marginTop: 40, fontSize: 14 }}>
+                메시지가 없습니다. 고객이 카카오톡으로 메시지를 보내면 여기에 표시됩니다.
+              </div>
+            )}
+            {msgs.map((m, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: m.from === 'agent' ? 'flex-end' : 'flex-start', marginBottom: 12 }}>
+                <div style={{ maxWidth: '70%' }}>
+                  {m.from === 'customer' && <div style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 4, marginLeft: 4 }}>고객 (KakaoTalk)</div>}
+                  {m.from === 'agent' && <div style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 4, textAlign: 'right', marginRight: 4 }}>상담사 (Slack → KakaoTalk)</div>}
+                  <div style={{
+                    padding: '10px 14px', borderRadius: m.from === 'agent' ? '12px 12px 4px 12px' : '12px 12px 12px 4px',
+                    background: m.from === 'agent' ? COLORS.primary : '#fff',
+                    color: m.from === 'agent' ? '#fff' : COLORS.textPrimary,
+                    fontSize: 14, lineHeight: 1.5,
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                  }}>
+                    {m.text}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 3, textAlign: m.from === 'agent' ? 'right' : 'left', padding: '0 4px' }}>{m.time}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ padding: '14px 20px', borderTop: '1px solid ' + COLORS.border, background: '#fff' }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <button style={{ padding: '8px 12px', background: '#F3F4F6', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 16 }}>📎</button>
+              <input placeholder="슬랙에서 답변을 작성하면 카카오톡으로 자동 전송됩니다..." style={{ flex: 1, padding: '10px 14px', border: '1px solid ' + COLORS.border, borderRadius: 8, fontSize: 14, outline: 'none', color: '#9CA3AF', background: '#F9FAFB' }} readOnly />
+              <button style={{ padding: '8px 16px', background: COLORS.primary, color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>전송</button>
+            </div>
+          </div>
+        </>)}
+      </div>
+    </div>
+  );
+}
+
+function ChannelManagement() {
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
+        <StatCard icon="🔗" label="활성 채널" value={CHANNEL_MAPPINGS.filter(c=>c.status==='active').length} color={COLORS.accent} />
+        <StatCard icon="🔒" label="종료된 채널" value={CHANNEL_MAPPINGS.filter(c=>c.status==='closed').length} color="#9CA3AF" />
+        <StatCard icon="⚠️" label="오류 채널" value={CHANNEL_MAPPINGS.filter(c=>c.status==='error').length} color={COLORS.danger} />
+      </div>
+
+      <div style={{ background: '#fff', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid ' + COLORS.border, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontWeight: 600, fontSize: 15 }}>카카오 채팅방 ↔ 슬랙 채널 매핑</span>
+          <button style={{ padding: '8px 16px', background: COLORS.primary, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>+ 수동 매핑 추가</button>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#F9FAFB' }}>
+                {['카카오 채팅방 ID', '슬랙 채널', '고객명', '생성 시각', '담당 상담사', '상태', '액션'].map(h => (
+                  <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 600, color: COLORS.textSecondary, borderBottom: '1px solid ' + COLORS.border }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {CHANNEL_MAPPINGS.map((row, i) => (
+                <tr key={i} style={{ borderBottom: '1px solid ' + COLORS.border }}>
+                  <td style={{ padding: '14px 16px', fontSize: 13, fontFamily: 'monospace' }}>{row.kakaoId}</td>
+                  <td style={{ padding: '14px 16px', fontSize: 13 }}>
+                    <span style={{ background: '#F0EEFF', color: COLORS.primary, padding: '3px 8px', borderRadius: 6, fontSize: 12, fontWeight: 500 }}>#{row.slackChannel}</span>
+                  </td>
+                  <td style={{ padding: '14px 16px', fontSize: 13, fontWeight: 500 }}>{row.customer}</td>
+                  <td style={{ padding: '14px 16px', fontSize: 12, color: COLORS.textSecondary }}>{row.created}</td>
+                  <td style={{ padding: '14px 16px', fontSize: 13 }}>{row.agent}</td>
+                  <td style={{ padding: '14px 16px' }}><StatusBadge status={row.status} /></td>
+                  <td style={{ padding: '14px 16px' }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {row.status === 'error' && <button style={{ padding: '5px 10px', background: COLORS.warning + '20', color: COLORS.warning, border: '1px solid ' + COLORS.warning + '40', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}>재연결</button>}
+                      <button style={{ padding: '5px 10px', background: '#F3F4F6', color: COLORS.textSecondary, border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}>상세</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MessageLog() {
+  const [filter, setFilter] = useState('all');
+  const filtered = filter === 'all' ? MSG_LOGS : MSG_LOGS.filter(m => m.status === filter);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
+        <StatCard icon="✅" label="성공" value={MSG_LOGS.filter(m=>m.status==='success').length} color={COLORS.accent} />
+        <StatCard icon="🔄" label="재시도" value={MSG_LOGS.filter(m=>m.retry>0).length} color={COLORS.warning} />
+        <StatCard icon="❌" label="실패" value={MSG_LOGS.filter(m=>m.status==='failed').length} color={COLORS.danger} />
+        <StatCard icon="📬" label="DLQ 보관" value={MSG_LOGS.filter(m=>m.status==='dlq').length} color="#8B5CF6" sub="수동 재처리 필요" />
+      </div>
+
+      <div style={{ background: '#fff', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid ' + COLORS.border, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontWeight: 600, fontSize: 15 }}>메시지 전송 이력</span>
+          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+            {['all', 'success', 'failed', 'dlq'].map(f => (
+              <button key={f} onClick={() => setFilter(f)} style={{
+                padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 500, cursor: 'pointer',
+                background: filter === f ? COLORS.primary : '#F3F4F6',
+                color: filter === f ? '#fff' : COLORS.textSecondary,
+                border: 'none',
+              }}>
+                {f === 'all' ? '전체' : f === 'success' ? '성공' : f === 'failed' ? '실패' : 'DLQ'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#F9FAFB' }}>
+                {['메시지 ID', '발신', '수신', '내용', '상태', '재시도', '시각', '액션'].map(h => (
+                  <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 600, color: COLORS.textSecondary, borderBottom: '1px solid ' + COLORS.border }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((row, i) => (
+                <tr key={i} style={{ borderBottom: '1px solid ' + COLORS.border, background: row.status === 'dlq' ? '#FFFBEB' : 'white' }}>
+                  <td style={{ padding: '12px 16px', fontSize: 12, fontFamily: 'monospace', color: COLORS.textSecondary }}>{row.id}</td>
+                  <td style={{ padding: '12px 16px', fontSize: 12 }}>
+                    <span style={{ background: row.from === 'KakaoTalk' ? '#FFF3E0' : '#EDE7F6', color: row.from === 'KakaoTalk' ? '#E65100' : '#4A154B', padding: '2px 8px', borderRadius: 4, fontWeight: 500 }}>{row.from}</span>
+                  </td>
+                  <td style={{ padding: '12px 16px', fontSize: 12 }}>
+                    <span style={{ background: row.to === 'Slack' ? '#EDE7F6' : '#FFF3E0', color: row.to === 'Slack' ? '#4A154B' : '#E65100', padding: '2px 8px', borderRadius: 4, fontWeight: 500 }}>{row.to}</span>
+                  </td>
+                  <td style={{ padding: '12px 16px', fontSize: 13, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.content}</td>
+                  <td style={{ padding: '12px 16px' }}><StatusBadge status={row.status} /></td>
+                  <td style={{ padding: '12px 16px', fontSize: 13, textAlign: 'center', color: row.retry > 0 ? COLORS.warning : COLORS.textSecondary }}>{row.retry}</td>
+                  <td style={{ padding: '12px 16px', fontSize: 12, color: COLORS.textSecondary, fontFamily: 'monospace' }}>{row.time}</td>
+                  <td style={{ padding: '12px 16px' }}>
+                    {(row.status === 'failed' || row.status === 'dlq') && (
+                      <button style={{ padding: '5px 10px', background: COLORS.primary + '15', color: COLORS.primary, border: '1px solid ' + COLORS.primary + '30', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}>재전송</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Settings() {
+  const [connected, setConnected] = useState({ kakao: true, slack: true, s3: false });
+  return (
+    <div style={{ maxWidth: 700 }}>
+      <div style={{ background: '#fff', borderRadius: 12, padding: 28, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+          <div style={{ fontSize: 24 }}>💬</div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>카카오 채널 API</div>
+            <div style={{ fontSize: 13, color: COLORS.textSecondary }}>카카오 비즈니스 채널 Webhook 설정</div>
+          </div>
+          <div style={{ marginLeft: 'auto' }}>
+            <span style={{ background: connected.kakao ? '#D1FAE5' : '#FEE2E2', color: connected.kakao ? '#065F46' : '#991B1B', padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
+              {connected.kakao ? '● 연결됨' : '● 미연결'}
+            </span>
+          </div>
+        </div>
+        {[
+          { label: 'Channel ID', placeholder: 'kakao_channel_xxxxxxxx', type: 'text' },
+          { label: 'Webhook Secret', placeholder: '서명 검증용 시크릿 키', type: 'password' },
+          { label: 'Webhook URL', placeholder: 'https://your-server.com/webhook/kakao', type: 'text', readonly: true },
+        ].map(f => (
+          <div key={f.label} style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 6 }}>{f.label}</label>
+            <input type={f.type} placeholder={f.placeholder} readOnly={f.readonly} style={{ width: '100%', padding: '10px 14px', border: '1px solid ' + COLORS.border, borderRadius: 8, fontSize: 14, outline: 'none', background: f.readonly ? '#F9FAFB' : '#fff' }} />
+          </div>
+        ))}
+        <button style={{ padding: '9px 20px', background: '#F0EEFF', color: COLORS.primary, border: '1px solid ' + COLORS.primary + '30', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>연결 테스트</button>
+      </div>
+
+      <div style={{ background: '#fff', borderRadius: 12, padding: 28, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+          <div style={{ fontSize: 24 }}>🟣</div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>Slack API</div>
+            <div style={{ fontSize: 13, color: COLORS.textSecondary }}>Slack 워크스페이스 봇 토큰 설정</div>
+          </div>
+          <div style={{ marginLeft: 'auto' }}>
+            <span style={{ background: connected.slack ? '#D1FAE5' : '#FEE2E2', color: connected.slack ? '#065F46' : '#991B1B', padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
+              {connected.slack ? '● 연결됨' : '● 미연결'}
+            </span>
+          </div>
+        </div>
+        {[
+          { label: 'Bot Token', placeholder: 'xoxb-xxxxxxxxxxxx-xxxxxxxxxxxx', type: 'password' },
+          { label: 'Signing Secret', placeholder: 'Events API 서명 검증 키', type: 'password' },
+          { label: 'App-Level Token', placeholder: 'xapp-xxxxxxxxxxxxxxx (Socket Mode용)', type: 'password' },
+        ].map(f => (
+          <div key={f.label} style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 6 }}>{f.label}</label>
+            <input type={f.type} placeholder={f.placeholder} style={{ width: '100%', padding: '10px 14px', border: '1px solid ' + COLORS.border, borderRadius: 8, fontSize: 14, outline: 'none' }} />
+          </div>
+        ))}
+        <button style={{ padding: '9px 20px', background: '#F0EEFF', color: COLORS.primary, border: '1px solid ' + COLORS.primary + '30', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>연결 테스트</button>
+      </div>
+
+      <div style={{ background: '#fff', borderRadius: 12, padding: 28, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+          <div style={{ fontSize: 24 }}>☁️</div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>AWS S3 (파일 전송 버퍼)</div>
+            <div style={{ fontSize: 13, color: COLORS.textSecondary }}>플랫폼 간 파일 전송 중간 저장소</div>
+          </div>
+          <div style={{ marginLeft: 'auto' }}>
+            <span style={{ background: connected.s3 ? '#D1FAE5' : '#FEE2E2', color: connected.s3 ? '#065F46' : '#991B1B', padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
+              {connected.s3 ? '● 연결됨' : '● 미연결'}
+            </span>
+          </div>
+        </div>
+        {[
+          { label: 'Access Key ID', placeholder: 'AKIAIOSFODNN7EXAMPLE', type: 'text' },
+          { label: 'Secret Access Key', placeholder: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY', type: 'password' },
+          { label: 'Bucket Name', placeholder: 'cs-bridge-file-buffer', type: 'text' },
+          { label: 'Region', placeholder: 'ap-northeast-2', type: 'text' },
+        ].map(f => (
+          <div key={f.label} style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 6 }}>{f.label}</label>
+            <input type={f.type} placeholder={f.placeholder} style={{ width: '100%', padding: '10px 14px', border: '1px solid ' + COLORS.border, borderRadius: 8, fontSize: 14, outline: 'none' }} />
+          </div>
+        ))}
+        <button onClick={() => setConnected(p => ({...p, s3: true}))} style={{ padding: '9px 20px', background: COLORS.primary, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>저장 및 연결 테스트</button>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [activeMenu, setActiveMenu] = useState('대시보드');
+
+  const pageContent = {
+    '대시보드': <Dashboard />,
+    '상담 목록': <ConsultationList />,
+    '채널 관리': <ChannelManagement />,
+    '메시지 로그': <MessageLog />,
+    'settings': <Settings />,
+  };
+
+  const currentId = MENU_ITEMS.find(m => m.label === activeMenu || m.id === activeMenu)?.id || 'dashboard';
+  const currentLabel = MENU_ITEMS.find(m => m.label === activeMenu || m.id === activeMenu)?.label || '대시보드';
+
+  return (
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      {/* Sidebar */}
+      <div style={{ width: 260, background: COLORS.sidebar, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+        <div style={{ padding: '24px 20px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: COLORS.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>🌉</div>
+            <div>
+              <div style={{ color: '#fff', fontWeight: 700, fontSize: 15, lineHeight: 1.2 }}>KS Bridge</div>
+              <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: 11 }}>카카오톡·슬랙 연동 관리</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding: '12px 12px', flex: 1 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: 'rgba(255,255,255,0.3)', padding: '8px 8px 6px', letterSpacing: 1 }}>MENU</div>
+          {MENU_ITEMS.map(item => {
+            const isActive = activeMenu === item.label || activeMenu === item.id;
+            return (
+              <div key={item.id} onClick={() => setActiveMenu(item.label || item.id)} style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 10, marginBottom: 2,
+                cursor: 'pointer', background: isActive ? COLORS.primary : 'transparent',
+                color: isActive ? '#fff' : 'rgba(255,255,255,0.6)',
+                transition: 'background 0.15s',
+              }}>
+                <span style={{ fontSize: 17 }}>{item.icon}</span>
+                <span style={{ fontSize: 14, fontWeight: isActive ? 600 : 400 }}>{item.label}</span>
+                {item.label === '메시지 로그' && <span style={{ marginLeft: 'auto', background: COLORS.danger, color: '#fff', borderRadius: 20, fontSize: 10, fontWeight: 700, padding: '1px 6px' }}>2</span>}
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: COLORS.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 13 }}>관</div>
+            <div>
+              <div style={{ color: '#fff', fontSize: 13, fontWeight: 500 }}>관리자</div>
+              <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>admin@taxfirm.kr</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main content */}
+      <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ background: '#fff', borderBottom: '1px solid ' + COLORS.border, padding: '14px 28px', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 17 }}>{currentLabel}</div>
+            <div style={{ fontSize: 12, color: COLORS.textSecondary }}>카카오톡-슬랙 고객상담 통합 브리지 — 맞춤 구현 데모</div>
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
+            <div style={{ background: '#D1FAE5', color: '#065F46', padding: '5px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
+              ● 시스템 정상
+            </div>
+            <div style={{ fontSize: 13, color: COLORS.textSecondary }}>2026.04.13 14:25</div>
+          </div>
+        </div>
+
+        <div style={{ padding: '24px 28px', flex: 1 }}>
+          {pageContent[activeMenu] || pageContent[currentId] || <Dashboard />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

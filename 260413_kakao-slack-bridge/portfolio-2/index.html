@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>배달 주문 알림 슬랙 브리지 시스템 — 구현 데모</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Pretendard', -apple-system, sans-serif; background: #FAFBFC; color: #1C2541; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d0d5de; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } = Recharts;
+
+const C = {
+  primary: '#FF6B35',
+  secondary: '#004E89',
+  accent: '#1A936F',
+  bg: '#FAFBFC',
+  surface: '#FFFFFF',
+  text: '#1C2541',
+  textSub: '#6C757D',
+  border: '#E5E8ED',
+  danger: '#E63946',
+  warning: '#F4A261',
+};
+
+const TABS = [
+  { id: '알림 현황', label: '알림 현황', icon: '📊' },
+  { id: '실시간 이벤트', label: '실시간 이벤트', icon: '⚡' },
+  { id: '라우팅 설정', label: '라우팅 설정', icon: '🔀' },
+  { id: '큐 모니터링', label: '큐 모니터링', icon: '🗂️' },
+];
+
+const LINE_DATA = [
+  { t: '09:00', order: 8, cancel: 1 },
+  { t: '10:00', order: 15, cancel: 2 },
+  { t: '11:00', order: 23, cancel: 3 },
+  { t: '12:00', order: 47, cancel: 5 },
+  { t: '13:00', order: 52, cancel: 4 },
+  { t: '14:00', order: 38, cancel: 3 },
+  { t: '15:00', order: 29, cancel: 2 },
+];
+
+const PIE_DATA = [
+  { name: '신규주문', value: 63, color: C.primary },
+  { name: '주문변경', value: 18, color: C.secondary },
+  { name: '취소', value: 12, color: C.danger },
+  { name: '리뷰', value: 7, color: C.accent },
+];
+
+const STORE_RANK = [
+  { store: '강남 버거퀸', count: 84, success: 82 },
+  { store: '홍대 피자팩토리', count: 71, success: 70 },
+  { store: '신촌 치킨나라', count: 65, success: 65 },
+  { store: '판교 스시마루', count: 58, success: 55 },
+  { store: '마포 국밥고수', count: 42, success: 42 },
+];
+
+const EVENTS = [
+  { id: 'E-0284', type: '신규주문', store: '강남 버거퀸', detail: '버거세트×2, 콜라×2', channel: '#orders-gangnam', status: 'sent', time: '14:24:51' },
+  { id: 'E-0283', type: '취소', store: '홍대 피자팩토리', detail: '마르게리타피자 (고객 변심)', channel: '#orders-hongdae', status: 'sent', time: '14:23:38' },
+  { id: 'E-0282', type: '신규주문', store: '신촌 치킨나라', detail: '반반치킨, 양념치킨', channel: '#orders-sinchon', status: 'retrying', time: '14:23:05' },
+  { id: 'E-0281', type: '리뷰', store: '판교 스시마루', detail: '★★★★☆ 맛있어요!', channel: '#reviews-pangyo', status: 'sent', time: '14:22:12' },
+  { id: 'E-0280', type: '주문변경', store: '강남 버거퀸', detail: '음료 콜라→사이다 변경', channel: '#orders-gangnam', status: 'sent', time: '14:21:55' },
+  { id: 'E-0279', type: '신규주문', store: '마포 국밥고수', detail: '순댓국밥×1, 깍두기추가', channel: '#orders-mapo', status: 'failed', time: '14:20:40' },
+  { id: 'E-0278', type: '신규주문', store: '홍대 피자팩토리', detail: '불고기피자 라지', channel: '#orders-hongdae', status: 'sent', time: '14:19:30' },
+  { id: 'E-0277', type: '취소', store: '마포 국밥고수', detail: '스팸김치찌개 (재료소진)', channel: '#orders-mapo', status: 'sent', time: '14:18:22' },
+];
+
+const ROUTES = [
+  { store: '강남 버거퀸', storeId: 'STR-001', event: '신규주문', channel: '#orders-gangnam', active: true },
+  { store: '강남 버거퀸', storeId: 'STR-001', event: '취소', channel: '#cancel-gangnam', active: true },
+  { store: '강남 버거퀸', storeId: 'STR-001', event: '리뷰', channel: '#reviews-gangnam', active: true },
+  { store: '홍대 피자팩토리', storeId: 'STR-002', event: '신규주문', channel: '#orders-hongdae', active: true },
+  { store: '홍대 피자팩토리', storeId: 'STR-002', event: '취소', channel: '#cancel-hongdae', active: false },
+  { store: '신촌 치킨나라', storeId: 'STR-003', event: '신규주문', channel: '#orders-sinchon', active: true },
+  { store: '판교 스시마루', storeId: 'STR-004', event: '신규주문', channel: '#orders-pangyo', active: true },
+  { store: '판교 스시마루', storeId: 'STR-004', event: '리뷰', channel: '#reviews-pangyo', active: true },
+];
+
+const QUEUE_JOBS = [
+  { id: 'job-8821', event: '신규주문', store: '신촌 치킨나라', attempt: 2, maxAttempt: 5, error: 'Rate limit exceeded', nextRetry: '14:25:05', status: 'retrying' },
+  { id: 'job-8815', event: '신규주문', store: '마포 국밥고수', attempt: 5, maxAttempt: 5, error: 'Channel not found', nextRetry: '—', status: 'dlq' },
+  { id: 'job-8812', event: '취소', store: '신촌 치킨나라', attempt: 1, maxAttempt: 5, error: 'Connection timeout', nextRetry: '14:25:30', status: 'retrying' },
+];
+
+const EVENT_COLORS = {
+  '신규주문': { bg: '#FFF0EB', color: C.primary },
+  '취소': { bg: '#FEE2E2', color: C.danger },
+  '주문변경': { bg: '#EFF6FF', color: C.secondary },
+  '리뷰': { bg: '#D1FAE5', color: C.accent },
+};
+
+function Badge({ type }) {
+  const s = EVENT_COLORS[type] || { bg: '#F3F4F6', color: '#374151' };
+  return <span style={{ background: s.bg, color: s.color, padding: '3px 9px', borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{type}</span>;
+}
+
+function StatusDot({ status }) {
+  const map = {
+    sent: { color: C.accent, label: '전송완료' },
+    retrying: { color: C.warning, label: '재시도중' },
+    failed: { color: C.danger, label: '실패' },
+    dlq: { color: '#8B5CF6', label: 'DLQ' },
+    active: { color: C.accent, label: '활성' },
+    inactive: { color: '#9CA3AF', label: '비활성' },
+  };
+  const s = map[status] || map.sent;
+  return <span style={{ color: s.color, fontWeight: 600, fontSize: 12 }}>● {s.label}</span>;
+}
+
+function KpiCard({ icon, label, value, sub, color }) {
+  return (
+    <div style={{ background: C.surface, borderRadius: 12, padding: '20px 24px', flex: 1, border: '1px solid ' + C.border }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <div style={{ width: 38, height: 38, borderRadius: 10, background: color + '15', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{icon}</div>
+        <span style={{ fontSize: 13, color: C.textSub, fontWeight: 500 }}>{label}</span>
+      </div>
+      <div style={{ fontSize: 30, fontWeight: 800, color: C.text }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: C.textSub, marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function AlertsBanner() {
+  return (
+    <div style={{ background: '#FFF8F0', border: '1px solid #FFD9C0', borderRadius: 10, padding: '12px 20px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
+      <span style={{ fontSize: 18 }}>⚠️</span>
+      <span style={{ fontSize: 14, color: '#92400E', fontWeight: 500 }}>큐에 <strong>3개</strong> 작업이 재시도/DLQ 상태입니다. 큐 모니터링을 확인하세요.</span>
+      <button style={{ marginLeft: 'auto', padding: '6px 14px', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>확인 →</button>
+    </div>
+  );
+}
+
+function AnalyticsView() {
+  return (
+    <div>
+      <AlertsBanner />
+      <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
+        <KpiCard icon="📦" label="총 이벤트 (오늘)" value="212" sub="전일 대비 +24" color={C.primary} />
+        <KpiCard icon="✅" label="전송 성공" value="207" sub="성공률 97.6%" color={C.accent} />
+        <KpiCard icon="🔄" label="재시도 중" value="2" sub="평균 2.1회" color={C.warning} />
+        <KpiCard icon="📬" label="DLQ 보관" value="1" sub="수동 처리 필요" color="#8B5CF6" />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, marginBottom: 20 }}>
+        <div style={{ background: C.surface, borderRadius: 12, padding: 24, border: '1px solid ' + C.border }}>
+          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>시간대별 이벤트 건수</div>
+          <div style={{ fontSize: 12, color: C.textSub, marginBottom: 16 }}>신규주문 / 취소 비율</div>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={LINE_DATA}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0" />
+              <XAxis dataKey="t" tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} />
+              <Tooltip />
+              <Legend />
+              <Line type="monotone" dataKey="order" name="신규주문" stroke={C.primary} strokeWidth={3} dot={{ r: 4 }} />
+              <Line type="monotone" dataKey="cancel" name="취소" stroke={C.danger} strokeWidth={2} dot={{ r: 3 }} strokeDasharray="4 2" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div style={{ background: C.surface, borderRadius: 12, padding: 24, border: '1px solid ' + C.border }}>
+          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>이벤트 유형별 비율</div>
+          <ResponsiveContainer width="100%" height={160}>
+            <PieChart>
+              <Pie data={PIE_DATA} cx="50%" cy="50%" innerRadius={45} outerRadius={70} dataKey="value">
+                {PIE_DATA.map((entry, i) => <Cell key={i} fill={entry.color} />)}
+              </Pie>
+              <Tooltip formatter={(v, n) => [`${v}건`, n]} />
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+            {PIE_DATA.map((d, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                <div style={{ width: 10, height: 10, borderRadius: 2, background: d.color, flexShrink: 0 }} />
+                <span style={{ flex: 1, color: C.textSub }}>{d.name}</span>
+                <span style={{ fontWeight: 600 }}>{d.value}건</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ background: C.surface, borderRadius: 12, padding: 24, border: '1px solid ' + C.border }}>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16 }}>매장별 알림 건수 랭킹</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: '#F9FAFB' }}>
+              {['순위', '매장명', '총 이벤트', '성공', '실패율'].map(h => (
+                <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontSize: 12, fontWeight: 600, color: C.textSub, borderBottom: '1px solid ' + C.border }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {STORE_RANK.map((row, i) => (
+              <tr key={i} style={{ borderBottom: '1px solid ' + C.border }}>
+                <td style={{ padding: '12px 16px', fontWeight: 700, color: i === 0 ? C.primary : C.text }}>{i + 1}</td>
+                <td style={{ padding: '12px 16px', fontWeight: 500 }}>{row.store}</td>
+                <td style={{ padding: '12px 16px' }}>{row.count}건</td>
+                <td style={{ padding: '12px 16px' }}>{row.success}건</td>
+                <td style={{ padding: '12px 16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ flex: 1, background: '#F0F0F0', borderRadius: 4, height: 6, overflow: 'hidden' }}>
+                      <div style={{ width: `${((row.count - row.success) / row.count) * 100}%`, background: C.danger, height: '100%' }} />
+                    </div>
+                    <span style={{ fontSize: 12, color: C.textSub }}>{(((row.count - row.success) / row.count) * 100).toFixed(1)}%</span>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function RealtimeView() {
+  const [events, setEvents] = useState(EVENTS);
+  const [ticker, setTicker] = useState(0);
+
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setTicker(t => t + 1);
+      const types = ['신규주문', '신규주문', '주문변경', '취소'];
+      const stores = ['강남 버거퀸', '홍대 피자팩토리', '신촌 치킨나라'];
+      const items = ['후라이드치킨×2', '페퍼로니피자', '와퍼세트×1', '새우버거', '된장찌개'];
+      const type = types[Math.floor(Math.random() * types.length)];
+      const store = stores[Math.floor(Math.random() * stores.length)];
+      const now = new Date();
+      const time = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+      const newEvent = {
+        id: `E-${Math.floor(Math.random()*9000)+1000}`,
+        type,
+        store,
+        detail: items[Math.floor(Math.random() * items.length)],
+        channel: `#orders-${store.includes('강남')?'gangnam':store.includes('홍대')?'hongdae':'sinchon'}`,
+        status: Math.random() > 0.9 ? 'retrying' : 'sent',
+        time,
+      };
+      setEvents(prev => [newEvent, ...prev.slice(0, 14)]);
+    }, 3500);
+    return () => clearInterval(iv);
+  }, []);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
+        <div style={{ background: C.surface, borderRadius: 12, padding: '16px 24px', border: '1px solid ' + C.border, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: C.accent, animation: 'pulse 1.5s infinite' }} />
+          <span style={{ fontSize: 14, fontWeight: 600 }}>WebSocket 연결됨</span>
+          <span style={{ fontSize: 12, color: C.textSub }}>실시간 이벤트 수신 중</span>
+        </div>
+        <div style={{ background: C.surface, borderRadius: 12, padding: '16px 24px', border: '1px solid ' + C.border }}>
+          <span style={{ fontSize: 13, color: C.textSub }}>총 수신 이벤트 </span>
+          <span style={{ fontWeight: 700, fontSize: 16, color: C.primary }}>{212 + ticker}</span>건
+        </div>
+      </div>
+
+      <div style={{ background: C.surface, borderRadius: 12, border: '1px solid ' + C.border, overflow: 'hidden' }}>
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid ' + C.border, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.accent }} />
+          <span style={{ fontWeight: 600, fontSize: 15 }}>실시간 이벤트 피드</span>
+          <span style={{ fontSize: 12, color: C.textSub, marginLeft: 4 }}>자동 새로고침</span>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            {['전체', '신규주문', '취소', '리뷰'].map(f => (
+              <button key={f} style={{ padding: '5px 12px', borderRadius: 20, border: '1px solid ' + C.border, background: f === '전체' ? C.primary : '#fff', color: f === '전체' ? '#fff' : C.textSub, fontSize: 12, cursor: 'pointer' }}>{f}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#F9FAFB' }}>
+                {['이벤트 ID', '유형', '매장명', '상세', '슬랙 채널', '상태', '시각'].map(h => (
+                  <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontSize: 12, fontWeight: 600, color: C.textSub, borderBottom: '1px solid ' + C.border }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((e, i) => (
+                <tr key={e.id + i} style={{ borderBottom: '1px solid ' + C.border, background: i === 0 ? '#FFF8F5' : 'white' }}>
+                  <td style={{ padding: '12px 16px', fontSize: 12, fontFamily: 'monospace', color: C.textSub }}>{e.id}</td>
+                  <td style={{ padding: '12px 16px' }}><Badge type={e.type} /></td>
+                  <td style={{ padding: '12px 16px', fontSize: 13, fontWeight: 500 }}>{e.store}</td>
+                  <td style={{ padding: '12px 16px', fontSize: 13, color: C.textSub, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.detail}</td>
+                  <td style={{ padding: '12px 16px', fontSize: 12 }}>
+                    <span style={{ background: '#EDE7F6', color: '#4A154B', padding: '2px 8px', borderRadius: 4 }}>{e.channel}</span>
+                  </td>
+                  <td style={{ padding: '12px 16px' }}><StatusDot status={e.status} /></td>
+                  <td style={{ padding: '12px 16px', fontSize: 12, color: C.textSub, fontFamily: 'monospace' }}>{e.time}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RoutingView() {
+  const [routes, setRoutes] = useState(ROUTES);
+  const toggle = (i) => setRoutes(prev => prev.map((r, idx) => idx === i ? {...r, active: !r.active} : r));
+
+  return (
+    <div>
+      <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '14px 20px', marginBottom: 20, fontSize: 14, color: '#1E40AF' }}>
+        <strong>라우팅 설정 방법:</strong> 매장 ID × 이벤트 유형 조합으로 알림을 받을 슬랙 채널을 지정합니다. 미설정 매장은 폴백 채널 <code>#default-orders</code>로 전달됩니다.
+      </div>
+
+      <div style={{ background: C.surface, borderRadius: 12, border: '1px solid ' + C.border, overflow: 'hidden', marginBottom: 20 }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid ' + C.border, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontWeight: 700, fontSize: 15 }}>라우팅 규칙 목록</span>
+          <button style={{ padding: '8px 18px', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>+ 규칙 추가</button>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#F9FAFB' }}>
+                {['매장명', '매장 ID', '이벤트 유형', '슬랙 채널', '활성', '액션'].map(h => (
+                  <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontSize: 12, fontWeight: 600, color: C.textSub, borderBottom: '1px solid ' + C.border }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {routes.map((row, i) => (
+                <tr key={i} style={{ borderBottom: '1px solid ' + C.border, background: row.active ? 'white' : '#FAFAFA' }}>
+                  <td style={{ padding: '12px 16px', fontWeight: 500, fontSize: 13 }}>{row.store}</td>
+                  <td style={{ padding: '12px 16px', fontSize: 12, fontFamily: 'monospace', color: C.textSub }}>{row.storeId}</td>
+                  <td style={{ padding: '12px 16px' }}><Badge type={row.event} /></td>
+                  <td style={{ padding: '12px 16px', fontSize: 12 }}>
+                    <span style={{ background: '#EDE7F6', color: '#4A154B', padding: '2px 8px', borderRadius: 4 }}>{row.channel}</span>
+                  </td>
+                  <td style={{ padding: '12px 16px' }}>
+                    <div onClick={() => toggle(i)} style={{ width: 40, height: 22, borderRadius: 11, background: row.active ? C.accent : '#D1D5DB', cursor: 'pointer', position: 'relative', transition: 'background 0.2s' }}>
+                      <div style={{ position: 'absolute', top: 2, left: row.active ? 20 : 2, width: 18, height: 18, borderRadius: '50%', background: 'white', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
+                    </div>
+                  </td>
+                  <td style={{ padding: '12px 16px' }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button style={{ padding: '5px 10px', background: '#F3F4F6', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', color: C.textSub }}>편집</button>
+                      <button style={{ padding: '5px 10px', background: '#FEE2E2', border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', color: C.danger }}>삭제</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={{ background: C.surface, borderRadius: 12, border: '1px solid ' + C.border, padding: 24 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16 }}>폴백 채널 설정</div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 6 }}>라우팅 규칙이 없는 경우 전송할 채널</label>
+            <input defaultValue="#default-orders" style={{ width: '100%', padding: '10px 14px', border: '1px solid ' + C.border, borderRadius: 8, fontSize: 14, outline: 'none' }} />
+          </div>
+          <button style={{ padding: '10px 20px', background: C.secondary, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', marginTop: 24 }}>저장</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QueueView() {
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
+        <KpiCard icon="⏳" label="대기 중" value="0" color={C.textSub} />
+        <KpiCard icon="⚙️" label="처리 중" value="3" sub="워커 2개 실행 중" color={C.secondary} />
+        <KpiCard icon="✅" label="완료 (1시간)" value="207" color={C.accent} />
+        <KpiCard icon="❌" label="실패 / DLQ" value="3" sub="즉시 확인 필요" color={C.danger} />
+      </div>
+
+      <div style={{ background: C.surface, borderRadius: 12, border: '1px solid ' + C.border, overflow: 'hidden', marginBottom: 20 }}>
+        <div style={{ padding: '14px 20px', borderBottom: '1px solid ' + C.border, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontWeight: 700, fontSize: 15 }}>재시도 / DLQ 작업</span>
+          <span style={{ background: '#FEE2E2', color: C.danger, borderRadius: 20, fontSize: 12, fontWeight: 700, padding: '2px 8px' }}>{QUEUE_JOBS.length}</span>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#F9FAFB' }}>
+                {['작업 ID', '이벤트', '매장', '시도 횟수', '에러', '다음 재시도', '상태', '액션'].map(h => (
+                  <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontSize: 12, fontWeight: 600, color: C.textSub, borderBottom: '1px solid ' + C.border }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {QUEUE_JOBS.map((job, i) => (
+                <tr key={i} style={{ borderBottom: '1px solid ' + C.border, background: job.status === 'dlq' ? '#FFF8F0' : 'white' }}>
+                  <td style={{ padding: '12px 16px', fontSize: 12, fontFamily: 'monospace', color: C.textSub }}>{job.id}</td>
+                  <td style={{ padding: '12px 16px' }}><Badge type={job.event} /></td>
+                  <td style={{ padding: '12px 16px', fontSize: 13, fontWeight: 500 }}>{job.store}</td>
+                  <td style={{ padding: '12px 16px', fontSize: 13, textAlign: 'center' }}>
+                    <span style={{ color: job.attempt >= job.maxAttempt ? C.danger : C.warning, fontWeight: 600 }}>{job.attempt}/{job.maxAttempt}</span>
+                  </td>
+                  <td style={{ padding: '12px 16px', fontSize: 12, color: C.danger, maxWidth: 180 }}>{job.error}</td>
+                  <td style={{ padding: '12px 16px', fontSize: 12, fontFamily: 'monospace', color: C.textSub }}>{job.nextRetry}</td>
+                  <td style={{ padding: '12px 16px' }}><StatusDot status={job.status} /></td>
+                  <td style={{ padding: '12px 16px' }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button style={{ padding: '5px 10px', background: C.primary + '15', color: C.primary, border: '1px solid ' + C.primary + '30', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}>즉시 재시도</button>
+                      {job.status === 'dlq' && <button style={{ padding: '5px 10px', background: '#FEE2E2', color: C.danger, border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer' }}>폐기</button>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={{ background: C.surface, borderRadius: 12, border: '1px solid ' + C.border, padding: 24 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16 }}>Bull Queue 재시도 정책</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+          {[
+            { label: '최대 재시도 횟수', value: '5회', desc: 'maxAttempts' },
+            { label: '초기 지연 시간', value: '5초', desc: 'delay (Exponential backoff)' },
+            { label: '최대 지연 상한', value: '30분', desc: 'backoff 상한' },
+          ].map(s => (
+            <div key={s.label} style={{ background: '#F9FAFB', borderRadius: 10, padding: '14px 18px' }}>
+              <div style={{ fontSize: 12, color: C.textSub, marginBottom: 4 }}>{s.label}</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: C.secondary }}>{s.value}</div>
+              <div style={{ fontSize: 11, color: C.textSub, fontFamily: 'monospace', marginTop: 4 }}>{s.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [activeTab, setActiveTab] = useState('알림 현황');
+
+  const VIEWS = {
+    '알림 현황': <AnalyticsView />,
+    '실시간 이벤트': <RealtimeView />,
+    '라우팅 설정': <RoutingView />,
+    '큐 모니터링': <QueueView />,
+  };
+
+  return (
+    <div style={{ minHeight: '100vh', background: C.bg }}>
+      {/* Top nav */}
+      <div style={{ background: C.surface, borderBottom: '1px solid ' + C.border, position: 'sticky', top: 0, zIndex: 100 }}>
+        <div style={{ maxWidth: 1280, margin: '0 auto', padding: '0 28px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', height: 60, gap: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 8, background: 'linear-gradient(135deg, ' + C.primary + ', #FF9A5C)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>📦</div>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 15, color: C.text }}>OrderBridge</div>
+                <div style={{ fontSize: 11, color: C.textSub }}>배달 주문 슬랙 브리지</div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
+              {TABS.map(tab => (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
+                  padding: '8px 18px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                  background: activeTab === tab.id ? C.primary + '12' : 'transparent',
+                  color: activeTab === tab.id ? C.primary : C.textSub,
+                  fontWeight: activeTab === tab.id ? 700 : 400,
+                  fontSize: 14,
+                  borderBottom: activeTab === tab.id ? '2px solid ' + C.primary : '2px solid transparent',
+                }}>
+                  {tab.icon} {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 16 }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.accent }} />
+              <span style={{ fontSize: 13, color: C.textSub }}>5개 매장 연결됨</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Hero Banner */}
+      <div style={{ background: 'linear-gradient(135deg, #004E89 0%, #1A3A5C 100%)', color: '#fff', padding: '28px 0' }}>
+        <div style={{ maxWidth: 1280, margin: '0 auto', padding: '0 28px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.5)', marginBottom: 6, letterSpacing: 1 }}>DELIVERY ORDER ALERT SYSTEM</div>
+              <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>배달 주문 알림 슬랙 브리지</div>
+              <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.7)', maxWidth: 500 }}>
+                Webhook → Redis Stream → Bull Queue → Slack Block Kit 이벤트 파이프라인 구현 데모.
+                매장별 멀티채널 라우팅과 Exponential backoff 재시도 로직을 적용합니다.
+              </div>
+            </div>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 20 }}>
+              {[
+                { label: '오늘 이벤트', value: '212', unit: '건' },
+                { label: '연결 매장', value: '5', unit: '개' },
+                { label: '성공률', value: '97.6', unit: '%' },
+              ].map(s => (
+                <div key={s.label} style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 800 }}>{s.value}<span style={{ fontSize: 16 }}>{s.unit}</span></div>
+                  <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{ maxWidth: 1280, margin: '0 auto', padding: '28px 28px' }}>
+        {VIEWS[activeTab]}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
