@@ -12,18 +12,32 @@
 <script src="vendor/supabase.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
+  :root, [data-theme="dark"] {
     --bg: #0f1117; --surface: #1a1d27; --surface2: #242836;
     --border: #2e3348; --text: #e4e6f0; --text2: #8b8fa8;
     --accent: #6c5ce7; --accent2: #a29bfe;
     --green: #00b894; --yellow: #fdcb6e; --red: #e17055; --blue: #74b9ff;
+    --shadow: rgba(0,0,0,0.4); --overlay: rgba(0,0,0,0.6); --color-scheme: dark;
   }
-  html { font-size: 14px; }
+  [data-theme="light"] {
+    --bg: #f0f1f6; --surface: #ffffff; --surface2: #e9eaf1;
+    --border: #d0d2dc; --text: #1a1d2e; --text2: #4b5068;
+    --accent: #6c5ce7; --accent2: #5040c8;
+    --green: #059669; --yellow: #c47a10; --red: #dc2626; --blue: #2563eb;
+    --shadow: rgba(0,0,0,0.12); --overlay: rgba(0,0,0,0.35); --color-scheme: light;
+  }
+  html { font-size: 15px; color-scheme: var(--color-scheme); }
   body { font-family: 'Pretendard', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; line-height: 1.5; }
   #root { max-width: 1280px; margin: 0 auto; padding: 2rem 1.5rem; }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: var(--surface); }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  /* input/select 의 color-scheme은 CSS 변수로 자동 적용 */
+  input, select, textarea { color-scheme: var(--color-scheme); }
+  /* 라이트 모드: 구분선 강화 + 반투명 배경 보정 */
+  [data-theme="light"] table tr { border-bottom-color: #c8cbda !important; }
+  [data-theme="light"] table thead tr { border-bottom: 2px solid #b8bcd0 !important; }
+  [data-theme="light"] table tr:hover { background: #e4e5ee !important; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
   .fade-in { animation: fadeIn 0.4s ease-out forwards; }
   .delay-1 { animation-delay: 0.05s; opacity: 0; }
@@ -35,19 +49,28 @@
   @keyframes toastIn { from { opacity: 0; transform: translateY(16px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
   @media (max-width: 768px) {
-    html { font-size: 13px; }
+    html { font-size: 14px; }
     #root { padding: 1rem 0.75rem; }
     table th, table td { padding: 0.5rem 0.5rem !important; }
+    /* 768px: 예산(4), 생성일(5), 메모(8) 숨김 — 미팅일·담당은 유지 */
+    table td:nth-child(4), table th:nth-child(4),
     table td:nth-child(5), table th:nth-child(5),
-    table td:nth-child(6), table th:nth-child(6),
-    table td:nth-child(7), table th:nth-child(7),
     table td:nth-child(8), table th:nth-child(8) { display: none; }
   }
   @media (max-width: 480px) {
+    /* 480px: 체크박스(1), 담당(7)도 추가 숨김 */
     table td:nth-child(1), table th:nth-child(1),
-    table td:nth-child(4), table th:nth-child(4) { display: none; }
+    table td:nth-child(7), table th:nth-child(7) { display: none; }
   }
 </style>
+<script>
+// 테마 초기화 (FOUC 방지 — Babel 변환 전에 실행)
+(function() {
+  var saved = localStorage.getItem('dashboard_theme');
+  var prefer = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', saved || prefer);
+})();
+</script>
 <script type="text/babel" data-type="module">
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
@@ -181,53 +204,42 @@ ALTER TABLE project_milestones ADD COLUMN IF NOT EXISTS week_number INT;
 -- 프로젝트에 주차별 에픽(마일스톤 플랜) 저장 컬럼 추가
 ALTER TABLE wishket_projects ADD COLUMN IF NOT EXISTS weekly_plan JSONB;
 
+-- 프로젝트 착수일 컬럼 추가 (계약 후 실제 작업 시작일 — 주차 자동 계산 기준)
+ALTER TABLE wishket_projects ADD COLUMN IF NOT EXISTS start_date DATE;
+
+-- 프로젝트 마감일 컬럼 추가
+ALTER TABLE wishket_projects ADD COLUMN IF NOT EXISTS deadline DATE;
+
 -- wishket_projects RLS (로그인한 사용자만 접근)
 ALTER TABLE wishket_projects ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "auth_only_projects" ON wishket_projects;
 CREATE POLICY "auth_only_projects" ON wishket_projects
   FOR ALL TO authenticated USING (true) WITH CHECK (true);`;
 
-const WEEKLY_MILESTONE_EXAMPLE = `1주차: 기획 및 설계
-- 요구사항 분석 및 정리
-- 와이어프레임 / 스토리보드 작성
-- DB 스키마 설계
 
-2주차: 디자인
-- UI/UX 디자인 시안 제작
-- 디자인 리뷰 및 수정
-- 디자인 확정 및 에셋 전달
+// 착수일 기준 현재 몇 주차인지 계산 (1-based, 착수 전이면 null)
+function getCurrentWeek(startDate) {
+  if (!startDate) return null;
+  const start = new Date(startDate);
+  if (isNaN(start.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  start.setHours(0, 0, 0, 0);
+  const diffDays = Math.floor((today - start) / (1000 * 60 * 60 * 24));
+  if (diffDays < 0) return null;
+  return Math.floor(diffDays / 7) + 1;
+}
 
-3주차: 프론트엔드 개발
-- 메인 페이지 퍼블리싱
-- 서브 페이지 퍼블리싱
-- 반응형 작업
-
-4주차: 백엔드 개발
-- API 설계 및 구현
-- DB 연동
-- 인증/권한 처리
-
-5주차: 통합 및 QA
-- 프론트-백 연동
-- 테스트 및 버그 수정
-- 배포 및 인수인계`;
-
-function parseWeeklyMilestones(text) {
-  const lines = text.split('\n');
-  const weeks = [];
-  let current = null;
-  for (const line of lines) {
-    const weekMatch = line.match(/^(\d+)주차\s*[:：]?\s*(.*)$/);
-    if (weekMatch) {
-      if (current) weeks.push(current);
-      current = { week: parseInt(weekMatch[1]), title: (weekMatch[2] || '').trim(), description: [] };
-    } else if (current) {
-      const taskMatch = line.match(/^[-·•]\s*(.+)/);
-      if (taskMatch) current.description.push(taskMatch[1].trim());
-    }
-  }
-  if (current) weeks.push(current);
-  return weeks;
+// ─── Theme ───
+function useTheme() {
+  const [theme, setThemeState] = useState(() => document.documentElement.getAttribute('data-theme') || 'dark');
+  const setTheme = useCallback((t) => {
+    document.documentElement.setAttribute('data-theme', t);
+    localStorage.setItem('dashboard_theme', t);
+    setThemeState(t);
+  }, []);
+  const toggle = useCallback(() => setTheme(theme === 'dark' ? 'light' : 'dark'), [theme, setTheme]);
+  return { theme, toggle };
 }
 
 // ─── Utils ───
@@ -284,10 +296,9 @@ function navigate(route) {
 
 // ─── CSV ───
 function exportCSV(data) {
-  const headers = ['slug','title','status','budget','timeline','created_at','meeting_at','meeting_type','memo','wishket_url'];
+  const headers = ['slug','title','current_status','budget','timeline','created_at','meeting_at','meeting_type','memo','wishket_url'];
   const rows = data.map(d => headers.map(h => {
     let v = d[h] || '';
-    if (h === 'status') v = d.current_status || '';
     if (typeof v === 'string' && (v.includes(',') || v.includes('"') || v.includes('\n'))) v = '"' + v.replace(/"/g,'""') + '"';
     return v;
   }).join(','));
@@ -317,18 +328,18 @@ function ConfirmModal({ state, onCancel }) {
   const accent = destructive ? '#e17055' : 'var(--accent)';
   const inputMatch = !confirmInput || inputVal === confirmInput.match;
   return (
-    <div onClick={onCancel} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', backdropFilter:'blur(3px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:2000, padding:'1rem' }}>
+    <div onClick={onCancel} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(3px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:2000, padding:'1rem' }}>
       <div onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:14, width:'100%', maxWidth:420,
         border:'1px solid var(--border)', animation:'slideUp 0.2s ease-out',
-        boxShadow:'0 20px 50px rgba(0,0,0,0.5)', overflow:'hidden',
+        boxShadow:'0 20px 50px var(--shadow)', overflow:'hidden',
       }}>
         <div style={{ padding:'1.1rem 1.3rem 0.8rem' }}>
-          <div style={{ fontSize:'0.98rem', fontWeight:600, color:'var(--text)', marginBottom:6 }}>{title}</div>
-          <div style={{ fontSize:'0.82rem', color:'var(--text2)', lineHeight:1.55, whiteSpace:'pre-wrap' }}>{message}</div>
+          <div style={{ fontSize:'1rem', fontWeight:600, color:'var(--text)', marginBottom:6 }}>{title}</div>
+          <div style={{ fontSize:'0.85rem', color:'var(--text2)', lineHeight:1.55, whiteSpace:'pre-wrap' }}>{message}</div>
           {confirmInput && (
             <div style={{ marginTop:12 }}>
-              <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginBottom:6 }}>{confirmInput.label}</div>
+              <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:6 }}>{confirmInput.label}</div>
               <input
                 autoFocus
                 type="text"
@@ -342,11 +353,46 @@ function ConfirmModal({ state, onCancel }) {
           )}
         </div>
         <div style={{ display:'flex', gap:8, padding:'0.9rem 1.1rem 1rem', justifyContent:'flex-end' }}>
-          <button onClick={onCancel} style={{ padding:'0.55rem 1.1rem', borderRadius:8, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.82rem' }}>{cancelLabel}</button>
+          <button onClick={onCancel} style={{ padding:'0.55rem 1.1rem', borderRadius:8, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.85rem' }}>{cancelLabel}</button>
           <button onClick={() => { onConfirm && onConfirm(); onCancel(); }} disabled={!inputMatch}
-            style={{ padding:'0.55rem 1.2rem', borderRadius:8, border:'none', background: inputMatch ? accent : 'var(--border)', color: inputMatch ? '#fff' : 'var(--text2)', cursor: inputMatch ? 'pointer' : 'not-allowed', fontSize:'0.82rem', fontWeight:600, transition:'background 0.15s' }}>
+            style={{ padding:'0.55rem 1.2rem', borderRadius:8, border:'none', background: inputMatch ? accent : 'var(--border)', color: inputMatch ? '#fff' : 'var(--text2)', cursor: inputMatch ? 'pointer' : 'not-allowed', fontSize:'0.85rem', fontWeight:600, transition:'background 0.15s' }}>
             {confirmLabel}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ShortcutHelp ───
+function ShortcutHelp({ onClose }) {
+  useEffect(() => {
+    const h = e => { if (e.key === 'Escape' || e.key === '?') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+  const shortcuts = [
+    { key: '/', desc: '검색 포커스' },
+    { key: '[ / ]', desc: '주차 필터 이전/다음 (프로젝트뷰)' },
+    { key: 'Esc', desc: '모달/패널 닫기' },
+    { key: '?', desc: '이 도움말 토글' },
+  ];
+  const rowS = { display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0.55rem 0', borderBottom:'1px solid var(--border)' };
+  const kbdS = { padding:'0.2rem 0.55rem', borderRadius:5, background:'var(--surface2)', border:'1px solid var(--border)', fontSize:'0.8rem', fontWeight:600, fontFamily:'monospace', color:'var(--text)' };
+  return (
+    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(3px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:2500 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background:'var(--surface)', borderRadius:14, width:'100%', maxWidth:360, border:'1px solid var(--border)', boxShadow:'0 20px 50px var(--shadow)', animation:'slideUp 0.2s ease-out' }}>
+        <div style={{ padding:'1rem 1.25rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span style={{ fontWeight:700, fontSize:'0.95rem' }}>키보드 단축키</span>
+          <button onClick={onClose} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1rem' }}>✕</button>
+        </div>
+        <div style={{ padding:'0.5rem 1.25rem 1.25rem' }}>
+          {shortcuts.map((s, i) => (
+            <div key={i} style={{ ...rowS, borderBottom: i === shortcuts.length - 1 ? 'none' : rowS.borderBottom }}>
+              <span style={{ fontSize:'0.85rem', color:'var(--text2)' }}>{s.desc}</span>
+              <kbd style={kbdS}>{s.key}</kbd>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -362,7 +408,7 @@ function ToastContainer({ toasts }) {
           padding:'0.7rem 1.2rem', borderRadius:10,
           background: t.type==='error' ? '#e17055' : t.type==='success' ? '#00b894' : 'var(--surface2)',
           color:'#fff', fontSize:'0.85rem', fontWeight:500,
-          boxShadow:'0 4px 20px rgba(0,0,0,0.4)', animation:'toastIn 0.25s ease-out',
+          boxShadow:'0 4px 20px var(--shadow)', animation:'toastIn 0.25s ease-out',
         }}>{t.message}</div>
       ))}
     </div>
@@ -441,7 +487,7 @@ function Funnel({ data }) {
                   <span style={{ fontSize:'0.85rem', fontWeight:600, color:'#fff', textShadow:'0 1px 2px rgba(0,0,0,0.3)' }}>{s.count}</span>
                 </div>
               </div>
-              {convRate && <div style={{ width:40, fontSize:'0.75rem', color:'var(--text2)', flexShrink:0 }}>{convRate}</div>}
+              {convRate && <div style={{ width:40, fontSize:'0.8rem', color:'var(--text2)', flexShrink:0 }}>{convRate}</div>}
             </div>
           );
         })}
@@ -471,20 +517,20 @@ function MonthlyChart({ data }) {
       <div style={{ display:'flex', alignItems:'flex-end', gap:8, height:140 }}>
         {monthData.map(([month,v]) => (
           <div key={month} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:4 }}>
-            <div style={{ fontSize:'0.7rem', color:'var(--text2)' }}>{v.applied}</div>
+            <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>{v.applied}</div>
             <div style={{ width:'100%', display:'flex', flexDirection:'column', alignItems:'center' }}>
               <div style={{ width:'70%', height:Math.max((v.applied/maxVal)*100,4), background:'var(--accent)', borderRadius:'4px 4px 0 0', position:'relative' }}>
                 {v.won > 0 && <div style={{ position:'absolute', bottom:0, left:0, right:0, height:Math.max((v.won/v.applied)*100,10)+'%', background:'var(--green)' }} />}
               </div>
             </div>
-            <div style={{ fontSize:'0.65rem', color:'var(--text2)' }}>{month.substring(5)}월</div>
-            {v.won > 0 && <div style={{ fontSize:'0.6rem', color:'var(--green)' }}>수주 {v.won}</div>}
+            <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>{month.substring(5)}월</div>
+            {v.won > 0 && <div style={{ fontSize:'0.8rem', color:'var(--green)' }}>수주 {v.won}</div>}
           </div>
         ))}
       </div>
       <div style={{ display:'flex', gap:12, marginTop:'0.75rem', justifyContent:'center' }}>
-        <span style={{ fontSize:'0.7rem', color:'var(--text2)', display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'var(--accent)' }} /> 지원</span>
-        <span style={{ fontSize:'0.7rem', color:'var(--text2)', display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'var(--green)' }} /> 수주</span>
+        <span style={{ fontSize:'0.8rem', color:'var(--text2)', display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'var(--accent)' }} /> 지원</span>
+        <span style={{ fontSize:'0.8rem', color:'var(--text2)', display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'var(--green)' }} /> 수주</span>
       </div>
     </div>
   );
@@ -521,7 +567,7 @@ function BudgetAnalysis({ data }) {
               {r.total > 0 && <div style={{ width:`${Math.max((r.won/r.total)*100,3)}%`, height:'100%', background:'var(--green)', borderRadius:4, minWidth:r.won>0?20:0 }} />}
             </div>
             <div style={{ width:50, fontSize:'0.8rem', color:'var(--text2)', flexShrink:0 }}>{r.rate}%</div>
-            <div style={{ width:50, fontSize:'0.75rem', color:'var(--text2)', flexShrink:0 }}>{r.won}/{r.total}</div>
+            <div style={{ width:50, fontSize:'0.8rem', color:'var(--text2)', flexShrink:0 }}>{r.won}/{r.total}</div>
           </div>
         ))}
       </div>
@@ -533,14 +579,14 @@ function BudgetAnalysis({ data }) {
 function FilterTabs({ active, onChange, counts }) {
   const tabs = [{ key:'all', label:'전체' }, ...STATUS_ORDER.map(s => ({ key:s, label:STATUS_META[s].label }))];
   return (
-    <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+    <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
       {tabs.map(t => {
         const count = t.key === 'all' ? counts.total : (counts[t.key]||0);
         if (t.key !== 'all' && count === 0) return null;
         const isActive = active === t.key;
         return (
           <button key={t.key} onClick={() => onChange(t.key)} style={{
-            padding:'0.4rem 0.85rem', borderRadius:8, border:'none', cursor:'pointer',
+            padding:'0.45rem 0.9rem', borderRadius:8, border:'none', cursor:'pointer',
             fontSize:'0.8rem', fontWeight:isActive?600:400, transition:'all 0.15s',
             background:isActive?'var(--accent)':'var(--surface2)', color:isActive?'#fff':'var(--text2)',
           }}>
@@ -596,13 +642,13 @@ function MemberBadge({ member, role }) {
     <span style={{
       display:'inline-flex', alignItems:'center', gap:4,
       padding:'0.1rem 0.5rem 0.1rem 0.25rem', borderRadius:20,
-      fontSize:'0.72rem', fontWeight:600,
-      background:member.color+'22', color:member.color,
+      fontSize:'0.8rem', fontWeight:600,
+      background:member.color+'30', color:member.color,
       border:`1px solid ${member.color}44`,
     }}>
       <MemberAvatar member={member} size={16} />
       {member.name}
-      {role && <span style={{ fontSize:'0.6rem', opacity:0.7, marginLeft:1 }}>{role==='mgr'?'PM':role==='main'?'주':'부'}</span>}
+      {role && <span style={{ fontSize:'0.8rem', opacity:0.7, marginLeft:1 }}>{role==='mgr'?'PM':role==='main'?'주':'부'}</span>}
     </span>
   );
 }
@@ -617,9 +663,9 @@ function AssignPicker({ label, members, value, onChange, exclude }) {
         <button onClick={() => onChange(null)} style={{
           padding:'0.3rem 0.65rem', borderRadius:20, cursor:'pointer',
           border: !value ? '1px solid var(--accent)' : '1px solid var(--border)',
-          background: !value ? 'var(--accent)22' : 'transparent',
+          background: !value ? 'var(--accent)30' : 'transparent',
           color: !value ? 'var(--accent)' : 'var(--text2)',
-          fontSize:'0.75rem', fontWeight: !value ? 600 : 400,
+          fontSize:'0.8rem', fontWeight: !value ? 600 : 400,
         }}>없음</button>
         {active.map(m => {
           const sel = value === m.id;
@@ -627,15 +673,15 @@ function AssignPicker({ label, members, value, onChange, exclude }) {
             <button key={m.id} onClick={() => onChange(sel ? null : m.id)} style={{
               padding:'0.25rem 0.6rem 0.25rem 0.3rem', borderRadius:20, cursor:'pointer',
               border: sel ? `1px solid ${m.color}` : '1px solid transparent',
-              background: sel ? m.color+'22' : 'var(--surface2)',
+              background: sel ? m.color+'30' : 'var(--surface2)',
               display:'inline-flex', alignItems:'center', gap:5,
             }}>
               <MemberAvatar member={m} size={16} />
-              <span style={{ fontSize:'0.75rem', fontWeight:sel?600:400, color:sel?m.color:'var(--text2)' }}>{m.name}</span>
+              <span style={{ fontSize:'0.8rem', fontWeight:sel?600:400, color:sel?m.color:'var(--text2)' }}>{m.name}</span>
             </button>
           );
         })}
-        {active.length === 0 && <span style={{ fontSize:'0.75rem', color:'var(--text2)', padding:'0.3rem 0', fontStyle:'italic' }}>팀원 없음 — 팀원 관리에서 추가하세요</span>}
+        {active.length === 0 && <span style={{ fontSize:'0.8rem', color:'var(--text2)', padding:'0.3rem 0', fontStyle:'italic' }}>팀원 없음 — 팀원 관리에서 추가하세요</span>}
       </div>
     </div>
   );
@@ -686,19 +732,19 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
   const inactive = members.filter(m => !m.is_active);
 
   const inputS = { flex:1, padding:'0.45rem 0.7rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.85rem', outline:'none' };
-  const btnS   = (col, ghost) => ({ padding:'0.25rem 0.6rem', borderRadius:6, cursor:'pointer', fontSize:'0.75rem', fontWeight:600, border: ghost?`1px solid ${col}44`:'none', background:ghost?'transparent':col, color:ghost?col:'#fff' });
+  const btnS   = (col, ghost) => ({ padding:'0.25rem 0.6rem', borderRadius:6, cursor:'pointer', fontSize:'0.8rem', fontWeight:600, border: ghost?`1px solid ${col}44`:'none', background:ghost?'transparent':col, color:ghost?col:'#fff' });
 
   return (
-    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
+    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
       <div onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:460,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
-        boxShadow:'0 20px 60px rgba(0,0,0,0.5)', maxHeight:'80vh', display:'flex', flexDirection:'column',
+        boxShadow:'0 20px 60px var(--shadow)', maxHeight:'80vh', display:'flex', flexDirection:'column',
       }}>
         <div style={{ padding:'1.25rem 1.5rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0 }}>
           <div>
             <div style={{ fontWeight:700, fontSize:'1rem' }}>팀원 관리</div>
-            <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginTop:2 }}>미팅 담당자로 배정할 팀원을 관리합니다</div>
+            <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginTop:2 }}>미팅 담당자로 배정할 팀원을 관리합니다</div>
           </div>
           <button onClick={onClose} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem', padding:'2px 4px' }}>✕</button>
         </div>
@@ -759,7 +805,7 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
                           <MemberAvatar member={m} size={30} />
                           <div style={{ flex:1, minWidth:0 }}>
                             <div style={{ fontWeight:600, fontSize:'0.9rem', color:m.color }}>{m.name}</div>
-                            <div style={{ fontSize:'0.72rem', color:'var(--text2)' }}>
+                            <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>
                               {wl > 0 ? `활성 미팅 ${wl}건` : '배정 없음'}
                             </div>
                           </div>
@@ -777,7 +823,7 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
           )}
           {active.length === 0 && (
             <div style={{ textAlign:'center', padding:'1.5rem', color:'var(--text2)', fontSize:'0.85rem', background:'var(--surface2)', borderRadius:10, marginBottom:'1rem' }}>
-              등록된 팀원이 없습니다<br /><span style={{ fontSize:'0.75rem' }}>위에서 팀원을 추가해주세요</span>
+              등록된 팀원이 없습니다<br /><span style={{ fontSize:'0.8rem' }}>위에서 팀원을 추가해주세요</span>
             </div>
           )}
 
@@ -809,17 +855,17 @@ function DBSetupBanner({ sql }) {
     navigator.clipboard.writeText(sql).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
   };
   return (
-    <div style={{ padding:'1rem 1.25rem', borderRadius:10, background:'#fdcb6e10', border:'1px solid #fdcb6e33', marginBottom:'1rem' }}>
+    <div style={{ padding:'1rem 1.25rem', borderRadius:10, background:'#fdcb6e1a', border:'1px solid #fdcb6e33', marginBottom:'1rem' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
         <div style={{ fontSize:'0.85rem', fontWeight:600, color:'var(--yellow)' }}>⚙️ 팀원/담당자 기능 — DB 설정 필요</div>
-        <button onClick={copy} style={{ padding:'0.25rem 0.6rem', borderRadius:6, border:'1px solid #fdcb6e33', background:copied?'#fdcb6e22':'transparent', color:'var(--yellow)', cursor:'pointer', fontSize:'0.75rem', fontWeight:600 }}>
+        <button onClick={copy} style={{ padding:'0.25rem 0.6rem', borderRadius:6, border:'1px solid #fdcb6e33', background:copied?'#fdcb6e30':'transparent', color:'var(--yellow)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
           {copied ? '✓ 복사됨' : 'SQL 복사'}
         </button>
       </div>
-      <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginBottom:8 }}>
+      <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:8 }}>
         Supabase 대시보드 → SQL 에디터에서 아래 SQL을 실행 후 새로고침하세요
       </div>
-      <pre style={{ fontSize:'0.7rem', color:'var(--text2)', background:'var(--surface2)', padding:'0.75rem', borderRadius:6, overflow:'auto', lineHeight:1.7, border:'1px solid var(--border)' }}>{sql}</pre>
+      <pre style={{ fontSize:'0.8rem', color:'var(--text2)', background:'var(--surface2)', padding:'0.75rem', borderRadius:6, overflow:'auto', lineHeight:1.7, border:'1px solid var(--border)' }}>{sql}</pre>
     </div>
   );
 }
@@ -827,19 +873,46 @@ function DBSetupBanner({ sql }) {
 // ─── MilestonePanel ───
 // ─── StructureWeekRow ───
 // ─── WeeklyMilestoneInput ───
+// 형식: "N주차: 제목" 한 줄씩 — AI에게 이 형식으로 생성 요청 후 붙여넣기
+const WEEKLY_MILESTONE_EXAMPLE = `1주차: 기획 및 설계
+2주차: 디자인
+3주차: 프론트엔드 개발
+4주차: 백엔드 개발
+5주차: QA 및 배포`;
+
 function WeeklyMilestoneInput({ project, saving, milestones, onBulkCreate, onClearPlan, onClose, onRequestConfirm }) {
-  const existingPlan = Array.isArray(project?.weekly_plan) ? project.weekly_plan : null;
-  const initialText = useMemo(() => {
-    if (!existingPlan || existingPlan.length === 0) return WEEKLY_MILESTONE_EXAMPLE;
-    return existingPlan.map(w => {
-      const lines = [`${w.week}주차: ${w.title || ''}`];
-      (w.description || []).forEach(d => lines.push(`- ${d}`));
-      return lines.join('\n');
-    }).join('\n\n');
-  }, [existingPlan]);
-  const [text, setText] = useState(initialText);
-  const baselineRef = useRef(initialText);
+  const existingPlan = Array.isArray(project?.weekly_plan) && project.weekly_plan.length > 0
+    ? project.weekly_plan : null;
+  const isEdit = !!existingPlan;
+
+  const getInitialText = () => {
+    if (!existingPlan) return WEEKLY_MILESTONE_EXAMPLE;
+    return existingPlan.map(w => `${w.week != null ? w.week : '?'}주차: ${w.title || ''}`).join('\n');
+  };
+
+  const [text, setText] = useState(getInitialText);
+  const baselineRef = useRef(text);
   const isDirty = text.trim() !== baselineRef.current.trim();
+
+  const parsed = useMemo(() => {
+    const lines = text.split('\n');
+    const weeks = [];
+    for (const line of lines) {
+      const m = line.trim().match(/^(\d+)주차\s*[:：]?\s*(.*)$/);
+      if (m) weeks.push({ week: parseInt(m[1]), title: (m[2] || '').trim() });
+    }
+    return weeks;
+  }, [text]);
+
+  const hasPlan = parsed.length > 0;
+
+  const duplicateWeeks = useMemo(() => {
+    const seen = new Set(), dups = new Set();
+    parsed.forEach(w => { if (seen.has(w.week)) dups.add(w.week); else seen.add(w.week); });
+    return [...dups].sort((a,b)=>a-b);
+  }, [parsed]);
+
+  const canSave = hasPlan && duplicateWeeks.length === 0;
 
   const safeClose = useCallback(() => {
     if (!isDirty) { onClose(); return; }
@@ -856,77 +929,55 @@ function WeeklyMilestoneInput({ project, saving, milestones, onBulkCreate, onCle
     }
   }, [isDirty, onClose, onRequestConfirm]);
 
-  useEffect(() => {
-    const h = e => { if (e.key === 'Escape') safeClose(); };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [safeClose]);
-
-  const parsed = useMemo(() => parseWeeklyMilestones(text), [text]);
-  const hasPlan = parsed.length > 0;
-  const isEdit = !!(existingPlan && existingPlan.length > 0);
-  const isUnchangedExample = !isEdit && text.trim() === WEEKLY_MILESTONE_EXAMPLE.trim();
-
-  const duplicateWeeks = useMemo(() => {
-    const seen = new Set(), dups = new Set();
-    parsed.forEach(w => { if (seen.has(w.week)) dups.add(w.week); else seen.add(w.week); });
-    return [...dups].sort((a,b)=>a-b);
-  }, [parsed]);
-  const emptyTitleWeeks = useMemo(() => parsed.filter(w => !w.title || !w.title.trim()).map(w => w.week), [parsed]);
-  const canSave = hasPlan && !isUnchangedExample && duplicateWeeks.length === 0;
-
   const handleSubmit = useCallback(() => {
     if (saving || !canSave) return;
     baselineRef.current = text;
     onBulkCreate(project.slug, parsed);
   }, [saving, canSave, text, parsed, onBulkCreate, project?.slug]);
 
-  useEffect(() => {
-    const h = e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); handleSubmit(); } };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [handleSubmit]);
+  // Cmd+Enter → 저장, Escape → 닫기 — textarea에 직접 붙여서 전역 오염 없음
+  const handleTextareaKeyDown = useCallback((e) => {
+    if (e.key === 'Escape') { e.stopPropagation(); safeClose(); return; }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); handleSubmit(); }
+  }, [safeClose, handleSubmit]);
 
   const textareaRef = useRef(null);
   useEffect(() => {
     if (textareaRef.current) { textareaRef.current.focus(); if (!isEdit) textareaRef.current.select(); }
   }, [isEdit]);
 
+  const macKey = typeof navigator !== 'undefined' && navigator.platform?.includes('Mac') ? '⌘' : 'Ctrl';
+
   return (
     <div style={{ padding:'1rem', borderRadius:12, background:'var(--surface)', border:'1px solid var(--border)', marginBottom:16 }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-        <div style={{ fontSize:'0.92rem', fontWeight:600 }}>📅 주차별 마일스톤 {isEdit ? '수정' : '등록'} (Epic){isDirty && <span style={{ marginLeft:6, color:'var(--yellow)', fontSize:'0.7rem' }}>● 편집 중</span>}</div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+        <div style={{ fontSize:'0.9rem', fontWeight:600 }}>
+          📅 주차별 마일스톤 {isEdit ? '수정' : '등록'}
+          {isDirty && <span style={{ marginLeft:6, color:'var(--yellow)', fontSize:'0.8rem' }}>● 편집 중</span>}
+        </div>
         <button onClick={safeClose} style={{ background:'transparent', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'0.85rem' }}>✕</button>
       </div>
-      <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:8, lineHeight:1.6 }}>
-        주차별 작업은 Jira의 <b>에픽</b>처럼 상위 그룹입니다. 개별 작업 티켓은 따로 생성하고 각 티켓에 주차를 지정하세요.
+      <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:8, lineHeight:1.6 }}>
+        Claude에게 <b>"이 프로젝트 특성에 맞춰 아래 형식으로 주차별 마일스톤 만들어줘"</b> 요청 후 붙여넣으세요.
+      </div>
+      <div style={{ marginBottom:8, padding:'0.45rem 0.7rem', borderRadius:6, background:'var(--surface2)', border:'1px solid var(--border)', fontSize:'0.8rem', color:'var(--text2)', fontFamily:'monospace', lineHeight:1.7 }}>
+        1주차: 기획 및 설계<br/>2주차: 디자인<br/>3주차: 개발<br/><span style={{ opacity:0.5 }}>…</span>
       </div>
       <textarea ref={textareaRef} value={text} onChange={e => setText(e.target.value)}
-        placeholder="AI에게 '이 프로젝트의 주차별 계획을 이 형식으로 만들어줘' 요청 후 붙여넣으세요"
-        style={{ width:'100%', minHeight:240, padding:'0.75rem 0.9rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.82rem', resize:'vertical', fontFamily:'inherit', lineHeight:1.7, outline:'none' }} />
-      {isUnchangedExample && (
-        <div style={{ marginTop:10, padding:'0.5rem 0.75rem', borderRadius:6, background:'#fdcb6e12', border:'1px solid #fdcb6e44', fontSize:'0.72rem', color:'var(--yellow)' }}>
-          ⚠️ 예시 데이터를 그대로 저장할 수 없습니다. 실제 계획을 입력하거나 AI로 생성해 붙여넣으세요.
-        </div>
-      )}
+        onKeyDown={handleTextareaKeyDown}
+        style={{ width:'100%', minHeight:180, padding:'0.75rem 0.9rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', resize:'vertical', fontFamily:'monospace', lineHeight:1.9, outline:'none' }} />
       {duplicateWeeks.length > 0 && (
-        <div style={{ marginTop:10, padding:'0.5rem 0.75rem', borderRadius:6, background:'#e1705512', border:'1px solid #e1705544', fontSize:'0.72rem', color:'#e17055' }}>
-          ⚠️ 중복된 주차 번호가 있습니다: {duplicateWeeks.join(', ')}주차
-        </div>
-      )}
-      {emptyTitleWeeks.length > 0 && duplicateWeeks.length === 0 && hasPlan && (
-        <div style={{ marginTop:10, padding:'0.5rem 0.75rem', borderRadius:6, background:'#fdcb6e10', border:'1px solid #fdcb6e33', fontSize:'0.72rem', color:'var(--text2)' }}>
-          💡 제목이 비어있는 주차: {emptyTitleWeeks.join(', ')}주차 (저장은 가능하지만 채우면 더 명확합니다)
+        <div style={{ marginTop:8, padding:'0.45rem 0.7rem', borderRadius:6, background:'#e1705518', border:'1px solid #e1705544', fontSize:'0.8rem', color:'#e17055' }}>
+          ⚠️ 중복된 주차 번호: {duplicateWeeks.join(', ')}주차
         </div>
       )}
       {hasPlan && (
-        <div style={{ marginTop:10, padding:'0.65rem 0.85rem', borderRadius:8, background:'var(--surface2)', border:'1px solid var(--border)' }}>
-          <div style={{ fontSize:'0.78rem', fontWeight:600, marginBottom:6 }}>미리보기: 총 {parsed.length}주차</div>
-          <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+        <div style={{ marginTop:8, padding:'0.55rem 0.8rem', borderRadius:8, background:'var(--surface2)', border:'1px solid var(--border)' }}>
+          <div style={{ fontSize:'0.8rem', fontWeight:600, marginBottom:5 }}>미리보기: 총 {parsed.length}주차</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:'4px 10px' }}>
             {parsed.map(w => (
-              <div key={w.week} style={{ fontSize:'0.75rem', color:'var(--text2)' }}>
-                <span style={{ fontWeight:600, color:'var(--accent2)' }}>{w.week}주차</span> {w.title}
-                {w.description.length > 0 && <span style={{ opacity:0.6 }}> — {w.description.length}개 항목</span>}
+              <div key={w.week} style={{ fontSize:'0.8rem', color:'var(--text2)' }}>
+                <span style={{ fontWeight:700, color:'var(--accent2)' }}>{w.week}주차</span> {w.title || <span style={{ opacity:0.4 }}>제목 없음</span>}
               </div>
             ))}
           </div>
@@ -934,16 +985,15 @@ function WeeklyMilestoneInput({ project, saving, milestones, onBulkCreate, onCle
       )}
       <div style={{ display:'flex', gap:8, marginTop:12, justifyContent:'flex-end', alignItems:'center' }}>
         {isEdit && onClearPlan && (
-          <button onClick={() => onClearPlan(project.slug)}
-            disabled={saving}
-            style={{ padding:'0.5rem 0.9rem', borderRadius:8, border:'1px solid #e1705544', background:'transparent', color:'#e17055', cursor:'pointer', fontSize:'0.78rem', marginRight:'auto' }}>
+          <button onClick={() => onClearPlan(project.slug)} disabled={saving}
+            style={{ padding:'0.5rem 0.9rem', borderRadius:8, border:'1px solid #e1705544', background:'transparent', color:'#e17055', cursor:'pointer', fontSize:'0.8rem', marginRight:'auto' }}>
             🗑️ 계획 전체 삭제
           </button>
         )}
-        <button onClick={safeClose} style={{ padding:'0.5rem 1rem', borderRadius:8, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.82rem' }}>취소</button>
+        <button onClick={safeClose} style={{ padding:'0.5rem 1rem', borderRadius:8, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.85rem' }}>취소</button>
         <button onClick={handleSubmit} disabled={saving || !canSave}
-          title={isUnchangedExample ? '예시 데이터를 편집하거나 AI로 생성해 붙여넣으세요' : duplicateWeeks.length > 0 ? `중복된 주차: ${duplicateWeeks.join(', ')}주차` : `${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+Enter로 저장`}
-          style={{ padding:'0.5rem 1.2rem', borderRadius:8, border:'none', background: canSave ? 'var(--accent)' : 'var(--border)', color:'#fff', cursor: canSave ? 'pointer' : 'not-allowed', fontSize:'0.82rem', fontWeight:600 }}>
+          title={duplicateWeeks.length > 0 ? `중복된 주차: ${duplicateWeeks.join(', ')}주차` : !hasPlan ? '주차 계획을 입력하세요' : `${macKey}+Enter로 저장`}
+          style={{ padding:'0.5rem 1.2rem', borderRadius:8, border:'none', background: canSave ? 'var(--accent)' : 'var(--border)', color:'#fff', cursor: canSave ? 'pointer' : 'not-allowed', fontSize:'0.85rem', fontWeight:600 }}>
           📅 {parsed.length}주차 계획 {isEdit ? '업데이트' : '저장'}
         </button>
       </div>
@@ -955,8 +1005,9 @@ function WeeklyMilestoneInput({ project, saving, milestones, onBulkCreate, onCle
 // weeklyPlan: [{week, title, description}] — epics defined on project.weekly_plan
 // milestones: individual task tickets; progress = done tickets / tickets assigned to the week
 // onAddTicket(label, weekNumber): optional — shows "+ 티켓" action on description items
-function WeeklyProgressBars({ weeklyPlan, milestones, onAddTicket, onFilterWeek, activeFilter, focusWeek }) {
+function WeeklyProgressBars({ weeklyPlan, milestones, onAddTicket, onFilterWeek, activeFilter, focusWeek, startDate }) {
   const [expandedWeek, setExpandedWeek] = useState(null);
+  const calWeek = getCurrentWeek(startDate); // 착수일 기준 오늘이 몇 주차인지
   const planWeeks = Array.isArray(weeklyPlan) && weeklyPlan.length > 0 ? weeklyPlan : null;
   const weeks = useMemo(() => {
     if (planWeeks) {
@@ -988,69 +1039,60 @@ function WeeklyProgressBars({ weeklyPlan, milestones, onAddTicket, onFilterWeek,
   });
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+    <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
       {weeks.map(({ week, title, description }) => {
         const c = counts[week] || { total:0, done:0 };
         const pct = c.total > 0 ? Math.round((c.done/c.total)*100) : 0;
         const allDone = c.total > 0 && c.done === c.total;
         const empty = c.total === 0;
         const blockedCount = blockedByWeek[week] || 0;
-        const hasDetails = description.length > 0;
         const isExpanded = expandedWeek === week;
         const isFocus = focusWeek === week;
-        const barColor = blockedCount > 0 ? '#e17055' : allDone ? 'var(--green)' : 'var(--accent)';
+        const isToday = calWeek === week;
+        const isActive = activeFilter === week;
+        const barColor = blockedCount > 0 ? '#e17055' : allDone ? 'var(--green)' : isFocus ? 'var(--accent)' : 'var(--text2)';
+        const rowBg = isToday ? 'var(--green)18' : isFocus ? 'var(--accent)18' : 'transparent';
+        const rowBorderColor = isToday ? 'var(--green)' : isFocus ? 'var(--accent)' : 'transparent';
         return (
-          <div key={week} style={{ display:'flex', flexDirection:'column' }}>
-            <div onClick={() => hasDetails && setExpandedWeek(isExpanded ? null : week)}
-              style={{ display:'flex', alignItems:'center', gap:8, cursor: hasDetails ? 'pointer' : 'default', padding:'2px 4px', borderRadius:4, background: isFocus ? 'var(--accent)0d' : 'transparent', borderLeft: isFocus ? '2px solid var(--accent)' : '2px solid transparent' }}>
-              {hasDetails ? (
-                <span style={{ fontSize:'0.58rem', color:'var(--text2)', width:10, flexShrink:0, transform: isExpanded ? 'rotate(90deg)' : 'none', transition:'transform 0.15s' }}>▶</span>
-              ) : <span style={{ width:10, flexShrink:0 }} />}
-              <div style={{ fontSize:'0.72rem', fontWeight:600, color: allDone ? 'var(--green)' : 'var(--accent2)', minWidth:42, flexShrink:0 }}>
-                {week}주차{isFocus && <span title="다음 진행 주차" style={{ marginLeft:3, fontSize:'0.6rem' }}>👈</span>}
+          <div key={week} style={{ borderRadius:7, border:`1px solid ${isToday ? 'var(--green)33' : isFocus ? 'var(--accent)30' : 'transparent'}`, background: rowBg, overflow:'hidden' }}>
+            {/* 주차 헤더 행 */}
+            <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 8px', borderLeft:`3px solid ${rowBorderColor}` }}>
+              {/* 주차 배지 */}
+              <div style={{ flexShrink:0, display:'flex', alignItems:'center', gap:4 }}>
+                <span style={{
+                  display:'inline-block', padding:'1px 7px', borderRadius:10,
+                  fontSize:'0.8rem', fontWeight:700, letterSpacing:'0.01em',
+                  background: allDone ? 'var(--green)30' : isToday ? 'var(--green)30' : isFocus ? 'var(--accent)30' : 'var(--surface2)',
+                  color: allDone ? 'var(--green)' : isToday ? 'var(--green)' : isFocus ? 'var(--accent2)' : 'var(--text2)',
+                  border: `1px solid ${allDone ? 'var(--green)33' : isToday ? 'var(--green)44' : isFocus ? 'var(--accent)33' : 'var(--border)'}`,
+                }}>
+                  {allDone ? '✓' : isToday ? '📍' : isFocus ? '▶' : ''}{week}주
+                </span>
               </div>
-              {title && <div title={title} style={{ fontSize:'0.65rem', color:'var(--text2)', minWidth:60, maxWidth:140, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flexShrink:0 }}>{title}</div>}
-              <div style={{ flex:1, height:6, background:'var(--bg)', borderRadius:3, overflow:'hidden' }}>
-                <div style={{ width:pct+'%', height:'100%', background: barColor, transition:'width 0.3s', borderRadius:3 }} />
+              {/* 마일스톤 제목 */}
+              <div style={{ flex:1, minWidth:0 }}>
+                {title
+                  ? <div style={{ fontSize:'0.8rem', fontWeight:500, color: allDone ? 'var(--text2)' : 'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', opacity: allDone ? 0.55 : 1, textDecoration: allDone ? 'line-through' : 'none' }}>{title}</div>
+                  : <div style={{ fontSize:'0.8rem', color:'var(--text2)', opacity:0.4 }}>마일스톤 없음</div>
+                }
               </div>
-              {blockedCount > 0 && <span title={`${blockedCount}개 블로킹됨`} style={{ fontSize:'0.65rem', color:'#e17055', flexShrink:0 }}>🔴{blockedCount}</span>}
-              <div title={empty ? '배정된 티켓 없음' : undefined} style={{ fontSize:'0.68rem', fontWeight:600, color: allDone ? 'var(--green)' : empty ? 'var(--text2)' : 'var(--text2)', minWidth:50, textAlign:'right', flexShrink:0, opacity: empty ? 0.5 : 1 }}>
-                {empty ? '0 tickets' : `${c.done}/${c.total}`}
+              {/* 진행률 숫자 */}
+              <div style={{ flexShrink:0, fontSize:'0.8rem', fontWeight:600, color: allDone ? 'var(--green)' : blockedCount > 0 ? '#e17055' : 'var(--text2)', minWidth:36, textAlign:'right', opacity: empty ? 0.35 : 1 }}>
+                {empty ? '—' : allDone ? '완료' : `${c.done}/${c.total}`}
               </div>
+              {blockedCount > 0 && <span title={`${blockedCount}개 블로킹됨`} style={{ fontSize:'0.8rem', color:'#e17055', flexShrink:0 }}>🔴</span>}
               {onFilterWeek && !empty && (
-                <button onClick={(e) => { e.stopPropagation(); onFilterWeek(activeFilter === week ? 'all' : week); }}
-                  title={activeFilter === week ? '필터 해제' : '이 주차로 칸반 필터링'}
-                  style={{ padding:'1px 5px', borderRadius:3, border:'1px solid var(--border)', background: activeFilter === week ? 'var(--accent)22' : 'transparent', color: activeFilter === week ? 'var(--accent2)' : 'var(--text2)', cursor:'pointer', fontSize:'0.6rem', flexShrink:0 }}>
-                  ⛁
+                <button onClick={(e) => { e.stopPropagation(); onFilterWeek(isActive ? 'all' : week); }}
+                  title={isActive ? '필터 해제' : '이 주차만 보기'}
+                  style={{ padding:'2px 7px', borderRadius:4, border:`1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}`, background: isActive ? 'var(--accent)30' : 'transparent', color: isActive ? 'var(--accent2)' : 'var(--text2)', cursor:'pointer', fontSize:'0.8rem', flexShrink:0, fontWeight: isActive ? 600 : 400 }}>
+                  {isActive ? '해제' : '필터'}
                 </button>
               )}
             </div>
-            {isExpanded && hasDetails && (
-              <div style={{ marginLeft:18, marginTop:4, marginBottom:4, padding:'0.5rem 0.7rem', background:'var(--bg)', borderRadius:6, border:'1px solid var(--border)' }}>
-                <div style={{ fontSize:'0.6rem', color:'var(--text2)', fontWeight:600, marginBottom:5, opacity:0.7, letterSpacing:'0.03em' }}>계획 항목</div>
-                {description.map((d, i) => {
-                  const exists = labelsByWeek[week]?.has(norm(d));
-                  return (
-                    <div key={i} style={{ display:'flex', alignItems:'center', gap:6, fontSize:'0.72rem', color:'var(--text2)', padding:'2px 0' }}>
-                      <span style={{ color:'var(--accent2)', opacity:0.6, flexShrink:0 }}>•</span>
-                      <span style={{ flex:1, lineHeight:1.4, textDecoration: exists ? 'line-through' : 'none', opacity: exists ? 0.6 : 1 }}>{d}</span>
-                      {onAddTicket && (
-                        exists ? (
-                          <span title="이미 같은 이름의 티켓이 이 주차에 있습니다"
-                            style={{ padding:'1px 6px', borderRadius:3, border:'1px solid var(--green)44', background:'transparent', color:'var(--green)', fontSize:'0.6rem', flexShrink:0 }}>
-                            ✓ 생성됨
-                          </span>
-                        ) : (
-                          <button onClick={(e) => { e.stopPropagation(); onAddTicket(d, week); }}
-                            title="이 항목으로 티켓 생성"
-                            style={{ padding:'1px 6px', borderRadius:3, border:'1px solid var(--accent)44', background:'transparent', color:'var(--accent2)', fontSize:'0.6rem', cursor:'pointer', flexShrink:0 }}>
-                            + 티켓
-                          </button>
-                        )
-                      )}
-                    </div>
-                  );
-                })}
+            {/* 프로그레스 바 */}
+            {!empty && (
+              <div style={{ height:5, background:'var(--bg)', margin:'0 8px 7px' }}>
+                <div style={{ width:pct+'%', height:'100%', background: barColor, borderRadius:3, transition:'width 0.4s ease' }} />
               </div>
             )}
           </div>
@@ -1092,15 +1134,15 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
   if (setupNeeded) {
     return (
       <div>
-        <div style={{ padding:'0.7rem 0.9rem', borderRadius:8, background:'#fdcb6e12', border:'1px solid #fdcb6e33', marginBottom:'0.75rem' }}>
+        <div style={{ padding:'0.7rem 0.9rem', borderRadius:8, background:'#fdcb6e1a', border:'1px solid #fdcb6e33', marginBottom:'0.75rem' }}>
           <div style={{ fontSize:'0.85rem', fontWeight:600, color:'var(--yellow)', marginBottom:4 }}>⚠️ DB 설정 필요</div>
-          <div style={{ fontSize:'0.75rem', color:'var(--text2)', lineHeight:1.5 }}>작업 트래커를 사용하려면 project_milestones 테이블을 먼저 생성하세요.</div>
+          <div style={{ fontSize:'0.8rem', color:'var(--text2)', lineHeight:1.5 }}>작업 트래커를 사용하려면 project_milestones 테이블을 먼저 생성하세요.</div>
         </div>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
-          <div style={{ fontSize:'0.75rem', color:'var(--text2)' }}>Supabase SQL 에디터에서 실행</div>
-          <button onClick={() => { navigator.clipboard.writeText(MILESTONE_SETUP_SQL); }} style={{ padding:'0.3rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', cursor:'pointer', fontSize:'0.75rem' }}>📋 SQL 복사</button>
+          <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>Supabase SQL 에디터에서 실행</div>
+          <button onClick={() => { navigator.clipboard.writeText(MILESTONE_SETUP_SQL); }} style={{ padding:'0.3rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', cursor:'pointer', fontSize:'0.8rem' }}>📋 SQL 복사</button>
         </div>
-        <pre style={{ background:'var(--bg)', padding:'0.75rem', borderRadius:8, fontSize:'0.7rem', color:'var(--text2)', overflow:'auto', maxHeight:280, border:'1px solid var(--border)', lineHeight:1.5 }}>{MILESTONE_SETUP_SQL}</pre>
+        <pre style={{ background:'var(--bg)', padding:'0.75rem', borderRadius:8, fontSize:'0.8rem', color:'var(--text2)', overflow:'auto', maxHeight:280, border:'1px solid var(--border)', lineHeight:1.5 }}>{MILESTONE_SETUP_SQL}</pre>
       </div>
     );
   }
@@ -1119,9 +1161,9 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
         <div style={{ textAlign:'center', padding:'1.5rem 0.5rem', color:'var(--text2)' }}>
           <div style={{ fontSize:'2rem', marginBottom:8 }}>📋</div>
           <div style={{ fontSize:'0.85rem', marginBottom:4 }}>등록된 작업이 없습니다</div>
-          <div style={{ fontSize:'0.75rem', opacity:0.7, marginBottom:16 }}>템플릿을 적용하거나 직접 추가할 수 있어요</div>
+          <div style={{ fontSize:'0.8rem', opacity:0.7, marginBottom:16 }}>템플릿을 적용하거나 직접 추가할 수 있어요</div>
           <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-            <button onClick={() => setShowWeeklyInput(true)} disabled={saving} style={{ padding:'0.65rem', borderRadius:10, border:'1px solid var(--accent)', background:'var(--accent)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.85rem', fontWeight:600 }}>
+            <button onClick={() => setShowWeeklyInput(true)} disabled={saving} style={{ padding:'0.65rem', borderRadius:10, border:'1px solid var(--accent)', background:'var(--accent)20', color:'var(--accent2)', cursor:'pointer', fontSize:'0.85rem', fontWeight:600 }}>
               📅 주차별 마일스톤 등록
             </button>
             {Object.entries(MILESTONE_TEMPLATES).map(([key,tpl]) => (
@@ -1155,26 +1197,26 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
         <div style={{ height:6, background:'var(--bg)', borderRadius:3, overflow:'hidden' }}>
           <div style={{ width:pct+'%', height:'100%', background:hasBlocked?'#e17055':'var(--green)', transition:'width 0.3s' }} />
         </div>
-        {hasBlocked && <div style={{ marginTop:6, fontSize:'0.72rem', color:'#e17055' }}>🔴 블로킹된 작업이 있습니다</div>}
+        {hasBlocked && <div style={{ marginTop:6, fontSize:'0.8rem', color:'#e17055' }}>🔴 블로킹된 작업이 있습니다</div>}
         {/* Weekly progress */}
         {weekOptions.length > 0 && (
           <div style={{ marginTop:10, paddingTop:8, borderTop:'1px solid var(--border)' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
-              <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontWeight:600 }}>주차별 진행률</div>
-              <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.15rem 0.5rem', borderRadius:4, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.62rem' }}>수정</button>
+              <div style={{ fontSize:'0.8rem', color:'var(--text2)', fontWeight:600 }}>주차별 진행률</div>
+              <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.15rem 0.5rem', borderRadius:4, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem' }}>수정</button>
             </div>
-            <WeeklyProgressBars weeklyPlan={project?.weekly_plan} milestones={sorted} onAddTicket={(label, week) => onAdd(project.slug, label, week)} />
+            <WeeklyProgressBars weeklyPlan={project?.weekly_plan} milestones={sorted} onAddTicket={(label, week) => onAdd(project.slug, label, week)} startDate={project?.start_date} />
           </div>
         )}
       </div>
 
       {/* Hint + weekly button */}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-        <div style={{ fontSize:'0.68rem', color:'var(--text2)', opacity:0.7, lineHeight:1.5 }}>
+        <div style={{ fontSize:'0.8rem', color:'var(--text2)', opacity:0.7, lineHeight:1.5 }}>
           💡 <b>상태 아이콘</b> 클릭 → 순환 · <b>라벨</b> 클릭 → 수정 · <b>▲▼</b> 순서 · <b>⌄</b> 상세 · <b>✕</b> 삭제
         </div>
         {weekOptions.length === 0 && (
-          <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.25rem 0.55rem', borderRadius:6, border:'1px solid var(--accent)44', background:'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.68rem', fontWeight:500, flexShrink:0 }}>📅 주차 계획 등록</button>
+          <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.25rem 0.55rem', borderRadius:6, border:'1px solid var(--accent)44', background:'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:500, flexShrink:0 }}>📅 주차 계획 등록</button>
         )}
       </div>
 
@@ -1185,22 +1227,12 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
           const expanded = expandedId === m.id;
           const editing = editingLabelId === m.id;
           const assignee = teamMembers?.find(tm => tm.id === m.assignee);
-          let deadlineBadge = null;
-          if (m.planned_end && m.status !== 'done') {
-            const today = new Date(); today.setHours(0,0,0,0);
-            const end = new Date(m.planned_end); end.setHours(0,0,0,0);
-            const diff = Math.round((end - today) / 86400000);
-            if (diff < 0) deadlineBadge = { text:`+${-diff}`, color:'#e17055', title:`${-diff}일 지연` };
-            else if (diff === 0) deadlineBadge = { text:'D-Day', color:'#fdcb6e' };
-            else if (diff <= 3) deadlineBadge = { text:`D-${diff}`, color:'#fdcb6e' };
-            else deadlineBadge = { text:`D-${diff}`, color:'var(--text2)' };
-          }
-          const iconBtn = (extra) => ({ padding:'2px 5px', borderRadius:4, border:'none', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.68rem', lineHeight:1, ...extra });
+          const iconBtn = (extra) => ({ padding:'2px 5px', borderRadius:4, border:'none', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem', lineHeight:1, ...extra });
           const disabledBtn = { ...iconBtn(), opacity:0.2, cursor:'not-allowed' };
           return (
-            <div key={m.id} style={{ borderRadius:8, border:`1px solid ${m.blocked?'#e1705544':'var(--border)'}`, background: m.blocked?'#e1705508':'var(--surface2)', overflow:'hidden' }}>
+            <div key={m.id} style={{ borderRadius:8, border:`1px solid ${m.blocked?'#e1705544':'var(--border)'}`, background: m.blocked?'#e1705518':'var(--surface2)', overflow:'hidden' }}>
               {/* Row */}
-              <div style={{ display:'flex', alignItems:'center', gap:6, padding:'0.5rem 0.55rem' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, padding:'0.6rem 0.7rem' }}>
                 {/* Status icon — click cycles */}
                 <button onClick={()=>cycleStatus(m)} disabled={saving}
                   title={`${stage.label} · 클릭으로 다음 단계 (${stage.label==='예정'?'진행중':stage.label==='진행중'?'완료':'예정'})`}
@@ -1221,23 +1253,17 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
                       {m.phase_label}
                     </div>
                   )}
-                  {(m.planned_start || m.planned_end) && !editing && (
-                    <div style={{ fontSize:'0.65rem', color:'var(--text2)', marginTop:1, opacity:0.7, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                      {m.planned_start||'—'} ~ {m.planned_end||'—'}
-                    </div>
-                  )}
                   {m.blocked && m.blocked_reason && !editing && (
-                    <div style={{ fontSize:'0.65rem', color:'#e17055', marginTop:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{m.blocked_reason}</div>
+                    <div style={{ fontSize:'0.8rem', color:'#e17055', marginTop:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{m.blocked_reason}</div>
                   )}
                 </div>
                 {/* Right side */}
-                {m.week_number != null && <span style={{ padding:'0.05rem 0.35rem', borderRadius:4, background:'var(--accent)22', color:'var(--accent2)', fontWeight:600, fontSize:'0.63rem', flexShrink:0 }}>{m.week_number}W</span>}
-                {deadlineBadge && <span title={deadlineBadge.title||deadlineBadge.text} style={{ padding:'0.05rem 0.35rem', borderRadius:4, background:deadlineBadge.color+'22', color:deadlineBadge.color, fontWeight:700, fontSize:'0.63rem', flexShrink:0 }}>{deadlineBadge.text}</span>}
+                {m.week_number != null && <span style={{ padding:'0.05rem 0.35rem', borderRadius:4, background:'var(--accent)30', color:'var(--accent2)', fontWeight:600, fontSize:'0.8rem', flexShrink:0 }}>{m.week_number}W</span>}
                 {assignee && <MemberAvatar member={assignee} size={14} />}
                 <div style={{ display:'flex', flexShrink:0, borderLeft:'1px solid var(--border)', paddingLeft:4, marginLeft:2 }}>
                   <button onClick={()=>onReorder(m,'up')} disabled={rowIdx===0} style={rowIdx===0?disabledBtn:iconBtn()} title="위로">▲</button>
                   <button onClick={()=>onReorder(m,'down')} disabled={rowIdx===sorted.length-1} style={rowIdx===sorted.length-1?disabledBtn:iconBtn()} title="아래로">▼</button>
-                  <button onClick={()=>setExpandedId(expanded?null:m.id)} style={iconBtn({ fontSize:'0.75rem' })} title="상세">{expanded?'⌃':'⌄'}</button>
+                  <button onClick={()=>setExpandedId(expanded?null:m.id)} style={iconBtn({ fontSize:'0.8rem' })} title="상세">{expanded?'⌃':'⌄'}</button>
                   <button onClick={()=>onDelete(m)} style={iconBtn({ color:'#e17055' })} title="삭제">✕</button>
                 </div>
               </div>
@@ -1246,22 +1272,22 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
                 <div style={{ padding:'0.7rem 0.8rem', borderTop:'1px solid var(--border)', background:'var(--bg)', display:'flex', flexDirection:'column', gap:10 }}>
                   {/* Blocked */}
                   <div>
-                    <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:'0.78rem', color:'var(--text2)', cursor:'pointer' }}>
+                    <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:'0.8rem', color:'var(--text2)', cursor:'pointer' }}>
                       <input type="checkbox" checked={!!m.blocked} onChange={e=>onUpdate(m,{blocked:e.target.checked, blocked_reason:e.target.checked?m.blocked_reason:null})} style={{ accentColor:'#e17055' }} />
                       🔴 블로킹 표시
                     </label>
                     {m.blocked && (
                       <input type="text" placeholder="블로킹 사유" defaultValue={m.blocked_reason||''}
                         onBlur={e=>{ if(e.target.value!==(m.blocked_reason||'')) onUpdate(m,{blocked_reason:e.target.value||null}); }}
-                        style={{ width:'100%', marginTop:6, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid #e1705544', background:'var(--surface2)', color:'var(--text)', fontSize:'0.78rem', outline:'none' }} />
+                        style={{ width:'100%', marginTop:6, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid #e1705544', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', outline:'none' }} />
                     )}
                   </div>
                   {/* Assignee */}
                   {teamMembers && teamMembers.length > 0 && (
                     <div>
-                      <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:4 }}>담당</div>
+                      <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:4 }}>담당</div>
                       <select value={m.assignee||''} onChange={e=>onUpdate(m,{assignee:e.target.value||null})}
-                        style={{ width:'100%', padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.78rem', outline:'none' }}>
+                        style={{ width:'100%', padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', outline:'none' }}>
                         <option value="">— 미지정 —</option>
                         {teamMembers.filter(tm=>tm.is_active).map(tm => <option key={tm.id} value={tm.id}>{tm.name}</option>)}
                       </select>
@@ -1270,9 +1296,9 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
                   {/* Week number */}
                   {weekOptions.length > 0 && (
                     <div>
-                      <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:4 }}>주차 (Epic)</div>
+                      <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:4 }}>주차 (Epic)</div>
                       <select value={m.week_number==null?'':m.week_number} onChange={e=>onUpdate(m,{week_number:e.target.value?parseInt(e.target.value):null})}
-                        style={{ width:'100%', padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.78rem', outline:'none' }}>
+                        style={{ width:'100%', padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', outline:'none' }}>
                         <option value="">— 미지정 —</option>
                         {weekOptions.map(w => <option key={w.week} value={w.week}>{w.week}주차{w.title?` — ${w.title}`:''}</option>)}
                       </select>
@@ -1280,31 +1306,37 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
                   )}
                   {/* Note */}
                   <div>
-                    <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:4 }}>메모 / 서브태스크</div>
+                    <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:4 }}>메모 / 서브태스크</div>
                     <textarea placeholder="- [ ] 서브태스크 1&#10;- [ ] 서브태스크 2" defaultValue={m.note||''}
                       onBlur={e=>{ if(e.target.value!==(m.note||'')) onUpdate(m,{note:e.target.value||null}); }}
-                      style={{ width:'100%', minHeight:60, padding:'0.45rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.78rem', resize:'vertical', fontFamily:'inherit', lineHeight:1.5, outline:'none' }} />
-                  </div>
-                  {/* Planned dates */}
-                  <div>
-                    <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:4 }}>예정 기간</div>
-                    <div style={{ display:'flex', gap:6 }}>
-                      <input type="date" defaultValue={m.planned_start||''}
-                        onBlur={e=>{ const v=e.target.value||null; if(v!==(m.planned_start||null)) onUpdate(m,{planned_start:v}); }}
-                        style={{ flex:1, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.75rem', outline:'none', colorScheme:'dark' }} />
-                      <input type="date" defaultValue={m.planned_end||''}
-                        onBlur={e=>{ const v=e.target.value||null; if(v!==(m.planned_end||null)) onUpdate(m,{planned_end:v}); }}
-                        style={{ flex:1, padding:'0.4rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.75rem', outline:'none', colorScheme:'dark' }} />
-                    </div>
+                      style={{ width:'100%', minHeight:60, padding:'0.45rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', resize:'vertical', fontFamily:'inherit', lineHeight:1.5, outline:'none' }} />
                   </div>
                   {/* Actual dates */}
-                  {(m.actual_start || m.actual_end) && (
-                    <div style={{ fontSize:'0.7rem', color:'var(--text2)', display:'flex', gap:8, flexWrap:'wrap' }}>
-                      {m.actual_start && <span>실제 시작 {m.actual_start.split('T')[0]}</span>}
-                      {m.actual_end && <span>실제 완료 {m.actual_end.split('T')[0]}</span>}
-                      {m.actual_start && m.actual_end && <span style={{ color:'var(--accent2)' }}>({daysBetween(m.actual_start,m.actual_end)}일)</span>}
+                  <div style={{ display:'flex', gap:10 }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:3 }}>착수일</div>
+                      <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                        <input type="date" defaultValue={m.actual_start ? m.actual_start.split('T')[0] : ''}
+                          onBlur={e => { const v = e.target.value; const cur = m.actual_start ? m.actual_start.split('T')[0] : ''; if (v !== cur) onUpdate(m, { actual_start: v ? v + 'T00:00:00.000Z' : null }); }}
+                          style={{ flex:1, padding:'0.25rem 0.4rem', borderRadius:5, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', outline:'none', minWidth:0 }} />
+                        {m.actual_start && <button onClick={() => onUpdate(m, { actual_start: null })} title="착수일 삭제" style={{ background:'transparent', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem', padding:'2px 3px', opacity:0.5, flexShrink:0 }}>✕</button>}
+                      </div>
                     </div>
-                  )}
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:3 }}>완료일</div>
+                      <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                        <input type="date" defaultValue={m.actual_end ? m.actual_end.split('T')[0] : ''}
+                          onBlur={e => { const v = e.target.value; const cur = m.actual_end ? m.actual_end.split('T')[0] : ''; if (v !== cur) onUpdate(m, { actual_end: v ? v + 'T00:00:00.000Z' : null }); }}
+                          style={{ flex:1, padding:'0.25rem 0.4rem', borderRadius:5, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', outline:'none', minWidth:0 }} />
+                        {m.actual_end && <button onClick={() => onUpdate(m, { actual_end: null })} title="완료일 삭제" style={{ background:'transparent', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem', padding:'2px 3px', opacity:0.5, flexShrink:0 }}>✕</button>}
+                      </div>
+                    </div>
+                    {m.actual_start && m.actual_end && (
+                      <div style={{ flexShrink:0, alignSelf:'flex-end', fontSize:'0.8rem', color:'var(--accent2)', paddingBottom:2 }}>
+                        {daysBetween(m.actual_start, m.actual_end)}일
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -1317,10 +1349,10 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
         <span style={{ fontSize:'1rem', color:'var(--text2)', lineHeight:1, paddingLeft:2, flexShrink:0 }}>＋</span>
         <input type="text" placeholder="작업 추가 (Enter)" value={newLabel} onChange={e=>setNewLabel(e.target.value)}
           onKeyDown={e=>{ if(e.key==='Enter' && newLabel.trim()){ onAdd(project.slug,newLabel); setNewLabel(''); } }}
-          style={{ flex:1, padding:'0.3rem 0.4rem', borderRadius:6, border:'none', background:'transparent', color:'var(--text)', fontSize:'0.82rem', outline:'none', fontFamily:'inherit' }} />
+          style={{ flex:1, padding:'0.3rem 0.4rem', borderRadius:6, border:'none', background:'transparent', color:'var(--text)', fontSize:'0.85rem', outline:'none', fontFamily:'inherit' }} />
         {newLabel.trim() && (
           <button onClick={()=>{ onAdd(project.slug,newLabel); setNewLabel(''); }}
-            style={{ padding:'0.3rem 0.75rem', borderRadius:6, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.75rem', fontWeight:600, flexShrink:0 }}>추가</button>
+            style={{ padding:'0.3rem 0.75rem', borderRadius:6, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.8rem', fontWeight:600, flexShrink:0 }}>추가</button>
         )}
       </div>
     </div>
@@ -1330,40 +1362,104 @@ function MilestonePanel({ project, milestones, setupNeeded, teamMembers, saving,
 // ─── PhaseDetail (right panel in ProjectView) ───
 function PhaseDetail({ milestone, teamMembers, saving, onUpdate, onDelete, weekOptions }) {
   const m = milestone;
-  const [label, setLabel] = useState(m.phase_label);
-  const [note, setNote] = useState(m.note || '');
-  const [blockedReason, setBlockedReason] = useState(m.blocked_reason || '');
+
+  const initDraft = (m) => ({
+    phase_label: m.phase_label,
+    status: m.status,
+    blocked: !!m.blocked,
+    blocked_reason: m.blocked_reason || '',
+    assignee: m.assignee || '',
+    week_number: m.week_number == null ? '' : m.week_number,
+    note: m.note || '',
+    actual_start: m.actual_start ? m.actual_start.split('T')[0] : '',
+    actual_end: m.actual_end ? m.actual_end.split('T')[0] : '',
+  });
+
+  const [draft, setDraft] = useState(() => initDraft(m));
+  // 티켓을 처음 열었을 때(또는 저장 직후) 의 원본 스냅샷 — 사용자 수정 여부 판단 기준
+  const baseRef = useRef(initDraft(m));
 
   useEffect(() => {
-    setLabel(m.phase_label);
-    setNote(m.note || '');
-    setBlockedReason(m.blocked_reason || '');
-  }, [m.id, m.phase_label, m.note, m.blocked_reason]);
+    const fresh = initDraft(m);
+    // 다른 티켓으로 전환: 전면 초기화
+    baseRef.current = fresh;
+    setDraft(fresh);
+  }, [m.id]);
 
-  const commitLabel = () => {
-    const v = label.trim();
-    if (v && v !== m.phase_label) onUpdate(m, { phase_label: v });
-    else setLabel(m.phase_label);
+  useEffect(() => {
+    // 같은 티켓에 외부(Realtime) 업데이트가 들어왔을 때
+    // 사용자가 직접 수정하지 않은 필드만 최신값으로 갱신
+    const fresh = initDraft(m);
+    setDraft(prev => {
+      const merged = { ...fresh };
+      Object.keys(prev).forEach(k => {
+        const userEdited = String(prev[k]) !== String(baseRef.current[k]);
+        if (userEdited) merged[k] = prev[k]; // 사용자 편집값 보존
+      });
+      return merged;
+    });
+  }, [m.phase_label, m.status, m.blocked, m.blocked_reason, m.assignee, m.week_number, m.note, m.actual_start, m.actual_end]);
+
+  const set = (key, val) => setDraft(prev => ({ ...prev, [key]: val }));
+
+  const orig = {
+    phase_label: m.phase_label,
+    status: m.status,
+    blocked: !!m.blocked,
+    blocked_reason: m.blocked_reason || '',
+    assignee: m.assignee || '',
+    week_number: m.week_number == null ? '' : m.week_number,
+    note: m.note || '',
+    actual_start: m.actual_start ? m.actual_start.split('T')[0] : '',
+    actual_end: m.actual_end ? m.actual_end.split('T')[0] : '',
   };
-  const commitNote = () => { if (note !== (m.note || '')) onUpdate(m, { note: note || null }); };
-  const commitBlockedReason = () => { if (blockedReason !== (m.blocked_reason || '')) onUpdate(m, { blocked_reason: blockedReason || null }); };
+
+  const changedFields = Object.keys(draft).filter(k => {
+    if (k === 'week_number') return String(draft[k]) !== String(orig[k]);
+    return draft[k] !== orig[k];
+  });
+  const hasPending = changedFields.length > 0;
+
+  const handleSave = () => {
+    if (!draft.phase_label.trim()) return;
+    const fields = {};
+    if (draft.phase_label !== orig.phase_label) fields.phase_label = draft.phase_label.trim();
+    if (draft.status !== orig.status) fields.status = draft.status;
+    if (draft.blocked !== orig.blocked) { fields.blocked = draft.blocked; if (!draft.blocked) fields.blocked_reason = null; }
+    if (draft.blocked && draft.blocked_reason !== orig.blocked_reason) fields.blocked_reason = draft.blocked_reason || null;
+    if (draft.assignee !== orig.assignee) fields.assignee = draft.assignee || null;
+    if (String(draft.week_number) !== String(orig.week_number)) fields.week_number = draft.week_number === '' ? null : parseInt(draft.week_number);
+    if (draft.note !== orig.note) fields.note = draft.note || null;
+    if (draft.actual_start !== orig.actual_start) fields.actual_start = draft.actual_start ? draft.actual_start + 'T00:00:00.000Z' : null;
+    if (draft.actual_end !== orig.actual_end) fields.actual_end = draft.actual_end ? draft.actual_end + 'T00:00:00.000Z' : null;
+    if (Object.keys(fields).length > 0) {
+      onUpdate(m, fields);
+      // 저장 기준점 갱신 — 이후 Realtime 업데이트와 사용자 편집 판별에 사용
+      baseRef.current = { ...draft, phase_label: draft.phase_label.trim() };
+    }
+  };
+
+  const inputS = { width:'100%', padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', outline:'none', fontFamily:'inherit' };
+  const labelS = { fontSize:'0.8rem', color:'var(--text2)', fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.04em' };
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
-      <input type="text" value={label} onChange={e=>setLabel(e.target.value)} onBlur={commitLabel}
-        onKeyDown={e=>{ if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){ setLabel(m.phase_label); e.target.blur(); } }}
-        style={{ width:'100%', padding:'0.7rem 0.9rem', borderRadius:10, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'1.15rem', fontWeight:600, outline:'none', fontFamily:'inherit' }} />
+      <input type="text" value={draft.phase_label} onChange={e => set('phase_label', e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+        style={{ ...inputS, padding:'0.7rem 0.9rem', fontSize:'1.15rem', fontWeight:600, border: draft.phase_label !== orig.phase_label ? '1px solid var(--accent)' : '1px solid var(--border)' }} />
 
       <div>
-        <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.04em' }}>상태</div>
+        <div style={labelS}>상태</div>
         <div style={{ display:'flex', gap:6 }}>
           {MILESTONE_STAGE_ORDER.map(s => {
             const st = MILESTONE_STAGES[s];
-            const sel = m.status === s;
+            const sel = draft.status === s;
+            const changed = s === draft.status && draft.status !== orig.status;
             return (
-              <button key={s} onClick={()=>onUpdate(m,{status:s})} disabled={saving}
-                style={{ flex:1, padding:'0.75rem', borderRadius:8, border:sel?`2px solid ${st.color}`:'2px solid var(--border)', background:sel?st.color+'22':'transparent', color:sel?st.color:'var(--text2)', cursor:'pointer', fontSize:'0.9rem', fontWeight:sel?700:500, transition:'all 0.1s' }}>
+              <button key={s} onClick={() => set('status', s)}
+                style={{ flex:1, padding:'0.75rem', borderRadius:8, border: sel ? `2px solid ${st.color}` : '2px solid var(--border)', background: sel ? st.color+'30' : 'transparent', color: sel ? st.color : 'var(--text2)', cursor:'pointer', fontSize:'0.9rem', fontWeight: sel ? 700 : 500, transition:'all 0.1s', position:'relative' }}>
                 {st.emoji} {st.label}
+                {changed && <span style={{ position:'absolute', top:4, right:4, width:6, height:6, borderRadius:'50%', background:'var(--accent)' }} />}
               </button>
             );
           })}
@@ -1372,66 +1468,89 @@ function PhaseDetail({ milestone, teamMembers, saving, onUpdate, onDelete, weekO
 
       <div>
         <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:'0.85rem', color:'var(--text2)', cursor:'pointer' }}>
-          <input type="checkbox" checked={!!m.blocked} onChange={e=>onUpdate(m,{blocked:e.target.checked, blocked_reason:e.target.checked?m.blocked_reason:null})} style={{ accentColor:'#e17055' }} />
+          <input type="checkbox" checked={draft.blocked} onChange={e => set('blocked', e.target.checked)} style={{ accentColor:'#e17055' }} />
           🔴 블로킹 표시
         </label>
-        {m.blocked && (
-          <input type="text" placeholder="블로킹 사유" value={blockedReason} onChange={e=>setBlockedReason(e.target.value)} onBlur={commitBlockedReason}
-            style={{ width:'100%', marginTop:6, padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid #e1705544', background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', outline:'none' }} />
+        {draft.blocked && (
+          <input type="text" placeholder="블로킹 사유" value={draft.blocked_reason} onChange={e => set('blocked_reason', e.target.value)}
+            style={{ ...inputS, marginTop:6, border:'1px solid #e1705544' }} />
         )}
       </div>
 
       {teamMembers && teamMembers.length > 0 && (
         <div>
-          <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.04em' }}>담당</div>
-          <select value={m.assignee||''} onChange={e=>onUpdate(m,{assignee:e.target.value||null})}
-            style={{ width:'100%', padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', outline:'none' }}>
+          <div style={labelS}>담당</div>
+          <select value={draft.assignee} onChange={e => set('assignee', e.target.value)}
+            style={{ ...inputS, border: draft.assignee !== orig.assignee ? '1px solid var(--accent)' : '1px solid var(--border)' }}>
             <option value="">— 미지정 —</option>
-            {teamMembers.filter(tm=>tm.is_active).map(tm => <option key={tm.id} value={tm.id}>{tm.name}</option>)}
+            {teamMembers.filter(tm => tm.is_active).map(tm => <option key={tm.id} value={tm.id}>{tm.name}</option>)}
           </select>
         </div>
       )}
 
       {weekOptions && weekOptions.length > 0 && (
         <div>
-          <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.04em' }}>주차 (Epic)</div>
-          <select value={m.week_number==null?'':m.week_number} onChange={e=>onUpdate(m,{week_number:e.target.value?parseInt(e.target.value):null})}
-            style={{ width:'100%', padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', outline:'none' }}>
+          <div style={labelS}>주차 (Epic)</div>
+          <select value={draft.week_number} onChange={e => set('week_number', e.target.value)}
+            style={{ ...inputS, border: String(draft.week_number) !== String(orig.week_number) ? '1px solid var(--accent)' : '1px solid var(--border)' }}>
             <option value="">— 미지정 —</option>
-            {weekOptions.map(w => <option key={w.week} value={w.week}>{w.week}주차{w.title?` — ${w.title}`:''}</option>)}
+            {weekOptions.map(w => <option key={w.week} value={w.week}>{w.week}주차{w.title ? ` — ${w.title}` : ''}</option>)}
           </select>
         </div>
       )}
 
       <div>
-        <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.04em' }}>예정 기간</div>
-        <div style={{ display:'flex', gap:8 }}>
-          <input type="date" defaultValue={m.planned_start||''}
-            onBlur={e=>{ const v=e.target.value||null; if(v!==(m.planned_start||null)) onUpdate(m,{planned_start:v}); }}
-            style={{ flex:1, padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', outline:'none', colorScheme:'dark' }} />
-          <input type="date" defaultValue={m.planned_end||''}
-            onBlur={e=>{ const v=e.target.value||null; if(v!==(m.planned_end||null)) onUpdate(m,{planned_end:v}); }}
-            style={{ flex:1, padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.85rem', outline:'none', colorScheme:'dark' }} />
+        <div style={labelS}>메모 / 서브태스크</div>
+        <textarea value={draft.note} onChange={e => set('note', e.target.value)}
+          placeholder={"- [ ] 서브태스크 1\n- [ ] 서브태스크 2\n\n자유롭게 메모..."}
+          style={{ ...inputS, minHeight:200, resize:'vertical', lineHeight:1.6, border: draft.note !== orig.note ? '1px solid var(--accent)' : '1px solid var(--border)' }} />
+      </div>
+
+      <div style={{ display:'flex', gap:10 }}>
+        <div style={{ flex:1 }}>
+          <div style={labelS}>착수일</div>
+          <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+            <input type="date" value={draft.actual_start} onChange={e => set('actual_start', e.target.value)}
+              style={{ ...inputS, border: draft.actual_start !== orig.actual_start ? '1px solid var(--accent)' : '1px solid var(--border)' }} />
+            {draft.actual_start && <button onClick={() => set('actual_start', '')} title="착수일 삭제"
+              style={{ padding:'0.45rem 0.6rem', borderRadius:8, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem', flexShrink:0 }}>✕</button>}
+          </div>
+          {!draft.actual_start && <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--text2)', opacity:0.5 }}>진행중으로 변경 시 자동 기록</div>}
+        </div>
+        <div style={{ flex:1 }}>
+          <div style={labelS}>완료일</div>
+          <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+            <input type="date" value={draft.actual_end} onChange={e => set('actual_end', e.target.value)}
+              style={{ ...inputS, border: draft.actual_end !== orig.actual_end ? '1px solid var(--accent)' : '1px solid var(--border)' }} />
+            {draft.actual_end && <button onClick={() => set('actual_end', '')} title="완료일 삭제"
+              style={{ padding:'0.45rem 0.6rem', borderRadius:8, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem', flexShrink:0 }}>✕</button>}
+          </div>
+          {!draft.actual_end && <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--text2)', opacity:0.5 }}>완료로 변경 시 자동 기록</div>}
         </div>
       </div>
-
-      <div>
-        <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontWeight:600, marginBottom:6, textTransform:'uppercase', letterSpacing:'0.04em' }}>메모 / 서브태스크</div>
-        <textarea value={note} onChange={e=>setNote(e.target.value)} onBlur={commitNote}
-          placeholder={"- [ ] 서브태스크 1\n- [ ] 서브태스크 2\n\n자유롭게 메모..."}
-          style={{ width:'100%', minHeight:260, padding:'0.8rem 0.95rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--bg)', color:'var(--text)', fontSize:'0.88rem', resize:'vertical', fontFamily:'inherit', lineHeight:1.6, outline:'none' }} />
-      </div>
-
-      {(m.actual_start || m.actual_end) && (
-        <div style={{ padding:'0.7rem 0.9rem', borderRadius:8, background:'var(--surface2)', fontSize:'0.78rem', color:'var(--text2)', display:'flex', gap:14, flexWrap:'wrap' }}>
-          {m.actual_start && <span>실제 시작 <b style={{color:'var(--text)'}}>{m.actual_start.split('T')[0]}</b></span>}
-          {m.actual_end && <span>실제 완료 <b style={{color:'var(--text)'}}>{m.actual_end.split('T')[0]}</b></span>}
-          {m.actual_start && m.actual_end && <span style={{ color:'var(--accent2)' }}>({daysBetween(m.actual_start,m.actual_end)}일 소요)</span>}
+      {draft.actual_start && draft.actual_end && (
+        <div style={{ fontSize:'0.8rem', color:'var(--accent2)', fontWeight:600, textAlign:'right' }}>
+          {daysBetween(draft.actual_start + 'T00:00:00', draft.actual_end + 'T00:00:00')}일 소요
         </div>
       )}
 
-      <div style={{ borderTop:'1px solid var(--border)', paddingTop:16 }}>
-        <button onClick={()=>onDelete(m)} style={{ padding:'0.6rem 1rem', borderRadius:8, border:'1px solid #e1705544', background:'transparent', color:'#e17055', cursor:'pointer', fontSize:'0.82rem', fontWeight:500 }}>작업 삭제</button>
+      <div style={{ borderTop:'1px solid var(--border)', paddingTop:16, display:'flex', gap:8, alignItems:'center' }}>
+        {hasPending && (
+          <button onClick={handleSave} disabled={saving || !draft.phase_label.trim()}
+            style={{ flex:1, padding:'0.65rem 1rem', borderRadius:8, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.9rem', fontWeight:700, opacity: saving ? 0.6 : 1 }}>
+            {saving ? '저장 중...' : `저장 (${changedFields.length}개 수정)`}
+          </button>
+        )}
+        {hasPending && (
+          <button onClick={() => setDraft(initDraft(m))} disabled={saving}
+            style={{ padding:'0.65rem 0.8rem', borderRadius:8, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.85rem' }}>
+            되돌리기
+          </button>
+        )}
+        <button onClick={() => onDelete(m)}
+          style={{ padding:'0.6rem 1rem', borderRadius:8, border:'1px solid #e1705544', background:'transparent', color:'#e17055', cursor:'pointer', fontSize:'0.85rem', fontWeight:500, marginLeft: hasPending ? 0 : 'auto' }}>
+          작업 삭제
+        </button>
       </div>
     </div>
   );
@@ -1451,15 +1570,15 @@ function MilestoneEditModal({ milestone, teamMembers, saving, onUpdate, onDelete
   const wrappedDelete = (m) => { onDelete(m); onClose(); };
 
   return (
-    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1500, padding:'2rem 1rem' }}>
+    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1500, padding:'2rem 1rem' }}>
       <div onClick={e=>e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:640,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
-        boxShadow:'0 20px 60px rgba(0,0,0,0.5)', maxHeight:'90vh', display:'flex', flexDirection:'column',
+        boxShadow:'0 20px 60px var(--shadow)', maxHeight:'90vh', display:'flex', flexDirection:'column',
       }}>
         <div style={{ padding:'0.95rem 1.25rem', borderBottom:'1px solid var(--border)', display:'flex', alignItems:'center', gap:10, flexShrink:0 }}>
           <span style={{ fontSize:'1.2rem' }}>{milestone.blocked?'🔴':stage.emoji}</span>
-          <span style={{ fontSize:'0.72rem', fontWeight:700, color:stage.color, textTransform:'uppercase', letterSpacing:'0.05em', padding:'0.22rem 0.6rem', borderRadius:12, background:stage.color+'22', flexShrink:0 }}>{stage.label}</span>
+          <span style={{ fontSize:'0.8rem', fontWeight:700, color:stage.color, textTransform:'uppercase', letterSpacing:'0.05em', padding:'0.22rem 0.6rem', borderRadius:12, background:stage.color+'30', flexShrink:0 }}>{stage.label}</span>
           <div style={{ flex:1 }} />
           <button onClick={onClose} title="닫기 (Esc)" style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem', padding:'4px 8px', lineHeight:1 }}>✕</button>
         </div>
@@ -1626,15 +1745,15 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
           {backBtn}
           <h1 style={{ fontSize:'1.15rem', fontWeight:600, margin:0 }}>{project.title||project.slug}</h1>
         </div>
-        <div style={{ padding:'0.9rem 1.1rem', borderRadius:10, background:'#fdcb6e12', border:'1px solid #fdcb6e33', marginBottom:'0.75rem' }}>
+        <div style={{ padding:'0.9rem 1.1rem', borderRadius:10, background:'#fdcb6e1a', border:'1px solid #fdcb6e33', marginBottom:'0.75rem' }}>
           <div style={{ fontSize:'0.9rem', fontWeight:600, color:'var(--yellow)', marginBottom:4 }}>⚠️ DB 설정 필요</div>
           <div style={{ fontSize:'0.8rem', color:'var(--text2)', lineHeight:1.5 }}>작업 트래커를 사용하려면 project_milestones 테이블을 먼저 생성하세요.</div>
         </div>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
-          <div style={{ fontSize:'0.78rem', color:'var(--text2)' }}>Supabase SQL 에디터에서 실행</div>
-          <button onClick={() => { navigator.clipboard.writeText(MILESTONE_SETUP_SQL); }} style={{ padding:'0.35rem 0.7rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', cursor:'pointer', fontSize:'0.78rem' }}>📋 SQL 복사</button>
+          <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>Supabase SQL 에디터에서 실행</div>
+          <button onClick={() => { navigator.clipboard.writeText(MILESTONE_SETUP_SQL); }} style={{ padding:'0.35rem 0.7rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', cursor:'pointer', fontSize:'0.8rem' }}>📋 SQL 복사</button>
         </div>
-        <pre style={{ background:'var(--bg)', padding:'0.9rem', borderRadius:8, fontSize:'0.72rem', color:'var(--text2)', overflow:'auto', maxHeight:360, border:'1px solid var(--border)', lineHeight:1.5 }}>{MILESTONE_SETUP_SQL}</pre>
+        <pre style={{ background:'var(--bg)', padding:'0.9rem', borderRadius:8, fontSize:'0.8rem', color:'var(--text2)', overflow:'auto', maxHeight:360, border:'1px solid var(--border)', lineHeight:1.5 }}>{MILESTONE_SETUP_SQL}</pre>
       </div>
     );
   }
@@ -1645,22 +1764,42 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
       <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:10, flexWrap:'wrap' }}>
         {backBtn}
         <h1 style={{ fontSize:'1.2rem', fontWeight:600, margin:0, flex:1, minWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{project.title || project.slug}</h1>
-        <span style={{ padding:'0.3rem 0.7rem', borderRadius:6, fontSize:'0.78rem', fontWeight:500, background:meta.color+'22', color:meta.color, border:`1px solid ${meta.color}44`, flexShrink:0 }}>
+        <span style={{ padding:'0.3rem 0.7rem', borderRadius:6, fontSize:'0.8rem', fontWeight:500, background:meta.color+'30', color:meta.color, border:`1px solid ${meta.color}44`, flexShrink:0 }}>
           {meta.emoji} {meta.label}
         </span>
         {mgrM && <MemberBadge member={mgrM} role="mgr" />}
         {mainM && <MemberBadge member={mainM} role="main" />}
         {subM && <MemberBadge member={subM} role="sub" />}
+        {project.start_date && (() => {
+          const cw = getCurrentWeek(project.start_date);
+          if (cw == null) return null;
+          const totalW = weekOptions.length;
+          const overdue = totalW > 0 && cw > totalW;
+          return (
+            <span title={`착수일: ${project.start_date} 기준`}
+              style={{ padding:'0.25rem 0.6rem', borderRadius:6, fontSize:'0.8rem', fontWeight:600, background: overdue ? '#e1705530' : 'var(--green)30', color: overdue ? '#e17055' : 'var(--green)', border:`1px solid ${overdue ? '#e1705544' : 'var(--green)44'}`, flexShrink:0, whiteSpace:'nowrap' }}>
+              📍 {cw}주차 진행 중{overdue && ` (총 ${totalW}주 초과)`}
+            </span>
+          );
+        })()}
       </div>
-      <div style={{ fontSize:'0.72rem', color:'var(--text2)', fontFamily:'monospace', marginBottom:14, paddingLeft:2 }}>
+      <div style={{ fontSize:'0.8rem', color:'var(--text2)', fontFamily:'monospace', marginBottom:14, paddingLeft:2 }}>
         {project.slug}
         {project.wishket_url && <> · <a href={project.wishket_url} target="_blank" rel="noopener" style={{ color:'var(--yellow)', textDecoration:'none' }}>위시켓 공고 ↗</a></>}
+        {project.start_date && <> · <span style={{ color:'var(--text2)' }}>착수 {project.start_date}</span></>}
+        {project.deadline && (() => {
+          const today = new Date(); today.setHours(0,0,0,0);
+          const dl = new Date(project.deadline); dl.setHours(0,0,0,0);
+          const diff = Math.round((dl - today) / 86400000);
+          const color = diff < 0 ? '#e17055' : diff <= 7 ? '#fdcb6e' : 'var(--text2)';
+          return <> · <span style={{ color }}>마감 {project.deadline}{diff < 0 ? ` (+${-diff}일 초과)` : diff === 0 ? ' (오늘)' : ` (D-${diff})`}</span></>;
+        })()}
       </div>
 
       {/* Weekly milestone input */}
       {showWeeklyInput && (
         <div style={{ marginBottom:14 }}>
-          <WeeklyMilestoneInput project={project} saving={saving} milestones={milestones} onBulkCreate={(slug, weeks) => { onBulkCreateWeekly(slug, weeks); setShowWeeklyInput(false); }} onClearPlan={(slug) => { onClearWeeklyPlan && onClearWeeklyPlan(slug); setShowWeeklyInput(false); }} onClose={() => setShowWeeklyInput(false)} onRequestConfirm={onRequestConfirm} />
+          <WeeklyMilestoneInput project={project} saving={saving} milestones={milestones} onBulkCreate={(slug, weeks) => { onBulkCreateWeekly(slug, weeks); setShowWeeklyInput(false); }} onClearPlan={(slug) => { onClearWeeklyPlan && onClearWeeklyPlan(slug); setShowWeeklyInput(false); }} onClose={() => { console.trace('[WeeklyMilestoneInput] onClose called'); setShowWeeklyInput(false); }} onRequestConfirm={onRequestConfirm} />
         </div>
       )}
 
@@ -1670,23 +1809,23 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         {totalWeeks > 0 && (
           <div style={{ marginBottom:12 }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
-              <div style={{ fontSize:'0.7rem', color:'var(--text2)', fontWeight:500, letterSpacing:'0.02em', textTransform:'uppercase', opacity:0.8 }}>
+              <div style={{ fontSize:'0.8rem', color:'var(--text2)', fontWeight:500, letterSpacing:'0.02em', textTransform:'uppercase', opacity:0.8 }}>
                 📅 타임라인 {completedWeeks}/{totalWeeks}
                 {focusWeek != null && (
                   <button onClick={() => setWeekFilter(weekFilter === focusWeek ? 'all' : focusWeek)}
                     title="이 주차로 칸반 필터링"
-                    style={{ marginLeft:8, padding:'1px 6px', borderRadius:4, border:'1px solid var(--accent)44', background: weekFilter===focusWeek ? 'var(--accent)22' : 'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.65rem', fontWeight:600, textTransform:'none', letterSpacing:0 }}>
+                    style={{ marginLeft:8, padding:'1px 6px', borderRadius:4, border:'1px solid var(--accent)44', background: weekFilter===focusWeek ? 'var(--accent)30' : 'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600, textTransform:'none', letterSpacing:0 }}>
                     👉 다음 {focusWeek}주차
                   </button>
                 )}
               </div>
-              <div style={{ fontSize:'0.72rem', fontWeight:600, color:'var(--text2)' }}>{weekPct}%</div>
+              <div style={{ fontSize:'0.8rem', fontWeight:600, color:'var(--text2)' }}>{weekPct}%</div>
             </div>
             <div style={{ height:4, background:'var(--bg)', borderRadius:2, overflow:'hidden' }}>
               <div style={{ width:weekPct+'%', height:'100%', background:'var(--text2)', opacity:0.5, transition:'width 0.3s' }} />
             </div>
             {staleWeeks.length > 0 && (
-              <div style={{ marginTop:6, fontSize:'0.65rem', color:'var(--yellow)', opacity:0.85 }}>
+              <div style={{ marginTop:6, fontSize:'0.8rem', color:'var(--yellow)', opacity:0.85 }}>
                 ⚠️ {staleWeeks.join(', ')}주차가 미완료인데 이후 주차 작업이 진행됨 — 작업 순서 점검 필요
               </div>
             )}
@@ -1719,13 +1858,13 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                   }}
                   disabled={saving}
                   title={`미지정·고아 담당 ${needsFill}개를 프로젝트 담당자로 일괄 배정 (전체 기준)`}
-                  style={{ padding:'0.3rem 0.65rem', borderRadius:6, border:'1px solid var(--accent2)44', background:'var(--accent2)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.72rem', fontWeight:600 }}>
+                  style={{ padding:'0.3rem 0.65rem', borderRadius:6, border:'1px solid var(--accent2)44', background:'var(--accent2)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
                   👤 담당자 백필 ({needsFill})
                 </button>
               );
             })()}
             {weekOptions.length === 0 && (
-              <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.3rem 0.65rem', borderRadius:6, border:'1px solid var(--accent)44', background:'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.72rem', fontWeight:500 }}>📅 주차 계획 등록</button>
+              <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.3rem 0.65rem', borderRadius:6, border:'1px solid var(--accent)44', background:'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:500 }}>📅 주차 계획 등록</button>
             )}
             {sortedAll.length > 0 && <div style={{ fontSize:'1.2rem', fontWeight:700, color:hasBlocked?'#e17055':'var(--green)' }}>{pct}%</div>}
           </div>
@@ -1733,14 +1872,14 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         <div style={{ height:10, background:'var(--bg)', borderRadius:5, overflow:'hidden' }}>
           <div style={{ width:pct+'%', height:'100%', background:hasBlocked?'#e17055':'var(--green)', transition:'width 0.3s' }} />
         </div>
-        {hasBlocked && <div style={{ marginTop:8, fontSize:'0.75rem', color:'#e17055' }}>🔴 블로킹된 작업이 있습니다</div>}
+        {hasBlocked && <div style={{ marginTop:8, fontSize:'0.8rem', color:'#e17055' }}>🔴 블로킹된 작업이 있습니다</div>}
         {/* Per-week breakdown (detail of the timeline shown above) */}
         {weekOptions.length > 0 && (
           <div style={{ marginTop:12, paddingTop:10, borderTop:'1px dashed var(--border)' }}>
             <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:6 }}>
-              <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.2rem 0.55rem', borderRadius:5, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.68rem' }}>주차 계획 수정</button>
+              <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.2rem 0.55rem', borderRadius:5, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem' }}>주차 계획 수정</button>
             </div>
-            <WeeklyProgressBars weeklyPlan={project?.weekly_plan} milestones={sortedAll} focusWeek={focusWeek} activeFilter={weekFilter} onFilterWeek={setWeekFilter} onAddTicket={(label, week) => onAdd(project.slug, label, week)} />
+            <WeeklyProgressBars weeklyPlan={project?.weekly_plan} milestones={sortedAll} focusWeek={focusWeek} activeFilter={weekFilter} onFilterWeek={setWeekFilter} onAddTicket={(label, week) => onAdd(project.slug, label, week)} startDate={project?.start_date} />
           </div>
         )}
       </div>
@@ -1748,12 +1887,12 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
       {/* Week filter bar */}
       {weekOptions.length > 0 && sortedAll.length > 0 && (
         <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:12, flexWrap:'wrap' }}>
-          <span style={{ fontSize:'0.68rem', color:'var(--text2)', marginRight:4 }}>주차 필터</span>
+          <span style={{ fontSize:'0.8rem', color:'var(--text2)', marginRight:4 }}>주차 필터</span>
           {(() => {
             const chipStyle = (active) => ({
-              padding:'0.25rem 0.65rem', borderRadius:14, fontSize:'0.7rem', fontWeight:500,
+              padding:'0.25rem 0.65rem', borderRadius:14, fontSize:'0.8rem', fontWeight:500,
               border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
-              background: active ? 'var(--accent)22' : 'var(--surface)',
+              background: active ? 'var(--accent)30' : 'var(--surface)',
               color: active ? 'var(--accent2)' : 'var(--text2)',
               cursor:'pointer',
             });
@@ -1795,19 +1934,19 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         const navBtn = (enabled) => ({
           padding:'0.25rem 0.55rem', borderRadius:6, border:'1px solid var(--accent)44',
           background: enabled ? 'var(--surface)' : 'transparent', color: enabled ? 'var(--accent2)' : 'var(--text2)',
-          cursor: enabled ? 'pointer' : 'not-allowed', fontSize:'0.7rem', fontWeight:600, opacity: enabled ? 1 : 0.4,
+          cursor: enabled ? 'pointer' : 'not-allowed', fontSize:'0.8rem', fontWeight:600, opacity: enabled ? 1 : 0.4,
         });
         return (
-          <div style={{ display:'flex', alignItems:'center', gap:10, padding:'0.5rem 0.8rem', marginBottom:10, borderRadius:8, background:'var(--accent)11', border:'1px solid var(--accent)44' }}>
-            <span style={{ fontSize:'0.75rem', color:'var(--accent2)', fontWeight:600 }}>🔍 {activeLabel} 필터링 중</span>
-            <span style={{ fontSize:'0.7rem', color:'var(--text2)' }}>{sorted.length}개 표시 · {hidden}개 숨김</span>
+          <div style={{ display:'flex', alignItems:'center', gap:10, padding:'0.5rem 0.8rem', marginBottom:10, borderRadius:8, background:'var(--accent)20', border:'1px solid var(--accent)44' }}>
+            <span style={{ fontSize:'0.8rem', color:'var(--accent2)', fontWeight:600 }}>🔍 {activeLabel} 필터링 중</span>
+            <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>{sorted.length}개 표시 · {hidden}개 숨김</span>
             <div style={{ flex:1 }} />
             <button onClick={() => prevFilter != null && setWeekFilter(prevFilter)} disabled={prevFilter == null}
               title="이전 주차 (단축키: [)" style={navBtn(prevFilter != null)}>← 이전</button>
             <button onClick={() => nextFilter != null && setWeekFilter(nextFilter)} disabled={nextFilter == null}
               title="다음 주차 (단축키: ])" style={navBtn(nextFilter != null)}>다음 →</button>
             <button onClick={() => setWeekFilter('all')}
-              style={{ padding:'0.25rem 0.7rem', borderRadius:6, border:'1px solid var(--accent)44', background:'var(--surface)', color:'var(--accent2)', cursor:'pointer', fontSize:'0.7rem', fontWeight:600 }}>
+              style={{ padding:'0.25rem 0.7rem', borderRadius:6, border:'1px solid var(--accent)44', background:'var(--surface)', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
               ✕ 해제
             </button>
           </div>
@@ -1854,7 +1993,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
               );
             })()}
             <button onClick={() => setShowWeeklyInput(true)} disabled={saving}
-              style={{ padding:'0.8rem', borderRadius:10, border:'1px solid var(--accent)', background:'var(--accent)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>
+              style={{ padding:'0.8rem', borderRadius:10, border:'1px solid var(--accent)', background:'var(--accent)20', color:'var(--accent2)', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>
               📅 주차 계획 (Epic) {(project?.weekly_plan || []).length > 0 ? '수정' : '등록'}
             </button>
             {Object.entries(MILESTONE_TEMPLATES).map(([key,tpl]) => (
@@ -1868,7 +2007,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
             <input type="text" placeholder="또는 직접 작업 이름 입력" value={newLabel} onChange={e=>setNewLabel(e.target.value)}
               onKeyDown={e=>{ if(e.key==='Enter' && newLabel.trim()){ onAdd(project.slug,newLabel); setNewLabel(''); } }}
               style={{ flex:1, padding:'0.6rem 0.8rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.85rem', outline:'none' }} />
-            <button onClick={()=>{ if(newLabel.trim()){ onAdd(project.slug,newLabel); setNewLabel(''); } }} disabled={!newLabel.trim()} style={{ padding:'0.6rem 1rem', borderRadius:8, border:'none', background:newLabel.trim()?'var(--surface2)':'var(--border)', color:'var(--text)', cursor:newLabel.trim()?'pointer':'not-allowed', fontSize:'0.82rem' }}>+ 추가</button>
+            <button onClick={()=>{ if(newLabel.trim()){ onAdd(project.slug,newLabel); setNewLabel(''); } }} disabled={!newLabel.trim()} style={{ padding:'0.6rem 1rem', borderRadius:8, border:'none', background:newLabel.trim()?'var(--surface2)':'var(--border)', color:'var(--text)', cursor:newLabel.trim()?'pointer':'not-allowed', fontSize:'0.85rem' }}>+ 추가</button>
           </div>
         </div>
       ) : (
@@ -1886,7 +2025,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                   background: isDragOver ? stage.color+'10' : 'var(--surface)',
                   border: `${isDragOver ? '2px dashed ' + stage.color : '1px solid var(--border)'}`,
                   borderRadius:12,
-                  padding: isDragOver ? '0.78rem 0.68rem' : '0.85rem 0.75rem', // compensate border width change
+                  padding: isDragOver ? '0.88rem 0.78rem' : '0.95rem 0.85rem', // compensate border width change
                   display:'flex', flexDirection:'column', minHeight:320,
                   transition:'background 0.12s',
                 }}>
@@ -1894,30 +2033,20 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                 <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0.15rem 0.35rem 0.7rem', borderBottom:`2px solid ${stage.color}33`, marginBottom:10, flexShrink:0 }}>
                   <div style={{ display:'flex', alignItems:'center', gap:7, minWidth:0 }}>
                     <span style={{ fontSize:'0.95rem' }}>{stage.emoji}</span>
-                    <span style={{ fontSize:'0.78rem', fontWeight:700, color:stage.color, textTransform:'uppercase', letterSpacing:'0.05em', whiteSpace:'nowrap' }}>{stage.label}</span>
+                    <span style={{ fontSize:'0.8rem', fontWeight:700, color:stage.color, textTransform:'uppercase', letterSpacing:'0.05em', whiteSpace:'nowrap' }}>{stage.label}</span>
                   </div>
-                  <span style={{ fontSize:'0.72rem', fontWeight:700, color:stage.color, padding:'0.12rem 0.55rem', borderRadius:10, background:stage.color+'22', flexShrink:0 }}>{cards.length}</span>
+                  <span style={{ fontSize:'0.8rem', fontWeight:700, color:stage.color, padding:'0.12rem 0.55rem', borderRadius:10, background:stage.color+'30', flexShrink:0 }}>{cards.length}</span>
                 </div>
                 {/* Cards */}
-                <div style={{ display:'flex', flexDirection:'column', gap:7, overflowY:'auto', maxHeight:'65vh', paddingRight:2, flex:1 }}>
+                <div style={{ display:'flex', flexDirection:'column', gap:8, overflowY:'auto', maxHeight:'65vh', paddingRight:2, flex:1 }}>
                   {cards.length === 0 ? (
-                    <div style={{ padding:'1.1rem 0.5rem', textAlign:'center', color:'var(--text2)', fontSize:'0.72rem', opacity:0.4, border:'1px dashed var(--border)', borderRadius:6 }}>
+                    <div style={{ padding:'1.1rem 0.5rem', textAlign:'center', color:'var(--text2)', fontSize:'0.8rem', opacity:0.4, border:'1px dashed var(--border)', borderRadius:6 }}>
                       {weekFilter !== 'all' && sortedAll.filter(m => m.status === stageKey).length > 0 ? '필터에 해당 없음' : '비어 있음'}
                     </div>
                   ) : cards.map((m, ci) => {
                     const prev = ci > 0 ? cards[ci - 1] : null;
                     const showWeekDivider = weekFilter === 'all' && (!prev || prev.week_number !== m.week_number);
                     const assignee = teamMembers?.find(tm => tm.id === m.assignee);
-                    let deadlineBadge = null;
-                    if (m.planned_end && m.status !== 'done') {
-                      const today = new Date(); today.setHours(0,0,0,0);
-                      const end = new Date(m.planned_end); end.setHours(0,0,0,0);
-                      const diff = Math.round((end - today) / 86400000);
-                      if (diff < 0) deadlineBadge = { text:`+${-diff}`, color:'#e17055', title:`${-diff}일 지연` };
-                      else if (diff === 0) deadlineBadge = { text:'D-Day', color:'#fdcb6e' };
-                      else if (diff <= 3) deadlineBadge = { text:`D-${diff}`, color:'#fdcb6e' };
-                      else deadlineBadge = { text:`D-${diff}`, color:'var(--text2)' };
-                    }
                     const nextStageLabel = m.status==='planned'?'진행중':m.status==='in_progress'?'완료':'예정';
                     const noteHasSub = m.note && m.note.includes('- [');
                     const isDragging = draggingId === m.id;
@@ -1925,7 +2054,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                       <React.Fragment key={m.id}>
                       {showWeekDivider && (
                         <div style={{ display:'flex', alignItems:'center', gap:6, padding:'2px 2px', marginTop: ci === 0 ? 0 : 4 }}>
-                          <span style={{ fontSize:'0.6rem', fontWeight:600, color:'var(--text2)', letterSpacing:'0.04em', textTransform:'uppercase', opacity:0.6 }}>
+                          <span style={{ fontSize:'0.8rem', fontWeight:600, color:'var(--text2)', letterSpacing:'0.04em', textTransform:'uppercase', opacity:0.6 }}>
                             {m.week_number != null ? `${m.week_number}주차` : '주차 미지정'}
                           </span>
                           <div style={{ flex:1, height:1, background:'var(--border)', opacity:0.5 }} />
@@ -1939,49 +2068,49 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                         style={{
                           borderRadius:8,
                           border: m.blocked?'1px solid #e1705555':'1px solid var(--border)',
-                          background: m.blocked?'#e1705510':'var(--surface2)',
+                          background: m.blocked?'#e1705518':'var(--surface2)',
                           cursor: isDragging ? 'grabbing' : 'grab',
-                          padding:'0.65rem 0.7rem',
+                          padding:'0.75rem 0.85rem',
                           transition:'transform 0.1s, box-shadow 0.1s, border-color 0.1s, opacity 0.1s',
-                          display:'flex', flexDirection:'column', gap:5,
+                          display:'flex', flexDirection:'column', gap:6,
                           opacity: isDragging ? 0.4 : 1,
                         }}
-                        onMouseEnter={e=>{ if(!isDragging){ e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 10px rgba(0,0,0,0.18)'; e.currentTarget.style.borderColor=m.blocked?'#e17055aa':'var(--accent)88'; } }}
+                        onMouseEnter={e=>{ if(!isDragging){ e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 10px var(--shadow)'; e.currentTarget.style.borderColor=m.blocked?'#e17055aa':'var(--accent)88'; } }}
                         onMouseLeave={e=>{ e.currentTarget.style.transform='none'; e.currentTarget.style.boxShadow='none'; e.currentTarget.style.borderColor=m.blocked?'#e1705555':'var(--border)'; }}
                         title="드래그로 컬럼 이동 · 클릭으로 상세 편집">
                         {/* Line 1: emoji + label + delete */}
-                        <div style={{ display:'flex', alignItems:'flex-start', gap:7 }}>
+                        <div style={{ display:'flex', alignItems:'flex-start', gap:8 }}>
                           <button onClick={(e)=>{ e.stopPropagation(); cycleStatus(m); }} disabled={saving}
                             title={`→ ${nextStageLabel}(으)로 이동`}
-                            style={{ background:'transparent', border:'none', cursor:'pointer', padding:0, fontSize:'1rem', lineHeight:1.2, flexShrink:0 }}>
+                            style={{ background:'transparent', border:'none', cursor:'pointer', padding:0, fontSize:'1.1rem', lineHeight:1.2, flexShrink:0 }}>
                             {m.blocked ? '🔴' : stage.emoji}
                           </button>
-                          <div style={{ flex:1, minWidth:0, fontSize:'0.86rem', fontWeight:500, color:m.status==='done'?'var(--text2)':'var(--text)', textDecoration:m.status==='done'?'line-through':'none', lineHeight:1.4, wordBreak:'break-word' }}>
+                          <div style={{ flex:1, minWidth:0, fontSize:'0.9rem', fontWeight:500, color:m.status==='done'?'var(--text2)':'var(--text)', textDecoration:m.status==='done'?'line-through':'none', lineHeight:1.45, wordBreak:'break-word' }}>
                             {m.phase_label}
                           </div>
                           <button onClick={(e)=>{ e.stopPropagation(); onDelete(m); }}
-                            style={{ background:'transparent', border:'none', cursor:'pointer', padding:'0 3px', color:'var(--text2)', fontSize:'0.72rem', lineHeight:1, flexShrink:0, opacity:0.4 }}
+                            style={{ background:'transparent', border:'none', cursor:'pointer', padding:'0 3px', color:'var(--text2)', fontSize:'0.8rem', lineHeight:1, flexShrink:0, opacity:0.4 }}
                             onMouseEnter={e=>{ e.stopPropagation(); e.currentTarget.style.opacity='1'; e.currentTarget.style.color='#e17055'; }}
                             onMouseLeave={e=>{ e.currentTarget.style.opacity='0.4'; e.currentTarget.style.color='var(--text2)'; }}
                             title="삭제">✕</button>
                         </div>
                         {/* Line 2: badges */}
-                        {(deadlineBadge || assignee || noteHasSub || m.week_number != null) && (
+                        {(assignee || noteHasSub || m.week_number != null) && (
                           <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap', paddingLeft:23 }}>
-                            {m.week_number != null && <span style={{ padding:'0.08rem 0.4rem', borderRadius:4, background:'var(--accent)22', color:'var(--accent2)', fontWeight:600, fontSize:'0.62rem' }}>{m.week_number}W</span>}
-                            {deadlineBadge && <span title={deadlineBadge.title||deadlineBadge.text} style={{ padding:'0.08rem 0.4rem', borderRadius:4, background:deadlineBadge.color+'22', color:deadlineBadge.color, fontWeight:700, fontSize:'0.62rem' }}>{deadlineBadge.text}</span>}
+                            {m.week_number != null && <span style={{ padding:'0.08rem 0.4rem', borderRadius:4, background:'var(--accent)30', color:'var(--accent2)', fontWeight:600, fontSize:'0.8rem' }}>{m.week_number}W</span>}
                             {assignee && <MemberAvatar member={assignee} size={14} />}
-                            {noteHasSub && <span title="서브태스크 있음" style={{ fontSize:'0.62rem', color:'var(--text2)', opacity:0.7 }}>📝</span>}
+                            {noteHasSub && <span title="서브태스크 있음" style={{ fontSize:'0.8rem', color:'var(--text2)', opacity:0.7 }}>📝</span>}
                           </div>
                         )}
                         {/* Blocked reason */}
                         {m.blocked && m.blocked_reason && (
-                          <div style={{ fontSize:'0.65rem', color:'#e17055', paddingLeft:23, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} title={m.blocked_reason}>{m.blocked_reason}</div>
+                          <div style={{ fontSize:'0.8rem', color:'#e17055', paddingLeft:23, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} title={m.blocked_reason}>{m.blocked_reason}</div>
                         )}
-                        {/* Line 3: dates */}
-                        {(m.planned_start || m.planned_end) && (
-                          <div style={{ fontSize:'0.62rem', color:'var(--text2)', opacity:0.55, paddingLeft:23, lineHeight:1.2 }}>
-                            {(m.planned_start||'').slice(5)||'—'} ~ {(m.planned_end||'').slice(5)||'—'}
+                        {/* actual dates (auto-stamped on status change) */}
+                        {(m.actual_start || m.actual_end) && (
+                          <div style={{ fontSize:'0.8rem', color:'var(--text2)', opacity:0.65, paddingLeft:23, lineHeight:1.4, display:'flex', gap:8 }}>
+                            {m.actual_start && <span>착수 {m.actual_start.split('T')[0].slice(5)}</span>}
+                            {m.actual_end && <span>완료 {m.actual_end.split('T')[0].slice(5)}</span>}
                           </div>
                         )}
                       </div>
@@ -1998,10 +2127,10 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                       <span style={{ fontSize:'0.95rem', color:'var(--text2)', lineHeight:1, flexShrink:0 }}>＋</span>
                       <input type="text" placeholder="작업 추가 (Enter)" value={newLabel} onChange={e=>setNewLabel(e.target.value)}
                         onKeyDown={e=>{ if(e.key==='Enter' && newLabel.trim()){ onAdd(project.slug,newLabel,newWeek?parseInt(newWeek):null); setNewLabel(''); setNewWeek(''); } }}
-                        style={{ flex:1, minWidth:0, padding:'0.28rem 0.4rem', borderRadius:4, border:'none', background:'transparent', color:'var(--text)', fontSize:'0.78rem', outline:'none', fontFamily:'inherit' }} />
+                        style={{ flex:1, minWidth:0, padding:'0.28rem 0.4rem', borderRadius:4, border:'none', background:'transparent', color:'var(--text)', fontSize:'0.8rem', outline:'none', fontFamily:'inherit' }} />
                       {weekOptions.length > 0 && (
                         <select value={newWeek} onChange={e=>setNewWeek(e.target.value)}
-                          style={{ padding:'0.2rem 0.3rem', borderRadius:4, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text2)', fontSize:'0.68rem', outline:'none', flexShrink:0 }}>
+                          style={{ padding:'0.2rem 0.3rem', borderRadius:4, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text2)', fontSize:'0.8rem', outline:'none', flexShrink:0 }}>
                           <option value="">주차</option>
                           {weekOptions.map(w => <option key={w.week} value={w.week} title={w.title}>{w.week}W</option>)}
                         </select>
@@ -2043,6 +2172,10 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
   const [editBudget, setEditBudget] = useState(project?.budget||'');
   const [editTimeline, setEditTimeline] = useState(project?.timeline||'');
   const [editDate, setEditDate] = useState(project?.created_at||'');
+  const [editStartDate, setEditStartDate] = useState(project?.start_date||'');
+  const [startDateChanged, setStartDateChanged] = useState(false);
+  const [editDeadline, setEditDeadline] = useState(project?.deadline||'');
+  const [deadlineChanged, setDeadlineChanged] = useState(false);
   const [editMeeting, setEditMeeting] = useState(toLocalInput(project?.meeting_at));
   const [editMeetingType, setEditMeetingType] = useState(project?.meeting_type||'');
   const [editMemo, setEditMemo] = useState(project?.memo||'');
@@ -2072,8 +2205,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
   const targets = TRANSITION_TARGETS[project.current_status]||[];
   const meta    = STATUS_META[project.current_status]||{};
 
-  const inputS  = { width:'100%', padding:'0.5rem 0.7rem', borderRadius:8, fontSize:'0.85rem', border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', outline:'none', colorScheme:'dark' };
-  const labelS  = { fontSize:'0.8rem', color:'var(--text2)', marginBottom:4, fontWeight:500 };
+  const inputS  = { width:'100%', padding:'0.5rem 0.7rem', borderRadius:8, fontSize:'0.85rem', border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', outline:'none' };
+  const labelS  = { fontSize:'0.8rem', color:'var(--text2)', marginBottom:6, fontWeight:500 };
   const saveBtnS = (act) => ({ padding:'0.5rem 0.85rem', borderRadius:8, border:'none', cursor:'pointer', fontSize:'0.8rem', fontWeight:600, background:act?'var(--blue)':'var(--surface2)', color:act?'#fff':'var(--text2)', opacity:saving?0.7:1 });
   const checkInfo = (t,b,tl) => setInfoChanged(t!==(project.title||'') || b!==(project.budget||'') || tl!==(project.timeline||''));
 
@@ -2099,11 +2232,11 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
   ];
 
   return (
-    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
+    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
       <div onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:500,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
-        boxShadow:'0 20px 60px rgba(0,0,0,0.5)', maxHeight:'88vh', display:'flex', flexDirection:'column',
+        boxShadow:'0 20px 60px var(--shadow)', maxHeight:'88vh', display:'flex', flexDirection:'column',
       }}>
         {/* Header */}
         <div style={{ padding:'1.25rem 1.5rem 0', flexShrink:0 }}>
@@ -2111,8 +2244,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ fontWeight:600, fontSize:'1rem', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{project.title||project.slug}</div>
               <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:4, flexWrap:'wrap' }}>
-                <span style={{ fontSize:'0.75rem', color:'var(--text2)', fontFamily:'monospace' }}>{project.slug}</span>
-                <span style={{ display:'inline-block', padding:'0.1rem 0.45rem', borderRadius:5, fontSize:'0.7rem', fontWeight:500, background:meta.color+'22', color:meta.color }}>{meta.emoji} {meta.label}</span>
+                <span style={{ fontSize:'0.8rem', color:'var(--text2)', fontFamily:'monospace' }}>{project.slug}</span>
+                <span style={{ display:'inline-block', padding:'0.1rem 0.45rem', borderRadius:5, fontSize:'0.8rem', fontWeight:500, background:meta.color+'30', color:meta.color }}>{meta.emoji} {meta.label}</span>
                 {project.current_status === 'won'
                   ? (managerMember && <MemberBadge member={managerMember} role="mgr" />)
                   : (<>{mainMember && <MemberBadge member={mainMember} role="main" />}{subMember && <MemberBadge member={subMember} role="sub" />}</>)
@@ -2124,8 +2257,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
 
           {project.wishket_url && (
             <a href={project.wishket_url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
-              style={{ display:'flex', alignItems:'center', gap:6, padding:'0.5rem 0.75rem', borderRadius:8, fontSize:'0.8rem', fontWeight:500, background:'#fdcb6e15', color:'var(--yellow)', textDecoration:'none', border:'1px solid #fdcb6e33', marginBottom:'0.5rem' }}
-            >📋 위시켓 공고 보기 <span style={{ fontSize:'0.7rem', color:'var(--text2)', marginLeft:'auto' }}>{project.wishket_url.split('/project/')[1]?.replace('/','')}</span></a>
+              style={{ display:'flex', alignItems:'center', gap:6, padding:'0.5rem 0.75rem', borderRadius:8, fontSize:'0.8rem', fontWeight:500, background:'#fdcb6e22', color:'var(--yellow)', textDecoration:'none', border:'1px solid #fdcb6e33', marginBottom:'0.5rem' }}
+            >📋 위시켓 공고 보기 <span style={{ fontSize:'0.8rem', color:'var(--text2)', marginLeft:'auto' }}>{project.wishket_url.split('/project/')[1]?.replace('/','')}</span></a>
           )}
 
           {(project.portfolio_count||0) > 0 && (
@@ -2133,7 +2266,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
               {Array.from({ length:project.portfolio_count },(_,i)=>i+1).map(n => (
                 <a key={n} href={`https://Firstpip.github.io/portfolio-showcase/${project.slug}/portfolio-${n}/`}
                   target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
-                  style={{ flex:1, padding:'0.3rem', borderRadius:6, fontSize:'0.75rem', fontWeight:500, background:'var(--surface2)', color:'var(--accent2)', textDecoration:'none', textAlign:'center', border:'1px solid var(--border)' }}
+                  style={{ flex:1, padding:'0.3rem', borderRadius:6, fontSize:'0.8rem', fontWeight:500, background:'var(--surface2)', color:'var(--accent2)', textDecoration:'none', textAlign:'center', border:'1px solid var(--border)' }}
                 >P{n}</a>
               ))}
             </div>
@@ -2180,6 +2313,34 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                   <div style={labelS}>생성일</div>
                   <input type="date" value={editDate} onChange={e => { setEditDate(e.target.value); setDateChanged(e.target.value!==(project.created_at||'')); }} style={inputS} />
                 </div>
+                {HAS_MILESTONES.includes(project.current_status) && (
+                  <div style={{ display:'flex', gap:10 }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ ...labelS, display:'flex', alignItems:'center', gap:5 }}>
+                        착수일
+                        <span style={{ fontSize:'0.8rem', color:'var(--text2)', fontWeight:400, opacity:0.8 }}>주차 자동 계산 기준</span>
+                      </div>
+                      <input type="date" value={editStartDate} onChange={e => { setEditStartDate(e.target.value); setStartDateChanged(e.target.value!==(project.start_date||'')); }} style={inputS} />
+                      {editStartDate && (() => { const cw = getCurrentWeek(editStartDate); return cw != null ? (
+                        <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--green)', opacity:0.9 }}>→ 오늘 기준 {cw}주차 진행 중</div>
+                      ) : (
+                        <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--text2)', opacity:0.7 }}>→ 아직 착수 전 날짜</div>
+                      ); })()}
+                    </div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ ...labelS }}>마감일</div>
+                      <input type="date" value={editDeadline} onChange={e => { setEditDeadline(e.target.value); setDeadlineChanged(e.target.value!==(project.deadline||'')); }} style={inputS} />
+                      {editDeadline && (() => {
+                        const today = new Date(); today.setHours(0,0,0,0);
+                        const dl = new Date(editDeadline); dl.setHours(0,0,0,0);
+                        const diff = Math.round((dl - today) / 86400000);
+                        if (diff < 0) return <div style={{ marginTop:4, fontSize:'0.8rem', color:'#e17055', opacity:0.9 }}>→ {-diff}일 초과</div>;
+                        if (diff === 0) return <div style={{ marginTop:4, fontSize:'0.8rem', color:'#fdcb6e', opacity:0.9 }}>→ 오늘 마감</div>;
+                        return <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--text2)', opacity:0.7 }}>→ D-{diff}</div>;
+                      })()}
+                    </div>
+                  </div>
+                )}
                 <div>
                   <div style={labelS}>위시켓 공고 URL</div>
                   <input type="url" value={editUrl} placeholder="https://www.wishket.com/project/..." onChange={e => { setEditUrl(e.target.value); setUrlChanged(e.target.value!==(project.wishket_url||'')); }} style={inputS} />
@@ -2190,15 +2351,17 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                     style={{ ...inputS, minHeight:56, resize:'vertical', fontFamily:'inherit', lineHeight:1.5 }} />
                 </div>
               </div>
-              {(infoChanged||dateChanged||urlChanged||memoChanged) && (
+              {(infoChanged||dateChanged||startDateChanged||deadlineChanged||urlChanged||memoChanged) && (
                 <button onClick={() => {
                   const fields = {};
                   if (infoChanged) { fields.title=editTitle; fields.budget=editBudget; fields.timeline=editTimeline; }
                   if (dateChanged) fields.created_at = editDate;
+                  if (startDateChanged) fields.start_date = editStartDate || null;
+                  if (deadlineChanged) fields.deadline = editDeadline || null;
                   if (urlChanged)  fields.wishket_url = editUrl;
                   if (memoChanged) fields.memo = editMemo;
                   onFieldSave(project, fields);
-                  setInfoChanged(false); setDateChanged(false); setUrlChanged(false); setMemoChanged(false);
+                  setInfoChanged(false); setDateChanged(false); setStartDateChanged(false); setDeadlineChanged(false); setUrlChanged(false); setMemoChanged(false);
                 }} disabled={saving} style={{ ...saveBtnS(true), width:'100%', marginTop:10 }}>
                   {saving ? '저장 중...' : '저장'}
                 </button>
@@ -2261,12 +2424,12 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                   const mStr = formatMeetingAt(currentMeeting.meeting_at);
                   const isDone = ms === 'done';
                   return (
-                    <div style={{ padding:'0.7rem 0.9rem', borderRadius:8, background:isDone?'#74b9ff12':'#fdcb6e12', border:`1px solid ${isDone?'#74b9ff33':'#fdcb6e33'}`, marginBottom:'1rem', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                    <div style={{ padding:'0.7rem 0.9rem', borderRadius:8, background:isDone?'#74b9ff1a':'#fdcb6e1a', border:`1px solid ${isDone?'#74b9ff33':'#fdcb6e33'}`, marginBottom:'1rem', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
                       <div>
-                        <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginBottom:2 }}>{isDone?'최근 미팅':'다음 미팅'}</div>
+                        <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:2 }}>{isDone?'최근 미팅':'다음 미팅'}</div>
                         <div style={{ fontSize:'0.9rem', fontWeight:600, color:isDone?'#74b9ff':'#fdcb6e' }}>{mt&&mt.emoji+' '}{mStr}</div>
                       </div>
-                      <span style={{ padding:'0.15rem 0.45rem', borderRadius:5, fontSize:'0.7rem', fontWeight:600, background:isDone?'#74b9ff22':'#fdcb6e22', color:isDone?'#74b9ff':'#fdcb6e' }}>{isDone?'완료':'예정'}</span>
+                      <span style={{ padding:'0.15rem 0.45rem', borderRadius:5, fontSize:'0.8rem', fontWeight:600, background:isDone?'#74b9ff30':'#fdcb6e30', color:isDone?'#74b9ff':'#fdcb6e' }}>{isDone?'완료':'예정'}</span>
                     </div>
                   );
                 })()}
@@ -2282,9 +2445,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                             <div style={{ display:'flex', alignItems:'center', gap:8 }}>
                               <span>{mt?mt.emoji:'📅'}</span>
                               <span style={{ color:'var(--text2)' }}>{formatMeetingAt(h.meeting_at)}</span>
-                              {h.note && <span style={{ color:'var(--text2)', opacity:0.6, fontSize:'0.75rem' }}>— {h.note}</span>}
+                              {h.note && <span style={{ color:'var(--text2)', opacity:0.6, fontSize:'0.8rem' }}>— {h.note}</span>}
                             </div>
-                            {h.meeting_memo && <div style={{ marginTop:4, fontSize:'0.78rem', color:'var(--text2)', lineHeight:1.5, paddingLeft:22, whiteSpace:'pre-wrap' }}>{h.meeting_memo}</div>}
+                            {h.meeting_memo && <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--text2)', lineHeight:1.5, paddingLeft:22, whiteSpace:'pre-wrap' }}>{h.meeting_memo}</div>}
                           </div>
                         );
                       })}
@@ -2293,11 +2456,26 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                 )}
 
                 <div style={{ fontSize:'0.85rem', fontWeight:600, marginBottom:8 }}>{currentMeeting?(project.current_status==='meeting_done'?'추가 미팅 등록':'미팅 수정'):'미팅 등록'}</div>
-                {project.current_status === 'meeting_done' && (
-                  <div style={{ padding:'0.5rem 0.7rem', borderRadius:8, background:'#fdcb6e10', border:'1px solid #fdcb6e22', marginBottom:'0.75rem', fontSize:'0.75rem', color:'var(--yellow)' }}>
-                    💡 미래 일정을 등록하면 자동으로 '미팅 예정'으로 전환됩니다
-                  </div>
-                )}
+                {project.current_status === 'meeting_done' && (() => {
+                  const selectedIso = editMeeting ? new Date(editMeeting) : null;
+                  const isFuture = selectedIso && selectedIso > new Date();
+                  const isPast   = selectedIso && selectedIso <= new Date();
+                  if (isFuture) return (
+                    <div style={{ padding:'0.5rem 0.7rem', borderRadius:8, background:'#00b8941a', border:'1px solid #00b89433', marginBottom:'0.75rem', fontSize:'0.8rem', color:'var(--green)' }}>
+                      ✅ 미래 일정 — 저장 시 '미팅 예정' 상태로 자동 전환됩니다
+                    </div>
+                  );
+                  if (isPast) return (
+                    <div style={{ padding:'0.5rem 0.7rem', borderRadius:8, background:'#636e721a', border:'1px solid #636e7233', marginBottom:'0.75rem', fontSize:'0.8rem', color:'var(--text2)' }}>
+                      ℹ️ 과거 일정 — 상태 전환 없이 미팅 기록만 저장됩니다
+                    </div>
+                  );
+                  return (
+                    <div style={{ padding:'0.5rem 0.7rem', borderRadius:8, background:'#fdcb6e1a', border:'1px solid #fdcb6e30', marginBottom:'0.75rem', fontSize:'0.8rem', color:'var(--yellow)' }}>
+                      💡 미래 일정을 등록하면 자동으로 '미팅 예정'으로 전환됩니다
+                    </div>
+                  );
+                })()}
                 <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
                   <div>
                     <div style={labelS}>미팅 일시</div>
@@ -2308,7 +2486,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                     <div style={{ display:'flex', gap:6 }}>
                       {MEETING_TYPES.map(mt => {
                         const sel = editMeetingType===mt.key;
-                        return (<button key={mt.key} onClick={() => { setEditMeetingType(mt.key); setMeetingChanged(true); }} style={{ flex:1, padding:'0.5rem', borderRadius:8, fontSize:'0.85rem', cursor:'pointer', border:sel?'2px solid var(--yellow)':'2px solid transparent', transition:'all 0.15s', background:sel?'var(--yellow)22':'var(--surface2)', color:sel?'var(--yellow)':'var(--text2)', fontWeight:sel?600:400 }}>{mt.emoji} {mt.label}</button>);
+                        return (<button key={mt.key} onClick={() => { setEditMeetingType(mt.key); setMeetingChanged(true); }} style={{ flex:1, padding:'0.5rem', borderRadius:8, fontSize:'0.85rem', cursor:'pointer', border:sel?'2px solid var(--yellow)':'2px solid transparent', transition:'all 0.15s', background:sel?'var(--yellow)30':'var(--surface2)', color:sel?'var(--yellow)':'var(--text2)', fontWeight:sel?600:400 }}>{mt.emoji} {mt.label}</button>);
                       })}
                     </div>
                   </div>
@@ -2332,7 +2510,11 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                         newHistory.push({ status:'interview', date:today, note:'추가 미팅 예정', meeting_at:iso, meeting_type:editMeetingType||null, meeting_memo:editMeetingMemo||null });
                         onFieldSave(project, { meeting_at:iso, meeting_type:editMeetingType||null, current_status:'interview', history:newHistory });
                       } else {
-                        onFieldSave(project, { meeting_at:iso, meeting_type:editMeetingType||null, history:[...(project.history||[]), { status:project.current_status, date:today, note:'미팅 등록', meeting_at:iso, meeting_type:editMeetingType||null, meeting_memo:editMeetingMemo||null }] });
+                        const isChange = !!currentMeeting;
+                        const changeNote = isChange
+                          ? `미팅 변경 (${currentMeeting.meeting_at?.slice(0,10)} → ${iso?.slice(0,10)||'삭제'})`
+                          : '미팅 등록';
+                        onFieldSave(project, { meeting_at:iso, meeting_type:editMeetingType||null, history:[...(project.history||[]), { status:project.current_status, date:today, note:changeNote, meeting_at:iso, meeting_type:editMeetingType||null, meeting_memo:editMeetingMemo||null }] });
                       }
                       setEditMeetingMemo('');
                       setMeetingChanged(false);
@@ -2347,7 +2529,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
                     <div style={{ fontSize:'0.85rem', fontWeight:600 }}>담당자 지정</div>
                     {!hasTeam && (
-                      <span style={{ fontSize:'0.72rem', color:'var(--text2)' }}>팀원 관리에서 팀원을 먼저 추가하세요</span>
+                      <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>팀원 관리에서 팀원을 먼저 추가하세요</span>
                     )}
                   </div>
                   <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
@@ -2388,9 +2570,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                   <div style={{ marginTop:'1.5rem', borderTop:'1px solid var(--border)', paddingTop:'1rem' }}>
                     <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:8 }}>빠른 상태 변경</div>
                     <div style={{ display:'flex', gap:8 }}>
-                      {project.current_status==='applied' && <button onClick={() => onSave(project,'interview','미팅 예정')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'#fdcb6e22', color:'#fdcb6e' }}>📅 미팅 예정으로 변경</button>}
-                      {project.current_status==='interview' && <button onClick={() => onSave(project,'meeting_done','미팅 완료')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'#74b9ff22', color:'#74b9ff' }}>🤝 계약 논의 중으로 변경</button>}
-                      {project.current_status==='meeting_done' && <button onClick={() => onSave(project,'interview','추가 미팅 예정')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'#fdcb6e22', color:'#fdcb6e' }}>📅 추가 미팅 예정으로 변경</button>}
+                      {project.current_status==='applied' && <button onClick={() => onSave(project,'interview','미팅 예정')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'#fdcb6e30', color:'#fdcb6e' }}>📅 미팅 예정으로 변경</button>}
+                      {project.current_status==='interview' && <button onClick={() => onSave(project,'meeting_done','미팅 완료')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'#74b9ff30', color:'#74b9ff' }}>🤝 계약 논의 중으로 변경</button>}
+                      {project.current_status==='meeting_done' && <button onClick={() => onSave(project,'interview','추가 미팅 예정')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'#fdcb6e30', color:'#fdcb6e' }}>📅 추가 미팅 예정으로 변경</button>}
                     </div>
                   </div>
                 )}
@@ -2409,11 +2591,11 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
             if (milestonesSetupNeeded) {
               return (
                 <div>
-                  <div style={{ padding:'0.7rem 0.9rem', borderRadius:8, background:'#fdcb6e12', border:'1px solid #fdcb6e33', marginBottom:'0.75rem' }}>
+                  <div style={{ padding:'0.7rem 0.9rem', borderRadius:8, background:'#fdcb6e1a', border:'1px solid #fdcb6e33', marginBottom:'0.75rem' }}>
                     <div style={{ fontSize:'0.85rem', fontWeight:600, color:'var(--yellow)', marginBottom:4 }}>⚠️ DB 설정 필요</div>
-                    <div style={{ fontSize:'0.75rem', color:'var(--text2)', lineHeight:1.5 }}>전체 화면에서 설정 SQL을 복사할 수 있습니다.</div>
+                    <div style={{ fontSize:'0.8rem', color:'var(--text2)', lineHeight:1.5 }}>전체 화면에서 설정 SQL을 복사할 수 있습니다.</div>
                   </div>
-                  <button onClick={openFull} style={{ width:'100%', padding:'0.75rem', borderRadius:10, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.88rem', fontWeight:600 }}>🎯 전체 화면에서 열기</button>
+                  <button onClick={openFull} style={{ width:'100%', padding:'0.75rem', borderRadius:10, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>🎯 전체 화면에서 열기</button>
                 </div>
               );
             }
@@ -2430,13 +2612,13 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                         <div style={{ width:pct+'%', height:'100%', background:hasBlocked?'#e17055':'var(--green)', transition:'width 0.3s' }} />
                       </div>
                       {current && (
-                        <div style={{ marginTop:10, fontSize:'0.78rem', color:'var(--text2)' }}>
+                        <div style={{ marginTop:10, fontSize:'0.8rem', color:'var(--text2)' }}>
                           현재 작업: <b style={{ color: hasBlocked&&current.blocked?'#e17055':MILESTONE_STAGES[current.status]?.color }}>
                             {current.blocked?'🔴 ':''}{current.phase_label}
                           </b>
                         </div>
                       )}
-                      {hasBlocked && <div style={{ marginTop:6, fontSize:'0.72rem', color:'#e17055' }}>🔴 블로킹된 작업이 있습니다</div>}
+                      {hasBlocked && <div style={{ marginTop:6, fontSize:'0.8rem', color:'#e17055' }}>🔴 블로킹된 작업이 있습니다</div>}
                       {/* Weekly progress in summary */}
                       {(() => {
                         const hasPlan = Array.isArray(project?.weekly_plan) && project.weekly_plan.length > 0;
@@ -2444,8 +2626,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                         if (!hasWeeks) return null;
                         return (
                           <div style={{ marginTop:8, paddingTop:6, borderTop:'1px solid var(--border)' }}>
-                            <div style={{ fontSize:'0.68rem', color:'var(--text2)', fontWeight:600, marginBottom:4 }}>주차별 (Epic)</div>
-                            <WeeklyProgressBars weeklyPlan={project?.weekly_plan} milestones={list} />
+                            <div style={{ fontSize:'0.8rem', color:'var(--text2)', fontWeight:600, marginBottom:4 }}>주차별 (Epic)</div>
+                            <WeeklyProgressBars weeklyPlan={project?.weekly_plan} milestones={list} startDate={project?.start_date} />
                           </div>
                         );
                       })()}
@@ -2470,7 +2652,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                                 onBackfillAssignees(project.slug);
                               }
                             }}
-                            style={{ marginTop:8, width:'100%', padding:'0.4rem', borderRadius:6, border:'1px solid var(--accent2)44', background:'var(--accent2)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.72rem', fontWeight:600 }}>
+                            style={{ marginTop:8, width:'100%', padding:'0.4rem', borderRadius:6, border:'1px solid var(--accent2)44', background:'var(--accent2)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
                             👤 담당자 백필 ({needsFill})
                           </button>
                         );
@@ -2486,7 +2668,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                 <button onClick={openFull} style={{ width:'100%', padding:'0.85rem', borderRadius:10, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>
                   🎯 전체 화면에서 {list.length > 0 ? '작업 관리' : '시작하기'} →
                 </button>
-                <div style={{ fontSize:'0.68rem', color:'var(--text2)', textAlign:'center', opacity:0.7 }}>
+                <div style={{ fontSize:'0.8rem', color:'var(--text2)', textAlign:'center', opacity:0.7 }}>
                   상세 편집, 메모, 서브태스크는 전체 화면에서 더 편리합니다
                 </div>
               </div>
@@ -2587,19 +2769,19 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
   const toggleAll = () => { setSelected(prev => prev.size===filtered.length ? new Set() : new Set(filtered.map(r=>r.slug))); };
 
   const cols = [
-    { key:'status',     label:'상태',  sortable:false, width:'90px' },
+    { key:'status',     label:'상태',  sortable:false, width:'120px' },
     { key:'title',      label:'프로젝트', sortable:false, width:'' },
-    { key:'budget',     label:'예산',  sortable:true,  width:'100px' },
-    { key:'created_at', label:'생성일', sortable:true,  width:'95px' },
-    { key:'meeting_at', label:'미팅일', sortable:true,  width:'165px' },
-    { key:'assigned',   label:'담당',  sortable:false, width:'120px' },
-    { key:'note',       label:'메모',  sortable:false, width:'150px' },
+    { key:'budget',     label:'예산',  sortable:true,  width:'110px' },
+    { key:'created_at', label:'생성일', sortable:true,  width:'100px' },
+    { key:'meeting_at', label:'미팅일', sortable:true,  width:'175px' },
+    { key:'assigned',   label:'담당',  sortable:false, width:'130px' },
+    { key:'note',       label:'메모',  sortable:false, width:'160px' },
   ];
 
   return (
     <div style={{ background:'var(--surface)', borderRadius:12, border:'1px solid var(--border)', overflow:'hidden' }}>
       {selected.size > 0 && (
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0.6rem 1rem', background:'#e1705515', borderBottom:'1px solid #e1705533' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0.6rem 1rem', background:'#e1705522', borderBottom:'1px solid #e1705533' }}>
           <span style={{ fontSize:'0.85rem', color:'var(--text)' }}>{selected.size}건 선택됨</span>
           <div style={{ display:'flex', gap:8 }}>
             <button onClick={() => setSelected(new Set())} style={{ padding:'0.35rem 0.7rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem' }}>선택 해제</button>
@@ -2629,8 +2811,8 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
               const meta = STATUS_META[r.current_status]||{};
               const meetingStr = formatMeetingAt(r.meeting_at);
               const urgency = r._urgency||getMeetingUrgency(r.meeting_at);
-              const urgBg  = urgency==='today'?'#fdcb6e18':urgency==='tomorrow'?'#74b9ff12':r._stale?'#e1705508':'transparent';
-              const urgBdr = urgency==='today'?'#fdcb6e44':urgency==='tomorrow'?'#74b9ff33':r._stale?'#e1705522':'var(--border)';
+              const urgBg  = urgency==='today'?'#fdcb6e18':urgency==='tomorrow'?'#74b9ff1a':r._stale?'#e1705518':'transparent';
+              const urgBdr = urgency==='today'?'#fdcb6e44':urgency==='tomorrow'?'#74b9ff33':r._stale?'#e1705530':'var(--border)';
               const mgrM  = teamMembers?.find(m => m.id===r.assigned_manager);
               const mainM = teamMembers?.find(m => m.id===r.assigned_main);
               const subM  = teamMembers?.find(m => m.id===r.assigned_sub);
@@ -2639,31 +2821,31 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                   style={{ borderBottom:`1px solid ${urgBdr}`, cursor:'pointer', transition:'background 0.1s', background:urgBg }}
                   onMouseEnter={e => e.currentTarget.style.background=urgency?(urgency==='today'?'#fdcb6e25':'#74b9ff20'):'var(--surface2)'}
                   onMouseLeave={e => e.currentTarget.style.background=urgBg}>
-                  <td style={{ padding:'0.65rem 0.5rem 0.65rem 1rem', width:32 }} onClick={e => e.stopPropagation()}>
+                  <td style={{ padding:'0.7rem 0.5rem 0.7rem 1rem', width:32 }} onClick={e => e.stopPropagation()}>
                     <input type="checkbox" checked={selected.has(r.slug)} onChange={e => toggleSelect(r.slug,e)} style={{ cursor:'pointer', accentColor:'var(--accent)' }} />
                   </td>
-                  <td style={{ padding:'0.65rem 1rem', whiteSpace:'nowrap' }}>
-                    <span style={{ display:'inline-flex', alignItems:'center', gap:4, padding:'0.2rem 0.6rem', borderRadius:6, fontSize:'0.75rem', fontWeight:500, background:meta.color+'22', color:meta.color, border:`1px solid ${meta.color}44` }}>
+                  <td style={{ padding:'0.7rem 0.75rem 0.7rem 1rem', whiteSpace:'nowrap' }}>
+                    <span style={{ display:'inline-flex', alignItems:'center', gap:5, padding:'0.3rem 0.7rem', borderRadius:6, fontSize:'0.8rem', fontWeight:500, background:meta.color+'30', color:meta.color, border:`1px solid ${meta.color}44` }}>
                       {meta.emoji} {meta.label}
                       {r._stale && <span title={`지원 후 ${daysBetween(r.created_at,new Date())}일 경과`} style={{ marginLeft:2, width:6, height:6, borderRadius:'50%', background:'#e17055', animation:'pulse 2s infinite' }} />}
                     </span>
                   </td>
-                  <td style={{ padding:'0.65rem 1rem', maxWidth:320 }}>
+                  <td style={{ padding:'0.7rem 1rem', maxWidth:360 }}>
                     <div style={{ fontWeight:500, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{r.title||r.slug}</div>
-                    <div style={{ fontSize:'0.75rem', color:'var(--text2)', fontFamily:'monospace' }}>{r.slug}</div>
+                    <div style={{ fontSize:'0.8rem', color:'var(--text2)', fontFamily:'monospace' }}>{r.slug}</div>
                     {HAS_MILESTONES.includes(r.current_status) && (() => {
                       const ms = (milestones?.[r.slug])||[];
                       const goToProject = (e) => { e.stopPropagation(); onOpenProject(r.slug); };
                       if (ms.length === 0) {
                         if (milestonesSetupNeeded) {
-                          return <div style={{ fontSize:'0.68rem', color:'var(--text2)', marginTop:4, opacity:0.7 }}>📋 작업 트래커 DB 미설정</div>;
+                          return <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginTop:4, opacity:0.7 }}>📋 작업 트래커 DB 미설정</div>;
                         }
                         return (
-                          <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, fontSize:'0.68rem' }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, fontSize:'0.8rem' }}>
                             <span onClick={goToProject} title="클릭: 작업 페이지 열기"
                               style={{ color:'var(--text2)', cursor:'pointer', textDecoration:'underline', textDecorationColor:'var(--border)', textUnderlineOffset:2 }}>📋 작업 설정 안 됨</span>
                             <button onClick={e=>{ e.stopPropagation(); onQuickApplyTemplate(r.slug,'web_standard'); }}
-                              style={{ padding:'0.1rem 0.45rem', borderRadius:4, border:'1px solid var(--accent)44', background:'var(--accent)15', color:'var(--accent)', cursor:'pointer', fontSize:'0.65rem', fontWeight:600 }}>
+                              style={{ padding:'0.1rem 0.45rem', borderRadius:4, border:'1px solid var(--accent)44', background:'var(--accent)20', color:'var(--accent)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
                               웹 표준 적용
                             </button>
                           </div>
@@ -2676,7 +2858,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                       const blocked = sorted.some(m => m.blocked);
                       return (
                         <div onClick={goToProject} title="클릭: 작업 페이지 열기"
-                          style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, fontSize:'0.7rem', cursor:'pointer', padding:'2px 4px', marginLeft:-4, borderRadius:4, transition:'background 0.12s' }}
+                          style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, fontSize:'0.8rem', cursor:'pointer', padding:'2px 4px', marginLeft:-4, borderRadius:4, transition:'background 0.12s' }}
                           onMouseEnter={e=>e.currentTarget.style.background='var(--surface2)'}
                           onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
                           <div style={{ flex:'0 0 80px', height:5, background:'var(--bg)', borderRadius:3, overflow:'hidden' }}>
@@ -2684,14 +2866,14 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                           </div>
                           <span style={{ color:'var(--text2)' }}>{doneCount}/{sorted.length}</span>
                           {current && <span style={{ color: blocked?'#e17055':(MILESTONE_STAGES[current.status]?.color||'var(--text2)') }}>· {blocked?'🔴 ':''}{current.phase_label}</span>}
-                          <span style={{ color:'var(--accent2)', fontSize:'0.62rem', marginLeft:'auto', opacity:0.6 }}>→</span>
+                          <span style={{ color:'var(--accent2)', fontSize:'0.8rem', marginLeft:'auto', opacity:0.6 }}>→</span>
                         </div>
                       );
                     })()}
                   </td>
-                  <td style={{ padding:'0.65rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:r.budget?'var(--text)':'var(--text2)' }}>{r.budget||'—'}</td>
-                  <td style={{ padding:'0.65rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:'var(--text2)' }}>{r.created_at||'—'}</td>
-                  <td style={{ padding:'0.65rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem' }}>
+                  <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:r.budget?'var(--text)':'var(--text2)' }}>{r.budget||'—'}</td>
+                  <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:'var(--text2)' }}>{r.created_at||'—'}</td>
+                  <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem' }}>
                     {meetingStr ? (() => {
                       const ms = getMeetingStatus(r.meeting_at);
                       const mt = MEETING_TYPES.find(t => t.key===r.meeting_type);
@@ -2700,9 +2882,9 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                       return (
                         <span style={{ display:'flex', alignItems:'center', gap:4 }}>
                           {urgLabel ? (
-                            <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.7rem', fontWeight:700, background:urgency==='today'?'#fdcb6e33':'#74b9ff22', color:urgency==='today'?'#fdcb6e':'#74b9ff', animation:urgency==='today'?'pulse 2s infinite':'none' }}>{urgLabel}</span>
+                            <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.8rem', fontWeight:700, background:urgency==='today'?'#fdcb6e33':'#74b9ff30', color:urgency==='today'?'#fdcb6e':'#74b9ff', animation:urgency==='today'?'pulse 2s infinite':'none' }}>{urgLabel}</span>
                           ) : (
-                            <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.7rem', fontWeight:600, background:isDone?'#00b89422':'#fdcb6e22', color:isDone?'#00b894':'#fdcb6e' }}>{isDone?'완료':'예정'}</span>
+                            <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.8rem', fontWeight:600, background:isDone?'#00b89430':'#fdcb6e30', color:isDone?'#00b894':'#fdcb6e' }}>{isDone?'완료':'예정'}</span>
                           )}
                           {mt && <span>{mt.emoji}</span>}
                           <span style={{ color:isDone?'var(--text2)':'var(--yellow)' }}>{meetingStr}</span>
@@ -2711,13 +2893,13 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                     })() : <span style={{ color:'var(--text2)' }}>—</span>}
                   </td>
                   {/* 담당 컬럼 */}
-                  <td style={{ padding:'0.65rem 0.75rem', whiteSpace:'nowrap' }}>
+                  <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap' }}>
                     {r.current_status === 'won' ? (
                       mgrM ? (
                         <span style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
                           <MemberAvatar member={mgrM} size={16} />
-                          <span style={{ fontSize:'0.72rem', color:mgrM.color, fontWeight:600 }}>{mgrM.name}</span>
-                          <span style={{ fontSize:'0.6rem', color:'var(--text2)' }}>PM</span>
+                          <span style={{ fontSize:'0.8rem', color:mgrM.color, fontWeight:600 }}>{mgrM.name}</span>
+                          <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>PM</span>
                         </span>
                       ) : <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>—</span>
                     ) : (mainM||subM) ? (
@@ -2725,21 +2907,21 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                         {mainM && (
                           <span style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
                             <MemberAvatar member={mainM} size={16} />
-                            <span style={{ fontSize:'0.72rem', color:mainM.color, fontWeight:600 }}>{mainM.name}</span>
-                            <span style={{ fontSize:'0.6rem', color:'var(--text2)' }}>주</span>
+                            <span style={{ fontSize:'0.8rem', color:mainM.color, fontWeight:600 }}>{mainM.name}</span>
+                            <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>주</span>
                           </span>
                         )}
                         {subM && (
                           <span style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
                             <MemberAvatar member={subM} size={14} />
-                            <span style={{ fontSize:'0.7rem', color:subM.color }}>{subM.name}</span>
-                            <span style={{ fontSize:'0.6rem', color:'var(--text2)' }}>부</span>
+                            <span style={{ fontSize:'0.8rem', color:subM.color }}>{subM.name}</span>
+                            <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>부</span>
                           </span>
                         )}
                       </div>
                     ) : <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>—</span>}
                   </td>
-                  <td style={{ padding:'0.65rem 1rem', fontSize:'0.8rem', color:'var(--text2)', maxWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                  <td style={{ padding:'0.7rem 1rem', fontSize:'0.8rem', color:'var(--text2)', maxWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                     <InlineMemo value={r.memo} onSave={val => onMemoSave(r,val)} />
                   </td>
                 </tr>
@@ -2748,7 +2930,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
           </tbody>
         </table>
       </div>
-      <div style={{ padding:'0.65rem 1rem', borderTop:'1px solid var(--border)', fontSize:'0.8rem', color:'var(--text2)' }}>
+      <div style={{ padding:'0.7rem 1rem', borderTop:'1px solid var(--border)', fontSize:'0.8rem', color:'var(--text2)' }}>
         {filtered.length}건 표시 중
       </div>
     </div>
@@ -2757,6 +2939,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
 
 // ─── App ───
 function App({ session }) {
+  const { theme, toggle: toggleTheme } = useTheme();
   const [data, setData]                   = useState(null);
   const [teamMembers, setTeamMembers]     = useState([]);
   const [teamSetupNeeded, setTeamSetupNeeded] = useState(false);
@@ -2780,14 +2963,20 @@ function App({ session }) {
   const [sortOrder, setSortOrder]         = useState('desc');
   const [dateRange, setDateRange]         = useState('all');
   const [showStats, setShowStats]         = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const { toasts, toast } = useToast();
   const [confirmState, setConfirmState] = useState(null); // { title, message, confirmLabel, destructive, onConfirm }
   const searchRef = useRef(null);
 
   useEffect(() => {
     const handler = e => {
-      if (e.key==='/' && !e.ctrlKey && !e.metaKey && document.activeElement.tagName!=='INPUT' && document.activeElement.tagName!=='TEXTAREA') {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key==='/' && !e.ctrlKey && !e.metaKey) {
         e.preventDefault(); searchRef.current?.focus();
+      }
+      if (e.key==='?' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault(); setShowShortcuts(prev => !prev);
       }
     };
     window.addEventListener('keydown', handler);
@@ -2858,25 +3047,30 @@ function App({ session }) {
     const today = now.toISOString().split('T')[0];
     const toMeetingDone = rows.filter(r => r.current_status==='interview' && r.meeting_at && new Date(r.meeting_at)<now);
     if (toMeetingDone.length > 0) {
-      for (const r of toMeetingDone) {
+      const results = await Promise.all(toMeetingDone.map(r => {
         const entry = { status:'meeting_done', date:today, note:'미팅 일시 경과 — 자동 전환', meeting_at:r.meeting_at, meeting_type:r.meeting_type||null };
-        supabase.from(TABLE).update({ current_status:'meeting_done', history:[...(r.history||[]),entry], updated_at:today }).eq('slug',r.slug).then(()=>{});
-      }
-      setData(prev => prev.map(d => {
-        if (!toMeetingDone.find(t => t.slug===d.slug)) return d;
-        const entry = { status:'meeting_done', date:today, note:'미팅 일시 경과 — 자동 전환', meeting_at:d.meeting_at, meeting_type:d.meeting_type||null };
-        return { ...d, current_status:'meeting_done', history:[...(d.history||[]),entry], updated_at:today };
+        return supabase.from(TABLE).update({ current_status:'meeting_done', history:[...(r.history||[]),entry], updated_at:today }).eq('slug',r.slug);
       }));
+      const failed = results.filter(r => r.error);
+      if (failed.length === 0) {
+        setData(prev => prev.map(d => {
+          if (!toMeetingDone.find(t => t.slug===d.slug)) return d;
+          const entry = { status:'meeting_done', date:today, note:'미팅 일시 경과 — 자동 전환', meeting_at:d.meeting_at, meeting_type:d.meeting_type||null };
+          return { ...d, current_status:'meeting_done', history:[...(d.history||[]),entry], updated_at:today };
+        }));
+      }
     }
     const toInterview = rows.filter(r => r.current_status==='meeting_done' && r.meeting_at && new Date(r.meeting_at)>now);
     if (toInterview.length > 0) {
-      for (const r of toInterview) {
-        supabase.from(TABLE).update({ current_status:'interview', history:[...(r.history||[]),{ status:'interview', date:today, note:'추가 미팅 예정 — 자동 전환' }], updated_at:today }).eq('slug',r.slug).then(()=>{});
+      const interviewResults = await Promise.all(toInterview.map(r =>
+        supabase.from(TABLE).update({ current_status:'interview', history:[...(r.history||[]),{ status:'interview', date:today, note:'추가 미팅 예정 — 자동 전환' }], updated_at:today }).eq('slug',r.slug)
+      ));
+      if (interviewResults.every(r => !r.error)) {
+        setData(prev => prev.map(d => {
+          if (!toInterview.find(t => t.slug===d.slug)) return d;
+          return { ...d, current_status:'interview', history:[...(d.history||[]),{ status:'interview', date:today, note:'추가 미팅 예정 — 자동 전환' }], updated_at:today };
+        }));
       }
-      setData(prev => prev.map(d => {
-        if (!toInterview.find(t => t.slug===d.slug)) return d;
-        return { ...d, current_status:'interview', history:[...(d.history||[]),{ status:'interview', date:today, note:'추가 미팅 예정 — 자동 전환' }], updated_at:today };
-      }));
     }
   }, [toast, checkMeetingNotifications]);
 
@@ -2907,8 +3101,16 @@ function App({ session }) {
         else if (payload.eventType==='INSERT') setData(prev => prev?[payload.new,...prev]:[payload.new]);
         else if (payload.eventType==='DELETE') setData(prev => prev?prev.filter(d => d.id!==payload.old.id):prev);
       })
-      .on('postgres_changes',{ event:'*', schema:'public', table:TEAM_TABLE },() => {
-        loadTeamMembers();
+      .on('postgres_changes',{ event:'*', schema:'public', table:TEAM_TABLE },(payload) => {
+        if (payload.eventType === 'INSERT') {
+          setTeamMembers(prev => [...prev, payload.new].sort((a,b) => new Date(a.created_at)-new Date(b.created_at)));
+        } else if (payload.eventType === 'UPDATE') {
+          setTeamMembers(prev => prev.map(m => m.id === payload.new.id ? payload.new : m));
+        } else if (payload.eventType === 'DELETE') {
+          setTeamMembers(prev => prev.filter(m => m.id !== payload.old.id));
+        } else {
+          loadTeamMembers(); // 알 수 없는 이벤트는 전체 리로드 fallback
+        }
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
@@ -2984,12 +3186,15 @@ function App({ session }) {
   }, [toast, defaultAssigneeFor]);
 
   const handleMilestoneUpdate = useCallback(async (milestone, fields) => {
+    setSaving(true);
+    try {
     const payload = { ...fields, updated_at:new Date().toISOString() };
     // auto-set timestamps when status changes
     if (fields.status && fields.status !== milestone.status) {
       if (fields.status === 'in_progress' && !milestone.actual_start) payload.actual_start = new Date().toISOString();
       if (fields.status === 'done' && !milestone.actual_end) payload.actual_end = new Date().toISOString();
-      if (fields.status !== 'done') payload.actual_end = null;
+      // actual_end 는 done → 다른 상태로 되돌릴 때만 초기화 (진행 중 전환 시 날짜 보존)
+      if (milestone.status === 'done' && fields.status !== 'done') payload.actual_end = null;
     }
     const { data:updated, error } = await supabase.from(MILESTONES_TABLE).update(payload).eq('id',milestone.id).select().single();
     if (error) { toast('저장 실패: '+error.message,'error'); return; }
@@ -3017,6 +3222,7 @@ function App({ session }) {
         return next;
       });
     }
+    } finally { setSaving(false); }
   }, [toast]);
 
   const handleMilestoneDelete = useCallback(async (milestone) => {
@@ -3104,15 +3310,15 @@ function App({ session }) {
   }, [milestones, toast, defaultAssigneeFor]);
 
   // Backfill: 미지정/고아(삭제·비활성 멤버 참조) 담당자를 프로젝트 기본 담당자로 일괄 채움
-  const backfillInFlightRef = useRef(false);
+  const backfillInFlightRef = useRef(new Set()); // slug 단위로 중복 방지
   const handleBackfillAssignees = useCallback(async (slug) => {
-    if (backfillInFlightRef.current) return 0;
+    if (backfillInFlightRef.current.has(slug)) return 0;
     const assignee = defaultAssigneeFor(slug);
     if (!assignee) { toast('프로젝트에 활성 담당자가 없습니다','error'); return 0; }
     const isActive = (id) => !!id && !!teamMembers?.find(tm => tm.id === id && tm.is_active);
     const targets = (milestones[slug] || []).filter(m => !isActive(m.assignee));
     if (targets.length === 0) { toast('백필할 티켓이 없습니다','info'); return 0; }
-    backfillInFlightRef.current = true;
+    backfillInFlightRef.current.add(slug);
     try {
       const ids = targets.map(m => m.id);
       const { error } = await supabase.from(MILESTONES_TABLE).update({ assignee, updated_at:new Date().toISOString() }).in('id', ids);
@@ -3130,7 +3336,7 @@ function App({ session }) {
       toast(`👤 ${targets.length}개 티켓 담당자 배정 완료`,'success');
       return targets.length;
     } finally {
-      backfillInFlightRef.current = false;
+      backfillInFlightRef.current.delete(slug);
     }
   }, [milestones, teamMembers, toast, defaultAssigneeFor]);
 
@@ -3171,9 +3377,12 @@ function App({ session }) {
         orphanIds = Object.values(orphanGroups).flat().map(t => t.id);
         const { error: mErr } = await supabase.from(MILESTONES_TABLE).update({ week_number: null }).in('id', orphanIds);
         if (mErr) {
-          // rollback weekly_plan to keep DB consistent
-          await supabase.from(TABLE).update({ weekly_plan: prevPlan }).eq('slug', slug);
-          toast('고아 티켓 주차 해제 실패: '+mErr.message+' · 계획 저장 롤백됨','error');
+          const { error: rollbackErr } = await supabase.from(TABLE).update({ weekly_plan: prevPlan }).eq('slug', slug);
+          if (rollbackErr) {
+            toast('고아 티켓 주차 해제 실패 + 롤백도 실패 — 페이지를 새로고침하고 주차 계획을 다시 확인하세요','error');
+          } else {
+            toast('고아 티켓 주차 해제 실패: '+mErr.message+' · 계획 저장 롤백됨','error');
+          }
           return;
         }
       }
@@ -3218,9 +3427,12 @@ function App({ session }) {
       if (linkedCount > 0) {
         const { error: mErr } = await supabase.from(MILESTONES_TABLE).update({ week_number: null }).eq('project_slug', slug);
         if (mErr) {
-          // rollback weekly_plan
-          await supabase.from(TABLE).update({ weekly_plan: prevPlan }).eq('slug', slug);
-          toast('티켓 주차 해제 실패: '+mErr.message+' · 삭제 롤백됨','error');
+          const { error: rollbackErr } = await supabase.from(TABLE).update({ weekly_plan: prevPlan }).eq('slug', slug);
+          if (rollbackErr) {
+            toast('티켓 주차 해제 실패 + 롤백도 실패 — 페이지를 새로고침하고 주차 계획을 다시 확인하세요','error');
+          } else {
+            toast('티켓 주차 해제 실패: '+mErr.message+' · 삭제 롤백됨','error');
+          }
           return;
         }
       }
@@ -3294,7 +3506,7 @@ function App({ session }) {
       supabase.functions.invoke('delete-portfolios', { body:{ slugs:toDelete } })
         .then(({ data:fnData, error:fnErr }) => {
           if (fnErr) toast('P2/P3 파일 삭제 실패: '+fnErr.message,'error');
-          else if (!fnData?.deleted) toast('P2/P3 파일 삭제 실패 (GitHub API 오류)','error');
+          else if (!fnData?.deleted) toast('P2/P3 파일 삭제 실패'+(fnData?.reason ? ` — ${fnData.reason}` : ' (GitHub API 오류)'),'error');
           else toast(`P2/P3 파일 삭제 완료 (${toDelete.length}건)`,'success');
         });
     }
@@ -3306,12 +3518,13 @@ function App({ session }) {
       const { error } = await supabase.from(TABLE).delete().eq('slug',project.slug);
       if (error) throw error;
       setData(prev => prev.filter(d => d.slug!==project.slug));
+      setMilestones(prev => { const next = { ...prev }; delete next[project.slug]; return next; });
       setSelectedProject(null);
       toast(`삭제 완료: ${project.slug}`,'success');
       supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug, all:true } })
         .then(({ data:fnData, error:fnErr }) => {
           if (fnErr) toast('포트폴리오 파일 삭제 실패: '+fnErr.message,'error');
-          else if (!fnData?.deleted) toast('포트폴리오 파일 삭제 실패 (GitHub API 오류)','error');
+          else if (!fnData?.deleted) toast('포트폴리오 파일 삭제 실패'+(fnData?.reason ? ` — ${fnData.reason}` : ' (GitHub API 오류)'),'error');
           else toast(`프로젝트 파일 삭제 완료 (${project.slug})`,'success');
         });
     } catch(err) { toast('삭제 실패: '+err.message,'error'); } finally { setSaving(false); }
@@ -3337,7 +3550,11 @@ function App({ session }) {
         setSelectedProject(prev => prev ? { ...prev, ...updatePayload } : prev);
         if (!milestonesSetupNeeded) {
           const existing = milestones[project.slug] || [];
-          if (existing.length === 0) handleCreateMilestonesFromTemplate(project.slug, 'web_standard');
+          if (existing.length === 0) {
+            handleCreateMilestonesFromTemplate(project.slug, 'web_standard');
+          } else {
+            toast('💡 기존 작업이 있어 템플릿 자동 생성을 건너뜁니다. 작업 탭 → 템플릿 버튼으로 직접 적용할 수 있습니다.', 'info');
+          }
         }
       } else {
         setSelectedProject(null);
@@ -3346,7 +3563,7 @@ function App({ session }) {
         supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug } })
           .then(({ data:fnData, error:fnErr }) => {
             if (fnErr) toast('P2/P3 파일 삭제 실패: '+fnErr.message,'error');
-            else if (!fnData?.deleted) toast('P2/P3 파일 삭제 실패 (GitHub API 오류)','error');
+            else if (!fnData?.deleted) toast('P2/P3 파일 삭제 실패'+(fnData?.reason ? ` — ${fnData.reason}` : ' (GitHub API 오류)'),'error');
             else toast(`P2/P3 파일 삭제 완료 (${project.slug})`,'success');
           });
       }
@@ -3427,6 +3644,7 @@ function App({ session }) {
     <div>
       <ToastContainer toasts={toasts} />
       <ConfirmModal state={confirmState} onCancel={() => setConfirmState(null)} />
+      {showShortcuts && <ShortcutHelp onClose={() => setShowShortcuts(false)} />}
       {selectedProject && (
         <StatusModal
           key={selectedProject.slug+'-'+selectedProject.current_status}
@@ -3470,9 +3688,9 @@ function App({ session }) {
       )}
 
       {/* Header */}
-      <div className="fade-in" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1rem', flexWrap:'wrap', gap:'0.5rem' }}>
-        <h1 style={{ fontSize:'1.25rem', fontWeight:700, letterSpacing:'-0.02em' }}>위시켓 현황 대시보드</h1>
-        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+      <div className="fade-in" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1.25rem', flexWrap:'wrap', gap:'0.75rem' }}>
+        <h1 style={{ fontSize:'1.3rem', fontWeight:700, letterSpacing:'-0.02em' }}>위시켓 현황 대시보드</h1>
+        <div style={{ display:'flex', gap:10, alignItems:'center' }}>
           <button onClick={() => setShowQuickAdd(true)} style={{
             padding:'0.3rem 0.7rem', borderRadius:6, border:'none',
             background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.8rem', fontWeight:600,
@@ -3480,18 +3698,26 @@ function App({ session }) {
           }}>＋ 등록</button>
           <button onClick={() => setShowTeamMgr(true)} style={{
             padding:'0.3rem 0.7rem', borderRadius:6, border:'1px solid var(--border)',
-            background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.75rem',
+            background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem',
             display:'flex', alignItems:'center', gap:5,
           }}>
             👥 팀원{activeMembers.length>0?` ${activeMembers.length}명`:''}
           </button>
-          <span style={{ fontSize:'0.75rem', color:'var(--text2)' }}>{data.length}건</span>
-          <div style={{ padding:'0.3rem 0.6rem', borderRadius:6, fontSize:'0.75rem', fontWeight:500, background:connected?'#00b89422':'#e1705522', color:connected?'#00b894':'#e17055', display:'flex', alignItems:'center', gap:5 }}>
+          <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>{data.length}건</span>
+          <div style={{ padding:'0.3rem 0.6rem', borderRadius:6, fontSize:'0.8rem', fontWeight:500, background:connected?'#00b89430':'#e1705530', color:connected?'#00b894':'#e17055', display:'flex', alignItems:'center', gap:5 }}>
             <span style={{ width:6, height:6, borderRadius:'50%', background:connected?'#00b894':'#e17055', animation:connected?'pulse 2s infinite':'none' }} />
             {connected?'Live':'Offline'}
           </div>
+          <button onClick={() => exportCSV(data)} title="CSV 내보내기"
+            style={{ padding:'0.3rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem' }}>
+            CSV
+          </button>
+          <button onClick={toggleTheme} title={theme === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}
+            style={{ padding:'0.3rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem' }}>
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
           <button onClick={() => supabase.auth.signOut()} title={session?.user?.email}
-            style={{ padding:'0.3rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.7rem' }}>
+            style={{ padding:'0.3rem 0.6rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem' }}>
             로그아웃
           </button>
         </div>
@@ -3502,21 +3728,21 @@ function App({ session }) {
 
       {/* 주간 알림 */}
       {(thisWeekMeetings.length>0||staleCount>0) && (
-        <div className="fade-in" style={{ display:'flex', gap:'0.5rem', marginBottom:'0.75rem', flexWrap:'wrap' }}>
+        <div className="fade-in" style={{ display:'flex', gap:'0.6rem', marginBottom:'1rem', flexWrap:'wrap' }}>
           {thisWeekMeetings.length>0 && (
-            <div style={{ padding:'0.5rem 0.8rem', borderRadius:8, background:'#fdcb6e12', border:'1px solid #fdcb6e33', fontSize:'0.8rem', color:'var(--yellow)', display:'flex', alignItems:'center', gap:6 }}>
+            <div style={{ padding:'0.5rem 0.8rem', borderRadius:8, background:'#fdcb6e1a', border:'1px solid #fdcb6e33', fontSize:'0.8rem', color:'var(--yellow)', display:'flex', alignItems:'center', gap:6 }}>
               📅 이번 주 미팅 {thisWeekMeetings.length}건
-              <span style={{ fontSize:'0.7rem', color:'var(--text2)' }}>{thisWeekMeetings.map(m=>(m.title||m.slug).substring(0,15)).join(', ')}</span>
+              <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>{thisWeekMeetings.map(m=>(m.title||m.slug).substring(0,15)).join(', ')}</span>
               {'Notification' in window && Notification.permission === 'default' && (
                 <button onClick={() => Notification.requestPermission()}
-                  style={{ marginLeft:4, padding:'0.15rem 0.5rem', borderRadius:4, border:'1px solid #fdcb6e55', background:'transparent', color:'var(--yellow)', cursor:'pointer', fontSize:'0.68rem', fontWeight:600 }}>
+                  style={{ marginLeft:4, padding:'0.15rem 0.5rem', borderRadius:4, border:'1px solid #fdcb6e55', background:'transparent', color:'var(--yellow)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
                   🔔 알림 허용
                 </button>
               )}
             </div>
           )}
           {staleCount>0 && (
-            <div onClick={() => setFilter('applied')} style={{ padding:'0.5rem 0.8rem', borderRadius:8, background:'#e1705510', border:'1px solid #e1705533', fontSize:'0.8rem', color:'#e17055', cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}>
+            <div onClick={() => setFilter('applied')} style={{ padding:'0.5rem 0.8rem', borderRadius:8, background:'#e1705518', border:'1px solid #e1705533', fontSize:'0.8rem', color:'#e17055', cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}>
               ⏰ 7일+ 무응답 {staleCount}건
             </div>
           )}
@@ -3524,9 +3750,9 @@ function App({ session }) {
       )}
 
       {/* 검색 + 상태 필터 */}
-      <div className="fade-in delay-1" style={{ display:'flex', gap:'0.5rem', marginBottom:'0.5rem', flexWrap:'wrap', alignItems:'center' }}>
+      <div className="fade-in delay-1" style={{ display:'flex', gap:'0.6rem', marginBottom:'0.75rem', flexWrap:'wrap', alignItems:'center' }}>
         <input ref={searchRef} type="text" placeholder="검색... ( / )" value={search} onChange={e => setSearch(e.target.value)}
-          style={{ padding:'0.4rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', width:170, outline:'none' }}
+          style={{ padding:'0.4rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', width:260, outline:'none' }}
           onFocus={e => e.target.style.borderColor='var(--accent)'}
           onBlur={e  => e.target.style.borderColor='var(--border)'} />
         <FilterTabs active={filter} onChange={setFilter} counts={counts} />
@@ -3534,7 +3760,7 @@ function App({ session }) {
           {[{key:'all',label:'전체'},{key:'7d',label:'7일'},{key:'30d',label:'30일'},{key:'90d',label:'90일'}].map(d => (
             <button key={d.key} onClick={() => setDateRange(d.key)} style={{
               padding:'0.3rem 0.55rem', borderRadius:6, border:'none', cursor:'pointer',
-              fontSize:'0.7rem', fontWeight:dateRange===d.key?600:400,
+              fontSize:'0.8rem', fontWeight:dateRange===d.key?600:400,
               background:dateRange===d.key?'var(--surface2)':'transparent',
               color:dateRange===d.key?'var(--text)':'var(--text2)',
             }}>{d.label}</button>
@@ -3544,14 +3770,14 @@ function App({ session }) {
 
       {/* 담당자 필터 (팀원이 있을 때만 표시) */}
       {activeMembers.length > 0 && (
-        <div style={{ display:'flex', gap:6, marginBottom:'0.75rem', flexWrap:'wrap', alignItems:'center' }}>
-          <span style={{ fontSize:'0.75rem', color:'var(--text2)', flexShrink:0 }}>담당:</span>
+        <div style={{ display:'flex', gap:8, marginBottom:'1rem', flexWrap:'wrap', alignItems:'center' }}>
+          <span style={{ fontSize:'0.8rem', color:'var(--text2)', flexShrink:0 }}>담당:</span>
           <button onClick={() => setMemberFilter('')} style={{
             padding:'0.25rem 0.65rem', borderRadius:20, cursor:'pointer',
             border:!memberFilter?'1px solid var(--accent)':'1px solid transparent',
-            background:!memberFilter?'var(--accent)22':'var(--surface2)',
+            background:!memberFilter?'var(--accent)30':'var(--surface2)',
             color:!memberFilter?'var(--accent)':'var(--text2)',
-            fontSize:'0.75rem', fontWeight:!memberFilter?600:400,
+            fontSize:'0.8rem', fontWeight:!memberFilter?600:400,
           }}>전체</button>
           {activeMembers.map(m => {
             const sel = memberFilter===m.id;
@@ -3560,12 +3786,12 @@ function App({ session }) {
               <button key={m.id} onClick={() => setMemberFilter(sel?'':m.id)} style={{
                 padding:'0.25rem 0.6rem 0.25rem 0.3rem', borderRadius:20, cursor:'pointer',
                 border:sel?`1px solid ${m.color}`:'1px solid transparent',
-                background:sel?m.color+'22':'var(--surface2)',
+                background:sel?m.color+'30':'var(--surface2)',
                 display:'inline-flex', alignItems:'center', gap:5,
               }}>
                 <MemberAvatar member={m} size={16} />
-                <span style={{ fontSize:'0.75rem', fontWeight:sel?600:400, color:sel?m.color:'var(--text2)' }}>{m.name}</span>
-                {cnt>0 && <span style={{ fontSize:'0.65rem', color:sel?m.color:'var(--text2)', opacity:0.8 }}>{cnt}</span>}
+                <span style={{ fontSize:'0.8rem', fontWeight:sel?600:400, color:sel?m.color:'var(--text2)' }}>{m.name}</span>
+                {cnt>0 && <span style={{ fontSize:'0.8rem', color:sel?m.color:'var(--text2)', opacity:0.8 }}>{cnt}</span>}
               </button>
             );
           })}
@@ -3573,7 +3799,7 @@ function App({ session }) {
       )}
 
       {/* 테이블 */}
-      <div className="fade-in delay-2" style={{ marginBottom:'1.5rem' }}>
+      <div className="fade-in delay-2" style={{ marginBottom:'1.75rem' }}>
         <ProjectTable
           data={data} filter={filter} search={search} dateRange={dateRange}
           onRowClick={handleRowClick} sortKey={sortKey} sortOrder={sortOrder} onSort={handleSort}
@@ -3586,14 +3812,56 @@ function App({ session }) {
         />
       </div>
 
-      {/* 통계 */}
+      {/* KPI 바 (상시 노출) */}
+      {(() => {
+        const wonBudgetTotal = data.filter(d=>d.current_status==='won').reduce((sum,d)=>sum+parseBudgetNum(d.budget),0);
+        const activeMeetings = (counts.interview||0) + (counts.meeting_done||0);
+        const inProg = POST_WON.reduce((s,k)=>s+(counts[k]||0),0);
+        const kpiStyle = { display:'flex', alignItems:'center', gap:6, padding:'0.45rem 0.85rem', borderRadius:8, background:'var(--surface)', border:'1px solid var(--border)', fontSize:'0.8rem', whiteSpace:'nowrap' };
+        const numStyle = (color) => ({ fontWeight:700, fontSize:'0.95rem', color });
+        return (
+          <div className="fade-in delay-2" style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:'1rem' }}>
+            <div style={kpiStyle}>
+              <span style={{ color:'var(--text2)' }}>수주율</span>
+              <span style={numStyle('var(--green)')}>{winRate}%</span>
+              <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>({wonCount}/{appliedOrBeyond})</span>
+            </div>
+            {wonBudgetTotal > 0 && (
+              <div style={kpiStyle}>
+                <span style={{ color:'var(--text2)' }}>수주 금액</span>
+                <span style={numStyle('var(--green)')}>{wonBudgetTotal.toLocaleString()}만원</span>
+              </div>
+            )}
+            {activeMeetings > 0 && (
+              <div style={kpiStyle}>
+                <span style={{ color:'var(--text2)' }}>활성 미팅</span>
+                <span style={numStyle('var(--yellow)')}>{activeMeetings}건</span>
+              </div>
+            )}
+            {inProg > 0 && (
+              <div style={kpiStyle}>
+                <span style={{ color:'var(--text2)' }}>진행 중</span>
+                <span style={numStyle('var(--accent2)')}>{inProg}건</span>
+              </div>
+            )}
+            {avgWonDays !== null && (
+              <div style={kpiStyle}>
+                <span style={{ color:'var(--text2)' }}>평균 수주</span>
+                <span style={numStyle('var(--blue)')}>{avgWonDays}일</span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* 통계 상세 */}
       <div style={{ marginBottom:'1.5rem' }}>
         <button onClick={() => setShowStats(prev=>!prev)} style={{
           display:'flex', alignItems:'center', gap:6, background:'none', border:'none',
           color:'var(--text2)', cursor:'pointer', fontSize:'0.85rem', fontWeight:500, padding:'0.4rem 0',
         }}>
           <span style={{ transition:'transform 0.2s', transform:showStats?'rotate(90deg)':'rotate(0)', display:'inline-block' }}>&#9654;</span>
-          통계 {showStats?'':`(수주 ${wonCount} / 미팅 ${(counts.interview||0)+(counts.meeting_done||0)} / 진행 ${(counts.applied||0)+(counts.interview||0)+(counts.meeting_done||0)})`}
+          상세 통계 {showStats?'':'(퍼널 · 월별 추이 · 예산 분석)'}
         </button>
         {showStats && (
           <div style={{ animation:'fadeIn 0.25s ease-out' }}>
@@ -3618,8 +3886,8 @@ function App({ session }) {
         )}
       </div>
 
-      <div style={{ textAlign:'center', padding:'1rem 0', color:'var(--text2)', fontSize:'0.7rem' }}>
-        Wishket Portfolio Tracker — Firstpip
+      <div style={{ textAlign:'center', padding:'1rem 0', color:'var(--text2)', fontSize:'0.8rem' }}>
+        Wishket Portfolio Tracker — Firstpip · <span style={{ cursor:'pointer' }} onClick={() => setShowShortcuts(true)} title="키보드 단축키">단축키 <kbd style={{ padding:'0.1rem 0.35rem', borderRadius:3, background:'var(--surface2)', border:'1px solid var(--border)', fontSize:'0.8rem' }}>?</kbd></span>
       </div>
     </div>
   );
@@ -3676,15 +3944,15 @@ function QuickAddModal({ onClose, onAdd, saving }) {
     onClose();
   };
 
-  const inputS = { width:'100%', padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.85rem', outline:'none', colorScheme:'dark' };
+  const inputS = { width:'100%', padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.85rem', outline:'none' };
   const canSubmit = slug.trim() && title.trim() && !saving;
 
   return (
-    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
+    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
       <div onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:440,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
-        boxShadow:'0 20px 60px rgba(0,0,0,0.5)',
+        boxShadow:'0 20px 60px var(--shadow)',
       }}>
         <div style={{ padding:'1.25rem 1.5rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <div style={{ fontWeight:700, fontSize:'1rem' }}>프로젝트 빠른 등록</div>
@@ -3698,7 +3966,7 @@ function QuickAddModal({ onClose, onAdd, saving }) {
               style={inputS}
               onFocus={e => e.target.style.borderColor='var(--accent)'}
               onBlur={e  => e.target.style.borderColor='var(--border)'} />
-            {slug && <div style={{ fontSize:'0.72rem', color:'var(--accent2)', marginTop:4 }}>슬러그 자동 생성: <code>{slug}</code></div>}
+            {slug && <div style={{ fontSize:'0.8rem', color:'var(--accent2)', marginTop:4 }}>슬러그 자동 생성: <code>{slug}</code></div>}
           </div>
           <div>
             <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>슬러그 <span style={{ color:'#e17055' }}>*</span></div>
@@ -3765,6 +4033,7 @@ function clearLockState() {
 }
 
 function LoginScreen() {
+  const { theme, toggle: toggleTheme } = useTheme();
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading]   = useState(false);
@@ -3819,18 +4088,22 @@ function LoginScreen() {
   };
 
   return (
-    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'var(--bg)' }}>
+    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'var(--bg)', position:'relative' }}>
       <div style={{ width:'100%', maxWidth:360, padding:'0 1.5rem' }}>
         <div style={{ textAlign:'center', marginBottom:'2rem' }}>
           <div style={{ fontSize:'1.5rem', fontWeight:700, letterSpacing:'-0.02em', marginBottom:6 }}>위시켓 대시보드</div>
           <div style={{ fontSize:'0.85rem', color:'var(--text2)' }}>Firstpip 내부 전용</div>
         </div>
+        <button onClick={toggleTheme} title={theme === 'dark' ? '라이트 모드' : '다크 모드'}
+          style={{ position:'absolute', top:'1.5rem', right:'1.5rem', padding:'0.4rem 0.6rem', borderRadius:8, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.85rem' }}>
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
         <form onSubmit={handleLogin} style={{ display:'flex', flexDirection:'column', gap:12 }}>
           <div>
             <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>이메일</div>
             <input type="email" value={email} onChange={e => setEmail(e.target.value)} required autoFocus
               placeholder="name@firstpip.com"
-              style={{ width:'100%', padding:'0.65rem 0.85rem', borderRadius:10, border:'1px solid var(--border)', background:'var(--surface)', color:'var(--text)', fontSize:'0.9rem', outline:'none', colorScheme:'dark' }}
+              style={{ width:'100%', padding:'0.65rem 0.85rem', borderRadius:10, border:'1px solid var(--border)', background:'var(--surface)', color:'var(--text)', fontSize:'0.9rem', outline:'none' }}
               onFocus={e => e.target.style.borderColor='var(--accent)'}
               onBlur={e  => e.target.style.borderColor='var(--border)'} />
           </div>
@@ -3838,7 +4111,7 @@ function LoginScreen() {
             <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>비밀번호</div>
             <input type="password" value={password} onChange={e => setPassword(e.target.value)} required
               placeholder="••••••••"
-              style={{ width:'100%', padding:'0.65rem 0.85rem', borderRadius:10, border:'1px solid var(--border)', background:'var(--surface)', color:'var(--text)', fontSize:'0.9rem', outline:'none', colorScheme:'dark' }}
+              style={{ width:'100%', padding:'0.65rem 0.85rem', borderRadius:10, border:'1px solid var(--border)', background:'var(--surface)', color:'var(--text)', fontSize:'0.9rem', outline:'none' }}
               onFocus={e => e.target.style.borderColor='var(--accent)'}
               onBlur={e  => e.target.style.borderColor='var(--border)'} />
           </div>
