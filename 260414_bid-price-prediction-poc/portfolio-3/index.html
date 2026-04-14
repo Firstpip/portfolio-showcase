@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>멀티 업종 입찰 전략 플랫폼 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" />
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; background: #FFFBEB; color: #1C1917; }
+#root { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+button { font-family: inherit; cursor: pointer; border: none; outline: none; }
+input, select { font-family: inherit; outline: none; }
+::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: #FCD34D; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const C = {
+  primary: '#D97706', secondary: '#F59E0B', accent: '#FCD34D',
+  bg: '#FFFBEB', surface: '#FFFFFF', border: '#FEF3C7',
+  text1: '#1C1917', text2: '#78716C', text3: '#A8A29E',
+  sidebar: '#1C1917', sidebarText: '#E7E5E4',
+  success: '#22C55E', danger: '#EF4444', info: '#3B82F6',
+};
+
+const { useState, useMemo } = React;
+const { ComposedChart, Bar, Line, BarChart, PieChart, Pie, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } = Recharts;
+
+const KANBAN_DATA = {
+  준비중: [
+    { id: 1, title: '서울시 공원 조성공사 (토목)', amount: '8억', deadline: 'D-12', owner: '김태형', type: 'urgent' },
+    { id: 2, title: '경기도 하수처리장 전기설비', amount: '15억', deadline: 'D-8', owner: '이수민', type: 'urgent' },
+  ],
+  진행중: [
+    { id: 3, title: 'IT 시스템 통합 구축 용역', amount: '32억', deadline: 'D-3', owner: '박지연', type: 'critical' },
+    { id: 4, title: '강원도 도로 포장공사', amount: '6억', deadline: 'D-5', owner: '최현우', type: 'normal' },
+  ],
+  검토완료: [
+    { id: 5, title: '부산시 스마트시티 플랫폼 구축', amount: '85억', deadline: 'D+2', owner: '정미나', type: 'normal' },
+  ],
+  결재요청: [
+    { id: 6, title: '국방부 통신장비 유지보수', amount: '22억', deadline: 'D+5', owner: '윤성준', type: 'normal' },
+  ],
+};
+
+const KPI = [
+  { label: '이번 달 투찰', value: 12, unit: '건', color: C.primary },
+  { label: '낙찰 건수', value: 4, unit: '건', color: '#22C55E' },
+  { label: '낙찰률', value: '33.3', unit: '%', color: '#3B82F6' },
+  { label: '누적 수주', value: '142', unit: '억', color: C.secondary },
+];
+
+const MONTHLY_DATA = [
+  { m: '11월', 투찰: 8, 낙찰: 2, rate: 25 }, { m: '12월', 투찰: 10, 낙찰: 3, rate: 30 },
+  { m: '1월', 투찰: 9, 낙찰: 2, rate: 22 }, { m: '2월', 투찰: 11, 낙찰: 4, rate: 36 },
+  { m: '3월', 투찰: 14, 낙찰: 5, rate: 36 }, { m: '4월', 투찰: 12, 낙찰: 4, rate: 33 },
+];
+
+const MEMBER_DATA = [
+  { name: '김태형', value: 28, color: C.primary }, { name: '이수민', value: 22, color: '#40916C' },
+  { name: '박지연', value: 31, color: '#3B82F6' }, { name: '최현우', value: 19, color: C.secondary },
+];
+
+const RADAR_DATA = [
+  { subject: '납기 준수', self: 85, comp: 70 }, { subject: '가격 경쟁력', self: 78, comp: 88 },
+  { subject: '기술 역량', self: 92, comp: 75 }, { subject: '실적', self: 88, comp: 82 },
+  { subject: '지역 우대', self: 65, comp: 72 }, { subject: '사후 지원', self: 90, comp: 68 },
+];
+
+const APPROVAL_STEPS = [
+  { label: '투찰가 작성', status: 'done', user: '박지연', time: '04/14 09:30', note: 'AI 예측 기반 89.2% 투찰가 입력' },
+  { label: '팀장 1차 검토', status: 'done', user: '이수민 팀장', time: '04/14 11:15', note: '투찰 전략 검토 완료, 안정형으로 결정' },
+  { label: '본부장 최종 승인', status: 'current', user: '김태형 본부장', time: '대기 중', note: '' },
+  { label: '입찰 시스템 제출', status: 'pending', user: '—', time: '—', note: '' },
+];
+
+function Sidebar({ active, setActive }) {
+  const menus = [
+    { id: 'main', icon: '⊞', label: '입찰 현황' },
+    { id: 'competitor', icon: '◎', label: '경쟁사 분석' },
+    { id: 'approval', icon: '✓', label: '결재 워크플로우' },
+    { id: 'analytics', icon: '↗', label: '분석 리포트' },
+  ];
+  return (
+    <div style={{ width: 200, background: C.sidebar, display: 'flex', flexDirection: 'column', flexShrink: 0, height: '100%' }}>
+      <div style={{ padding: '20px 16px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 28, height: 28, background: C.primary, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ color: '#fff', fontSize: 14, fontWeight: 700 }}>B</span>
+          </div>
+          <div>
+            <div style={{ color: '#fff', fontSize: 13, fontWeight: 700 }}>BidTeam</div>
+            <div style={{ color: C.secondary, fontSize: 11 }}>입찰 관리 플랫폼</div>
+          </div>
+        </div>
+      </div>
+      <nav style={{ padding: '12px 8px', flex: 1 }}>
+        {menus.map(m => (
+          <button key={m.id} onClick={() => setActive(m.id)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 8, background: active === m.id ? C.primary : 'transparent', color: active === m.id ? '#fff' : C.sidebarText, fontWeight: active === m.id ? 600 : 400, fontSize: 13, marginBottom: 2, textAlign: 'left', transition: 'all .15s', opacity: active === m.id ? 1 : 0.7 }}>
+            <span style={{ fontSize: 15, width: 20, textAlign: 'center' }}>{m.icon}</span>
+            {m.label}
+          </button>
+        ))}
+      </nav>
+      <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+        <div style={{ display: 'flex', align: 'center', gap: 8 }}>
+          <div style={{ width: 30, height: 30, background: C.primary, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 12, fontWeight: 700 }}>박</div>
+          <div>
+            <div style={{ color: '#fff', fontSize: 12, fontWeight: 600 }}>박지연</div>
+            <div style={{ color: C.text3, fontSize: 11 }}>입찰 담당자</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MainView() {
+  const typeColor = { critical: '#EF4444', urgent: '#F59E0B', normal: '#22C55E' };
+  return (
+    <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>팀 입찰 현황 워크스페이스</h2>
+      <p style={{ fontSize: 13, color: C.text2, marginBottom: 20 }}>2026년 4월 · 현재 진행 중인 입찰 공고를 단계별로 관리합니다</p>
+      {/* KPI */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+        {KPI.map(k => (
+          <div key={k.label} style={{ background: C.surface, borderRadius: 10, padding: '14px 16px', borderLeft: `4px solid ${k.color}`, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+            <p style={{ fontSize: 12, color: C.text2, marginBottom: 6 }}>{k.label}</p>
+            <p style={{ fontSize: 24, fontWeight: 800, color: k.color }}>{k.value}<span style={{ fontSize: 13, fontWeight: 400 }}>{k.unit}</span></p>
+          </div>
+        ))}
+      </div>
+      {/* Kanban */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        {Object.entries(KANBAN_DATA).map(([col, cards]) => (
+          <div key={col}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: C.text1 }}>{col}</span>
+              <span style={{ background: C.border, color: C.primary, fontSize: 11, fontWeight: 700, borderRadius: 10, padding: '1px 7px' }}>{cards.length}</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {cards.map(card => (
+                <div key={card.id} style={{ background: C.surface, borderRadius: 10, padding: '12px', borderLeft: `3px solid ${typeColor[card.type]}`, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', cursor: 'grab' }}>
+                  <p style={{ fontSize: 13, fontWeight: 600, color: C.text1, marginBottom: 6, lineHeight: 1.4 }}>{card.title}</p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: C.primary }}>{card.amount}</span>
+                    <span style={{ fontSize: 11, background: card.deadline.startsWith('D-') ? (parseInt(card.deadline.slice(2)) <= 5 ? '#FEF2F2' : '#FEF3C7') : '#F0FDF4', color: card.deadline.startsWith('D-') ? (parseInt(card.deadline.slice(2)) <= 5 ? '#EF4444' : C.primary) : '#22C55E', borderRadius: 4, padding: '2px 6px', fontWeight: 600 }}>{card.deadline}</span>
+                  </div>
+                  <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <div style={{ width: 18, height: 18, background: C.border, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: C.primary }}>{card.owner[0]}</div>
+                    <span style={{ fontSize: 11, color: C.text2 }}>{card.owner}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CompetitorView() {
+  return (
+    <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>AI 경쟁사 분석</h2>
+      <p style={{ fontSize: 13, color: C.text2, marginBottom: 20 }}>공고 조건 기반 경쟁사 유형 분석 및 차별화 전략 제안</p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 20, marginBottom: 20 }}>
+        {/* Radar */}
+        <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+          <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>자사 vs 주요 경쟁사 유형 강점 비교</p>
+          <p style={{ fontSize: 12, color: C.text2, marginBottom: 12 }}>IT 시스템 통합 구축 용역 기준</p>
+          <ResponsiveContainer width="100%" height={240}>
+            <RadarChart data={RADAR_DATA}>
+              <PolarGrid stroke="#FEF3C7" />
+              <PolarAngleAxis dataKey="subject" tick={{ fontSize: 11, fill: C.text2 }} />
+              <PolarRadiusAxis tick={false} domain={[0, 100]} />
+              <Radar name="자사" dataKey="self" stroke={C.primary} fill={C.primary} fillOpacity={0.25} strokeWidth={2} />
+              <Radar name="경쟁사" dataKey="comp" stroke="#3B82F6" fill="#3B82F6" fillOpacity={0.15} strokeWidth={2} />
+              <Legend iconType="circle" iconSize={8} />
+            </RadarChart>
+          </ResponsiveContainer>
+        </div>
+        {/* Strategies */}
+        <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+          <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>AI 분석 결과</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {[
+              { label: '예상 경쟁사 유형', value: '대기업 SI 계열 1개, 중견 IT 2개', icon: '🏢' },
+              { label: '예상 투찰가 범위', value: '87.5% ~ 91.2%', icon: '📊' },
+              { label: '자사 차별점', value: '기술 역량 + 사후지원 우위', icon: '⚡' },
+              { label: '권장 전략', value: '가격 90.1% / 기술점수 강화', icon: '✓' },
+            ].map(item => (
+              <div key={item.label} style={{ background: '#FFFBEB', borderRadius: 8, padding: '10px 12px', border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <span style={{ fontSize: 16 }}>{item.icon}</span>
+                  <div>
+                    <p style={{ fontSize: 11, color: C.text2, marginBottom: 3 }}>{item.label}</p>
+                    <p style={{ fontSize: 14, fontWeight: 700, color: C.text1 }}>{item.value}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {/* Competitor Details */}
+      <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+        <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>경쟁사 유형별 상세 분석</p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+          {[
+            { type: '대기업 SI 계열', prob: '투찰 확률 높음', price: '87~88%', strength: '브랜드·인력', strategy: '기술제안서 품질로 차별화 필요' },
+            { type: '중견 IT 전문사', prob: '투찰 확률 중간', price: '89~91%', strength: '납기·전문성', strategy: '가격 경쟁력과 사후지원 강조' },
+            { type: '지역 IT업체', prob: '투찰 확률 낮음', price: '91~94%', strength: '지역 우대', strategy: '가격 역차별 전략 불필요' },
+          ].map(c => (
+            <div key={c.type} style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: '14px' }}>
+              <p style={{ fontWeight: 700, fontSize: 13, color: C.text1, marginBottom: 8 }}>{c.type}</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {[['투찰 확률',c.prob],['예상 가격대',c.price],['주요 강점',c.strength],['대응 전략',c.strategy]].map(([k,v]) => (
+                  <div key={k}>
+                    <span style={{ fontSize: 11, color: C.text3 }}>{k} </span>
+                    <span style={{ fontSize: 12, color: C.text2 }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ApprovalView() {
+  const statusStyle = { done: { bg: '#F0FDF4', color: '#22C55E', label: '완료' }, current: { bg: '#FFFBEB', color: C.primary, label: '진행 중' }, pending: { bg: '#F9FAFB', color: C.text3, label: '대기' } };
+  return (
+    <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>투찰가 결재 워크플로우</h2>
+      <p style={{ fontSize: 13, color: C.text2, marginBottom: 20 }}>AI 예측 낙찰가 기반 최종 투찰가 결재 요청·승인 프로세스</p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 20 }}>
+        {/* Timeline */}
+        <div style={{ background: C.surface, borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div>
+              <p style={{ fontWeight: 700, fontSize: 15, color: C.text1 }}>IT 시스템 통합 구축 용역</p>
+              <p style={{ fontSize: 12, color: C.text2, marginTop: 2 }}>마감: 2026-04-17 · 예정가격: 32억</p>
+            </div>
+            <span style={{ background: '#FEF3C7', color: C.primary, fontSize: 12, fontWeight: 700, borderRadius: 6, padding: '4px 10px' }}>결재 진행 중</span>
+          </div>
+          {/* Steps */}
+          <div style={{ position: 'relative' }}>
+            {APPROVAL_STEPS.map((step, i) => {
+              const s = statusStyle[step.status];
+              return (
+                <div key={i} style={{ display: 'flex', gap: 14, marginBottom: i < APPROVAL_STEPS.length - 1 ? 0 : 0 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: s.bg, border: `2px solid ${s.color}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, color: s.color, fontWeight: 700, flexShrink: 0 }}>
+                      {step.status === 'done' ? '✓' : step.status === 'current' ? '●' : '○'}
+                    </div>
+                    {i < APPROVAL_STEPS.length - 1 && <div style={{ width: 2, height: 48, background: step.status === 'done' ? '#22C55E' : C.border, margin: '4px 0' }} />}
+                  </div>
+                  <div style={{ flex: 1, paddingBottom: i < APPROVAL_STEPS.length - 1 ? 24 : 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <p style={{ fontWeight: 700, fontSize: 14, color: C.text1 }}>{step.label}</p>
+                      <span style={{ fontSize: 11, background: s.bg, color: s.color, borderRadius: 4, padding: '2px 8px', fontWeight: 600 }}>{s.label}</span>
+                    </div>
+                    <p style={{ fontSize: 12, color: C.text2 }}>{step.user} · {step.time}</p>
+                    {step.note && <p style={{ fontSize: 12, color: C.text2, background: '#FFFBEB', borderRadius: 6, padding: '6px 10px', marginTop: 6 }}>{step.note}</p>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {/* Approval Form */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+            <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>투찰가 정보</p>
+            {[
+              ['AI 예측 낙찰가율', '89.8% (안정형 권장)'],
+              ['제출 투찰가', '28억 7,360만원'],
+              ['투찰가율', '89.8%'],
+              ['예정 마감일', '2026-04-17 14:00'],
+            ].map(([k,v]) => (
+              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ fontSize: 13, color: C.text2 }}>{k}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: C.text1 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+            <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>결재 액션</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button style={{ padding: '11px', background: C.primary, color: '#fff', borderRadius: 8, fontWeight: 700, fontSize: 14 }}>승인</button>
+              <button style={{ padding: '11px', background: C.surface, color: C.danger, border: `1px solid ${C.danger}`, borderRadius: 8, fontWeight: 700, fontSize: 14 }}>반려</button>
+            </div>
+            <textarea placeholder="코멘트를 입력하세요..." style={{ width: '100%', marginTop: 10, padding: '10px 12px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, resize: 'vertical', minHeight: 72, color: C.text1, background: '#FFFBEB' }} />
+          </div>
+          <div style={{ background: '#FEF3C7', borderRadius: 10, padding: '12px 14px', display: 'flex', gap: 10 }}>
+            <span style={{ fontSize: 16 }}>⏰</span>
+            <div>
+              <p style={{ fontSize: 12, fontWeight: 700, color: C.primary }}>마감 알림 설정됨</p>
+              <p style={{ fontSize: 11, color: C.text2, marginTop: 2 }}>D-3일 전 Webhook으로 자동 알림 전송</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsView() {
+  const [period, setPeriod] = useState(6);
+  const sliced = MONTHLY_DATA.slice(MONTHLY_DATA.length - period);
+  return (
+    <div style={{ flex: 1, overflow: 'auto', padding: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div>
+          <h2 style={{ fontSize: 20, fontWeight: 700 }}>입찰 이력 분석 리포트</h2>
+          <p style={{ fontSize: 13, color: C.text2, marginTop: 4 }}>팀 단위 누적 입찰 성과 분석</p>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {[3,6,12].map(p => (
+            <button key={p} onClick={() => setPeriod(p)} style={{ padding: '5px 14px', borderRadius: 6, background: period === p ? C.primary : C.surface, color: period === p ? '#fff' : C.text2, border: `1px solid ${period === p ? C.primary : C.border}`, fontSize: 13, fontWeight: period === p ? 600 : 400 }}>
+              {p}개월
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 20, marginBottom: 20 }}>
+        {/* ComposedChart */}
+        <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+          <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>월별 투찰·낙찰 현황</p>
+          <ResponsiveContainer width="100%" height={220}>
+            <ComposedChart data={sliced} margin={{ top: 5, right: 10, bottom: 5, left: -10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#FEF3C7" />
+              <XAxis dataKey="m" tick={{ fontSize: 11 }} />
+              <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
+              <YAxis yAxisId="right" orientation="right" tickFormatter={v => `${v}%`} tick={{ fontSize: 11 }} />
+              <Tooltip />
+              <Legend iconType="circle" iconSize={8} />
+              <Bar yAxisId="left" dataKey="투찰" fill="#FEF3C7" stroke={C.secondary} strokeWidth={1} radius={[4,4,0,0]} />
+              <Bar yAxisId="left" dataKey="낙찰" fill={C.primary} radius={[4,4,0,0]} />
+              <Line yAxisId="right" type="monotone" dataKey="rate" stroke="#3B82F6" strokeWidth={2.5} dot={{ r: 4 }} name="낙찰률(%)" />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        {/* Pie */}
+        <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+          <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>팀원별 기여도</p>
+          <ResponsiveContainer width="100%" height={160}>
+            <PieChart>
+              <Pie data={MEMBER_DATA} cx="50%" cy="50%" innerRadius={45} outerRadius={70} dataKey="value" paddingAngle={3}>
+                {MEMBER_DATA.map((m, i) => <Cell key={i} fill={m.color} />)}
+              </Pie>
+              <Tooltip formatter={(v, n) => [`${v}건`, n]} />
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center', marginTop: 8 }}>
+            {MEMBER_DATA.map(m => (
+              <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: m.color }} />
+                <span style={{ fontSize: 11, color: C.text2 }}>{m.name} {m.value}건</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {/* Summary Table */}
+      <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+        <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 16 }}>업종별 성과 요약</p>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: '#FFFBEB' }}>
+              {['업종','투찰','낙찰','낙찰률','평균 낙찰가율','상태'].map(h => (
+                <th key={h} style={{ padding: '9px 14px', fontSize: 12, fontWeight: 600, color: C.text2, textAlign: 'left', borderBottom: `1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {[
+              { type: 'IT·정보화', bids: 24, wins: 9, rate: '37.5%', avgRate: '89.4%', status: '우수' },
+              { type: '건설·토목', bids: 18, wins: 5, rate: '27.8%', avgRate: '87.2%', status: '양호' },
+              { type: '용역·서비스', bids: 15, wins: 4, rate: '26.7%', avgRate: '90.1%', status: '양호' },
+              { type: '물품·조달', bids: 7, wins: 1, rate: '14.3%', avgRate: '88.6%', status: '개선 필요' },
+            ].map((r, i) => (
+              <tr key={i}>
+                <td style={{ padding: '11px 14px', fontSize: 14, fontWeight: 600 }}>{r.type}</td>
+                <td style={{ padding: '11px 14px', fontSize: 13, color: C.text2 }}>{r.bids}건</td>
+                <td style={{ padding: '11px 14px', fontSize: 13, fontWeight: 700, color: C.primary }}>{r.wins}건</td>
+                <td style={{ padding: '11px 14px', fontSize: 13, fontWeight: 700 }}>{r.rate}</td>
+                <td style={{ padding: '11px 14px', fontSize: 13, color: C.text2 }}>{r.avgRate}</td>
+                <td style={{ padding: '11px 14px' }}>
+                  <span style={{ fontSize: 11, borderRadius: 4, padding: '3px 8px', fontWeight: 600, background: r.status === '우수' ? '#F0FDF4' : r.status === '양호' ? '#FFFBEB' : '#FEF2F2', color: r.status === '우수' ? '#22C55E' : r.status === '양호' ? C.primary : '#EF4444' }}>{r.status}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [view, setView] = useState('main');
+  return (
+    <div style={{ display: 'flex', height: '100vh', background: C.bg }}>
+      <Sidebar active={view} setActive={setView} />
+      {view === 'main' && <MainView />}
+      {view === 'competitor' && <CompetitorView />}
+      {view === 'approval' && <ApprovalView />}
+      {view === 'analytics' && <AnalyticsView />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

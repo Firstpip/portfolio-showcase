@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>조달청 나라장터 낙찰가 AI 예측 PoC — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" />
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; background: #F1F3F9; }
+#root { display: flex; width: 100%; height: 100vh; overflow: hidden; }
+button { font-family: inherit; cursor: pointer; border: none; outline: none; }
+input, select, textarea { font-family: inherit; outline: none; }
+::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const C = {
+  sidebar: '#0F172A',
+  sidebarHover: '#1E2D45',
+  sidebarActive: '#1D3461',
+  primary: '#3B5BDB',
+  secondary: '#4C6EF5',
+  accent: '#74C0FC',
+  bg: '#F1F3F9',
+  surface: '#FFFFFF',
+  border: '#E2E8F0',
+  text1: '#1A1F36',
+  text2: '#5A6282',
+  text3: '#94A3B8',
+  success: '#22C55E',
+  warning: '#F59E0B',
+  error: '#EF4444',
+};
+
+const { useState, useCallback } = React;
+const { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, RadialBarChart, RadialBar, PolarAngleAxis } = Recharts;
+
+// Dummy data
+const MONTHLY_DATA = [
+  { month: '11월', 낙찰가율: 87.2, 예측가율: 88.1 },
+  { month: '12월', 낙찰가율: 85.4, 예측가율: 86.0 },
+  { month: '1월', 낙찰가율: 88.9, 예측가율: 89.3 },
+  { month: '2월', 낙찰가율: 86.1, 예측가율: 85.8 },
+  { month: '3월', 낙찰가율: 90.2, 예측가율: 91.0 },
+  { month: '4월', 낙찰가율: 87.8, 예측가율: 87.5 },
+];
+
+const REGION_DATA = [
+  { region: '서울', 건수: 142 }, { region: '경기', 건수: 198 },
+  { region: '인천', 건수: 67 }, { region: '부산', 건수: 89 },
+  { region: '대전', 건수: 54 }, { region: '광주', 건수: 48 },
+  { region: '대구', 건수: 73 }, { region: '울산', 건수: 39 },
+];
+
+const ACCURACY_DATA = [
+  { date: '3/15', 오차율: 8.2 }, { date: '3/20', 오차율: 6.7 },
+  { date: '3/25', 오차율: 9.1 }, { date: '3/30', 오차율: 5.4 },
+  { date: '4/5', 오차율: 7.3 }, { date: '4/10', 오차율: 4.8 },
+  { date: '4/14', 오차율: 6.1 },
+];
+
+const PIPELINE_STEPS = [
+  { id: 1, step: 'API 공고 수집', status: 'success', count: '1,248건', time: '04:12:30', duration: '2m 18s' },
+  { id: 2, step: '데이터 전처리', status: 'success', count: '1,201건', time: '04:14:52', duration: '1m 44s' },
+  { id: 3, step: '피처 추출', status: 'warning', count: '1,196건', time: '04:16:41', duration: '3m 02s' },
+  { id: 4, step: 'AI 예측 처리', status: 'success', count: '1,180건', time: '04:19:45', duration: '4m 30s' },
+  { id: 5, step: '결과 저장', status: 'success', count: '1,180건', time: '04:24:17', duration: '0m 52s' },
+];
+
+const VALIDATION_LOGS = [
+  { id: 1, title: '도로유지보수공사', predicted: 182000000, actual: 195000000, error: 6.7, date: '04/12' },
+  { id: 2, title: '공공청사 냉난방 설비', predicted: 84500000, actual: 81200000, error: 4.1, date: '04/11' },
+  { id: 3, title: '가로등 LED 교체사업', predicted: 56800000, actual: 61400000, error: 7.5, date: '04/10' },
+  { id: 4, title: '학교시설 방수공사', predicted: 147300000, actual: 142600000, error: 3.3, date: '04/09' },
+  { id: 5, title: '공원조성 토목공사', predicted: 320000000, actual: 298000000, error: 7.4, date: '04/08' },
+];
+
+const NAV_ITEMS = [
+  { id: 'main', label: '낙찰가 AI 예측', icon: '🎯' },
+  { id: 'dashboard', label: '데이터 분석', icon: '📊' },
+  { id: 'pipeline', label: '파이프라인', icon: '⚙️' },
+  { id: 'validation', label: '정확도 검증', icon: '✅' },
+];
+
+function Badge({ status }) {
+  const cfg = {
+    success: { bg: '#D1FAE5', color: '#065F46', label: '정상' },
+    warning: { bg: '#FEF3C7', color: '#92400E', label: '주의' },
+    error: { bg: '#FEE2E2', color: '#991B1B', label: '오류' },
+  }[status] || { bg: '#F3F4F6', color: '#374151', label: status };
+  return <span style={{ padding: '2px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, background: cfg.bg, color: cfg.color }}>{cfg.label}</span>;
+}
+
+function KpiCard({ label, value, sub, color }) {
+  return (
+    <div style={{ background: C.surface, borderRadius: 12, padding: '20px 24px', border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,.04)', flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 13, color: C.text2, marginBottom: 8 }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 700, color: color || C.text1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 12, color: C.text3, marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Modal({ open, onClose, title, children }) {
+  if (!open) return null;
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={onClose}>
+      <div style={{ background: C.surface, borderRadius: 16, width: 540, maxWidth: '95vw', maxHeight: '85vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,.2)' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px', borderBottom: `1px solid ${C.border}` }}>
+          <span style={{ fontWeight: 700, fontSize: 16, color: C.text1 }}>{title}</span>
+          <button onClick={onClose} style={{ background: 'none', fontSize: 20, color: C.text3, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ padding: 24 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ──────── Pages ────────
+function PageMain() {
+  const [form, setForm] = useState({ type: '토목공사', region: '서울특별시', budget: '', issuer: '지방자치단체', period: '60일' });
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const predict = () => {
+    if (!form.budget) return;
+    setLoading(true);
+    setTimeout(() => {
+      const b = parseInt(form.budget.replace(/,/g, '')) || 100000000;
+      const rate = 0.872 + (Math.random() - 0.5) * 0.04;
+      setResult({
+        low: Math.round(b * (rate - 0.03)),
+        mid: Math.round(b * rate),
+        high: Math.round(b * (rate + 0.02)),
+        confidence: Math.round(78 + Math.random() * 14),
+        basis: ['유사 사업 낙찰가율 평균 87.2% 적용', form.region + ' 지역 최근 1년 낙찰 트렌드 반영', form.issuer + ' 발주 특성 가중치 반영'],
+      });
+      setLoading(false);
+    }, 1200);
+  };
+
+  const fmt = n => n ? n.toLocaleString() + '원' : '-';
+  const confData = result ? [{ value: result.confidence, fill: C.primary }] : [];
+
+  return (
+    <div style={{ display: 'flex', gap: 24 }}>
+      {/* 입력 폼 */}
+      <div style={{ flex: '0 0 380px', background: C.surface, borderRadius: 12, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,.04)' }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: C.text1, marginBottom: 20 }}>입찰 공고 조건 입력</div>
+        {[
+          { label: '사업 유형', key: 'type', opts: ['토목공사', '건축공사', '전기공사', '설비공사', '용역', '물품'] },
+          { label: '지역', key: 'region', opts: ['서울특별시', '경기도', '인천광역시', '부산광역시', '대구광역시', '광주광역시', '대전광역시', '울산광역시'] },
+          { label: '발주처 유형', key: 'issuer', opts: ['중앙정부기관', '지방자치단체', '공기업', '준정부기관'] },
+          { label: '계약 기간', key: 'period', opts: ['30일', '60일', '90일', '120일', '180일', '365일'] },
+        ].map(({ label, key, opts }) => (
+          <div key={key} style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 13, color: C.text2, display: 'block', marginBottom: 6 }}>{label}</label>
+            <select value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 14, background: C.bg, color: C.text1 }}>
+              {opts.map(o => <option key={o}>{o}</option>)}
+            </select>
+          </div>
+        ))}
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ fontSize: 13, color: C.text2, display: 'block', marginBottom: 6 }}>예정가격 (원)</label>
+          <input type="text" placeholder="예: 150,000,000" value={form.budget}
+            onChange={e => setForm(f => ({ ...f, budget: e.target.value }))}
+            style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 14, background: C.bg, color: C.text1 }} />
+        </div>
+        <button onClick={predict} disabled={loading || !form.budget}
+          style={{ width: '100%', padding: '12px', borderRadius: 10, background: loading ? C.text3 : C.primary, color: '#fff', fontWeight: 700, fontSize: 15, transition: '.2s' }}>
+          {loading ? '분석 중…' : 'AI 낙찰가 예측 실행'}
+        </button>
+        <div style={{ marginTop: 12, fontSize: 12, color: C.text3, textAlign: 'center' }}>OpenAI API + 나라장터 공공데이터 기반 분석</div>
+      </div>
+
+      {/* 결과 패널 */}
+      <div style={{ flex: 1 }}>
+        {!result ? (
+          <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, height: 320, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: C.text3, boxShadow: '0 1px 4px rgba(0,0,0,.04)' }}>
+            <div style={{ fontSize: 48, marginBottom: 12 }}>🎯</div>
+            <div style={{ fontSize: 15 }}>공고 조건 입력 후 예측을 실행하세요</div>
+          </div>
+        ) : (
+          <>
+            {/* 예측 결과 카드들 */}
+            <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
+              {[
+                { label: '예측 낙찰가 (하한)', value: fmt(result.low), color: '#0EA5E9' },
+                { label: '예측 낙찰가 (중간)', value: fmt(result.mid), color: C.primary },
+                { label: '예측 낙찰가 (상한)', value: fmt(result.high), color: '#6366F1' },
+              ].map(k => <KpiCard key={k.label} label={k.label} value={k.value} color={k.color} />)}
+            </div>
+
+            {/* 신뢰도 + 근거 */}
+            <div style={{ display: 'flex', gap: 16 }}>
+              <div style={{ background: C.surface, borderRadius: 12, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,.04)', width: 200, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                <div style={{ fontSize: 13, color: C.text2, marginBottom: 8 }}>예측 신뢰도</div>
+                <ResponsiveContainer width="100%" height={140}>
+                  <RadialBarChart cx="50%" cy="50%" innerRadius="60%" outerRadius="100%" startAngle={90} endAngle={-270} data={confData}>
+                    <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
+                    <RadialBar dataKey="value" cornerRadius={8} />
+                  </RadialBarChart>
+                </ResponsiveContainer>
+                <div style={{ fontSize: 28, fontWeight: 800, color: C.primary, marginTop: -8 }}>{result.confidence}%</div>
+              </div>
+              <div style={{ flex: 1, background: C.surface, borderRadius: 12, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,.04)' }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text1, marginBottom: 12 }}>AI 분석 근거</div>
+                {result.basis.map((b, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10 }}>
+                    <span style={{ width: 22, height: 22, borderRadius: '50%', background: C.primary, color: '#fff', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>{i + 1}</span>
+                    <span style={{ fontSize: 13, color: C.text2, lineHeight: 1.5 }}>{b}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* 최근 예측 이력 */}
+        <div style={{ marginTop: 20, background: C.surface, borderRadius: 12, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,.04)' }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: C.text1, marginBottom: 14 }}>최근 예측 이력</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                {['공고명', '사업유형', '예정가격', '예측 낙찰가', '일자'].map(h => (
+                  <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 12, color: C.text2, fontWeight: 600 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { title: '시청 외벽 도색 공사', type: '건축공사', budget: '45,000,000', pred: '39,240,000', date: '04/14' },
+                { title: '하수관로 정비사업', type: '토목공사', budget: '280,000,000', pred: '244,160,000', date: '04/13' },
+                { title: '보안장비 일괄 구매', type: '물품', budget: '120,000,000', pred: '103,680,000', date: '04/13' },
+                { title: '공원 편의시설 설치', type: '조경공사', budget: '67,000,000', pred: '58,290,000', date: '04/12' },
+              ].map((r, i) => (
+                <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }} onMouseEnter={e => e.currentTarget.style.background = '#F8FAFF'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  <td style={{ padding: '10px 12px', fontSize: 13, color: C.text1, fontWeight: 500 }}>{r.title}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 12, color: C.text2 }}>{r.type}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 13, color: C.text1 }}>{r.budget}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 13, color: C.primary, fontWeight: 600 }}>{r.pred}</td>
+                  <td style={{ padding: '10px 12px', fontSize: 12, color: C.text3 }}>{r.date}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PageDashboard() {
+  const [typeFilter, setTypeFilter] = useState('전체');
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
+        <KpiCard label="총 낙찰 건수" value="2,847건" sub="최근 12개월" />
+        <KpiCard label="평균 낙찰가율" value="87.6%" sub="나라장터 기준" color={C.primary} />
+        <KpiCard label="분석 대상 공고" value="4,312건" sub="수집 완료" />
+        <KpiCard label="예측 정확도" value="92.3%" sub="오차율 10% 이내" color={C.success} />
+      </div>
+
+      {/* 필터 */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {['전체', '토목공사', '건축공사', '전기공사', '용역', '물품'].map(t => (
+          <button key={t} onClick={() => setTypeFilter(t)}
+            style={{ padding: '6px 14px', borderRadius: 20, fontSize: 13, fontWeight: 600, background: typeFilter === t ? C.primary : C.surface, color: typeFilter === t ? '#fff' : C.text2, border: `1px solid ${typeFilter === t ? C.primary : C.border}`, transition: '.15s' }}>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+        {/* 월별 낙찰가율 추이 */}
+        <div style={{ background: C.surface, borderRadius: 12, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,.04)' }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: C.text1, marginBottom: 16 }}>월별 낙찰가율 추이 (%)</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <ComposedChart data={MONTHLY_DATA}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F5" />
+              <XAxis dataKey="month" tick={{ fontSize: 12, fill: C.text3 }} />
+              <YAxis domain={[80, 95]} tick={{ fontSize: 12, fill: C.text3 }} />
+              <Tooltip />
+              <Line type="monotone" dataKey="낙찰가율" stroke={C.primary} strokeWidth={2} dot={{ r: 4 }} />
+              <Line type="monotone" dataKey="예측가율" stroke={C.accent} strokeWidth={2} strokeDasharray="4 2" dot={{ r: 3 }} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* 지역별 낙찰 건수 */}
+        <div style={{ background: C.surface, borderRadius: 12, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,.04)' }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: C.text1, marginBottom: 16 }}>지역별 낙찰 건수</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={REGION_DATA}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F5" />
+              <XAxis dataKey="region" tick={{ fontSize: 11, fill: C.text3 }} />
+              <YAxis tick={{ fontSize: 12, fill: C.text3 }} />
+              <Tooltip />
+              <Bar dataKey="건수" fill={C.secondary} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* 낙찰가율 분포 */}
+        <div style={{ background: C.surface, borderRadius: 12, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,.04)', gridColumn: '1/-1' }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: C.text1, marginBottom: 16 }}>낙찰가율 구간 분포 (사업유형별)</div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[
+              { label: '80% 미만', pct: 5.2, color: '#F87171' },
+              { label: '80~85%', pct: 12.4, color: '#FB923C' },
+              { label: '85~90%', pct: 38.7, color: C.primary },
+              { label: '90~95%', pct: 31.2, color: C.secondary },
+              { label: '95% 이상', pct: 12.5, color: C.accent },
+            ].map(b => (
+              <div key={b.label} style={{ flex: b.pct, minWidth: 0, cursor: 'pointer' }} onClick={() => {}}>
+                <div style={{ height: 40, background: b.color, borderRadius: 4, opacity: 0.85 }} />
+                <div style={{ fontSize: 11, color: C.text2, marginTop: 4, textAlign: 'center' }}>{b.label}</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: b.color, textAlign: 'center' }}>{b.pct}%</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PagePipeline() {
+  const [selected, setSelected] = useState(null);
+  return (
+    <div>
+      {/* 상태 요약 카드 */}
+      <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
+        <KpiCard label="마지막 수집" value="04:24:17" sub="오늘 새벽 자동 실행" />
+        <KpiCard label="수집 성공" value="1,180건" sub="오류 68건 제외" color={C.success} />
+        <KpiCard label="API 응답률" value="98.2%" sub="나라장터 Open API" color={C.primary} />
+        <KpiCard label="파이프라인 상태" value="정상" sub="다음 실행: 내일 04:00" color={C.success} />
+      </div>
+
+      {/* 파이프라인 단계 */}
+      <div style={{ background: C.surface, borderRadius: 12, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,.04)', marginBottom: 20 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: C.text1, marginBottom: 16 }}>파이프라인 실행 단계</div>
+        {PIPELINE_STEPS.map((s, i) => (
+          <div key={s.id} onClick={() => setSelected(selected === s.id ? null : s.id)}
+            style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 16px', borderRadius: 10, marginBottom: 8, background: selected === s.id ? '#EEF2FF' : '#F8FAFC', cursor: 'pointer', border: `1px solid ${selected === s.id ? C.secondary : C.border}`, transition: '.15s' }}>
+            <div style={{ width: 32, height: 32, borderRadius: '50%', background: s.status === 'success' ? C.success : s.status === 'warning' ? C.warning : C.error, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, flexShrink: 0 }}>{i + 1}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 14, color: C.text1 }}>{s.step}</div>
+              <div style={{ fontSize: 12, color: C.text2 }}>처리 건수: {s.count} · 소요 시간: {s.duration}</div>
+            </div>
+            <div style={{ fontSize: 12, color: C.text3 }}>{s.time}</div>
+            <Badge status={s.status} />
+          </div>
+        ))}
+      </div>
+
+      {/* 오류 로그 */}
+      <div style={{ background: C.surface, borderRadius: 12, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,.04)' }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: C.text1, marginBottom: 14 }}>오류 로그 (최근 5건)</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+              {['시각', '단계', '오류 내용', '상태'].map(h => (
+                <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 12, color: C.text2, fontWeight: 600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {[
+              { time: '04:16:52', step: '피처 추출', msg: '입찰참가자격 필드 누락 (52건)', status: 'warning' },
+              { time: '04:17:01', step: '피처 추출', msg: '예정가격 형식 오류 — 정규식 파싱 실패 (16건)', status: 'warning' },
+              { time: '04:19:12', step: 'API 재시도', msg: '나라장터 응답 지연 > 3초 타임아웃', status: 'error' },
+            ].map((r, i) => (
+              <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }} onMouseEnter={e => e.currentTarget.style.background = '#F8FAFF'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <td style={{ padding: '10px 12px', fontSize: 12, color: C.text3, fontFamily: 'monospace' }}>{r.time}</td>
+                <td style={{ padding: '10px 12px', fontSize: 12, color: C.text2 }}>{r.step}</td>
+                <td style={{ padding: '10px 12px', fontSize: 13, color: C.text1 }}>{r.msg}</td>
+                <td style={{ padding: '10px 12px' }}><Badge status={r.status} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function PageValidation() {
+  const [showModal, setShowModal] = useState(false);
+  const [modalData, setModalData] = useState({ title: '', predicted: '', actual: '' });
+  const [logs, setLogs] = useState(VALIDATION_LOGS);
+
+  const submit = () => {
+    if (!modalData.actual) return;
+    const pred = parseInt(String(modalData.predicted).replace(/,/g, '')) || 0;
+    const act = parseInt(String(modalData.actual).replace(/,/g, '')) || 0;
+    const err = act ? Math.abs(((pred - act) / act) * 100).toFixed(1) : 0;
+    setLogs(l => [{ id: l.length + 1, title: modalData.title || '신규 공고', predicted: pred, actual: act, error: parseFloat(err), date: '04/14' }, ...l]);
+    setShowModal(false);
+    setModalData({ title: '', predicted: '', actual: '' });
+  };
+
+  const avgError = (logs.reduce((s, l) => s + l.error, 0) / logs.length).toFixed(1);
+  const within10 = Math.round((logs.filter(l => l.error < 10).length / logs.length) * 100);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
+        <KpiCard label="검증 건수" value={logs.length + '건'} sub="누적 기록" />
+        <KpiCard label="평균 오차율" value={avgError + '%'} sub="MAE 기준" color={parseFloat(avgError) < 8 ? C.success : C.warning} />
+        <KpiCard label="오차 10% 이내 달성" value={within10 + '%'} sub="PoC 목표 기준" color={within10 >= 80 ? C.success : C.primary} />
+        <KpiCard label="PoC 판정" value={within10 >= 80 ? '✅ 유효' : '⏳ 검증 중'} sub="목표: 80% 이상" color={within10 >= 80 ? C.success : C.warning} />
+      </div>
+
+      {/* 정확도 추이 차트 */}
+      <div style={{ background: C.surface, borderRadius: 12, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,.04)', marginBottom: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: C.text1 }}>예측 오차율 추이 (%)</div>
+          <button onClick={() => setShowModal(true)}
+            style={{ padding: '8px 18px', borderRadius: 8, background: C.primary, color: '#fff', fontWeight: 600, fontSize: 13 }}>+ 검증 결과 입력</button>
+        </div>
+        <ResponsiveContainer width="100%" height={200}>
+          <AreaChart data={ACCURACY_DATA}>
+            <defs>
+              <linearGradient id="errGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor={C.primary} stopOpacity={0.3} />
+                <stop offset="95%" stopColor={C.primary} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F5" />
+            <XAxis dataKey="date" tick={{ fontSize: 12, fill: C.text3 }} />
+            <YAxis domain={[0, 15]} tick={{ fontSize: 12, fill: C.text3 }} />
+            <Tooltip />
+            <Area type="monotone" dataKey="오차율" stroke={C.primary} fill="url(#errGrad)" strokeWidth={2} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* 검증 로그 테이블 */}
+      <div style={{ background: C.surface, borderRadius: 12, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,.04)' }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: C.text1, marginBottom: 14 }}>검증 이력</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+              {['공고명', '예측 낙찰가', '실제 낙찰가', '오차율', '일자'].map(h => (
+                <th key={h} style={{ textAlign: 'left', padding: '8px 12px', fontSize: 12, color: C.text2, fontWeight: 600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {logs.map(r => (
+              <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}` }} onMouseEnter={e => e.currentTarget.style.background = '#F8FAFF'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <td style={{ padding: '10px 12px', fontSize: 13, color: C.text1, fontWeight: 500 }}>{r.title}</td>
+                <td style={{ padding: '10px 12px', fontSize: 13, color: C.text1 }}>{r.predicted.toLocaleString()}원</td>
+                <td style={{ padding: '10px 12px', fontSize: 13, color: C.text1 }}>{r.actual.toLocaleString()}원</td>
+                <td style={{ padding: '10px 12px' }}>
+                  <span style={{ fontWeight: 700, color: r.error < 10 ? C.success : r.error < 15 ? C.warning : C.error }}>{r.error}%</span>
+                </td>
+                <td style={{ padding: '10px 12px', fontSize: 12, color: C.text3 }}>{r.date}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <Modal open={showModal} onClose={() => setShowModal(false)} title="검증 결과 입력">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {[
+            { label: '공고명', key: 'title', ph: '예: 도로 보수 공사' },
+            { label: '예측 낙찰가 (원)', key: 'predicted', ph: '예: 142600000' },
+            { label: '실제 낙찰가 (원)', key: 'actual', ph: '실제 공고에서 확인한 낙찰가' },
+          ].map(f => (
+            <div key={f.key}>
+              <label style={{ fontSize: 13, color: C.text2, display: 'block', marginBottom: 6 }}>{f.label}</label>
+              <input type="text" placeholder={f.ph} value={modalData[f.key]}
+                onChange={e => setModalData(d => ({ ...d, [f.key]: e.target.value }))}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 14 }} />
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
+            <button onClick={() => setShowModal(false)} style={{ padding: '10px 20px', borderRadius: 8, background: '#F3F4F6', color: C.text1, fontWeight: 600, fontSize: 14 }}>취소</button>
+            <button onClick={submit} style={{ padding: '10px 20px', borderRadius: 8, background: C.primary, color: '#fff', fontWeight: 600, fontSize: 14 }}>등록</button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+function App() {
+  const [page, setPage] = useState('main');
+  const pages = { main: PageMain, dashboard: PageDashboard, pipeline: PagePipeline, validation: PageValidation };
+  const pageTitles = { main: '낙찰가 AI 예측', dashboard: '데이터 분석', pipeline: '파이프라인', validation: '정확도 검증' };
+  const PageComp = pages[page] || PageMain;
+
+  return (
+    <div style={{ display: 'flex', width: '100%', height: '100vh', overflow: 'hidden' }}>
+      {/* Sidebar */}
+      <aside style={{ width: 240, background: C.sidebar, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+        <div style={{ padding: '24px 20px 16px' }}>
+          <div style={{ fontWeight: 800, fontSize: 15, color: '#fff', letterSpacing: '-0.3px' }}>나라장터 AI</div>
+          <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>낙찰가 예측 PoC</div>
+        </div>
+        <nav style={{ flex: 1, padding: '8px 12px' }}>
+          {NAV_ITEMS.map(item => (
+            <button key={item.id} onClick={() => setPage(item.id)}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 12px', borderRadius: 8, marginBottom: 4, background: page === item.id ? C.sidebarActive : 'transparent', color: page === item.id ? '#fff' : '#94A3B8', fontWeight: page === item.id ? 700 : 400, fontSize: 14, textAlign: 'left', transition: '.15s', cursor: 'pointer' }}
+              onMouseEnter={e => { if (page !== item.id) e.currentTarget.style.background = C.sidebarHover; }}
+              onMouseLeave={e => { if (page !== item.id) e.currentTarget.style.background = 'transparent'; }}>
+              <span>{item.icon}</span>
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+        <div style={{ padding: '16px 20px', borderTop: '1px solid #1E293B' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: '50%', background: C.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: '#fff' }}>김</div>
+            <div>
+              <div style={{ fontSize: 13, color: '#E2E8F0', fontWeight: 600 }}>김입찰</div>
+              <div style={{ fontSize: 11, color: '#64748B' }}>입찰 담당자</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main area */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Topbar */}
+        <header style={{ height: 56, background: C.surface, borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', padding: '0 24px', gap: 12, flexShrink: 0 }}>
+          <div style={{ flex: 1, fontWeight: 700, fontSize: 15, color: C.text1 }}>{pageTitles[page]}</div>
+          <div style={{ background: C.bg, borderRadius: 8, padding: '7px 14px', fontSize: 13, color: C.text2, border: `1px solid ${C.border}` }}>🔍 검색</div>
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: C.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${C.border}`, cursor: 'pointer' }}>🔔</div>
+        </header>
+
+        {/* Content */}
+        <main style={{ flex: 1, overflow: 'auto', padding: 24, background: C.bg }}>
+          <PageComp />
+        </main>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

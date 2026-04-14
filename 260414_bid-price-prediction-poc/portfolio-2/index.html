@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>부동산 공사비 낙찰가 예측 시스템 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" />
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; background: #F4FAF6; color: #1B3A2D; }
+#root { display: flex; flex-direction: column; min-height: 100vh; }
+button { font-family: inherit; cursor: pointer; border: none; outline: none; }
+input, select { font-family: inherit; outline: none; }
+::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: #b7e4c7; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const C = {
+  primary: '#2D6A4F', secondary: '#40916C', accent: '#74C69D',
+  bg: '#F4FAF6', surface: '#FFFFFF', border: '#D8F3DC',
+  text1: '#1B3A2D', text2: '#4A7C5E', text3: '#95B4A0',
+  heroGrad: 'linear-gradient(135deg, #1B4332 0%, #2D6A4F 50%, #40916C 100%)',
+  warn: '#F59E0B', error: '#EF4444', info: '#3B82F6',
+};
+
+const { useState, useMemo } = React;
+const { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, RadialBarChart, RadialBar, PolarAngleAxis } = Recharts;
+
+const REGIONS = ['서울','경기','인천','부산','대구','대전','광주','울산','세종','강원','충북','충남','전북','전남','경북','경남','제주'];
+const TYPES = ['토목','건축','전기','설비','조경','통신'];
+
+const REGION_DATA = REGIONS.map((r, i) => ({ region: r, rate: 86 + ((i * 7 + 3) % 10) * 0.5 }));
+
+const HISTORY_DATA = [
+  { id: 1, name: '강남구 복합문화센터 신축공사', type: '건축', amount: '48억', region: '서울', rate: 91.2, score: 96 },
+  { id: 2, name: '수원시 하수관로 정비공사', type: '토목', amount: '12억', region: '경기', rate: 88.4, score: 92 },
+  { id: 3, name: '인천항 전기설비 교체공사', type: '전기', amount: '7억', region: '인천', rate: 89.1, score: 88 },
+  { id: 4, name: '대구 도시철도 부대시설 공사', type: '토목', amount: '31억', region: '대구', rate: 86.7, score: 85 },
+  { id: 5, name: '부산 신항 조경 및 환경시설', type: '조경', amount: '5억', region: '부산', rate: 90.3, score: 81 },
+  { id: 6, name: '세종청사 설비 유지보수공사', type: '설비', amount: '9억', region: '세종', rate: 87.8, score: 78 },
+  { id: 7, name: '광주 AI 클러스터 인프라 공사', type: '전기', amount: '22억', region: '광주', rate: 88.9, score: 74 },
+  { id: 8, name: '울산 산업단지 도로포장공사', type: '토목', amount: '18억', region: '울산', rate: 85.2, score: 71 },
+];
+
+const QUARTERLY = [
+  { q: '2024 Q1', rate: 87.4 }, { q: 'Q2', rate: 89.1 }, { q: 'Q3', rate: 88.7 }, { q: 'Q4', rate: 90.2 },
+  { q: '2025 Q1', rate: 88.9 }, { q: 'Q2', rate: 87.6 }, { q: 'Q3', rate: 91.0 }, { q: 'Q4', rate: 89.5 },
+];
+
+const STRATEGIES = [
+  { label: '공격형', color: '#EF4444', rate: 88.4, note: '낙찰 확률 높음, 마진 낮음', icon: '⚡' },
+  { label: '안정형', color: '#40916C', rate: 89.8, note: '균형 잡힌 전략 (권장)', icon: '✓' },
+  { label: '보수형', color: '#3B82F6', rate: 91.2, note: '마진 높음, 경쟁 불리', icon: '🛡' },
+];
+
+function Topnav({ active, setActive }) {
+  const navs = [
+    { id: 'main', label: '시뮬레이터' },
+    { id: 'heatmap', label: '지역 분석' },
+    { id: 'history', label: '이력 검색' },
+    { id: 'report', label: '리포트' },
+  ];
+  return (
+    <nav style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: '0 32px', display: 'flex', alignItems: 'center', height: 60, position: 'sticky', top: 0, zIndex: 100, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 40 }}>
+        <div style={{ width: 28, height: 28, background: C.primary, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <span style={{ color: '#fff', fontSize: 14, fontWeight: 700 }}>B</span>
+        </div>
+        <span style={{ fontWeight: 700, fontSize: 16, color: C.primary }}>BidPredict AI</span>
+      </div>
+      <div style={{ display: 'flex', gap: 4, flex: 1 }}>
+        {navs.map(n => (
+          <button key={n.id} onClick={() => setActive(n.id)} style={{ padding: '6px 16px', borderRadius: 6, background: active === n.id ? C.primary : 'transparent', color: active === n.id ? '#fff' : C.text2, fontWeight: active === n.id ? 600 : 400, fontSize: 14, transition: 'all .15s' }}>
+            {n.label}
+          </button>
+        ))}
+      </div>
+      <button style={{ padding: '7px 18px', background: C.primary, color: '#fff', borderRadius: 8, fontWeight: 600, fontSize: 13 }}>낙찰 전략 시작</button>
+    </nav>
+  );
+}
+
+function MainView() {
+  const [form, setForm] = useState({ type: '건축', size: '10', region: '서울', owner: '공공' });
+  const [predicted, setPredicted] = useState(null);
+  const predict = () => {
+    const base = { 건축: 89.8, 토목: 87.4, 전기: 88.2, 설비: 88.9, 조경: 90.1, 통신: 87.6 };
+    const b = base[form.type] ?? 88.5;
+    setPredicted({ strategies: STRATEGIES.map(s => ({ ...s, predicted: Math.round(Number(form.size) * 100000000 * (s.rate / 100 + (b - 89) / 100) / 10000) * 10000 })), base: b });
+  };
+  const fmt = n => `${(n / 100000000).toFixed(1)}억`;
+  return (
+    <div style={{ flex: 1 }}>
+      {/* Hero */}
+      <div style={{ background: C.heroGrad, padding: '48px 32px', color: '#fff' }}>
+        <div style={{ maxWidth: 900, margin: '0 auto' }}>
+          <div style={{ display: 'inline-block', background: 'rgba(255,255,255,0.15)', borderRadius: 20, padding: '4px 14px', fontSize: 12, fontWeight: 600, marginBottom: 16 }}>AI 낙찰가 예측 플랫폼</div>
+          <h1 style={{ fontSize: 32, fontWeight: 800, lineHeight: 1.3, marginBottom: 12 }}>공사 조건 기반<br />낙찰가 AI 시뮬레이터</h1>
+          <p style={{ fontSize: 15, opacity: 0.85, lineHeight: 1.6, maxWidth: 520, marginBottom: 32 }}>
+            공종·규모·지역·발주처 조건을 입력하면 AI가 과거 낙찰 이력을 분석하여<br />공격형·안정형·보수형 3가지 투찰 전략을 제안합니다.
+          </p>
+          {/* Input Form in Hero */}
+          <div style={{ background: 'rgba(255,255,255,0.12)', borderRadius: 12, padding: '20px 24px', display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end', maxWidth: 720, backdropFilter: 'blur(8px)' }}>
+            {[
+              { label: '공종', key: 'type', options: TYPES },
+              { label: '공사 규모 (억원)', key: 'size', options: ['3','5','10','20','50','100'] },
+              { label: '시공 지역', key: 'region', options: REGIONS.slice(0,8) },
+              { label: '발주처 유형', key: 'owner', options: ['공공','민간'] },
+            ].map(f => (
+              <div key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label style={{ fontSize: 12, opacity: 0.8, fontWeight: 500 }}>{f.label}</label>
+                <select value={form[f.key]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))}
+                  style={{ background: 'rgba(255,255,255,0.9)', border: 'none', borderRadius: 6, padding: '8px 12px', fontSize: 14, color: C.text1, fontWeight: 600, cursor: 'pointer' }}>
+                  {f.options.map(o => <option key={o}>{o}</option>)}
+                </select>
+              </div>
+            ))}
+            <button onClick={predict} style={{ padding: '10px 28px', background: C.accent, color: C.text1, borderRadius: 8, fontWeight: 700, fontSize: 14, height: 38 }}>
+              예측 시작
+            </button>
+          </div>
+        </div>
+      </div>
+      {/* Results */}
+      <div style={{ maxWidth: 900, margin: '32px auto', padding: '0 32px' }}>
+        {predicted ? (
+          <>
+            <p style={{ fontSize: 13, color: C.text2, marginBottom: 16 }}>
+              📊 <b>{form.type}</b> · {form.size}억 규모 · {form.region} · {form.owner} 발주처 — 예상 낙찰가율 기준 <b>{predicted.base.toFixed(1)}%</b>
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+              {predicted.strategies.map(s => (
+                <div key={s.label} style={{ background: C.surface, borderRadius: 12, padding: '20px', borderTop: `4px solid ${s.color}`, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                    <span style={{ fontSize: 20 }}>{s.icon}</span>
+                    <span style={{ fontWeight: 700, fontSize: 16, color: s.color }}>{s.label}</span>
+                  </div>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: C.text1, marginBottom: 4 }}>{fmt(s.predicted)}</div>
+                  <div style={{ fontSize: 13, color: C.text2, marginBottom: 8 }}>낙찰가율 {s.rate}%</div>
+                  <div style={{ fontSize: 12, color: C.text3, background: '#f0faf4', borderRadius: 6, padding: '6px 10px' }}>{s.note}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 24, background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+              <p style={{ fontWeight: 600, fontSize: 14, marginBottom: 12, color: C.text1 }}>전략별 예측 낙찰가 비교</p>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={predicted.strategies} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e8f5ec" />
+                  <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                  <YAxis tickFormatter={v => `${(v/100000000).toFixed(0)}억`} tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={v => fmt(v)} />
+                  <Bar dataKey="predicted" radius={[4,4,0,0]} fill={C.secondary} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '60px 0', color: C.text3 }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>🏗</div>
+            <p style={{ fontSize: 16, fontWeight: 600 }}>위 조건을 입력하고 예측을 시작하세요</p>
+            <p style={{ fontSize: 13, marginTop: 8 }}>공종·규모·지역·발주처를 선택 후 예측 시작 버튼을 누르면 3가지 투찰 전략이 제안됩니다</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HeatmapView() {
+  const [selectedType, setSelectedType] = useState('건축');
+  const [selected, setSelected] = useState(null);
+  const typeOffset = { 건축: 0, 토목: -1.2, 전기: 0.8, 설비: 0.4, 조경: 1.1, 통신: -0.5 };
+  const rateData = useMemo(() => REGION_DATA.map(r => ({ ...r, rate: +(r.rate + (typeOffset[selectedType] ?? 0)).toFixed(1) })), [selectedType]);
+  const minRate = Math.min(...rateData.map(r => r.rate));
+  const maxRate = Math.max(...rateData.map(r => r.rate));
+  const getColor = rate => {
+    const t = (rate - minRate) / (maxRate - minRate);
+    const r = Math.round(45 + t * 0); const g = Math.round(113 + t * 32); const b = Math.round(72 + t * 29);
+    return `rgba(${r},${g},${b},${0.3 + t * 0.7})`;
+  };
+  const selectedData = selected ? QUARTERLY.map((q, i) => ({ ...q, rate: +(q.rate + ((rateData.find(r => r.region === selected)?.rate ?? 89) - 89) * 0.3).toFixed(1) })) : QUARTERLY;
+  return (
+    <div style={{ maxWidth: 1000, margin: '32px auto', padding: '0 32px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text1 }}>지역별 낙찰가율 분석</h2>
+          <p style={{ fontSize: 13, color: C.text2, marginTop: 4 }}>시도별 공사 낙찰가율 분포와 분기별 추이를 확인합니다</p>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {TYPES.map(t => (
+            <button key={t} onClick={() => setSelectedType(t)} style={{ padding: '5px 12px', borderRadius: 6, background: selectedType === t ? C.primary : C.surface, color: selectedType === t ? '#fff' : C.text2, border: `1px solid ${selectedType === t ? C.primary : C.border}`, fontSize: 13, fontWeight: selectedType === t ? 600 : 400 }}>
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 20 }}>
+        {/* Grid Heatmap */}
+        <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+          <p style={{ fontWeight: 600, fontSize: 14, marginBottom: 16, color: C.text1 }}>지역별 낙찰가율 (클릭하여 추이 확인)</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+            {rateData.map(r => (
+              <div key={r.region} onClick={() => setSelected(r.region === selected ? null : r.region)}
+                style={{ background: getColor(r.rate), borderRadius: 8, padding: '10px 8px', textAlign: 'center', cursor: 'pointer', border: selected === r.region ? `2px solid ${C.primary}` : '2px solid transparent', transition: 'all .15s' }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.text1 }}>{r.region}</div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: C.primary, marginTop: 2 }}>{r.rate}%</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 12, justifyContent: 'flex-end' }}>
+            <span style={{ fontSize: 11, color: C.text3 }}>낮음</span>
+            {[0,.25,.5,.75,1].map(t => (
+              <div key={t} style={{ width: 20, height: 10, borderRadius: 2, background: getColor(minRate + t * (maxRate - minRate)) }} />
+            ))}
+            <span style={{ fontSize: 11, color: C.text3 }}>높음</span>
+          </div>
+        </div>
+        {/* Trend Chart */}
+        <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+          <p style={{ fontWeight: 600, fontSize: 14, marginBottom: 4, color: C.text1 }}>
+            {selected ? `${selected} — 분기별 낙찰가율 추이` : '전국 평균 분기별 추이'}
+          </p>
+          <p style={{ fontSize: 12, color: C.text2, marginBottom: 12 }}>{selectedType} 공종 기준</p>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={selectedData} margin={{ top: 5, right: 10, bottom: 5, left: -10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e8f5ec" />
+              <XAxis dataKey="q" tick={{ fontSize: 11 }} />
+              <YAxis domain={[84, 94]} tickFormatter={v => `${v}%`} tick={{ fontSize: 11 }} />
+              <Tooltip formatter={v => `${v}%`} />
+              <Line type="monotone" dataKey="rate" stroke={C.primary} strokeWidth={2.5} dot={{ r: 4, fill: C.primary }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HistoryView() {
+  const [selected, setSelected] = useState(null);
+  const [query, setQuery] = useState('');
+  const filtered = HISTORY_DATA.filter(h => !query || h.name.includes(query) || h.type.includes(query) || h.region.includes(query));
+  return (
+    <div style={{ maxWidth: 1000, margin: '32px auto', padding: '0 32px' }}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text1, marginBottom: 6 }}>유사 낙찰 이력 검색</h2>
+      <p style={{ fontSize: 13, color: C.text2, marginBottom: 20 }}>조건 유사도 점수 순으로 정렬된 과거 낙찰 이력을 참조합니다</p>
+      <div style={{ display: 'grid', gridTemplateColumns: selected ? '1fr 320px' : '1fr', gap: 20 }}>
+        <div style={{ background: C.surface, borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+          <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.border}` }}>
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="공사명, 공종, 지역 검색..." style={{ width: '100%', padding: '8px 12px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, color: C.text1 }} />
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: '#f0faf4' }}>
+                {['공사명','공종','규모','지역','낙찰가율','유사도'].map(h => (
+                  <th key={h} style={{ padding: '10px 16px', fontSize: 12, fontWeight: 600, color: C.text2, textAlign: 'left', borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(r => (
+                <tr key={r.id} onClick={() => setSelected(selected?.id === r.id ? null : r)} style={{ cursor: 'pointer', background: selected?.id === r.id ? '#f0faf4' : 'transparent', transition: 'background .1s' }}>
+                  <td style={{ padding: '12px 16px', fontSize: 13, color: C.text1, fontWeight: 500 }}>{r.name}</td>
+                  <td style={{ padding: '12px 16px', fontSize: 13 }}>
+                    <span style={{ background: '#d8f3dc', color: C.primary, borderRadius: 4, padding: '2px 8px', fontSize: 12, fontWeight: 600 }}>{r.type}</span>
+                  </td>
+                  <td style={{ padding: '12px 16px', fontSize: 13, color: C.text2 }}>{r.amount}</td>
+                  <td style={{ padding: '12px 16px', fontSize: 13, color: C.text2 }}>{r.region}</td>
+                  <td style={{ padding: '12px 16px', fontSize: 13, fontWeight: 700, color: C.primary }}>{r.rate}%</td>
+                  <td style={{ padding: '12px 16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <div style={{ flex: 1, height: 6, background: C.border, borderRadius: 3 }}>
+                        <div style={{ width: `${r.score}%`, height: '100%', background: r.score >= 90 ? C.primary : r.score >= 80 ? C.accent : C.text3, borderRadius: 3 }} />
+                      </div>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: C.primary, minWidth: 28 }}>{r.score}</span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {selected && (
+          <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 2px 12px rgba(0,0,0,0.08)', alignSelf: 'start' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+              <p style={{ fontWeight: 700, fontSize: 15, color: C.text1 }}>상세 정보</p>
+              <button onClick={() => setSelected(null)} style={{ color: C.text3, background: 'transparent', fontSize: 16 }}>✕</button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ background: '#f0faf4', borderRadius: 8, padding: '12px 14px' }}>
+                <p style={{ fontSize: 11, color: C.text2, marginBottom: 4 }}>공사명</p>
+                <p style={{ fontSize: 14, fontWeight: 700, color: C.text1 }}>{selected.name}</p>
+              </div>
+              {[['공종', selected.type],['공사 규모', selected.amount],['지공 지역', selected.region],['낙찰가율', `${selected.rate}%`],['유사도 점수', `${selected.score}점`]].map(([k,v]) => (
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${C.border}` }}>
+                  <span style={{ fontSize: 13, color: C.text2 }}>{k}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: C.text1 }}>{v}</span>
+                </div>
+              ))}
+              <button style={{ width: '100%', padding: '10px', background: C.primary, color: '#fff', borderRadius: 8, fontWeight: 600, fontSize: 14, marginTop: 8 }}>
+                이 이력 기반으로 예측
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ReportView() {
+  const today = '2025년 4월 14일';
+  return (
+    <div style={{ maxWidth: 860, margin: '32px auto', padding: '0 32px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text1 }}>수주 가능성 리포트</h2>
+          <p style={{ fontSize: 13, color: C.text2, marginTop: 4 }}>예측 결과 기반 투찰 전략 요약</p>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button style={{ padding: '8px 16px', background: C.surface, color: C.primary, border: `1px solid ${C.primary}`, borderRadius: 8, fontWeight: 600, fontSize: 13 }}>PDF 저장</button>
+          <button style={{ padding: '8px 16px', background: C.primary, color: '#fff', borderRadius: 8, fontWeight: 600, fontSize: 13 }}>인쇄</button>
+        </div>
+      </div>
+      {/* Report Card */}
+      <div style={{ background: C.surface, borderRadius: 12, overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
+        {/* Header */}
+        <div style={{ background: C.heroGrad, padding: '24px 32px', color: '#fff' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 6 }}>수주 전략 리포트</div>
+              <h3 style={{ fontSize: 22, fontWeight: 800 }}>강남구 복합문화센터 신축공사</h3>
+              <p style={{ fontSize: 13, opacity: 0.8, marginTop: 6 }}>공종: 건축 · 규모: 48억 · 지역: 서울 · 발주처: 공공</p>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 11, opacity: 0.7 }}>작성일</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>{today}</div>
+            </div>
+          </div>
+        </div>
+        {/* Body */}
+        <div style={{ padding: '24px 32px' }}>
+          {/* Strategy Cards */}
+          <h4 style={{ fontSize: 14, fontWeight: 700, color: C.text1, marginBottom: 12 }}>◼ 투찰 전략 비교</h4>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
+            {STRATEGIES.map((s, i) => (
+              <div key={s.label} style={{ border: `2px solid ${i === 1 ? C.primary : C.border}`, borderRadius: 10, padding: '14px', position: 'relative' }}>
+                {i === 1 && <div style={{ position: 'absolute', top: -10, left: '50%', transform: 'translateX(-50%)', background: C.primary, color: '#fff', fontSize: 11, fontWeight: 700, borderRadius: 10, padding: '2px 10px' }}>권장</div>}
+                <div style={{ fontWeight: 700, fontSize: 14, color: s.color, marginBottom: 6 }}>{s.label} 전략</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: C.text1, marginBottom: 2 }}>43.1억</div>
+                <div style={{ fontSize: 12, color: C.text2 }}>낙찰가율 {s.rate}%</div>
+              </div>
+            ))}
+          </div>
+          {/* Basis */}
+          <h4 style={{ fontSize: 14, fontWeight: 700, color: C.text1, marginBottom: 12 }}>◼ 예측 근거</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24 }}>
+            {['최근 1년 서울 건축 공사 낙찰가율 평균 89.7% (표준편차 1.8%)', '공공 발주처 건축 공사 낙찰가율은 민간 대비 평균 1.2%p 낮은 경향', '50억 미만 중형 공사의 경쟁 참여사 수는 평균 8.3개사로 경쟁 강도 중간'].map((b, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, background: '#f0faf4', borderRadius: 8, padding: '10px 14px' }}>
+                <span style={{ color: C.primary, fontWeight: 700, fontSize: 13, marginTop: 1 }}>✓</span>
+                <span style={{ fontSize: 13, color: C.text2, lineHeight: 1.5 }}>{b}</span>
+              </div>
+            ))}
+          </div>
+          {/* Risk */}
+          <h4 style={{ fontSize: 14, fontWeight: 700, color: C.text1, marginBottom: 12 }}>◼ 리스크 요인</h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {['서울 강남구는 대형 건설사 참여 비율이 높아 낙찰 경쟁 심화 가능성', '공사 착공 시기(봄철)로 인한 자재·노무비 상승으로 수익성 하락 리스크'].map((r, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, background: '#fff8f0', borderRadius: 8, padding: '10px 14px' }}>
+                <span style={{ color: C.warn, fontWeight: 700, fontSize: 13, marginTop: 1 }}>⚠</span>
+                <span style={{ fontSize: 13, color: C.text2, lineHeight: 1.5 }}>{r}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [view, setView] = useState('main');
+  return (
+    <div style={{ minHeight: '100vh', background: C.bg }}>
+      <Topnav active={view} setActive={setView} />
+      {view === 'main' && <MainView />}
+      {view === 'heatmap' && <HeatmapView />}
+      {view === 'history' && <HistoryView />}
+      {view === 'report' && <ReportView />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
