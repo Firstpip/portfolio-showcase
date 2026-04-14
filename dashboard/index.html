@@ -2184,13 +2184,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
   const [urlChanged, setUrlChanged] = useState(false);
   const [editLinks, setEditLinks] = useState(() => {
     const saved = project?.portfolio_links || [];
-    if (saved.length > 0) return saved.map(l => ({...l}));
-    const count = project?.portfolio_count || 0;
-    if (count > 0) return Array.from({ length: count }, (_, i) => ({
-      label: `P${i+1}`,
-      url: `https://Firstpip.github.io/portfolio-showcase/${project?.slug}/portfolio-${i+1}/`
-    }));
-    return [];
+    return saved.map(l => ({...l}));
   });
   const [linksChanged, setLinksChanged] = useState(false);
   const [newLinkLabel, setNewLinkLabel] = useState('');
@@ -2275,23 +2269,16 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
             >📋 위시켓 공고 보기 <span style={{ fontSize:'0.8rem', color:'var(--text2)', marginLeft:'auto' }}>{project.wishket_url.split('/project/')[1]?.replace('/','')}</span></a>
           )}
 
-          {(() => {
-            const links = (project.portfolio_links||[]).length > 0
-              ? project.portfolio_links
-              : (project.portfolio_count||0) > 0
-                ? Array.from({ length: project.portfolio_count }, (_, i) => ({ label:`P${i+1}`, url:`https://Firstpip.github.io/portfolio-showcase/${project.slug}/portfolio-${i+1}/` }))
-                : [];
-            return links.length > 0 && (
+          {((project.portfolio_links||[]).length > 0) && (
             <div style={{ display:'flex', gap:4, marginBottom:'0.75rem', flexWrap:'wrap' }}>
-              {links.map((link, i) => (
+              {(project.portfolio_links||[]).map((link, i) => (
                 <a key={`cl-${i}`} href={link.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
                   title={link.url}
                   style={{ flex:1, padding:'0.3rem', borderRadius:6, fontSize:'0.8rem', fontWeight:500, background:'var(--surface2)', color:'var(--accent2)', textDecoration:'none', textAlign:'center', border:'1px solid var(--border)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
                 >{link.label}</a>
               ))}
             </div>
-            );
-          })()}
+          )}
 
           <div style={{ display:'flex', borderBottom:'1px solid var(--border)' }}>
             {tabs.map(t => (
@@ -3131,6 +3118,15 @@ function App({ session }) {
   const loadData = useCallback(async () => {
     const { data:rows, error } = await supabase.from(TABLE).select('*').order('created_at', { ascending:false });
     if (error) { toast('데이터 로드 실패: '+error.message,'error'); setData([]); return; }
+    // 마이그레이션: portfolio_count만 있고 portfolio_links가 없는 프로젝트에 links 자동 생성
+    const migrateTargets = rows.filter(r => (r.portfolio_count||0) > 0 && !(r.portfolio_links?.length > 0));
+    if (migrateTargets.length > 0) {
+      for (const r of migrateTargets) {
+        const links = Array.from({ length: r.portfolio_count }, (_, i) => ({ label:`P${i+1}`, url:`https://Firstpip.github.io/portfolio-showcase/${r.slug}/portfolio-${i+1}/` }));
+        r.portfolio_links = links;
+        supabase.from(TABLE).update({ portfolio_links: links }).eq('slug', r.slug).then(({ error:e }) => { if (e) console.warn('portfolio_links 마이그레이션 실패:', r.slug, e.message); });
+      }
+    }
     setData(rows); setConnected(true);
     checkMeetingNotifications(rows);
     // ⚠️ 자동 상태 전환 로직 제거 (2026-04-13)
@@ -3550,9 +3546,8 @@ function App({ session }) {
       if (!project || project.current_status==='lost' || project.current_status==='won') continue;
       const newHistory = [...(project.history||[]),{ status:'lost', date:today, note:'일괄 미선정 처리' }];
       const batchPayload = { current_status:'lost', history:newHistory, updated_at:today };
-      if ((project.portfolio_count||0) > 1) {
-        batchPayload.portfolio_count = 1;
-        batchPayload.portfolio_links = (project.portfolio_links||[]).slice(0,1);
+      if ((project.portfolio_links||[]).length > 1) {
+        batchPayload.portfolio_links = project.portfolio_links.slice(0,1);
       }
       const { error } = await supabase.from(TABLE).update(batchPayload).eq('slug',slug);
       if (!error) success++;
@@ -3561,16 +3556,15 @@ function App({ session }) {
       if (!slugs.includes(d.slug) || d.current_status==='won') return d;
       const newHistory = [...(d.history||[]),{status:'lost',date:today,note:'일괄 미선정 처리'}];
       const updated = {...d, current_status:'lost', history:newHistory, updated_at:today};
-      if ((d.portfolio_count||0) > 1) {
-        updated.portfolio_count = 1;
-        updated.portfolio_links = (d.portfolio_links||[]).slice(0,1);
+      if ((d.portfolio_links||[]).length > 1) {
+        updated.portfolio_links = d.portfolio_links.slice(0,1);
       }
       return updated;
     }));
     toast(`${success}건 미선정 처리 완료`,'success');
     const toDelete = slugs.filter(slug => {
       const p = data.find(d => d.slug===slug);
-      return p && p.current_status!=='won' && (p.portfolio_count||0) > 1;
+      return p && p.current_status!=='won' && (p.portfolio_links||[]).length > 1;
     });
     if (toDelete.length > 0) {
       supabase.functions.invoke('delete-portfolios', { body:{ slugs:toDelete } })
@@ -3608,9 +3602,8 @@ function App({ session }) {
       if (newStatus==='meeting_done' && project.meeting_at) { historyEntry.meeting_at=project.meeting_at; historyEntry.meeting_type=project.meeting_type||null; }
       const newHistory = [...(project.history||[]),historyEntry];
       const updatePayload = { current_status:newStatus, history:newHistory, updated_at:today };
-      if (newStatus==='lost' && (project.portfolio_count||0) > 1) {
-        updatePayload.portfolio_count = 1;
-        updatePayload.portfolio_links = (project.portfolio_links||[]).slice(0,1);
+      if (newStatus==='lost' && (project.portfolio_links||[]).length > 1) {
+        updatePayload.portfolio_links = project.portfolio_links.slice(0,1);
       }
       const { error } = await supabase.from(TABLE).update(updatePayload).eq('slug',project.slug);
       if (error) throw error;
@@ -3632,7 +3625,7 @@ function App({ session }) {
       } else {
         setSelectedProject(null);
       }
-      if (newStatus==='lost' && (project.portfolio_count||0) > 1) {
+      if (newStatus==='lost' && (project.portfolio_links||[]).length > 1) {
         supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug } })
           .then(({ data:fnData, error:fnErr }) => {
             if (fnErr) toast('P2/P3 파일 삭제 실패: '+fnErr.message,'error');
