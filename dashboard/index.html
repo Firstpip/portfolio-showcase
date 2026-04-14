@@ -3127,11 +3127,26 @@ function App({ session }) {
         supabase.from(TABLE).update({ portfolio_links: links }).eq('slug', r.slug).then(({ error:e }) => { if (e) console.warn('portfolio_links 마이그레이션 실패:', r.slug, e.message); });
       }
     }
-    setData(rows); setConnected(true);
-    checkMeetingNotifications(rows);
-    // ⚠️ 자동 상태 전환 로직 제거 (2026-04-13)
-    // 데이터는 사용자가 직접 변경할 때만 수정됨.
-    // 이전에 있던 interview↔meeting_done 자동 전환이 의도치 않은 데이터 변경을 유발했으므로 삭제.
+    // 자동 삭제: 미선정 후 30일 경과한 프로젝트 제거 (DB + GitHub Pages)
+    const now = new Date();
+    const autoDeleteTargets = rows.filter(r => {
+      if (r.current_status !== 'lost') return false;
+      const lostEntry = [...(r.history||[])].reverse().find(h => h.status === 'lost');
+      const lostDate = lostEntry?.date || r.updated_at || r.created_at;
+      return daysBetween(lostDate, now) >= 30;
+    });
+    if (autoDeleteTargets.length > 0) {
+      const slugs = autoDeleteTargets.map(r => r.slug);
+      for (const slug of slugs) {
+        supabase.from(TABLE).delete().eq('slug', slug);
+      }
+      supabase.functions.invoke('delete-portfolios', { body: { slugs, all: true } })
+        .then(({ error: fnErr }) => { if (fnErr) console.warn('자동 삭제 파일 정리 실패:', fnErr.message); });
+      toast(`🗑️ 미선정 30일+ 경과 ${autoDeleteTargets.length}건 자동 삭제`, 'info');
+    }
+    const finalRows = autoDeleteTargets.length > 0 ? rows.filter(r => !autoDeleteTargets.some(t => t.slug === r.slug)) : rows;
+    setData(finalRows); setConnected(true);
+    checkMeetingNotifications(finalRows);
   }, [toast, checkMeetingNotifications]);
 
   useEffect(() => {
