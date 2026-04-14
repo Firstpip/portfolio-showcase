@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>IT 솔루션 구축 자동 견적 플랫폼</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{width:100%;min-height:100vh;font-family:'Pretendard',-apple-system,sans-serif;background:#0F172A;}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes slideIn{from{transform:translateX(100%)}to{transform:none}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef} = React;
+const {AreaChart,Area,BarChart,Bar,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,Legend,LineChart,Line} = Recharts;
+
+const C = {
+  primary:'#6366F1', secondary:'#4F46E5', accent:'#818CF8',
+  bg:'#0F172A', surface:'#1E293B', surface2:'#263346',
+  border:'#334155', text:'#F1F5F9', textSub:'#94A3B8',
+  success:'#10B981', warning:'#F59E0B', danger:'#EF4444',
+  green:'#34D399',
+};
+
+const TABS=[
+  {id:'simulator',label:'실시간 견적 시뮬레이터',icon:'🧮'},
+  {id:'vendor',label:'벤더 요금 비교 대시보드',icon:'⚖️'},
+  {id:'history',label:'견적 이력 관리',icon:'📋'},
+  {id:'report',label:'견적 보고서 출력',icon:'📊'},
+];
+
+const SOLUTIONS=[
+  {id:'erp',label:'ERP 통합 구축',base:28000000,desc:'SAP/Oracle 연동'},
+  {id:'crm',label:'CRM 시스템',base:12000000,desc:'Salesforce 대체'},
+  {id:'infra',label:'클라우드 인프라',base:8000000,desc:'AWS/GCP 마이그레이션'},
+  {id:'sec',label:'보안 솔루션',base:15000000,desc:'ISMS 인증 대응'},
+  {id:'data',label:'데이터 분석 플랫폼',base:22000000,desc:'BI 대시보드 구축'},
+];
+
+const VENDORS=[
+  {id:'A',name:'(주)테크노빌더스',level:'엔터프라이즈',color:'#6366F1',exp:15},
+  {id:'B',name:'(주)클라우드솔루션즈',level:'프리미엄',color:'#34D399',exp:10},
+  {id:'C',name:'(주)ITwork',level:'스탠다드',color:'#F59E0B',exp:7},
+];
+
+const HISTORY_DATA=[
+  {id:'Q-2604-041',date:'2026-04-10',company:'(주)한진물류',solution:'ERP 통합 구축',users:250,tco5:[42000000,35000000,28000000],status:'계약 완료',selected:'A'},
+  {id:'Q-2604-039',date:'2026-04-08',company:'(주)메디케어',solution:'CRM 시스템',users:80,tco5:[18000000,15500000,12000000],status:'검토중',selected:null},
+  {id:'Q-2604-035',date:'2026-04-05',company:'스마트팩토리(주)',solution:'클라우드 인프라',users:120,tco5:[12500000,11000000,8500000],status:'견적 발송',selected:'B'},
+  {id:'Q-2604-030',date:'2026-04-01',company:'(주)교육플러스',solution:'데이터 분석 플랫폼',users:200,tco5:[32000000,27000000,21000000],status:'재견적 요청',selected:null},
+  {id:'Q-2603-088',date:'2026-03-28',company:'(주)금융파트너스',solution:'보안 솔루션',users:150,tco5:[23000000,19500000,15000000],status:'계약 완료',selected:'A'},
+];
+
+const TCO_YEARS=[
+  {year:'1년차',A:14000000,B:11500000,C:9200000},
+  {year:'2년차',A:22000000,B:18500000,C:14800000},
+  {year:'3년차',A:30000000,B:25500000,C:20400000},
+  {year:'4년차',A:38000000,B:32500000,C:26000000},
+  {year:'5년차',A:46000000,B:39500000,C:31600000},
+];
+
+// 공용 컴포넌트
+function Tag({color,bg,children,size='sm'}){
+  return <span style={{display:'inline-flex',alignItems:'center',padding:size==='sm'?'2px 8px':'4px 12px',borderRadius:99,fontSize:size==='sm'?10:12,fontWeight:600,color:color||'#A5B4FC',background:bg||'rgba(99,102,241,0.15)'}}>{children}</span>;
+}
+function StatusChip({s}){
+  const m={'계약 완료':{c:'#34D399',b:'rgba(52,211,153,.12)'},'검토중':{c:'#F59E0B',b:'rgba(245,158,11,.12)'},'견적 발송':{c:'#6366F1',b:'rgba(99,102,241,.12)'},'재견적 요청':{c:'#EF4444',b:'rgba(239,68,68,.12)'}};
+  const x=m[s]||{c:C.textSub,b:'rgba(255,255,255,.05)'};
+  return <Tag color={x.c} bg={x.b}>{s}</Tag>;
+}
+function Drawer({item,onClose}){
+  if(!item)return null;
+  return(
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,.55)',zIndex:200}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:480,background:C.surface,boxShadow:'-8px 0 40px rgba(0,0,0,.4)',zIndex:201,overflowY:'auto',padding:28,animation:'slideIn 200ms ease'}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:20}}>
+          <div>
+            <div style={{fontSize:11,color:C.textSub,marginBottom:4}}>{item.id}</div>
+            <div style={{fontSize:16,fontWeight:700,color:C.text}}>{item.company}</div>
+          </div>
+          <button onClick={onClose} style={{border:'none',background:'rgba(255,255,255,.06)',cursor:'pointer',fontSize:16,color:C.textSub,padding:'6px 12px',borderRadius:8}}>✕</button>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
+          {[['솔루션',item.solution],['사용자수',`${item.users}명`],['접수일',item.date],['상태',null]].map(([k,v])=>(
+            <div key={k} style={{background:C.surface2,borderRadius:8,padding:'10px 12px'}}>
+              <div style={{fontSize:10,color:C.textSub,marginBottom:4}}>{k}</div>
+              {v?<div style={{fontSize:13,fontWeight:600,color:C.text}}>{v}</div>:<StatusChip s={item.status}/>}
+            </div>
+          ))}
+        </div>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.textSub,marginBottom:10}}>5년 TCO 비교</div>
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={[{name:'Tier A',TCO:item.tco5[0]},{name:'Tier B',TCO:item.tco5[1]},{name:'Tier C',TCO:item.tco5[2]}]}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+              <XAxis dataKey="name" tick={{fontSize:11,fill:C.textSub}}/>
+              <YAxis tickFormatter={v=>`${(v/10000000).toFixed(0)}천만`} tick={{fontSize:10,fill:C.textSub}}/>
+              <Tooltip formatter={v=>`₩${v.toLocaleString()}`} contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}}/>
+              <Bar dataKey="TCO" fill={C.primary} radius={[4,4,0,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.textSub,marginBottom:8}}>내부 메모</div>
+          <textarea rows={3} placeholder="메모 입력..." style={{width:'100%',padding:'10px 12px',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:13,fontFamily:'inherit',resize:'none',outline:'none'}}/>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={onClose} style={{flex:1,padding:'9px',border:`1px solid ${C.border}`,borderRadius:8,background:'transparent',color:C.textSub,cursor:'pointer',fontFamily:'inherit',fontWeight:600,fontSize:13}}>닫기</button>
+          <button onClick={onClose} style={{flex:2,padding:'9px',border:'none',borderRadius:8,background:C.primary,color:'#fff',cursor:'pointer',fontFamily:'inherit',fontWeight:600,fontSize:13}}>저장</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── 견적 시뮬레이터 ──────────────────────────────────────────────────────────
+function SimulatorPage({setDrawer}){
+  const [sol,setSol]=useState('erp');
+  const [users,setUsers]=useState(100);
+  const [months,setMonths]=useState(12);
+  const [modules,setModules]=useState(3);
+  const [urgent,setUrgent]=useState(false);
+
+  const base=SOLUTIONS.find(s=>s.id===sol)?.base||28000000;
+  const calc=(mul)=>{
+    const u=1+(users-50)/200;
+    const m=0.8+months/60;
+    const mo=0.7+modules/10;
+    const urg=urgent?1.2:1;
+    return Math.round(base*u*m*mo*urg*mul/100000)*100000;
+  };
+  const quotes=[calc(1.0),calc(0.84),calc(0.68)];
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+        {/* 입력 패널 */}
+        <div style={{background:C.surface,borderRadius:16,padding:24,border:`1px solid ${C.border}`}}>
+          <h3 style={{fontWeight:700,color:C.text,marginBottom:20,fontSize:15}}>견적 조건 설정</h3>
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:11,fontWeight:600,color:C.textSub,marginBottom:10}}>솔루션 유형</div>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {SOLUTIONS.map(s=>(
+                <div key={s.id} onClick={()=>setSol(s.id)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 14px',borderRadius:10,border:`1.5px solid ${sol===s.id?C.primary:C.border}`,background:sol===s.id?'rgba(99,102,241,.08)':'transparent',cursor:'pointer',transition:'all 150ms'}}>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:700,color:sol===s.id?C.accent:C.text}}>{s.label}</div>
+                    <div style={{fontSize:10,color:C.textSub}}>{s.desc}</div>
+                  </div>
+                  <div style={{fontSize:11,color:C.textSub}}>기본가 {(s.base/10000000).toFixed(1)}천만</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{marginBottom:16}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+              <span style={{fontSize:11,fontWeight:600,color:C.textSub}}>사용자 수</span>
+              <span style={{fontSize:13,fontWeight:700,color:C.accent}}>{users}명</span>
+            </div>
+            <input type="range" min={10} max={500} step={10} value={users} onChange={e=>setUsers(+e.target.value)} style={{width:'100%',accentColor:C.primary}}/>
+          </div>
+          <div style={{marginBottom:16}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+              <span style={{fontSize:11,fontWeight:600,color:C.textSub}}>계약 기간 (유지보수)</span>
+              <span style={{fontSize:13,fontWeight:700,color:C.accent}}>{months}개월</span>
+            </div>
+            <input type="range" min={6} max={60} step={6} value={months} onChange={e=>setMonths(+e.target.value)} style={{width:'100%',accentColor:C.primary}}/>
+          </div>
+          <div style={{marginBottom:20}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+              <span style={{fontSize:11,fontWeight:600,color:C.textSub}}>커스터마이즈 모듈 수</span>
+              <span style={{fontSize:13,fontWeight:700,color:C.accent}}>{modules}개</span>
+            </div>
+            <input type="range" min={1} max={10} value={modules} onChange={e=>setModules(+e.target.value)} style={{width:'100%',accentColor:C.primary}}/>
+          </div>
+          <div onClick={()=>setUrgent(u=>!u)} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',borderRadius:10,border:`1.5px solid ${urgent?C.warning:C.border}`,background:urgent?'rgba(245,158,11,.08)':'transparent',cursor:'pointer',transition:'all 150ms'}}>
+            <div style={{width:18,height:18,borderRadius:4,background:urgent?C.warning:C.border,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:11,transition:'all 150ms'}}>{urgent&&'✓'}</div>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:urgent?C.warning:C.text}}>긴급 납기 (20% 할증)</div>
+              <div style={{fontSize:10,color:C.textSub}}>표준 납기 대비 30일 단축</div>
+            </div>
+          </div>
+        </div>
+
+        {/* 결과 패널 */}
+        <div>
+          <div style={{background:C.surface,borderRadius:16,padding:20,border:`1px solid ${C.border}`,marginBottom:16}}>
+            <div style={{fontSize:11,fontWeight:600,color:C.textSub,marginBottom:14}}>벤더별 견적 (실시간 계산)</div>
+            {VENDORS.map((v,i)=>(
+              <div key={v.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 14px',borderRadius:10,border:`1px solid ${C.border}`,marginBottom:8,background:C.surface2,cursor:'pointer'}} onClick={()=>setDrawer({id:`Q-LIVE-00${i}`,company:'견적 시뮬레이션',solution:SOLUTIONS.find(s=>s.id===sol)?.label,users,date:'2026-04-14',tco5:quotes.map(q=>q+(i*2000000)),status:'검토중',selected:null})}>
+                <div>
+                  <div style={{fontSize:11,color:C.textSub,marginBottom:2}}>{v.level}</div>
+                  <div style={{fontSize:13,fontWeight:700,color:C.text}}>{v.name}</div>
+                </div>
+                <div style={{textAlign:'right'}}>
+                  <div style={{fontSize:20,fontWeight:800,color:v.color}}>₩{quotes[i].toLocaleString()}</div>
+                  <div style={{fontSize:10,color:C.textSub}}>구축 + {months}개월 유지보수</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{background:C.surface,borderRadius:16,padding:20,border:`1px solid ${C.border}`}}>
+            <div style={{fontSize:11,fontWeight:600,color:C.textSub,marginBottom:12}}>5년 TCO 누적 시뮬레이션</div>
+            <ResponsiveContainer width="100%" height={180}>
+              <AreaChart data={TCO_YEARS}>
+                <defs>
+                  <linearGradient id="gA" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#6366F1" stopOpacity={0.3}/><stop offset="95%" stopColor="#6366F1" stopOpacity={0}/></linearGradient>
+                  <linearGradient id="gB" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#34D399" stopOpacity={0.3}/><stop offset="95%" stopColor="#34D399" stopOpacity={0}/></linearGradient>
+                  <linearGradient id="gC" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#F59E0B" stopOpacity={0.3}/><stop offset="95%" stopColor="#F59E0B" stopOpacity={0}/></linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                <XAxis dataKey="year" tick={{fontSize:10,fill:C.textSub}}/>
+                <YAxis tickFormatter={v=>`${(v/10000000).toFixed(0)}천만`} tick={{fontSize:9,fill:C.textSub}}/>
+                <Tooltip formatter={v=>`₩${v.toLocaleString()}`} contentStyle={{background:C.surface,border:`1px solid ${C.border}`,color:C.text,borderRadius:8}}/>
+                <Area type="monotone" dataKey="A" name="Tier A" stroke="#6366F1" strokeWidth={2} fill="url(#gA)"/>
+                <Area type="monotone" dataKey="B" name="Tier B" stroke="#34D399" strokeWidth={2} fill="url(#gB)"/>
+                <Area type="monotone" dataKey="C" name="Tier C" stroke="#F59E0B" strokeWidth={2} fill="url(#gC)"/>
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 벤더 비교 대시보드 ────────────────────────────────────────────────────────
+function VendorPage({setDrawer}){
+  const compareItems=[
+    {item:'구축 경력',A:'15년',B:'10년',C:'7년'},
+    {item:'레퍼런스 기업 수',A:'340+',B:'185+',C:'92+'},
+    {item:'전담 PM 배정',A:'✅ 시니어 PM',B:'✅ PM',C:'⚡ 협의'},
+    {item:'SLA 보장',A:'99.9%',B:'99.5%',C:'99.0%'},
+    {item:'온사이트 지원',A:'✅ 포함',B:'💰 별도',C:'💰 별도'},
+    {item:'소스코드 인도',A:'✅ 전체',B:'✅ 전체',C:'⚡ 부분'},
+    {item:'24/7 지원',A:'✅ 포함',B:'⚡ 영업시간',C:'⚡ 영업시간'},
+    {item:'평균 납기',A:'6개월',B:'5개월',C:'4개월'},
+  ];
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:20}}>
+        {VENDORS.map((v,i)=>{
+          const prices=[28000000,23500000,19000000];
+          return(
+            <div key={v.id} style={{background:C.surface,borderRadius:14,padding:20,border:`1px solid ${C.border}`,cursor:'pointer'}} onClick={()=>setDrawer(HISTORY_DATA[i])}>
+              <Tag color={v.color} bg={`${v.color}20`}>{v.level}</Tag>
+              <div style={{fontSize:15,fontWeight:800,color:C.text,marginTop:10,marginBottom:4}}>{v.name}</div>
+              <div style={{fontSize:24,fontWeight:800,color:v.color,marginBottom:8}}>₩{prices[i].toLocaleString()}</div>
+              <div style={{fontSize:11,color:C.textSub}}>ERP 기준가 · 100명</div>
+              <div style={{marginTop:12,fontSize:11,color:C.textSub}}>구축 경력 {v.exp}년 · SLA {['99.9','99.5','99.0'][i]}%</div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{background:C.surface,borderRadius:16,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+        <div style={{padding:'14px 20px',borderBottom:`1px solid ${C.border}`}}>
+          <h4 style={{fontWeight:700,color:C.text,fontSize:14}}>벤더 서비스 상세 비교</h4>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{background:C.surface2}}>
+            <th style={{padding:'10px 16px',textAlign:'left',fontSize:11,fontWeight:700,color:C.textSub,width:'25%'}}>비교 항목</th>
+            {VENDORS.map(v=><th key={v.id} style={{padding:'10px 16px',textAlign:'center',fontSize:12,fontWeight:700,color:v.color}}>{v.name.replace('(주)','')}</th>)}
+          </tr></thead>
+          <tbody>
+            {compareItems.map((row,i)=>(
+              <tr key={i} style={{borderTop:`1px solid ${C.border}`,background:i%2===0?C.surface:C.surface2}}>
+                <td style={{padding:'11px 16px',fontSize:12,fontWeight:600,color:C.textSub}}>{row.item}</td>
+                <td style={{padding:'11px 16px',textAlign:'center',fontSize:12,color:C.text}}>{row.A}</td>
+                <td style={{padding:'11px 16px',textAlign:'center',fontSize:12,color:C.text}}>{row.B}</td>
+                <td style={{padding:'11px 16px',textAlign:'center',fontSize:12,color:C.text}}>{row.C}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── 견적 이력 관리 ────────────────────────────────────────────────────────────
+function HistoryPage({setDrawer}){
+  const [filter,setFilter]=useState('all');
+  const statuses=['all','계약 완료','검토중','견적 발송','재견적 요청'];
+  const filtered=filter==='all'?HISTORY_DATA:HISTORY_DATA.filter(d=>d.status===filter);
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',gap:8,marginBottom:16,flexWrap:'wrap'}}>
+        {statuses.map(s=>(
+          <button key={s} onClick={()=>setFilter(s)} style={{padding:'6px 14px',borderRadius:99,border:`1px solid ${filter===s?C.primary:C.border}`,background:filter===s?'rgba(99,102,241,.12)':'transparent',color:filter===s?C.accent:C.textSub,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit',transition:'all 150ms'}}>
+            {s==='all'?'전체':s} {s==='all'?`(${HISTORY_DATA.length})`:(`(${HISTORY_DATA.filter(d=>d.status===s).length})`)}
+          </button>
+        ))}
+      </div>
+      <div style={{background:C.surface,borderRadius:16,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{background:C.surface2}}>
+            {['견적 ID','접수일','기업명','솔루션','5년 TCO 최저','상태','비교'].map(h=>(
+              <th key={h} style={{padding:'10px 14px',textAlign:'left',fontSize:11,fontWeight:700,color:C.textSub}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {filtered.map(row=>(
+              <tr key={row.id} style={{borderTop:`1px solid ${C.border}`,cursor:'pointer'}} onClick={()=>setDrawer(row)}>
+                <td style={{padding:'12px 14px',fontSize:11,fontWeight:600,color:C.accent,fontFamily:'monospace'}}>{row.id}</td>
+                <td style={{padding:'12px 14px',fontSize:11,color:C.textSub}}>{row.date}</td>
+                <td style={{padding:'12px 14px',fontSize:13,fontWeight:700,color:C.text}}>{row.company}</td>
+                <td style={{padding:'12px 14px',fontSize:12,color:C.textSub}}>{row.solution}</td>
+                <td style={{padding:'12px 14px',fontSize:13,fontWeight:700,color:C.green}}>₩{Math.min(...row.tco5).toLocaleString()}</td>
+                <td style={{padding:'12px 14px'}}><StatusChip s={row.status}/></td>
+                <td style={{padding:'12px 14px'}}>
+                  <button onClick={e=>{e.stopPropagation();setDrawer(row);}} style={{padding:'4px 10px',border:`1px solid ${C.primary}`,borderRadius:6,background:'transparent',color:C.accent,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>상세 보기</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── 보고서 출력 ────────────────────────────────────────────────────────────────
+function ReportPage(){
+  const [sections,setSections]=useState(['견적 요약','벤더 비교표','TCO 5년 분석','권장 구성','계약 체크리스트']);
+  const [generating,setGenerating]=useState(false);
+  const [done,setDone]=useState(false);
+  const toggle=s=>setSections(p=>p.includes(s)?p.filter(x=>x!==s):[...p,s]);
+  const handle=()=>{setGenerating(true);setTimeout(()=>{setGenerating(false);setDone(true);},2000);};
+  const allSec=['견적 요약','벤더 비교표','TCO 5년 분석','권장 구성','계약 체크리스트','기술 스택 명세','SLA 조건 비교'];
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+        <div>
+          <div style={{background:C.surface,borderRadius:16,padding:20,border:`1px solid ${C.border}`,marginBottom:16}}>
+            <h4 style={{fontWeight:700,color:C.text,marginBottom:16,fontSize:14}}>보고서 기본 정보</h4>
+            {[['기업명','(주)한진물류'],['솔루션','ERP 통합 구축'],['담당자','이승훈 IT팀장'],['견적일','2026-04-14']].map(([k,v])=>(
+              <div key={k} style={{marginBottom:12}}>
+                <div style={{fontSize:10,fontWeight:600,color:C.textSub,marginBottom:4}}>{k}</div>
+                <input defaultValue={v} style={{width:'100%',padding:'8px 12px',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:13,fontFamily:'inherit',outline:'none'}}/>
+              </div>
+            ))}
+          </div>
+          <div style={{background:C.surface,borderRadius:16,padding:20,border:`1px solid ${C.border}`}}>
+            <h4 style={{fontWeight:700,color:C.text,marginBottom:14,fontSize:14}}>포함 섹션 선택</h4>
+            {allSec.map(s=>(
+              <div key={s} onClick={()=>toggle(s)} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:`1px solid ${C.border}`,cursor:'pointer'}}>
+                <div style={{width:18,height:18,borderRadius:4,background:sections.includes(s)?C.primary:'transparent',border:`1.5px solid ${sections.includes(s)?C.primary:C.border}`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:10,transition:'all 150ms'}}>{sections.includes(s)&&'✓'}</div>
+                <span style={{fontSize:12,color:sections.includes(s)?C.text:C.textSub}}>{s}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{background:C.surface,borderRadius:16,padding:20,border:`1px solid ${C.border}`,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:400}}>
+          {!done?(
+            <>
+              <div style={{fontSize:48,marginBottom:16}}>📊</div>
+              <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:8}}>영업용 견적 보고서</div>
+              <div style={{fontSize:12,color:C.textSub,marginBottom:24,textAlign:'center'}}>선택된 {sections.length}개 섹션을 포함한<br/>PDF 보고서를 생성합니다</div>
+              <button onClick={handle} disabled={generating} style={{padding:'12px 28px',background:generating?C.border:C.primary,border:'none',borderRadius:10,color:'#fff',fontFamily:'inherit',fontWeight:700,fontSize:14,cursor:'pointer',transition:'all 200ms'}}>
+                {generating?'생성 중... ⏳':'보고서 생성 →'}
+              </button>
+              {generating&&<div style={{marginTop:16,display:'flex',gap:8,color:C.textSub,fontSize:11}}>
+                <div style={{animation:'spin 1s linear infinite',display:'inline-block'}}>⟳</div> WeasyPrint로 PDF 생성 중...
+              </div>}
+            </>
+          ):(
+            <>
+              <div style={{fontSize:48,marginBottom:16}}>✅</div>
+              <div style={{fontSize:15,fontWeight:700,color:C.success,marginBottom:8}}>보고서 생성 완료</div>
+              <div style={{fontSize:12,color:C.textSub,marginBottom:24,textAlign:'center'}}>한진물류_ERP견적보고서_20260414.pdf<br/>{sections.length}개 섹션 · 12페이지</div>
+              <div style={{display:'flex',gap:10}}>
+                <button onClick={()=>alert('다운로드')} style={{padding:'10px 20px',background:C.primary,border:'none',borderRadius:8,color:'#fff',fontFamily:'inherit',fontWeight:600,fontSize:13,cursor:'pointer'}}>⬇ PDF 다운로드</button>
+                <button onClick={()=>setDone(false)} style={{padding:'10px 20px',background:'transparent',border:`1px solid ${C.border}`,borderRadius:8,color:C.textSub,fontFamily:'inherit',fontWeight:600,fontSize:13,cursor:'pointer'}}>다시 생성</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 히어로 배너 ────────────────────────────────────────────────────────────────
+const PAGE_META={
+  simulator:{title:'실시간 견적 시뮬레이터',kpis:[{l:'평균 견적 금액',v:'₩24.5M'},{l:'이번 달 견적 수',v:'38건'},{l:'계약 전환율',v:'57%'}]},
+  vendor:{title:'벤더 요금 비교 대시보드',kpis:[{l:'등록 벤더',v:'3개사'},{l:'비교 항목',v:'8가지'},{l:'평균 절감액',v:'₩8.5M'}]},
+  history:{title:'견적 이력 관리',kpis:[{l:'전체 견적',v:`${HISTORY_DATA.length}건`},{l:'계약 완료',v:'2건'},{l:'진행 중',v:'3건'}]},
+  report:{title:'견적 보고서 출력',kpis:[{l:'이번 달 발송',v:'14건'},{l:'평균 페이지',v:'11p'},{l:'열람률',v:'78%'}]},
+};
+
+function App(){
+  const [tab,setTab]=useState('simulator');
+  const [drawer,setDrawer]=useState(null);
+  const meta=PAGE_META[tab];
+
+  const renderPage=()=>{
+    if(tab==='simulator') return <SimulatorPage setDrawer={setDrawer}/>;
+    if(tab==='vendor') return <VendorPage setDrawer={setDrawer}/>;
+    if(tab==='history') return <HistoryPage setDrawer={setDrawer}/>;
+    if(tab==='report') return <ReportPage/>;
+  };
+
+  return(
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh',background:C.bg}}>
+      {/* 상단 네비 */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:4,boxShadow:'0 2px 12px rgba(0,0,0,.3)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginRight:16}}>
+          <div style={{width:32,height:32,borderRadius:8,background:`linear-gradient(135deg,${C.primary},${C.secondary})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>⚙️</div>
+          <span style={{fontSize:13,fontWeight:800,color:C.text}}>QuotePro</span>
+        </div>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{
+            padding:'6px 14px',border:'none',background:'transparent',cursor:'pointer',fontFamily:'inherit',
+            fontSize:12,fontWeight:600,color:tab===t.id?C.accent:C.textSub,
+            borderBottom:`2px solid ${tab===t.id?C.primary:'transparent'}`,
+            paddingBottom:8,transition:'all 150ms',
+          }}>{t.icon} {t.label}</button>
+        ))}
+        <div style={{flex:1}}/>
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'5px 10px',background:C.surface2,borderRadius:8,border:`1px solid ${C.border}`,marginRight:8}}>
+          <span style={{fontSize:11,color:C.textSub}}>🔍</span>
+          <input placeholder="견적 검색..." style={{border:'none',background:'transparent',fontSize:11,outline:'none',width:110,fontFamily:'inherit',color:C.text}}/>
+        </div>
+        <div style={{width:30,height:30,borderRadius:99,background:C.surface2,border:`1px solid ${C.border}`,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:13}}>🔔</div>
+        <div style={{width:30,height:30,borderRadius:99,background:`linear-gradient(135deg,${C.primary},${C.secondary})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,color:'#fff',fontWeight:700,marginLeft:6,cursor:'pointer'}}>이</div>
+      </header>
+
+      {/* 히어로 배너 */}
+      <div style={{background:`linear-gradient(135deg,${C.secondary} 0%,${C.primary} 60%,${C.accent} 100%)`,padding:'28px 32px'}}>
+        <div style={{fontSize:11,color:'rgba(255,255,255,.6)',marginBottom:4,fontWeight:600}}>IT SOLUTION QUOTE PLATFORM</div>
+        <h1 style={{fontSize:22,fontWeight:800,color:'#fff',marginBottom:14}}>{meta.title}</h1>
+        <div style={{display:'flex',gap:28}}>
+          {meta.kpis.map(k=>(
+            <div key={k.l}>
+              <div style={{fontSize:18,fontWeight:800,color:'#fff'}}>{k.v}</div>
+              <div style={{fontSize:10,color:'rgba(255,255,255,.65)',marginTop:2}}>{k.l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 콘텐츠 */}
+      <main style={{padding:'24px 32px',flex:1}}>
+        {renderPage()}
+      </main>
+
+      <Drawer item={drawer} onClose={()=>setDrawer(null)}/>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
