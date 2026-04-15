@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>의료진 진료 스케줄 예약 관리 시스템 — 구현 데모</title>
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;font-family:'Pretendard',sans-serif;background:#F0FDF9}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:#a7f3d0;border-radius:3px}
+@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState } = React;
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, Line, AreaChart, Area } = Recharts;
+
+const C = {
+  primary:'#00B69B', secondary:'#1B2B4B', accent:'#06D6A0',
+  bg:'#F0FDF9', surface:'#FFFFFF', border:'#D1FAE5',
+  tp:'#1B2B4B', ts:'#6B7280', success:'#10B981', warning:'#F59E0B', danger:'#EF4444',
+  nav:'#FFFFFF', hero1:'#00B69B', hero2:'#0891B2',
+};
+
+const DOCTORS = [
+  { id:1, name:'김민준', dept:'내과', title:'과장', slots:12, today:8, color:'#00B69B' },
+  { id:2, name:'이서연', dept:'피부과', title:'원장', slots:10, today:7, color:'#6366F1' },
+  { id:3, name:'박지호', dept:'정형외과', title:'부장', slots:14, today:10, color:'#F59E0B' },
+  { id:4, name:'최수아', dept:'소아과', title:'과장', slots:11, today:6, color:'#EF4444' },
+];
+
+function genSlots(doctor) {
+  const slots = [];
+  const statuses = ['available','booked','booked','available','booked','completed','booked','available','booked','completed','booked','available'];
+  let si = 0;
+  for (let h = 9; h < 18; h++) {
+    if (h === 12) { slots.push({ time:'12:00', disabled:true }); h = 12; continue; }
+    if (h === 13 && slots[slots.length-1]?.time === '12:00') continue;
+    for (let m = 0; m < 60 && (h*60+m) < 18*60; m += 30) {
+      if (h === 12) continue;
+      const t = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+      const patients = ['김영수','이지은','박민호','최유진','정현우','강소영','윤태양','임나래','조성현','한미래'];
+      slots.push({ time:t, status:statuses[si%statuses.length], patient:patients[si%patients.length], doctorId:doctor.id, si });
+      si++;
+    }
+  }
+  return slots.filter(s=>!s.disabled);
+}
+
+const QUEUE = [
+  { id:1, patient:'김영수', type:'초진', time:'09:00', status:'in-progress', dept:'내과', age:45, phone:'010-1234-5678', reason:'복통 및 구역감' },
+  { id:2, patient:'이지은', type:'재진', time:'09:30', status:'waiting', dept:'내과', age:32, phone:'010-2345-6789', reason:'혈압 재측정' },
+  { id:3, patient:'박민호', type:'초진', time:'10:00', status:'waiting', dept:'내과', age:28, phone:'010-3456-7890', reason:'두통 3일째 지속' },
+  { id:4, patient:'최유진', type:'재진', time:'10:30', status:'waiting', dept:'내과', age:52, phone:'010-4567-8901', reason:'당뇨 정기검진' },
+  { id:5, patient:'정현우', type:'초진', time:'11:00', status:'waiting', dept:'내과', age:36, phone:'010-5678-9012', reason:'허리 통증' },
+  { id:6, patient:'강소영', type:'재진', time:'14:00', status:'cancelled', dept:'내과', age:41, phone:'010-6789-0123', reason:'인후통' },
+];
+
+const STATS_DATA = [
+  { time:'09:00', 예약:4, 취소:0, 완료:3 }, { time:'10:00', 예약:5, 취소:1, 완료:4 },
+  { time:'11:00', 예약:6, 취소:0, 완료:5 }, { time:'13:00', 예약:4, 취소:1, 완료:2 },
+  { time:'14:00', 예약:7, 취소:0, 완료:6 }, { time:'15:00', 예약:5, 취소:2, 완료:3 },
+  { time:'16:00', 예약:6, 취소:1, 완료:5 }, { time:'17:00', 예약:3, 취소:0, 완료:2 },
+];
+
+const TABS = [
+  { id:'home', label:'홈', icon:'🏥' },
+  { id:'booking', label:'예약하기', icon:'📅' },
+  { id:'doctor-queue', label:'진료 큐', icon:'👨‍⚕️' },
+  { id:'stats', label:'통계', icon:'📊' },
+  { id:'schedule', label:'스케줄 설정', icon:'⚙️' },
+];
+
+const PAGE_META = {
+  home:{ title:'진료 예약 현황', kpis:[{l:'오늘 예약',v:'42건'},{l:'진료 완료',v:'28건'},{l:'대기 중',v:'14건'}] },
+  booking:{ title:'진료 예약', kpis:[{l:'잔여 슬롯',v:'18개'},{l:'오늘 예약',v:'24건'},{l:'대기 순번',v:'6번'}] },
+  'doctor-queue':{ title:'진료 큐 관리', kpis:[{l:'현재 진료',v:'1명'},{l:'대기 환자',v:'5명'},{l:'완료',v:'28명'}] },
+  stats:{ title:'예약 통계 분석', kpis:[{l:'이번 주 예약',v:'187건'},{l:'취소율',v:'8.3%'},{l:'평균 대기',v:'22분'}] },
+  schedule:{ title:'스케줄 설정', kpis:[{l:'등록 의사',v:'4명'},{l:'운영 시간',v:'09-18시'},{l:'슬롯 간격',v:'30분'}] },
+};
+
+function Toast({ msg, onDone }) {
+  React.useEffect(()=>{const t=setTimeout(onDone,2200);return()=>clearTimeout(t);},[]);
+  return <div style={{position:'fixed',bottom:28,right:28,background:C.primary,color:'#fff',padding:'12px 20px',borderRadius:10,fontSize:14,fontWeight:600,zIndex:400,boxShadow:'0 8px 24px rgba(0,182,155,0.4)'}}>{msg}</div>;
+}
+
+function Drawer({ item, onClose }) {
+  return (
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:200}} />
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:420,background:C.surface,boxShadow:'-8px 0 40px rgba(0,0,0,0.15)',zIndex:201,overflowY:'auto',padding:28,animation:'slideIn 200ms ease'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20}}>
+          <h3 style={{fontSize:17,fontWeight:700,color:C.tp}}>예약 상세</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:20,color:C.ts}}>✕</button>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:12}}>
+          <div style={{padding:'16px 20px',borderRadius:12,background:`${C.primary}10`,border:`1px solid ${C.primary}30`}}>
+            <div style={{fontSize:18,fontWeight:700,color:C.tp,marginBottom:4}}>{item.patient}</div>
+            <div style={{fontSize:13,color:C.ts}}>{item.type} · {item.dept} · {item.time}</div>
+          </div>
+          {[{l:'나이',v:`${item.age}세`},{l:'연락처',v:item.phone},{l:'진료 사유',v:item.reason},{l:'예약 시간',v:item.time},{l:'유형',v:item.type}].map(r=>(
+            <div key={r.l} style={{display:'flex',gap:12,padding:'9px 0',borderBottom:`1px solid ${C.border}`}}>
+              <span style={{fontSize:13,color:C.ts,width:80,flexShrink:0}}>{r.l}</span>
+              <span style={{fontSize:13,color:C.tp,fontWeight:500}}>{r.v}</span>
+            </div>
+          ))}
+          <textarea rows={3} placeholder="의사 메모 입력..." style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,resize:'vertical',marginTop:4}} />
+          <div style={{display:'flex',gap:8,marginTop:4}}>
+            <button onClick={onClose} style={{flex:1,padding:'10px 0',borderRadius:8,border:`1px solid ${C.border}`,background:'#fff',fontSize:13,cursor:'pointer'}}>닫기</button>
+            <button style={{flex:1,padding:'10px 0',borderRadius:8,border:'none',background:C.primary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>진료 시작</button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function HomePage({ onTab }) {
+  return (
+    <div style={{padding:'0 32px 32px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(2, 1fr)',gap:16,marginBottom:24}}>
+        {DOCTORS.map(doc=>(
+          <div key={doc.id} style={{background:C.surface,borderRadius:14,padding:20,border:`1px solid ${C.border}`,cursor:'pointer',boxShadow:'0 2px 12px rgba(0,182,155,0.08)'}} onClick={()=>onTab('booking')}>
+            <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:14}}>
+              <div style={{width:48,height:48,borderRadius:12,background:`${doc.color}20`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>👨‍⚕️</div>
+              <div>
+                <div style={{fontSize:15,fontWeight:700,color:C.tp}}>Dr. {doc.name}</div>
+                <div style={{fontSize:12,color:C.ts,marginTop:2}}>{doc.dept} · {doc.title}</div>
+              </div>
+              <div style={{marginLeft:'auto',textAlign:'right'}}>
+                <div style={{fontSize:18,fontWeight:700,color:doc.color}}>{doc.today}</div>
+                <div style={{fontSize:11,color:C.ts}}>오늘 예약</div>
+              </div>
+            </div>
+            <div style={{display:'flex',gap:6}}>
+              {[...Array(doc.slots)].map((_,i)=>(
+                <div key={i} style={{height:6,flex:1,borderRadius:3,background:i<doc.today?doc.color:`${doc.color}25`}} />
+              ))}
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',marginTop:8,fontSize:12,color:C.ts}}>
+              <span>잔여 {doc.slots - doc.today}슬롯</span>
+              <span>전체 {doc.slots}슬롯</span>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{background:C.surface,borderRadius:14,padding:24,border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:C.tp,marginBottom:16}}>시간대별 예약 현황 (오늘)</h3>
+        <div style={{height:200}}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={STATS_DATA} margin={{top:4,right:8,left:-20,bottom:4}}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="time" tick={{fontSize:11,fill:C.ts}} />
+              <YAxis tick={{fontSize:11,fill:C.ts}} />
+              <Tooltip />
+              <Bar dataKey="예약" fill={C.primary} radius={[4,4,0,0]} />
+              <Bar dataKey="완료" fill={C.accent} radius={[4,4,0,0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BookingPage({ onDrawer }) {
+  const [selDoc, setSelDoc] = useState(DOCTORS[0]);
+  const [toast, setToast] = useState('');
+  const slots = genSlots(selDoc);
+
+  const statusStyle = {
+    available:{ bg:`${C.primary}15`, c:C.primary, t:'예약 가능' },
+    booked:{ bg:'#FEF3C7', c:'#92400E', t:'예약 완료' },
+    completed:{ bg:'#F1F5F9', c:'#64748B', t:'진료 완료' },
+  };
+
+  return (
+    <div style={{padding:'0 32px 32px'}}>
+      <div style={{display:'flex',gap:10,marginBottom:24}}>
+        {DOCTORS.map(d=>(
+          <button key={d.id} onClick={()=>setSelDoc(d)} style={{
+            display:'flex',alignItems:'center',gap:10,padding:'10px 16px',borderRadius:10,
+            border:`2px solid ${selDoc.id===d.id?d.color:C.border}`,
+            background:selDoc.id===d.id?`${d.color}12`:'#fff',cursor:'pointer',
+          }}>
+            <span style={{fontSize:18}}>👨‍⚕️</span>
+            <div style={{textAlign:'left'}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.tp}}>Dr. {d.name}</div>
+              <div style={{fontSize:11,color:C.ts}}>{d.dept}</div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div style={{background:C.surface,borderRadius:14,border:`1px solid ${C.border}`,overflow:'hidden',marginBottom:20}}>
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,background:`${selDoc.color}08`}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.tp}}>Dr. {selDoc.name} — {selDoc.dept} 진료 슬롯</h3>
+          <p style={{fontSize:12,color:C.ts,marginTop:3}}>09:00 – 18:00 · 30분 간격 · 점심(12:00-13:00) 비활성화</p>
+        </div>
+        <div style={{padding:20,display:'grid',gridTemplateColumns:'repeat(4, 1fr)',gap:8}}>
+          {/* 점심 시간 표시 */}
+          <div style={{gridColumn:'1/-1',padding:'8px 14px',borderRadius:8,background:'#F8FAFC',border:`1px dashed ${C.border}`,fontSize:12,color:'#94A3B8',textAlign:'center'}}>
+            🍽️ 12:00 – 13:00 점심시간 (예약 비활성화)
+          </div>
+          {slots.slice(0, 16).map((slot, i) => {
+            const ss = statusStyle[slot.status] || statusStyle.available;
+            return (
+              <button key={i} onClick={()=>slot.status==='available'&&setToast(`${slot.time} 슬롯 예약 신청이 접수되었습니다`)} style={{
+                padding:'12px 8px',borderRadius:8,border:`1px solid ${slot.status==='available'?selDoc.color:C.border}`,
+                background:ss.bg,cursor:slot.status==='available'?'pointer':'default',
+                display:'flex',flexDirection:'column',alignItems:'center',gap:3,
+              }}>
+                <span style={{fontSize:13,fontWeight:700,color:C.tp}}>{slot.time}</span>
+                <span style={{fontSize:11,color:ss.c,fontWeight:600}}>{ss.t}</span>
+                {slot.status!=='available' && <span style={{fontSize:10,color:C.ts,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',maxWidth:'100%'}}>{slot.patient}</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:14,border:`1px solid ${C.border}`,padding:20}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:C.tp,marginBottom:16}}>예약 신청</h3>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+          {[
+            {l:'담당 의사',type:'text',v:`Dr. ${selDoc.name} (${selDoc.dept})`},
+            {l:'희망 날짜',type:'date'},
+            {l:'희망 시간',type:'select',opts:slots.filter(s=>s.status==='available').map(s=>s.time)},
+            {l:'진료 유형',type:'select',opts:['초진','재진']},
+            {l:'환자명',type:'text',ph:'홍길동'},
+            {l:'연락처',type:'text',ph:'010-0000-0000'},
+          ].map(f=>(
+            <div key={f.l}>
+              <label style={{fontSize:12,fontWeight:600,color:C.ts,display:'block',marginBottom:5}}>{f.l}</label>
+              {f.type==='select' ? (
+                <select style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13}}>
+                  <option>선택...</option>
+                  {(f.opts||[]).slice(0,6).map(o=><option key={o}>{o}</option>)}
+                </select>
+              ) : (
+                <input type={f.type==='date'?'date':'text'} defaultValue={f.v||''} placeholder={f.ph} style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13}} />
+              )}
+            </div>
+          ))}
+        </div>
+        <div style={{gridColumn:'1/-1',marginTop:14}}>
+          <label style={{fontSize:12,fontWeight:600,color:C.ts,display:'block',marginBottom:5}}>진료 사유</label>
+          <textarea rows={2} placeholder="증상을 간략히 입력해주세요" style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,resize:'vertical'}} />
+        </div>
+        <button onClick={()=>setToast('예약 신청이 완료되었습니다')} style={{marginTop:14,width:'100%',padding:'12px 0',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer'}}>
+          예약 신청하기
+        </button>
+      </div>
+      {toast && <Toast msg={toast} onDone={()=>setToast('')} />}
+    </div>
+  );
+}
+
+function QueuePage() {
+  const [queue, setQueue] = useState(QUEUE);
+  const [drawer, setDrawer] = useState(null);
+  const [dragging, setDragging] = useState(null);
+  const [toast, setToast] = useState('');
+
+  const statusStyle = {
+    'in-progress':{ bg:'#D1FAE5', c:'#065F46', t:'진료 중' },
+    'waiting':{ bg:'#FEF3C7', c:'#92400E', t:'대기' },
+    'completed':{ bg:'#F1F5F9', c:'#64748B', t:'완료' },
+    'cancelled':{ bg:'#FEE2E2', c:'#991B1B', t:'취소' },
+  };
+
+  const handleStatus = (id, newStatus) => {
+    setQueue(q => q.map(p => p.id===id ? {...p, status:newStatus} : p));
+    setToast('상태가 업데이트되었습니다');
+  };
+
+  return (
+    <div style={{padding:'0 32px 32px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3, 1fr)',gap:14,marginBottom:20}}>
+        {[{icon:'⚡',l:'현재 진료',v:'김영수',sub:'내과 · 초진',c:C.primary},{icon:'⏳',l:'대기 환자',v:'5명',sub:'평균 대기 22분',c:C.warning},{icon:'✅',l:'오늘 완료',v:'28명',sub:'취소 3건 포함',c:C.success}].map(k=>(
+          <div key={k.l} style={{background:C.surface,borderRadius:12,padding:'16px 20px',border:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:14}}>
+            <div style={{width:44,height:44,borderRadius:10,background:`${k.c}15`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}}>{k.icon}</div>
+            <div>
+              <div style={{fontSize:13,color:C.ts,marginBottom:2}}>{k.l}</div>
+              <div style={{fontSize:18,fontWeight:700,color:C.tp}}>{k.v}</div>
+              <div style={{fontSize:11,color:C.ts}}>{k.sub}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{background:C.surface,borderRadius:14,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+        <div style={{padding:'14px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:8}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.tp,flex:1}}>오늘 진료 큐</h3>
+          <span style={{fontSize:12,color:C.ts}}>⠿ 드래그로 순서 변경 가능</span>
+        </div>
+        {queue.map((p, i) => {
+          const ss = statusStyle[p.status];
+          return (
+            <div key={p.id} onClick={()=>setDrawer(p)} style={{
+              display:'flex',alignItems:'center',gap:14,padding:'14px 20px',
+              borderBottom:`1px solid ${C.border}`,cursor:'pointer',
+              background: dragging===p.id ? `${C.primary}08` : 'transparent',
+              transition:'background 0.12s',
+            }}
+            draggable onDragStart={()=>setDragging(p.id)} onDragEnd={()=>setDragging(null)}>
+              <span style={{width:22,color:'#CBD5E1',fontSize:14,cursor:'grab'}}>⠿⠿</span>
+              <div style={{width:28,height:28,borderRadius:8,background:`${C.primary}15`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:C.primary}}>{i+1}</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:14,fontWeight:700,color:C.tp}}>{p.patient}</div>
+                <div style={{fontSize:12,color:C.ts,marginTop:1}}>{p.type} · {p.time} · {p.reason}</div>
+              </div>
+              <span style={{padding:'4px 10px',borderRadius:20,fontSize:11,fontWeight:600,background:ss.bg,color:ss.c}}>{ss.t}</span>
+              <div style={{display:'flex',gap:6}} onClick={e=>e.stopPropagation()}>
+                {p.status==='waiting' && <button onClick={()=>handleStatus(p.id,'in-progress')} style={{padding:'5px 10px',borderRadius:6,border:'none',background:`${C.primary}15`,color:C.primary,fontSize:11,fontWeight:600,cursor:'pointer'}}>진료 시작</button>}
+                {p.status==='in-progress' && <button onClick={()=>handleStatus(p.id,'completed')} style={{padding:'5px 10px',borderRadius:6,border:'none',background:`${C.success}15`,color:C.success,fontSize:11,fontWeight:600,cursor:'pointer'}}>완료</button>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {drawer && <Drawer item={drawer} onClose={()=>setDrawer(null)} />}
+      {toast && <Toast msg={toast} onDone={()=>setToast('')} />}
+    </div>
+  );
+}
+
+function StatsPage() {
+  const weekData = [
+    {day:'월',예약:32,취소:3,완료:28},{day:'화',예약:38,취소:2,완료:35},
+    {day:'수',예약:41,취소:5,완료:36},{day:'목',예약:36,취소:2,완료:34},
+    {day:'금',예약:45,취소:4,완료:40},{day:'토',예약:28,취소:1,완료:27},
+  ];
+  return (
+    <div style={{padding:'0 32px 32px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:16,marginBottom:20}}>
+        <div style={{background:C.surface,borderRadius:14,padding:24,border:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.tp,marginBottom:16}}>주간 예약 현황</h3>
+          <div style={{height:200}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={weekData} margin={{top:4,right:8,left:-20,bottom:4}}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis dataKey="day" tick={{fontSize:12,fill:C.ts}} />
+                <YAxis tick={{fontSize:11,fill:C.ts}} />
+                <Tooltip />
+                <Bar dataKey="예약" fill={C.primary} radius={[4,4,0,0]} opacity={0.85} />
+                <Bar dataKey="완료" fill={C.accent} radius={[4,4,0,0]} opacity={0.85} />
+                <Line type="monotone" dataKey="취소" stroke={C.danger} strokeWidth={2} dot={{fill:C.danger,r:3}} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{background:C.surface,borderRadius:14,padding:24,border:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.tp,marginBottom:16}}>진료과별 현황</h3>
+          {DOCTORS.map(d=>(
+            <div key={d.id} style={{marginBottom:12}}>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:4}}>
+                <span style={{color:C.tp,fontWeight:500}}>{d.dept}</span>
+                <span style={{color:d.color,fontWeight:700}}>{d.today}건</span>
+              </div>
+              <div style={{height:6,borderRadius:3,background:`${d.color}20`,overflow:'hidden'}}>
+                <div style={{height:'100%',borderRadius:3,background:d.color,width:`${(d.today/14)*100}%`}} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:14,padding:24,border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:C.tp,marginBottom:16}}>시간대별 예약 밀도</h3>
+        <div style={{height:180}}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={STATS_DATA} margin={{top:4,right:8,left:-20,bottom:4}}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="time" tick={{fontSize:11,fill:C.ts}} />
+              <YAxis tick={{fontSize:11,fill:C.ts}} />
+              <Tooltip />
+              <Area type="monotone" dataKey="예약" stroke={C.primary} fill={`${C.primary}20`} strokeWidth={2} />
+              <Area type="monotone" dataKey="완료" stroke={C.accent} fill={`${C.accent}15`} strokeWidth={2} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScheduleSettingPage() {
+  const [toast, setToast] = useState('');
+  return (
+    <div style={{padding:'0 32px 32px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+        {DOCTORS.map(doc=>(
+          <div key={doc.id} style={{background:C.surface,borderRadius:14,padding:24,border:`1px solid ${C.border}`}}>
+            <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20,paddingBottom:16,borderBottom:`1px solid ${C.border}`}}>
+              <div style={{width:44,height:44,borderRadius:10,background:`${doc.color}20`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}}>👨‍⚕️</div>
+              <div>
+                <div style={{fontSize:15,fontWeight:700,color:C.tp}}>Dr. {doc.name}</div>
+                <div style={{fontSize:12,color:C.ts}}>{doc.dept} · {doc.title}</div>
+              </div>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:12}}>
+              {[{l:'운영 시간',v:'09:00 – 18:00'},{l:'슬롯 간격',v:'30분'},{l:'점심 휴식',v:'12:00 – 13:00'}].map(f=>(
+                <div key={f.l} style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <span style={{fontSize:13,color:C.ts}}>{f.l}</span>
+                  <input defaultValue={f.v} style={{padding:'6px 10px',borderRadius:6,border:`1px solid ${C.border}`,fontSize:13,width:140,textAlign:'right'}} />
+                </div>
+              ))}
+              <div>
+                <div style={{fontSize:13,color:C.ts,marginBottom:6}}>운영 요일</div>
+                <div style={{display:'flex',gap:5}}>
+                  {['월','화','수','목','금','토'].map((d,i)=>(
+                    <button key={d} style={{width:34,height:34,borderRadius:8,border:`1px solid ${i<5?doc.color:C.border}`,fontSize:12,fontWeight:600,cursor:'pointer',background:i<5?`${doc.color}15`:'transparent',color:i<5?doc.color:C.ts}}>{d}</button>
+                  ))}
+                </div>
+              </div>
+              <button onClick={()=>setToast('스케줄이 저장되었습니다')} style={{width:'100%',padding:'9px 0',borderRadius:8,border:'none',background:doc.color,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer',marginTop:4}}>저장</button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {toast && <Toast msg={toast} onDone={()=>setToast('')} />}
+    </div>
+  );
+}
+
+function App() {
+  const [tab, setTab] = useState('home');
+  const meta = PAGE_META[tab] || PAGE_META.home;
+
+  const renderContent = () => {
+    if (tab==='home') return <HomePage onTab={setTab} />;
+    if (tab==='booking') return <BookingPage />;
+    if (tab==='doctor-queue') return <QueuePage />;
+    if (tab==='stats') return <StatsPage />;
+    if (tab==='schedule') return <ScheduleSettingPage />;
+  };
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh',background:C.bg}}>
+      {/* 상단 네비 */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:4}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginRight:16}}>
+          <div style={{width:32,height:32,borderRadius:8,background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>🏥</div>
+          <span style={{fontSize:15,fontWeight:700,color:C.tp}}>MediSchedule</span>
+        </div>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{
+            display:'flex',alignItems:'center',gap:6,padding:'7px 14px',borderRadius:8,border:'none',
+            cursor:'pointer',fontSize:13,fontWeight:tab===t.id?700:500,
+            background:tab===t.id?`${C.primary}15`:'transparent',
+            color:tab===t.id?C.primary:C.ts,
+            borderBottom:tab===t.id?`2px solid ${C.primary}`:'2px solid transparent',
+            transition:'all 0.15s',
+          }}>
+            <span>{t.icon}</span><span>{t.label}</span>
+          </button>
+        ))}
+        <div style={{flex:1}} />
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 14px',borderRadius:8,background:C.bg,border:`1px solid ${C.border}`,fontSize:13,color:C.ts,cursor:'text'}}>🔍 검색...</div>
+        <button style={{background:'none',border:'none',cursor:'pointer',fontSize:20,position:'relative'}}>
+          🔔<span style={{position:'absolute',top:0,right:0,width:8,height:8,borderRadius:'50%',background:C.danger}} />
+        </button>
+        <div style={{width:32,height:32,borderRadius:'50%',background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>의</div>
+      </header>
+
+      {/* 히어로 배너 */}
+      <div style={{background:`linear-gradient(135deg, ${C.hero1}, ${C.hero2})`,padding:'24px 32px',color:'#fff'}}>
+        <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between'}}>
+          <div>
+            <h1 style={{fontSize:20,fontWeight:700,marginBottom:6}}>{meta.title}</h1>
+            <div style={{display:'flex',gap:24,marginTop:8}}>
+              {meta.kpis.map(k=>(
+                <div key={k.l} style={{background:'rgba(255,255,255,0.15)',borderRadius:8,padding:'8px 16px',backdropFilter:'blur(4px)'}}>
+                  <div style={{fontSize:11,opacity:0.75,marginBottom:1}}>{k.l}</div>
+                  <div style={{fontSize:16,fontWeight:700}}>{k.v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{fontSize:13,opacity:0.75}}>2026.04.15 (수) 오후 2:30</div>
+        </div>
+      </div>
+
+      {/* 콘텐츠 */}
+      <main style={{flex:1,paddingTop:24}}>
+        {renderContent()}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

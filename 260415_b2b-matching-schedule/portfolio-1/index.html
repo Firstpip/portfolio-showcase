@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>수출상담회 B2B 매칭 스케줄링 플랫폼 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" />
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;font-family:'Pretendard',sans-serif;background:#F4F6F9}
+#root{display:flex;width:100%;height:100vh;overflow:hidden}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:#f1f5f9}::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef } = React;
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } = Recharts;
+
+const C = {
+  primary:'#1E3A5F', secondary:'#2D9CDB', accent:'#0EA5E9',
+  bg:'#F4F6F9', surface:'#FFFFFF', border:'#E2E8F0',
+  tp:'#1A1A2E', ts:'#6B7280', success:'#10B981', warning:'#F59E0B', danger:'#EF4444',
+  sidebar:'#152A46', sidebarHover:'#1E3A5F', sidebarActive:'#2D9CDB',
+};
+
+const COMPANIES = [
+  { id:1, name:'(주)한국전자부품', country:'대한민국', product:'반도체 부품', category:'전자', matches:3, status:'confirmed', lang:'ko', grade:'VIP' },
+  { id:2, name:'글로벌무역(주)', country:'대한민국', product:'화학소재', category:'화학', matches:1, status:'pending', lang:'ko', grade:'일반' },
+  { id:3, name:'화성정밀기계', country:'대한민국', product:'산업기계', category:'기계', matches:4, status:'confirmed', lang:'ko', grade:'VIP' },
+  { id:4, name:'K-푸드테크(주)', country:'대한민국', product:'식품가공기계', category:'식품', matches:2, status:'confirmed', lang:'ko', grade:'일반' },
+  { id:5, name:'스마트소재(주)', country:'대한민국', product:'스마트 소재', category:'소재', matches:0, status:'pending', lang:'ko', grade:'신규' },
+  { id:6, name:'에코에너지(주)', country:'대한민국', product:'친환경 에너지', category:'에너지', matches:2, status:'confirmed', lang:'ko', grade:'일반' },
+];
+
+const BUYERS = [
+  { id:101, name:'TechVenture Ltd.', country:'영국', product:'전자부품 구매', category:'전자', matches:2, status:'confirmed', lang:'en', grade:'VIP' },
+  { id:102, name:'Asia Pacific Trading', country:'싱가포르', product:'화학소재', category:'화학', matches:1, status:'pending', lang:'en', grade:'일반' },
+  { id:103, name:'Müller Industries GmbH', country:'독일', product:'산업기계', category:'기계', matches:3, status:'confirmed', lang:'en', grade:'VIP' },
+  { id:104, name:'Green Energy Corp.', country:'미국', product:'친환경 제품', category:'에너지', matches:2, status:'confirmed', lang:'en', grade:'일반' },
+  { id:105, name:'Pacific Foods Inc.', country:'호주', product:'식품가공설비', category:'식품', matches:1, status:'pending', lang:'en', grade:'신규' },
+];
+
+const MEMBERS = [
+  ...COMPANIES.map(c => ({...c, type:'기업', email:`info@${c.name.replace(/[^a-z]/gi,'').toLowerCase()}.co.kr`, joined:'2026-04-10'})),
+  ...BUYERS.map(b => ({...b, type:'바이어', email:`contact@${b.name.replace(/\s/g,'').toLowerCase()}.com`, joined:'2026-04-12'})),
+];
+
+// 슬롯 생성 (10:00-18:00, 40분 간격, 점심 제외)
+function genSlots() {
+  const times = [];
+  for (let h = 10; h < 18; h++) {
+    for (let m = 0; m < 60; m += 40) {
+      const t = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+      const end = new Date(0, 0, 0, h, m + 40);
+      const te = `${String(end.getHours()).padStart(2,'0')}:${String(end.getMinutes()).padStart(2,'0')}`;
+      const isLunch = (h === 12 && m < 60) || (h === 13 && m === 0);
+      if (!isLunch && end.getHours() <= 18) times.push({ time: t, endTime: te, disabled: isLunch });
+    }
+  }
+  return times;
+}
+
+const TIME_SLOTS_RAW = genSlots();
+
+const SLOT_STATUS = ['confirmed','confirmed','pending','available','confirmed','rejected','available','pending','confirmed','available','available','confirmed'];
+const SLOTS = TIME_SLOTS_RAW.map((s, i) => ({
+  ...s,
+  company: COMPANIES[i % COMPANIES.length].name,
+  buyer: BUYERS[i % BUYERS.length].name,
+  status: SLOT_STATUS[i % SLOT_STATUS.length],
+}));
+
+const NAV = [
+  { id:'home', icon:'🏢', label:'홈' },
+  { id:'scheduling', icon:'📅', label:'스케줄링' },
+  { id:'profiles', icon:'🏭', label:'기업 정보' },
+  { id:'admin', icon:'⚙️', label:'관리자' },
+  { id:'export', icon:'📊', label:'엑셀 내보내기' },
+];
+
+const BAR_DATA = [
+  { time:'10:00', 확정:3, 대기:1 }, { time:'10:40', 확정:4, 대기:0 },
+  { time:'11:20', 확정:2, 대기:2 }, { time:'14:00', 확정:5, 대기:1 },
+  { time:'14:40', 확정:3, 대기:2 }, { time:'15:20', 확정:4, 대기:0 },
+  { time:'16:00', 확정:6, 대기:1 }, { time:'16:40', 확정:3, 대기:2 },
+  { time:'17:20', 확정:4, 대기:1 },
+];
+const PIE_DATA = [
+  { name:'확정', value:28, color:C.success },
+  { name:'대기', value:8, color:C.warning },
+  { name:'거절', value:3, color:C.danger },
+  { name:'가능', value:12, color:'#CBD5E1' },
+];
+
+function Badge({ status }) {
+  const map = { confirmed:{bg:'#D1FAE5',c:'#065F46',t:'확정'}, pending:{bg:'#FEF3C7',c:'#92400E',t:'대기'}, rejected:{bg:'#FEE2E2',c:'#991B1B',t:'거절'}, available:{bg:'#F1F5F9',c:'#475569',t:'가능'}, VIP:{bg:'#EDE9FE',c:'#6D28D9',t:'VIP'}, 신규:{bg:'#DBEAFE',c:'#1D4ED8',t:'신규'}, 일반:{bg:'#F1F5F9',c:'#475569',t:'일반'} };
+  const s = map[status] || map.available;
+  return <span style={{display:'inline-flex',alignItems:'center',padding:'2px 8px',borderRadius:20,fontSize:12,fontWeight:600,background:s.bg,color:s.c}}>{s.t}</span>;
+}
+
+function Modal({ title, onClose, children }) {
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:24}} onClick={onClose}>
+      <div style={{background:C.surface,borderRadius:16,padding:28,width:520,maxWidth:'100%',maxHeight:'80vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.2)'}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20}}>
+          <h3 style={{fontSize:18,fontWeight:700,color:C.tp}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:20,color:C.ts,lineHeight:1}}>✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Toast({ msg, onDone }) {
+  React.useEffect(() => { const t = setTimeout(onDone, 2200); return ()=>clearTimeout(t); }, []);
+  return <div style={{position:'fixed',bottom:32,right:32,background:C.primary,color:'#fff',padding:'12px 20px',borderRadius:10,fontSize:14,fontWeight:600,zIndex:400,boxShadow:'0 8px 24px rgba(0,0,0,0.3)'}}>{msg}</div>;
+}
+
+function KpiCard({ icon, label, value, sub, color }) {
+  return (
+    <div style={{background:C.surface,borderRadius:12,padding:'20px 24px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}>
+        <div style={{width:40,height:40,borderRadius:10,background:`${color}20`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>{icon}</div>
+        <span style={{fontSize:13,color:C.ts,fontWeight:500}}>{label}</span>
+      </div>
+      <div style={{fontSize:28,fontWeight:700,color:C.tp}}>{value}</div>
+      {sub && <div style={{fontSize:12,color:C.ts,marginTop:4}}>{sub}</div>}
+    </div>
+  );
+}
+
+function SideNav({ page, onNav }) {
+  return (
+    <aside style={{width:260,background:C.sidebar,display:'flex',flexDirection:'column',flexShrink:0}}>
+      <div style={{padding:'24px 20px 16px'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:36,height:36,borderRadius:8,background:C.secondary,display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>🌐</div>
+          <div>
+            <div style={{color:'#fff',fontWeight:700,fontSize:14,lineHeight:1.2}}>수출상담회 매칭</div>
+            <div style={{color:'#94a3b8',fontSize:11,marginTop:2}}>화성시 B2B 플랫폼</div>
+          </div>
+        </div>
+        <div style={{marginTop:12,display:'flex',gap:6}}>
+          <button style={{flex:1,padding:'5px 0',borderRadius:6,fontSize:11,fontWeight:600,border:'none',cursor:'pointer',background:'#fff',color:C.primary}}>한국어</button>
+          <button style={{flex:1,padding:'5px 0',borderRadius:6,fontSize:11,fontWeight:600,border:'none',cursor:'pointer',background:'transparent',color:'#94a3b8',border:'1px solid #334155'}}>English</button>
+        </div>
+      </div>
+      <div style={{height:1,background:'#1e3a5f',margin:'0 16px'}} />
+      <nav style={{flex:1,padding:'12px 8px'}}>
+        {NAV.map(n => (
+          <button key={n.id} onClick={()=>onNav(n.id)} style={{
+            display:'flex',alignItems:'center',gap:10,width:'100%',padding:'10px 12px',
+            borderRadius:8,border:'none',cursor:'pointer',textAlign:'left',marginBottom:2,
+            background: page===n.id ? `${C.secondary}25` : 'transparent',
+            color: page===n.id ? '#fff' : '#94a3b8',
+            fontWeight: page===n.id ? 600 : 400, fontSize:14,
+            borderLeft: page===n.id ? `3px solid ${C.secondary}` : '3px solid transparent',
+            transition:'all 0.15s',
+          }}>
+            <span>{n.icon}</span><span>{n.label}</span>
+          </button>
+        ))}
+      </nav>
+      <div style={{padding:'12px 16px',borderTop:'1px solid #1e3a5f'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:32,height:32,borderRadius:'50%',background:C.secondary,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700}}>관</div>
+          <div>
+            <div style={{color:'#fff',fontSize:13,fontWeight:600}}>관리자</div>
+            <div style={{color:'#64748b',fontSize:11}}>admin@hwaseong.go.kr</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function TopBar({ title }) {
+  return (
+    <header style={{height:56,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',padding:'0 24px',gap:12,flexShrink:0}}>
+      <h1 style={{fontSize:16,fontWeight:700,color:C.tp,flex:1}}>{title}</h1>
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 14px',borderRadius:8,background:C.bg,border:`1px solid ${C.border}`,fontSize:13,color:C.ts,cursor:'text'}}>
+        🔍 <span>검색...</span>
+      </div>
+      <button style={{background:'none',border:'none',cursor:'pointer',fontSize:20,position:'relative'}}>
+        🔔
+        <span style={{position:'absolute',top:0,right:0,width:8,height:8,borderRadius:'50%',background:C.danger}} />
+      </button>
+      <div style={{width:32,height:32,borderRadius:'50%',background:C.secondary,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}}>관</div>
+    </header>
+  );
+}
+
+function HomePage() {
+  return (
+    <div>
+      <div style={{background:`linear-gradient(135deg, ${C.primary} 0%, ${C.secondary} 100%)`,borderRadius:16,padding:'28px 32px',marginBottom:24,color:'#fff'}}>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8}}>
+          <span style={{fontSize:24}}>🌐</span>
+          <h2 style={{fontSize:20,fontWeight:700}}>2026 화성시 해외바이어 초청 수출상담회</h2>
+        </div>
+        <p style={{fontSize:14,opacity:0.85,marginBottom:16}}>화성시 관내 수출기업과 해외 바이어 간의 B2B 매칭 스케줄링 플랫폼입니다.</p>
+        <div style={{display:'flex',gap:20}}>
+          {[{l:'행사일',v:'2026.05.15'},{l:'장소',v:'화성시 컨벤션센터'},{l:'상담 시간',v:'10:00 - 18:00'},{l:'슬롯 간격',v:'40분'}].map(i=>(
+            <div key={i.l} style={{background:'rgba(255,255,255,0.15)',borderRadius:8,padding:'8px 16px',backdropFilter:'blur(4px)'}}>
+              <div style={{fontSize:11,opacity:0.75,marginBottom:2}}>{i.l}</div>
+              <div style={{fontSize:14,fontWeight:700}}>{i.v}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4, 1fr)',gap:16,marginBottom:24}}>
+        <KpiCard icon="🏭" label="참여 기업" value="24" sub="국내 수출기업" color={C.secondary} />
+        <KpiCard icon="🌏" label="해외 바이어" value="18" sub="7개국 참가" color={C.accent} />
+        <KpiCard icon="✅" label="확정 매칭" value="51" sub="전체 슬롯의 72%" color={C.success} />
+        <KpiCard icon="⏳" label="대기 요청" value="12" sub="처리 필요" color={C.warning} />
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 320px',gap:16}}>
+        <div style={{background:C.surface,borderRadius:12,padding:24,border:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.tp,marginBottom:16}}>시간대별 매칭 현황</h3>
+          <div style={{height:220}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={BAR_DATA} margin={{top:4,right:8,left:-20,bottom:4}}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis dataKey="time" tick={{fontSize:11,fill:C.ts}} />
+                <YAxis tick={{fontSize:11,fill:C.ts}} />
+                <Tooltip />
+                <Bar dataKey="확정" fill={C.success} radius={[4,4,0,0]} />
+                <Bar dataKey="대기" fill={C.warning} radius={[4,4,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{background:C.surface,borderRadius:12,padding:24,border:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.tp,marginBottom:16}}>매칭 상태</h3>
+          <div style={{height:160}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={PIE_DATA} cx="50%" cy="50%" innerRadius={45} outerRadius={70} paddingAngle={3} dataKey="value">
+                  {PIE_DATA.map((e,i)=><Cell key={i} fill={e.color} />)}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:8,marginTop:8}}>
+            {PIE_DATA.map(d=>(
+              <div key={d.name} style={{display:'flex',alignItems:'center',gap:4,fontSize:12}}>
+                <span style={{width:8,height:8,borderRadius:2,background:d.color,display:'inline-block'}} />
+                <span style={{color:C.ts}}>{d.name} {d.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SchedulingPage() {
+  const [selected, setSelected] = useState(null);
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState('');
+
+  const statusStyle = { confirmed:{bg:'#D1FAE5',c:'#065F46'}, pending:{bg:'#FEF3C7',c:'#92400E'}, rejected:{bg:'#FEE2E2',c:'#991B1B'}, available:{bg:'#F8FAFC',c:'#94A3B8'} };
+
+  return (
+    <div>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20}}>
+        <div>
+          <h2 style={{fontSize:16,fontWeight:700,color:C.tp}}>수출상담 스케줄링</h2>
+          <p style={{fontSize:13,color:C.ts,marginTop:2}}>2026년 5월 15일 · 10:00 – 18:00 · 40분 간격 · 점심(12:00-13:00) 비활성화</p>
+        </div>
+        <button onClick={()=>setModal('new')} style={{padding:'9px 18px',background:C.secondary,color:'#fff',border:'none',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer'}}>+ 예약 신청</button>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+        <div style={{display:'grid',gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 100px 80px',background:C.bg,borderBottom:`1px solid ${C.border}`,padding:'10px 16px',fontSize:12,fontWeight:600,color:C.ts}}>
+          <span>시간</span><span>기업명</span><span>바이어</span><span>국가</span><span>품목</span><span style={{textAlign:'center'}}>상태</span><span></span>
+        </div>
+        {SLOTS.map((slot, i) => {
+          const isLunch = slot.time >= '12:00' && slot.time < '13:00';
+          if (isLunch && i === SLOTS.findIndex(s => s.time >= '12:00')) {
+            return (
+              <div key="lunch" style={{display:'grid',gridTemplateColumns:'80px 1fr',padding:'10px 16px',background:'#F8FAFC',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:13,fontWeight:600,color:'#94A3B8'}}>12:00</span>
+                <span style={{fontSize:12,color:'#94A3B8',fontStyle:'italic'}}>🍽️ 점심시간 (12:00 – 13:00) — 예약 비활성화</span>
+              </div>
+            );
+          }
+          if (isLunch) return null;
+          const ss = statusStyle[slot.status] || statusStyle.available;
+          return (
+            <div key={i} onClick={()=>setSelected(selected===i?null:i)} style={{
+              display:'grid',gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 100px 80px',
+              padding:'10px 16px',borderBottom:`1px solid ${C.border}`,cursor:'pointer',
+              background: selected===i ? `${C.secondary}10` : 'transparent',
+              transition:'background 0.15s',
+            }}>
+              <span style={{fontSize:13,fontWeight:600,color:C.secondary}}>{slot.time}</span>
+              <span style={{fontSize:13,color:C.tp}}>{slot.company}</span>
+              <span style={{fontSize:13,color:C.tp}}>{slot.buyer}</span>
+              <span style={{fontSize:12,color:C.ts}}>🇩🇪🇬🇧🇺🇸🇸🇬🇦🇺'[i%5]</span>
+              <span style={{fontSize:12,color:C.ts}}>전자/기계/화학</span>
+              <span style={{textAlign:'center'}}>
+                <span style={{padding:'3px 10px',borderRadius:20,fontSize:11,fontWeight:600,background:ss.bg,color:ss.c}}>
+                  {slot.status==='confirmed'?'확정':slot.status==='pending'?'대기':slot.status==='rejected'?'거절':'가능'}
+                </span>
+              </span>
+              <div style={{display:'flex',gap:4,justifyContent:'flex-end'}}>
+                {slot.status==='pending' && <>
+                  <button onClick={e=>{e.stopPropagation();setToast('승인 처리되었습니다');}} style={{padding:'2px 8px',fontSize:11,background:C.success,color:'#fff',border:'none',borderRadius:4,cursor:'pointer'}}>승인</button>
+                  <button onClick={e=>{e.stopPropagation();setToast('거절 처리되었습니다');}} style={{padding:'2px 8px',fontSize:11,background:C.danger,color:'#fff',border:'none',borderRadius:4,cursor:'pointer'}}>거절</button>
+                </>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {modal==='new' && (
+        <Modal title="상담 예약 신청" onClose={()=>setModal(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            {[
+              {l:'기업 선택',type:'select',opts:COMPANIES.map(c=>c.name)},
+              {l:'바이어 선택',type:'select',opts:BUYERS.map(b=>b.name)},
+              {l:'희망 시간',type:'select',opts:SLOTS.filter(s=>s.status==='available').map(s=>s.time+' – '+s.endTime)},
+              {l:'상담 목적',type:'textarea'},
+            ].map(f=>(
+              <div key={f.l}>
+                <label style={{fontSize:13,fontWeight:600,color:C.tp,display:'block',marginBottom:5}}>{f.l}</label>
+                {f.type==='select' ? (
+                  <select style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,color:C.tp,background:'#fff'}}>
+                    <option value="">선택...</option>
+                    {f.opts.map(o=><option key={o}>{o}</option>)}
+                  </select>
+                ) : (
+                  <textarea rows={3} placeholder="상담 목적을 입력하세요" style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,resize:'vertical'}} />
+                )}
+              </div>
+            ))}
+            <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}>
+              <button onClick={()=>setModal(null)} style={{padding:'9px 18px',borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,color:C.tp,fontSize:13,cursor:'pointer'}}>취소</button>
+              <button onClick={()=>{setModal(null);setToast('예약 신청이 접수되었습니다');}} style={{padding:'9px 18px',borderRadius:8,border:'none',background:C.secondary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>신청</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {toast && <Toast msg={toast} onDone={()=>setToast('')} />}
+    </div>
+  );
+}
+
+function ProfilesPage() {
+  const [tab, setTab] = useState('company');
+  const [detail, setDetail] = useState(null);
+  const [search, setSearch] = useState('');
+
+  const list = tab==='company' ? COMPANIES : BUYERS;
+  const filtered = list.filter(i=>i.name.includes(search)||(i.product||'').includes(search));
+
+  return (
+    <div>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20}}>
+        {[{id:'company',l:'참여 기업'},{ id:'buyer',l:'해외 바이어'}].map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{padding:'7px 16px',borderRadius:20,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,background:tab===t.id?C.secondary:'#E2E8F0',color:tab===t.id?'#fff':C.ts}}>{t.l}</button>
+        ))}
+        <div style={{flex:1}} />
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="기업명·제품 검색..." style={{padding:'8px 14px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,width:220}} />
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3, 1fr)',gap:16}}>
+        {filtered.map(item=>(
+          <div key={item.id} onClick={()=>setDetail(item)} style={{background:C.surface,borderRadius:12,padding:20,border:`1px solid ${C.border}`,cursor:'pointer',transition:'all 0.15s',boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}>
+              <div style={{width:44,height:44,borderRadius:10,background:`${C.secondary}20`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}}>
+                {tab==='company'?'🏭':'🌏'}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:14,fontWeight:700,color:C.tp,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{item.name}</div>
+                <div style={{fontSize:12,color:C.ts,marginTop:2}}>{item.country}</div>
+              </div>
+              <Badge status={item.grade} />
+            </div>
+            <div style={{fontSize:13,color:C.ts,marginBottom:8}}>📦 {item.product}</div>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',borderTop:`1px solid ${C.border}`,paddingTop:10}}>
+              <span style={{fontSize:12,color:C.ts}}>매칭 {item.matches}건</span>
+              <Badge status={item.status} />
+            </div>
+          </div>
+        ))}
+      </div>
+      {detail && (
+        <Modal title={detail.name} onClose={()=>setDetail(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {[
+              {l:'국가',v:detail.country},{l:'분야',v:detail.category},{l:'주요 제품/구매 품목',v:detail.product},
+              {l:'매칭 건수',v:`${detail.matches}건`},{l:'등록 상태',v:<Badge status={detail.status} />},{l:'등급',v:<Badge status={detail.grade} />},
+            ].map(r=>(
+              <div key={r.l} style={{display:'flex',gap:16,padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:13,color:C.ts,width:140,flexShrink:0}}>{r.l}</span>
+                <span style={{fontSize:13,color:C.tp,fontWeight:500}}>{r.v}</span>
+              </div>
+            ))}
+            <div>
+              <div style={{fontSize:13,color:C.ts,marginBottom:6}}>소개서 파일</div>
+              <div style={{padding:'10px 16px',borderRadius:8,border:`1px dashed ${C.border}`,fontSize:13,color:C.secondary,cursor:'pointer',display:'flex',alignItems:'center',gap:8}}>
+                📄 회사소개서_{detail.name}.pdf <span style={{marginLeft:'auto',fontSize:12,color:C.ts}}>1.2 MB</span>
+              </div>
+            </div>
+            <textarea rows={2} placeholder="메모 입력..." style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,resize:'vertical'}} />
+            <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+              <button onClick={()=>setDetail(null)} style={{padding:'8px 16px',borderRadius:8,border:`1px solid ${C.border}`,background:'#fff',fontSize:13,cursor:'pointer'}}>닫기</button>
+              <button style={{padding:'8px 16px',borderRadius:8,border:'none',background:C.secondary,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>상담 신청</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function AdminPage() {
+  const [detail, setDetail] = useState(null);
+  const [toast, setToast] = useState('');
+
+  return (
+    <div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4, 1fr)',gap:16,marginBottom:24}}>
+        <KpiCard icon="👥" label="전체 회원" value="42" sub="기업 24 · 바이어 18" color={C.primary} />
+        <KpiCard icon="✅" label="확정 매칭" value="51" sub="" color={C.success} />
+        <KpiCard icon="⏳" label="처리 대기" value="12" sub="승인 필요" color={C.warning} />
+        <KpiCard icon="🏢" label="방문 초청" value="8" sub="Company Visit" color={C.accent} />
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:12}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.tp,flex:1}}>회원 관리</h3>
+          <select style={{padding:'6px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,color:C.tp}}>
+            <option>전체</option><option>기업</option><option>바이어</option>
+          </select>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 80px 1fr 80px 80px 100px',background:C.bg,borderBottom:`1px solid ${C.border}`,padding:'10px 16px',fontSize:12,fontWeight:600,color:C.ts}}>
+          <span>이름</span><span>유형</span><span>이메일</span><span>매칭</span><span>등급</span><span>상태</span>
+        </div>
+        {MEMBERS.slice(0, 8).map((m, i) => (
+          <div key={i} onClick={()=>setDetail(m)} style={{display:'grid',gridTemplateColumns:'1fr 80px 1fr 80px 80px 100px',padding:'11px 16px',borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background 0.12s'}}>
+            <span style={{fontSize:13,fontWeight:600,color:C.tp}}>{m.name}</span>
+            <span style={{fontSize:12,color:m.type==='기업'?C.primary:C.accent}}>{m.type}</span>
+            <span style={{fontSize:12,color:C.ts}}>{m.email}</span>
+            <span style={{fontSize:13,fontWeight:600,color:C.tp,textAlign:'center'}}>{m.matches}</span>
+            <span><Badge status={m.grade} /></span>
+            <div style={{display:'flex',gap:4}}>
+              <button onClick={e=>{e.stopPropagation();setToast('처리 완료');}} style={{padding:'2px 8px',fontSize:11,background:`${C.success}15`,color:C.success,border:'none',borderRadius:4,cursor:'pointer'}}>승인</button>
+              <button onClick={e=>{e.stopPropagation();setToast('비활성화 처리');}} style={{padding:'2px 8px',fontSize:11,background:`${C.danger}15`,color:C.danger,border:'none',borderRadius:4,cursor:'pointer'}}>비활성</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {detail && (
+        <Modal title={`${detail.type} 상세: ${detail.name}`} onClose={()=>setDetail(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {[{l:'유형',v:detail.type},{l:'이메일',v:detail.email},{l:'국가',v:detail.country},{l:'제품/품목',v:detail.product},{l:'매칭 건수',v:`${detail.matches}건`}].map(r=>(
+              <div key={r.l} style={{display:'flex',gap:16,padding:'8px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:13,color:C.ts,width:100,flexShrink:0}}>{r.l}</span>
+                <span style={{fontSize:13,color:C.tp,fontWeight:500}}>{r.v}</span>
+              </div>
+            ))}
+            <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:8}}>
+              <button onClick={()=>setDetail(null)} style={{padding:'8px 16px',borderRadius:8,border:`1px solid ${C.border}`,background:'#fff',fontSize:13,cursor:'pointer'}}>닫기</button>
+              <button style={{padding:'8px 16px',borderRadius:8,border:'none',background:C.danger,color:'#fff',fontSize:13,fontWeight:600,cursor:'pointer'}}>비활성화</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {toast && <Toast msg={toast} onDone={()=>setToast('')} />}
+    </div>
+  );
+}
+
+function ExportPage() {
+  const [toast, setToast] = useState('');
+  const sheets = [
+    { id:'members', label:'회원 목록', desc:'기업/바이어 전체 정보', count:'42건', icon:'👥' },
+    { id:'matching', label:'매칭 현황', desc:'예약·확정·거절 내역', count:'71건', icon:'📅' },
+    { id:'schedule', label:'상담 일정표', desc:'시간대별 슬롯 현황', count:'12슬롯', icon:'🗓️' },
+    { id:'visit', label:'방문 초청', desc:'Company Visit 신청 내역', count:'8건', icon:'🏢' },
+  ];
+  const [selected, setSelected] = useState(new Set(['members','matching']));
+
+  return (
+    <div>
+      <div style={{background:C.surface,borderRadius:12,border:`1px solid ${C.border}`,padding:24,marginBottom:20}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:C.tp,marginBottom:16}}>엑셀 내보내기</h3>
+        <p style={{fontSize:13,color:C.ts,marginBottom:20}}>내보낼 데이터 항목을 선택하면 다중 시트 xlsx 파일로 생성됩니다.</p>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(2, 1fr)',gap:12,marginBottom:20}}>
+          {sheets.map(s=>(
+            <div key={s.id} onClick={()=>{const ns=new Set(selected);ns.has(s.id)?ns.delete(s.id):ns.add(s.id);setSelected(ns);}} style={{
+              padding:'16px 20px',borderRadius:10,border:`2px solid ${selected.has(s.id)?C.secondary:C.border}`,
+              cursor:'pointer',background:selected.has(s.id)?`${C.secondary}08`:'#fff',
+              display:'flex',alignItems:'center',gap:14,transition:'all 0.15s',
+            }}>
+              <span style={{fontSize:24}}>{s.icon}</span>
+              <div style={{flex:1}}>
+                <div style={{fontSize:14,fontWeight:600,color:C.tp}}>{s.label}</div>
+                <div style={{fontSize:12,color:C.ts,marginTop:2}}>{s.desc}</div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:13,fontWeight:700,color:selected.has(s.id)?C.secondary:C.ts}}>{s.count}</div>
+                <div style={{width:18,height:18,borderRadius:4,border:`2px solid ${selected.has(s.id)?C.secondary:C.border}`,background:selected.has(s.id)?C.secondary:'transparent',display:'flex',alignItems:'center',justifyContent:'center',marginTop:4,marginLeft:'auto'}}>
+                  {selected.has(s.id) && <span style={{color:'#fff',fontSize:11,lineHeight:1}}>✓</span>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 20px',background:C.bg,borderRadius:10,marginBottom:16}}>
+          <span style={{fontSize:13,color:C.ts}}>선택된 시트: <strong style={{color:C.tp}}>{selected.size}개</strong></span>
+          <span style={{fontSize:13,color:C.ts}}>예상 파일 크기: <strong style={{color:C.tp}}>약 2.4 MB</strong></span>
+        </div>
+        <button onClick={()=>setToast('xlsx 파일 다운로드를 시작합니다')} disabled={selected.size===0} style={{
+          width:'100%',padding:'12px 0',borderRadius:10,border:'none',fontSize:14,fontWeight:700,cursor:'pointer',
+          background:selected.size>0?C.secondary:'#E2E8F0',color:selected.size>0?'#fff':'#94A3B8',
+          transition:'all 0.15s',
+        }}>
+          📥 엑셀 파일 다운로드 ({selected.size}개 시트)
+        </button>
+      </div>
+      {toast && <Toast msg={toast} onDone={()=>setToast('')} />}
+    </div>
+  );
+}
+
+const PAGE_TITLES = { home:'대시보드', scheduling:'수출상담 스케줄링', profiles:'기업·바이어 정보', admin:'관리자 대시보드', export:'엑셀 내보내기' };
+
+function App() {
+  const [page, setPage] = useState('home');
+  const renderPage = () => {
+    if (page==='home') return <HomePage />;
+    if (page==='scheduling') return <SchedulingPage />;
+    if (page==='profiles') return <ProfilesPage />;
+    if (page==='admin') return <AdminPage />;
+    if (page==='export') return <ExportPage />;
+  };
+  return (
+    <div style={{display:'flex',width:'100%',height:'100vh',overflow:'hidden'}}>
+      <SideNav page={page} onNav={setPage} />
+      <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <TopBar title={PAGE_TITLES[page]} />
+        <main style={{flex:1,overflow:'auto',padding:24,background:C.bg}}>
+          {renderPage()}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
