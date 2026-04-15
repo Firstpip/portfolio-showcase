@@ -2403,6 +2403,15 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
             </div>
           )}
 
+          {/* 착수일/마감일 미설정 안내 (수주 후 단계인데 누락됐을 때) */}
+          {HAS_MILESTONES.includes(project.current_status) && (!project.start_date || !project.deadline) && tab !== 'info' && (
+            <div onClick={() => setTab('info')}
+              style={{ marginBottom:8, padding:'0.5rem 0.75rem', borderRadius:8, background:'#fdcb6e1a', border:'1px solid #fdcb6e44', color:'#fdcb6e', fontSize:'0.8rem', cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}
+              title="클릭하면 정보 탭으로 이동">
+              ⚠ {!project.start_date && !project.deadline ? '착수일·마감일 미설정' : !project.start_date ? '착수일 미설정' : '마감일 미설정'} — 정보 탭에서 입력
+            </div>
+          )}
+
           <div style={{ display:'flex', borderBottom:'1px solid var(--border)' }}>
             {tabs.map(t => (
               <button key={t.key} onClick={() => setTab(t.key)} style={{
@@ -2902,12 +2911,36 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                       return (<button key={s} onClick={() => setNewStatus(s)} style={{ padding:'0.5rem 1rem', borderRadius:10, cursor:'pointer', transition:'all 0.15s', fontSize:'0.85rem', fontWeight:selected?600:400, background:selected?sm.color+'33':'var(--surface2)', color:selected?sm.color:'var(--text2)', border:selected?`2px solid ${sm.color}`:'2px solid transparent' }}>{sm.emoji} {sm.label}</button>);
                     })}
                   </div>
-                  <input type="text" placeholder="메모 (선택)" value={note} onChange={e => setNote(e.target.value)} style={{ ...inputS, marginBottom:'0.75rem' }}
-                    onKeyDown={e => { if (e.key==='Enter' && newStatus) onSave(project,newStatus,note); }} />
-                  <button onClick={() => onSave(project,newStatus,note)} disabled={!newStatus||saving}
-                    style={{ width:'100%', padding:'0.65rem', borderRadius:10, border:'none', cursor:newStatus&&!saving?'pointer':'not-allowed', fontSize:'0.9rem', fontWeight:600, background:newStatus&&!saving?'var(--accent)':'var(--surface2)', color:newStatus&&!saving?'#fff':'var(--text2)', opacity:saving?0.7:1 }}>
-                    {saving?'저장 중...':'상태 변경'}
-                  </button>
+                  {(() => {
+                    // 되돌리기 어려운 전환만 confirm: won(템플릿 자동 생성), lost(P2/P3 삭제)
+                    const triggerSave = () => {
+                      if (!newStatus) return;
+                      if ((newStatus==='won' || newStatus==='lost') && onRequestConfirm) {
+                        const sm = STATUS_META[newStatus];
+                        onRequestConfirm({
+                          title: `${sm.emoji} ${sm.label}으로 전환`,
+                          message: newStatus==='won'
+                            ? '수주 성공으로 전환하면 마일스톤 템플릿이 자동 생성됩니다.\n계속할까요?'
+                            : '미선정으로 전환하면 P2/P3 포트폴리오 파일이 자동 삭제됩니다.\n되돌리기 어렵습니다.',
+                          confirmLabel: `${sm.label} 전환`,
+                          destructive: newStatus==='lost',
+                          onConfirm: () => onSave(project, newStatus, note),
+                        });
+                      } else {
+                        onSave(project, newStatus, note);
+                      }
+                    };
+                    return (
+                      <>
+                        <input type="text" placeholder="메모 (선택)" value={note} onChange={e => setNote(e.target.value)} style={{ ...inputS, marginBottom:'0.75rem' }}
+                          onKeyDown={e => { if (e.key==='Enter') triggerSave(); }} />
+                        <button onClick={triggerSave} disabled={!newStatus||saving}
+                          style={{ width:'100%', padding:'0.65rem', borderRadius:10, border:'none', cursor:newStatus&&!saving?'pointer':'not-allowed', fontSize:'0.9rem', fontWeight:600, background:newStatus&&!saving?'var(--accent)':'var(--surface2)', color:newStatus&&!saving?'#fff':'var(--text2)', opacity:saving?0.7:1 }}>
+                          {saving?'저장 중...':'상태 변경'}
+                        </button>
+                      </>
+                    );
+                  })()}
                 </>
               ) : (
                 <div style={{ textAlign:'center', padding:'1rem', color:'var(--text2)', fontSize:'0.85rem', background:'var(--surface2)', borderRadius:8 }}>현재 전환 가능한 상태가 없습니다</div>
@@ -2981,13 +3014,18 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
 
   const toggleAll = () => { setSelected(prev => prev.size===filtered.length ? new Set() : new Set(filtered.map(r=>r.slug))); };
 
+  const isPmFilter = ['won','contracted','in_progress','delivered','settled'].includes(filter);
+  // 미팅 예정 이전 단계(generated/applied)엔 미팅일·담당이 모두 의미 없음 → 컬럼 자체 숨김
+  const preMeeting = filter === 'generated' || filter === 'applied';
+  const hideMeeting  = preMeeting;
+  const hideAssigned = preMeeting;
   const cols = [
     { key:'status',     label:'상태',  sortable:false, width:'120px' },
     { key:'title',      label:'프로젝트', sortable:false, width:'' },
     { key:'budget',     label:'예산',  sortable:true,  width:'110px' },
     { key:'created_at', label:'생성일', sortable:true,  width:'100px' },
-    { key:'meeting_at', label:'미팅일', sortable:true,  width:'175px' },
-    { key:'assigned',   label:'담당',  sortable:false, width:'130px' },
+    ...(hideMeeting  ? [] : [{ key:'meeting_at', label:'미팅일', sortable:true,  width:'175px' }]),
+    ...(hideAssigned ? [] : [{ key:'assigned',   label:isPmFilter?'담당 (PM)':'담당 (미팅)', sortable:false, width:'130px' }]),
     { key:'note',       label:'메모',  sortable:false, width:'160px' },
   ];
 
@@ -3095,6 +3133,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                   </td>
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:r.budget?'var(--text)':'var(--text2)' }}>{r.budget||'—'}</td>
                   <td title={r.created_at ? formatMeetingAt(r.created_at) || r.created_at : ''} style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:'var(--text2)' }}>{r.created_at ? (r.created_at.length >= 10 ? r.created_at.slice(0,10) : r.created_at) : '—'}</td>
+                  {!hideMeeting && (
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem' }}>
                     {meetingStr ? (() => {
                       const ms = getMeetingStatus(r.meeting_at);
@@ -3114,16 +3153,23 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                       );
                     })() : <span style={{ color:'var(--text2)' }}>—</span>}
                   </td>
-                  {/* 담당 컬럼: 필터가 won 이후 단계일 때는 PM(assigned_manager), 그 외엔 미팅 메인/보조(main/sub) */}
+                  )}
+                  {/* 담당 컬럼: 필터가 won 이후 단계일 때는 PM(assigned_manager), 그 외엔 미팅 메인/보조(main/sub).
+                      미팅 예정 이전(generated/applied) 필터일 땐 컬럼 자체를 숨김 */}
+                  {!hideAssigned && (
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap' }}>
-                    {['won','contracted','in_progress','delivered','settled'].includes(filter) ? (
+                    {isPmFilter ? (
                       mgrM ? (
                         <span style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
                           <MemberAvatar member={mgrM} size={16} />
                           <span style={{ fontSize:'0.8rem', color:mgrM.color, fontWeight:600 }}>{mgrM.name}</span>
                           <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>PM</span>
                         </span>
-                      ) : <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>—</span>
+                      ) : (
+                        <span title="수주 후 PM 미배정 — 배정 필요" style={{ display:'inline-flex', alignItems:'center', gap:4, padding:'0.15rem 0.5rem', borderRadius:6, background:'#fdcb6e22', color:'#fdcb6e', fontSize:'0.75rem', fontWeight:600, border:'1px solid #fdcb6e44' }}>
+                          ⚠ PM 미배정
+                        </span>
+                      )
                     ) : (mainM||subM) ? (
                       <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
                         {mainM && (
@@ -3143,6 +3189,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                       </div>
                     ) : <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>—</span>}
                   </td>
+                  )}
                   <td style={{ padding:'0.7rem 1rem', fontSize:'0.8rem', color:'var(--text2)', maxWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                     <InlineMemo value={r.memo} onSave={val => onMemoSave(r,val)} />
                   </td>
@@ -4134,9 +4181,9 @@ function App({ session }) {
         </div>
       )}
 
-      {/* 검색 + 상태 필터 */}
-      <div className="fade-in delay-1" style={{ display:'flex', gap:'0.6rem', marginBottom:'0.75rem', flexWrap:'wrap', alignItems:'center' }}>
-        <input ref={searchRef} type="text" placeholder="검색... ( / )" value={search} onChange={e => setSearch(e.target.value)}
+      {/* 검색 + 상태 필터 (페이지 스크롤 시 상단 sticky로 항상 접근 가능) */}
+      <div className="fade-in delay-1" style={{ display:'flex', gap:'0.6rem', marginBottom:'0.75rem', flexWrap:'wrap', alignItems:'center', position:'sticky', top:0, background:'var(--bg)', zIndex:5, padding:'0.5rem 0' }}>
+        <input ref={searchRef} type="text" placeholder="제목·슬러그·메모 검색 (/)" value={search} onChange={e => setSearch(e.target.value)}
           style={{ padding:'0.4rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', flex:'1 1 180px', minWidth:180, maxWidth:280, outline:'none' }}
           onFocus={e => e.target.style.borderColor='var(--accent)'}
           onBlur={e  => e.target.style.borderColor='var(--border)'} />
