@@ -2958,9 +2958,13 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
 }
 
 // ─── ProjectTable ───
+const PAGE_SIZE = 30;
 function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, sortOrder, onSort, onBatchLost, onMemoSave, memberFilter, teamMembers, milestones, milestonesSetupNeeded, onQuickApplyTemplate, onOpenProject }) {
   const [selected, setSelected] = useState(new Set());
+  const [page, setPage] = useState(1);
   const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s=new Set(prev); s.has(slug)?s.delete(slug):s.add(slug); return s; }); };
+  // 필터/검색/정렬 변경 시 1페이지로 자동 리셋 (빈 페이지 노출 방지)
+  useEffect(() => { setPage(1); }, [filter, search, dateRange, memberFilter, sortKey, sortOrder]);
 
   // 1) 필터링만
   const filteredOnly = useMemo(() => {
@@ -3018,6 +3022,11 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
 
   const toggleAll = () => { setSelected(prev => prev.size===filtered.length ? new Set() : new Set(filtered.map(r=>r.slug))); };
 
+  // 페이지네이션: 50개 단위. 필터 결과가 50개 이하면 컨트롤 자동 숨김 (방해 안 됨)
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageStart = (safePage - 1) * PAGE_SIZE;
+  const pagedRows = filtered.slice(pageStart, pageStart + PAGE_SIZE);
   const isPmFilter = ['won','contracted','in_progress','delivered','settled'].includes(filter);
   // 미팅 예정 이전 단계(generated/applied)엔 미팅일·담당이 모두 의미 없음 → 컬럼 자체 숨김
   const preMeeting = filter === 'generated' || filter === 'applied';
@@ -3068,7 +3077,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                     ? '조건에 일치하는 프로젝트가 없습니다. 필터를 조정해보세요.'
                     : '표시할 프로젝트가 없습니다.'}
               </td></tr>
-            ) : filtered.map(r => {
+            ) : pagedRows.map(r => {
               const meta = STATUS_META[r.current_status]||{};
               const meetingStr = formatMeetingAt(r.meeting_at);
               const urgency = r._urgency||getMeetingUrgency(r.meeting_at);
@@ -3203,8 +3212,41 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
           </tbody>
         </table>
       </div>
-      <div style={{ padding:'0.7rem 1rem', borderTop:'1px solid var(--border)', fontSize:'0.8rem', color:'var(--text2)' }}>
-        {filtered.length}건 표시 중
+      <div style={{ padding:'0.7rem 1rem', borderTop:'1px solid var(--border)', fontSize:'0.8rem', color:'var(--text2)', display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, flexWrap:'wrap' }}>
+        <span>
+          {filtered.length === 0
+            ? '0건'
+            : totalPages > 1
+              ? `${pageStart+1}–${Math.min(pageStart+PAGE_SIZE, filtered.length)} / 전체 ${filtered.length}건`
+              : `${filtered.length}건 표시 중`}
+        </span>
+        {totalPages > 1 && (() => {
+          // 페이지 번호 윈도우: 현재 페이지 ±2, 처음·끝 항상 표시
+          const window = new Set([1, totalPages, safePage-2, safePage-1, safePage, safePage+1, safePage+2].filter(p => p >= 1 && p <= totalPages));
+          const sorted = [...window].sort((a,b) => a-b);
+          const items = [];
+          let prev = 0;
+          for (const p of sorted) {
+            if (p - prev > 1) items.push('…');
+            items.push(p);
+            prev = p;
+          }
+          const btn = (label, onClick, disabled, active) => (
+            <button key={label+(active?'-a':'')} onClick={onClick} disabled={disabled}
+              style={{ padding:'0.25rem 0.55rem', borderRadius:6, border:'1px solid '+(active?'var(--accent)':'var(--border)'), background:active?'var(--accent)':'transparent', color:active?'#fff':disabled?'var(--text2)':'var(--text)', cursor:disabled?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:active?600:400, opacity:disabled?0.4:1, minWidth:28 }}>
+              {label}
+            </button>
+          );
+          return (
+            <div style={{ display:'flex', gap:4, alignItems:'center' }}>
+              {btn('‹', () => setPage(p => Math.max(1, p-1)), safePage===1, false)}
+              {items.map((it, i) => it === '…'
+                ? <span key={'e'+i} style={{ padding:'0 4px', color:'var(--text2)' }}>…</span>
+                : btn(String(it), () => setPage(it), false, it===safePage))}
+              {btn('›', () => setPage(p => Math.min(totalPages, p+1)), safePage===totalPages, false)}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
@@ -4338,7 +4380,6 @@ function App({ session }) {
                 </div>
               );
             })()}
-            <Funnel data={data} />
             <MonthlyChart data={data} />
             <BudgetAnalysis data={data} />
           </div>
