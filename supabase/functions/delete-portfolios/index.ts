@@ -6,6 +6,9 @@ const BRANCH       = "main";
 
 type TreeEntry = { path: string; mode: string; type: string; sha: string };
 type Result    = { ok: boolean; reason?: string };
+type CommitResult = Result & { conflict?: boolean };
+
+const MAX_RETRIES = 3;
 
 const ghFetch = (token: string, path: string, options: RequestInit = {}) =>
   fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}${path}`, {
@@ -48,8 +51,8 @@ async function createTree(token: string, entries: TreeEntry[]): Promise<string |
   return (await res.json()).sha as string;
 }
 
-/** 커밋 + ref 업데이트 */
-async function commitAndPush(token: string, treeSha: string, parentSha: string, message: string): Promise<Result> {
+/** 커밋 + ref 업데이트 — fast-forward 충돌은 conflict 플래그로 신호 */
+async function commitAndPush(token: string, treeSha: string, parentSha: string, message: string): Promise<CommitResult> {
   const commitRes = await ghFetch(token, `/git/commits`, {
     method: "POST",
     body: JSON.stringify({ message, tree: treeSha, parents: [parentSha] }),
@@ -66,9 +69,24 @@ async function commitAndPush(token: string, treeSha: string, parentSha: string, 
   });
   if (!updateRes.ok) {
     const body = await updateRes.text();
-    return { ok: false, reason: `ref 업데이트 실패 (${updateRes.status}): ${body}` };
+    // 422 = fast-forward 위반 (다른 커밋이 사이에 들어옴) → 호출자가 재시도
+    const conflict = updateRes.status === 422;
+    return { ok: false, conflict, reason: `ref 업데이트 실패 (${updateRes.status}): ${body}` };
   }
   return { ok: true };
+}
+
+/** 작업이 fast-forward 충돌로 실패하면 HEAD 재조회 후 재시도 (최대 MAX_RETRIES회) */
+async function withRetry(op: () => Promise<CommitResult>): Promise<Result> {
+  let lastResult: CommitResult = { ok: false, reason: "초기 상태" };
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    lastResult = await op();
+    if (lastResult.ok) return lastResult;
+    if (!lastResult.conflict) return lastResult;
+    // 충돌 시 짧은 백오프 후 재시도 (지터 포함)
+    await new Promise(r => setTimeout(r, 200 * attempt + Math.random() * 100));
+  }
+  return { ok: false, reason: `재시도 ${MAX_RETRIES}회 후에도 충돌: ${lastResult.reason}` };
 }
 
 /**
@@ -76,43 +94,45 @@ async function commitAndPush(token: string, treeSha: string, parentSha: string, 
  * 전체 트리 대신 slug 디렉터리만 shallow 조회 → 빠름
  */
 async function deleteP2P3(token: string, slugs: string[]): Promise<Result> {
-  const head = await getHeadInfo(token);
-  if (!head) return { ok: false, reason: "HEAD 조회 실패 — GitHub 토큰 또는 네트워크 확인" };
+  return withRetry(async () => {
+    const head = await getHeadInfo(token);
+    if (!head) return { ok: false, reason: "HEAD 조회 실패 — GitHub 토큰 또는 네트워크 확인" };
 
-  const rootEntries = await getTree(token, head.rootTreeSha);
-  if (!rootEntries) return { ok: false, reason: "루트 트리 조회 실패" };
+    const rootEntries = await getTree(token, head.rootTreeSha);
+    if (!rootEntries) return { ok: false, reason: "루트 트리 조회 실패" };
 
-  let modified = false;
-  const newRootEntries: TreeEntry[] = [...rootEntries];
+    let modified = false;
+    const newRootEntries: TreeEntry[] = [...rootEntries];
 
-  for (const slug of slugs) {
-    const slugIdx = newRootEntries.findIndex(e => e.path === slug && e.type === "tree");
-    if (slugIdx < 0) continue; // 해당 slug 폴더 없음 — skip
+    for (const slug of slugs) {
+      const slugIdx = newRootEntries.findIndex(e => e.path === slug && e.type === "tree");
+      if (slugIdx < 0) continue; // 해당 slug 폴더 없음 — skip
 
-    const slugEntries = await getTree(token, newRootEntries[slugIdx].sha);
-    if (!slugEntries) continue;
+      const slugEntries = await getTree(token, newRootEntries[slugIdx].sha);
+      if (!slugEntries) continue;
 
-    const filtered = slugEntries.filter(e => e.path !== "portfolio-2" && e.path !== "portfolio-3");
-    if (filtered.length === slugEntries.length) continue; // 삭제 대상 없음
+      const filtered = slugEntries.filter(e => e.path !== "portfolio-2" && e.path !== "portfolio-3");
+      if (filtered.length === slugEntries.length) continue; // 삭제 대상 없음
 
-    const newSlugTreeSha = await createTree(token, filtered);
-    if (!newSlugTreeSha) return { ok: false, reason: `${slug} 트리 재생성 실패` };
+      const newSlugTreeSha = await createTree(token, filtered);
+      if (!newSlugTreeSha) return { ok: false, reason: `${slug} 트리 재생성 실패` };
 
-    newRootEntries[slugIdx] = { ...newRootEntries[slugIdx], sha: newSlugTreeSha };
-    modified = true;
-  }
+      newRootEntries[slugIdx] = { ...newRootEntries[slugIdx], sha: newSlugTreeSha };
+      modified = true;
+    }
 
-  if (!modified) return { ok: true }; // 삭제할 파일 없음 (no-op)
+    if (!modified) return { ok: true }; // 삭제할 파일 없음 (no-op)
 
-  const newRootSha = await createTree(token, newRootEntries);
-  if (!newRootSha) return { ok: false, reason: "루트 트리 재생성 실패" };
+    const newRootSha = await createTree(token, newRootEntries);
+    if (!newRootSha) return { ok: false, reason: "루트 트리 재생성 실패" };
 
-  return commitAndPush(
-    token,
-    newRootSha,
-    head.commitSha,
-    `chore: remove P2/P3 for ${slugs.length > 1 ? `${slugs.length}건 일괄 미선정` : slugs[0]}`,
-  );
+    return commitAndPush(
+      token,
+      newRootSha,
+      head.commitSha,
+      `chore: remove P2/P3 for ${slugs.length > 1 ? `${slugs.length}건 일괄 미선정` : slugs[0]}`,
+    );
+  });
 }
 
 /**
@@ -120,19 +140,21 @@ async function deleteP2P3(token: string, slugs: string[]): Promise<Result> {
  * 루트 트리에서 slug 항목만 제거 — recursive fetch 불필요
  */
 async function deleteSlug(token: string, slug: string): Promise<Result> {
-  const head = await getHeadInfo(token);
-  if (!head) return { ok: false, reason: "HEAD 조회 실패 — GitHub 토큰 또는 네트워크 확인" };
+  return withRetry(async () => {
+    const head = await getHeadInfo(token);
+    if (!head) return { ok: false, reason: "HEAD 조회 실패 — GitHub 토큰 또는 네트워크 확인" };
 
-  const rootEntries = await getTree(token, head.rootTreeSha);
-  if (!rootEntries) return { ok: false, reason: "루트 트리 조회 실패" };
+    const rootEntries = await getTree(token, head.rootTreeSha);
+    if (!rootEntries) return { ok: false, reason: "루트 트리 조회 실패" };
 
-  const filtered = rootEntries.filter(e => e.path !== slug);
-  if (filtered.length === rootEntries.length) return { ok: true }; // 이미 없음
+    const filtered = rootEntries.filter(e => e.path !== slug);
+    if (filtered.length === rootEntries.length) return { ok: true }; // 이미 없음
 
-  const newRootSha = await createTree(token, filtered);
-  if (!newRootSha) return { ok: false, reason: "루트 트리 재생성 실패" };
+    const newRootSha = await createTree(token, filtered);
+    if (!newRootSha) return { ok: false, reason: "루트 트리 재생성 실패" };
 
-  return commitAndPush(token, newRootSha, head.commitSha, `chore: delete project ${slug}`);
+    return commitAndPush(token, newRootSha, head.commitSha, `chore: delete project ${slug}`);
+  });
 }
 
 // ─── Handler ───────────────────────────────────────────────────────────────
