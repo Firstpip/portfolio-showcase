@@ -157,6 +157,55 @@ async function deleteSlug(token: string, slug: string): Promise<Result> {
   });
 }
 
+// ─── Supabase DB 갱신 (단일 진실 원천화) ──────────────────────────────────
+
+const SB_URL = Deno.env.get("SUPABASE_URL") || "";
+const SB_SR  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+const TABLE  = "wishket_projects";
+
+/** 파일 삭제 성공 후 DB의 portfolio_links를 첫 항목만 남기도록 트림.
+ *  여러 slug에 대해 PATCH를 직렬로 보내고, 실패는 reasons에 누적해 부분 성공 가시화. */
+async function trimPortfolioLinks(slugs: string[]): Promise<{ updated: string[]; failures: { slug: string; reason: string }[] }> {
+  if (!SB_URL || !SB_SR) {
+    return { updated: [], failures: slugs.map(s => ({ slug: s, reason: "SUPABASE env 미설정" })) };
+  }
+  const updated: string[] = [];
+  const failures: { slug: string; reason: string }[] = [];
+  for (const slug of slugs) {
+    // 현재 portfolio_links 조회 (length>1인 경우만 트림 — 멱등성)
+    const getRes = await fetch(`${SB_URL}/rest/v1/${TABLE}?slug=eq.${encodeURIComponent(slug)}&select=portfolio_links`, {
+      headers: { apikey: SB_SR, Authorization: `Bearer ${SB_SR}` },
+    });
+    if (!getRes.ok) { failures.push({ slug, reason: `조회 실패 ${getRes.status}` }); continue; }
+    const rows = await getRes.json() as Array<{ portfolio_links?: unknown[] }>;
+    const links = Array.isArray(rows[0]?.portfolio_links) ? rows[0].portfolio_links : [];
+    if (links.length <= 1) { updated.push(slug); continue; } // 이미 트림됨
+
+    const patchRes = await fetch(`${SB_URL}/rest/v1/${TABLE}?slug=eq.${encodeURIComponent(slug)}`, {
+      method: "PATCH",
+      headers: { apikey: SB_SR, Authorization: `Bearer ${SB_SR}`, "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify({ portfolio_links: links.slice(0, 1) }),
+    });
+    if (!patchRes.ok) {
+      failures.push({ slug, reason: `PATCH 실패 ${patchRes.status}: ${await patchRes.text()}` });
+    } else {
+      updated.push(slug);
+    }
+  }
+  return { updated, failures };
+}
+
+/** 전체 삭제 시 DB row 자체 제거 (멱등 — 없으면 no-op) */
+async function deleteRow(slug: string): Promise<{ ok: boolean; reason?: string }> {
+  if (!SB_URL || !SB_SR) return { ok: false, reason: "SUPABASE env 미설정" };
+  const res = await fetch(`${SB_URL}/rest/v1/${TABLE}?slug=eq.${encodeURIComponent(slug)}`, {
+    method: "DELETE",
+    headers: { apikey: SB_SR, Authorization: `Bearer ${SB_SR}`, Prefer: "return=minimal" },
+  });
+  if (!res.ok) return { ok: false, reason: `DELETE 실패 ${res.status}: ${await res.text()}` };
+  return { ok: true };
+}
+
 // ─── Handler ───────────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
@@ -171,21 +220,26 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "GITHUB_TOKEN not set" }), { status: 500 });
   }
 
-  let body: { slug?: string; slugs?: string[]; all?: boolean };
+  let body: { slug?: string; slugs?: string[]; all?: boolean; skip_db?: boolean };
   try {
     body = await req.json();
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400 });
   }
 
-  const { slug, slugs, all } = body;
+  const { slug, slugs, all, skip_db } = body;
   const headers = { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" };
 
   try {
     if (all) {
       if (!slug) return new Response(JSON.stringify({ error: "slug is required" }), { status: 400 });
-      const result = await deleteSlug(token, slug);
-      return new Response(JSON.stringify({ slug, deleted: result.ok, reason: result.reason }), { headers });
+      // 파일 삭제 → 성공 시에만 DB row 제거 (역순서로 dual-write 비일관 차단)
+      const fileResult = await deleteSlug(token, slug);
+      if (!fileResult.ok) {
+        return new Response(JSON.stringify({ slug, deleted: false, db_updated: false, reason: fileResult.reason }), { headers });
+      }
+      const dbResult = skip_db ? { ok: true } : await deleteRow(slug);
+      return new Response(JSON.stringify({ slug, deleted: true, db_updated: dbResult.ok, reason: dbResult.reason }), { headers });
     }
 
     const targetSlugs: string[] = slugs || (slug ? [slug] : []);
@@ -193,8 +247,21 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "slug or slugs is required" }), { status: 400 });
     }
 
-    const result = await deleteP2P3(token, targetSlugs);
-    return new Response(JSON.stringify({ slugs: targetSlugs, deleted: result.ok, reason: result.reason }), { headers });
+    // 파일 삭제 → 성공 시에만 portfolio_links 트림 (단일 진실 원천)
+    const fileResult = await deleteP2P3(token, targetSlugs);
+    if (!fileResult.ok) {
+      return new Response(JSON.stringify({ slugs: targetSlugs, deleted: false, db_updated: false, reason: fileResult.reason }), { headers });
+    }
+    const dbResult = skip_db
+      ? { updated: targetSlugs, failures: [] }
+      : await trimPortfolioLinks(targetSlugs);
+    return new Response(JSON.stringify({
+      slugs: targetSlugs,
+      deleted: true,
+      db_updated: dbResult.failures.length === 0,
+      db_updated_slugs: dbResult.updated,
+      db_failures: dbResult.failures,
+    }), { headers });
 
   } catch (err) {
     return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers });
