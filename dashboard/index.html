@@ -527,13 +527,14 @@ function StatCard({ title, value, sub, color, delay }) {
 
 // ─── Funnel ───
 function Funnel({ data }) {
+  // 지원 단계는 30일+ 무응답 자동 삭제로 카운트 편향이 큼 → 퍼널에서 제외.
+  // 미팅 단계부터는 자동 삭제 영향 없어 전환율 신뢰 가능.
   const stages = [
-    { key:'applied',      label:'지원', color:'#6c5ce7' },
     { key:'interview',    label:'미팅', color:'#fdcb6e' },
     { key:'meeting_done', label:'논의', color:'#74b9ff' },
     { key:'won',          label:'수주', color:'#00b894' },
   ];
-  const ORDER = ['applied','interview','meeting_done','won'];
+  const ORDER = ['interview','meeting_done','won'];
   const counts = stages.map(s => {
     const idx = ORDER.indexOf(s.key);
     return { ...s, count: data.filter(d => {
@@ -551,7 +552,10 @@ function Funnel({ data }) {
   const maxCount = Math.max(...counts.map(c => c.count), 1);
   return (
     <div style={{ background:'var(--surface)', borderRadius:12, padding:'1.5rem', border:'1px solid var(--border)' }}>
-      <h3 style={{ fontSize:'1rem', fontWeight:600, marginBottom:'1.25rem' }}>수주 퍼널</h3>
+      <div style={{ display:'flex', alignItems:'baseline', gap:8, marginBottom:'1.25rem', flexWrap:'wrap' }}>
+        <h3 style={{ fontSize:'1rem', fontWeight:600 }}>수주 퍼널</h3>
+        <span style={{ fontSize:'0.75rem', color:'var(--text2)', opacity:0.7 }}>* 지원 단계는 30일+ 무응답 자동 삭제로 표시하지 않음</span>
+      </div>
       <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
         {counts.map((s,i) => {
           const pct = maxCount > 0 ? (s.count/maxCount)*100 : 0;
@@ -3936,15 +3940,32 @@ function App({ session }) {
 
   const avgWonDays = useMemo(() => {
     if (!data) return null;
+    // won 단계 도달 이후 모든 프로젝트(contracted/in_progress/delivered/settled 포함) 평균
+    const SECURED = ['won','contracted','in_progress','delivered','settled'];
     const samples = [];
     data.forEach(d => {
-      if (d.current_status !== 'won' || !d.created_at) return;
+      if (!SECURED.includes(d.current_status) || !d.created_at) return;
       const wonDate = (d.history||[]).filter(h => h.status==='won').pop()?.date;
       if (!wonDate) return;
       samples.push(daysBetween(d.created_at, wonDate));
     });
     if (samples.length === 0) return null;
     return Math.round(samples.reduce((a,b) => a+b, 0) / samples.length);
+  }, [data]);
+
+  // 지원 → 미팅 평균: 지원일부터 첫 미팅 잡힐 때까지 (lead response 신호)
+  // 미팅 도달한 모든 프로젝트가 대상 (현재 상태 무관, history에 interview 흔적이 있으면 포함)
+  const avgInterviewDays = useMemo(() => {
+    if (!data) return null;
+    const samples = [];
+    data.forEach(d => {
+      if (!d.created_at) return;
+      const interviewDate = (d.history||[]).find(h => h.status === 'interview')?.date;
+      if (!interviewDate) return;
+      samples.push(daysBetween(d.created_at, interviewDate));
+    });
+    if (samples.length === 0) return null;
+    return { avg: Math.round(samples.reduce((a,b)=>a+b,0) / samples.length), n: samples.length };
   }, [data]);
 
   if (!data) return <Loading />;
@@ -3982,8 +4003,19 @@ function App({ session }) {
   const counts = { total:data.length };
   STATUS_ORDER.forEach(s => counts[s]=data.filter(d=>d.current_status===s).length);
   const appliedOrBeyond = data.filter(d=>d.current_status!=='generated').length;
-  const wonCount = counts.won||0;
-  const winRate  = appliedOrBeyond > 0 ? ((wonCount/appliedOrBeyond)*100).toFixed(1) : '0.0';
+  // 수주 = won 이후 모든 단계. 한 번 수주된 이상 진행 단계와 무관하게 카운트.
+  const SECURED_STATUSES = ['won','contracted','in_progress','delivered','settled'];
+  const POST_MEETING = ['interview','meeting_done', ...SECURED_STATUSES];
+  // 수주율 분모 = "미팅을 거친 모든 프로젝트". 미팅 후 미선정으로 끝난 케이스도 포함 (history에 interview/meeting_done 흔적 검사)
+  const wonCount = data.filter(d => SECURED_STATUSES.includes(d.current_status)).length;
+  const meetingReachedCount = data.filter(d => {
+    if (POST_MEETING.includes(d.current_status)) return true;
+    if (d.current_status === 'lost') {
+      return (d.history||[]).some(h => h.status === 'interview' || h.status === 'meeting_done');
+    }
+    return false;
+  }).length;
+  const winRate = meetingReachedCount > 0 ? ((wonCount/meetingReachedCount)*100).toFixed(1) : '0.0';
 
   const now = new Date();
   const weekStart = new Date(now); weekStart.setDate(now.getDate()-now.getDay());
@@ -4246,28 +4278,21 @@ function App({ session }) {
 
       {/* KPI 바 (상시 노출) */}
       {(() => {
-        const wonBudgetTotal = data.filter(d=>d.current_status==='won').reduce((sum,d)=>sum+parseBudgetNum(d.budget),0);
-        const activeMeetings = (counts.interview||0) + (counts.meeting_done||0);
-        const inProg = POST_WON.reduce((s,k)=>s+(counts[k]||0),0);
+        const wonBudgetTotal = data.filter(d=>SECURED_STATUSES.includes(d.current_status)).reduce((sum,d)=>sum+parseBudgetNum(d.budget),0);
+        const inProg = SECURED_STATUSES.reduce((s,k)=>s+(counts[k]||0),0);
         const kpiStyle = { flex:'1 1 0', minWidth:'fit-content', display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'0.45rem 0.85rem', borderRadius:8, background:'var(--surface)', border:'1px solid var(--border)', fontSize:'0.8rem', whiteSpace:'nowrap' };
         const numStyle = (color) => ({ fontWeight:700, fontSize:'0.95rem', color });
         return (
           <div className="fade-in delay-2" style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:'1rem' }}>
-            <div style={kpiStyle}>
-              <span style={{ color:'var(--text2)' }}>수주율</span>
+            <div style={kpiStyle} title="미팅을 거친 모든 프로젝트(미팅 후 미선정 포함) 대비 수주 성공 비율">
+              <span style={{ color:'var(--text2)' }}>미팅 → 수주 전환율</span>
               <span style={numStyle('var(--green)')}>{winRate}%</span>
-              <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>({wonCount}/{appliedOrBeyond})</span>
+              <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>({wonCount}/{meetingReachedCount})</span>
             </div>
             {wonBudgetTotal > 0 && (
               <div style={kpiStyle}>
                 <span style={{ color:'var(--text2)' }}>수주 금액</span>
                 <span style={numStyle('var(--green)')}>{wonBudgetTotal.toLocaleString()}만원</span>
-              </div>
-            )}
-            {activeMeetings > 0 && (
-              <div style={kpiStyle}>
-                <span style={{ color:'var(--text2)' }}>활성 미팅</span>
-                <span style={numStyle('var(--yellow)')}>{activeMeetings}건</span>
               </div>
             )}
             {inProg > 0 && (
@@ -4276,10 +4301,11 @@ function App({ session }) {
                 <span style={numStyle('var(--accent2)')}>{inProg}건</span>
               </div>
             )}
-            {avgWonDays !== null && (
-              <div style={kpiStyle}>
-                <span style={{ color:'var(--text2)' }}>평균 수주</span>
-                <span style={numStyle('var(--blue)')}>{avgWonDays}일</span>
+            {avgInterviewDays && (
+              <div style={kpiStyle} title="지원일 → '미팅 예정' 상태로 전환된 날까지의 평균 일수.&#10;즉 클라이언트 회신·미팅 일정 확정 시점 기준 (lead 응답 속도).&#10;※ 사용자가 status 갱신을 늦게 하면 실제보다 길게 집계됩니다.">
+                <span style={{ color:'var(--text2)' }}>지원 → 미팅 잡힘</span>
+                <span style={numStyle('var(--blue)')}>평균 {avgInterviewDays.avg}일</span>
+                <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>({avgInterviewDays.n}건)</span>
               </div>
             )}
           </div>
@@ -4298,16 +4324,17 @@ function App({ session }) {
         {showStats && (
           <div style={{ animation:'fadeIn 0.25s ease-out' }}>
             {(() => {
-              const wonBudgetTotal = data.filter(d=>d.current_status==='won').reduce((sum,d)=>sum+parseBudgetNum(d.budget),0);
+              const wonBudgetTotal = data.filter(d=>SECURED_STATUSES.includes(d.current_status)).reduce((sum,d)=>sum+parseBudgetNum(d.budget),0);
               const wonBudgetStr = wonBudgetTotal>0?wonBudgetTotal.toLocaleString()+'만원':'—';
               return (
                 <div style={{ display:'flex', gap:'0.75rem', flexWrap:'wrap', marginTop:'0.75rem', marginBottom:'1rem' }}>
                   <StatCard title="총 프로젝트" value={data.length} sub={`생성 ${counts.generated||0} / 지원 ${appliedOrBeyond}`} delay={1} />
-                  <StatCard title="수주율" value={`${winRate}%`} sub={`${wonCount} / ${appliedOrBeyond} (지원 기준)`} color="var(--green)" delay={1} />
+                  <StatCard title="미팅 → 수주 전환율" value={`${winRate}%`} sub={`${wonCount} / ${meetingReachedCount}`} color="var(--green)" delay={1} />
                   <StatCard title="수주 금액" value={wonBudgetStr} sub={`${wonCount}건 합산`} color="var(--green)" delay={1} />
-                  <StatCard title="수주 후 진행" value={POST_WON.reduce((s,k)=>s+(counts[k]||0),0)}
-                    sub={POST_WON.map(k=>counts[k]>0?`${STATUS_META[k].label} ${counts[k]}`:'').filter(Boolean).join(' · ')||'없음'} color="var(--accent2)" delay={1} />
-                  {avgWonDays!==null && <StatCard title="평균 수주 소요" value={`${avgWonDays}일`} sub={`${wonCount}건 평균`} color="var(--blue)" delay={1} />}
+                  <StatCard title="진행 중" value={SECURED_STATUSES.reduce((s,k)=>s+(counts[k]||0),0)}
+                    sub={SECURED_STATUSES.map(k=>counts[k]>0?`${STATUS_META[k].label} ${counts[k]}`:'').filter(Boolean).join(' · ')||'없음'} color="var(--accent2)" delay={1} />
+                  {avgInterviewDays && <StatCard title="지원 → 미팅 잡힘" value={`평균 ${avgInterviewDays.avg}일`} sub={`${avgInterviewDays.n}건 (미팅 예정 전환 시점 기준)`} color="var(--blue)" delay={1} />}
+                  {avgWonDays!==null && <StatCard title="지원 → 수주" value={`평균 ${avgWonDays}일`} sub={`${wonCount}건 기준 (전체 사이클)`} color="var(--blue)" delay={1} />}
                 </div>
               );
             })()}
