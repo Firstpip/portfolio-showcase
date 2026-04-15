@@ -280,14 +280,23 @@ function parseBudgetNum(v) {
   return d ? Number(d) : 0;
 }
 function daysBetween(d1, d2) {
-  return Math.round((new Date(d2) - new Date(d1)) / 86400000);
+  const a = new Date(d1), b = new Date(d2);
+  if (isNaN(a) || isNaN(b)) return 0;
+  const ua = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const ub = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.floor((ub - ua) / 86400000);
 }
 
 // ─── Hash routing ───
 function parseHash() {
   const h = (window.location.hash || '').replace(/^#/, '');
   const m = h.match(/^project\/([^/]+)\/tasks$/);
-  if (m) return { name: 'project', slug: decodeURIComponent(m[1]) };
+  if (m) {
+    let slug;
+    try { slug = decodeURIComponent(m[1]); } catch { return { name: 'table' }; }
+    if (!/^[a-zA-Z0-9_-]+$/.test(slug)) return { name: 'table' };
+    return { name: 'project', slug };
+  }
   return { name: 'table' };
 }
 function navigate(route) {
@@ -3173,27 +3182,39 @@ function App({ session }) {
   const loadData = useCallback(async () => {
     const { data:rows, error } = await supabase.from(TABLE).select('*').order('created_at', { ascending:false });
     if (error) { toast('데이터 로드 실패: '+error.message,'error'); setData([]); return; }
-    // 마이그레이션: portfolio_count만 있고 portfolio_links가 없는 프로젝트에 links 자동 생성
-    const migrateTargets = rows.filter(r => (r.portfolio_count||0) > 0 && !(r.portfolio_links?.length > 0));
-    if (migrateTargets.length > 0) {
-      for (const r of migrateTargets) {
-        const links = Array.from({ length: r.portfolio_count }, (_, i) => ({ label:`P${i+1}`, url:`https://Firstpip.github.io/portfolio-showcase/${r.slug}/portfolio-${i+1}/` }));
-        r.portfolio_links = links;
-        supabase.from(TABLE).update({ portfolio_links: links }).eq('slug', r.slug).then(({ error:e }) => { if (e) console.warn('portfolio_links 마이그레이션 실패:', r.slug, e.message); }).catch(err => console.warn('portfolio_links 마이그레이션 네트워크 오류:', r.slug, err.message));
+    const nowTs = Date.now();
+    // 마이그레이션: portfolio_count만 있고 portfolio_links가 없는 프로젝트에 links 자동 생성 (세션당 1회)
+    const migrateCooldown = 24 * 3600 * 1000;
+    const lastMigrate = parseInt(localStorage.getItem('last_portfolio_migrate')||'0', 10);
+    if (nowTs - lastMigrate > migrateCooldown) {
+      const migrateTargets = rows.filter(r => (r.portfolio_count||0) > 0 && !(r.portfolio_links?.length > 0));
+      if (migrateTargets.length > 0) {
+        for (const r of migrateTargets) {
+          const links = Array.from({ length: r.portfolio_count }, (_, i) => ({ label:`P${i+1}`, url:`https://Firstpip.github.io/portfolio-showcase/${r.slug}/portfolio-${i+1}/` }));
+          r.portfolio_links = links;
+          supabase.from(TABLE).update({ portfolio_links: links }).eq('slug', r.slug).then(({ error:e }) => { if (e) console.warn('portfolio_links 마이그레이션 실패:', r.slug, e.message); }).catch(err => console.warn('portfolio_links 마이그레이션 네트워크 오류:', r.slug, err.message));
+        }
+        localStorage.setItem('last_portfolio_migrate', String(nowTs));
       }
     }
-    // 자동 삭제: 생성일 기준 30일 경과한 미선정 프로젝트 제거 (DB + GitHub Pages)
-    const now = new Date();
-    const autoDeleteTargets = rows.filter(r => r.current_status === 'lost' && daysBetween(r.created_at, now) >= 30);
-    if (autoDeleteTargets.length > 0) {
-      const slugs = autoDeleteTargets.map(r => r.slug);
-      supabase.from(TABLE).delete().in('slug', slugs)
-        .then(({ error:e }) => { if (e) console.warn('자동 삭제 실패:', e.message); });
-      supabase.functions.invoke('delete-portfolios', { body: { slugs, all: true } })
-        .catch(err => console.warn('자동 삭제 파일 정리 실패:', err.message));
-      toast(`🗑️ 미선정 30일+ 경과 ${autoDeleteTargets.length}건 자동 삭제`, 'info');
+    // 자동 삭제: 생성일 기준 30일 경과한 미선정 프로젝트 제거 (DB + GitHub Pages) — 24시간 쿨다운
+    const deleteCooldown = 24 * 3600 * 1000;
+    const lastAutoDelete = parseInt(localStorage.getItem('last_auto_delete')||'0', 10);
+    let finalRows = rows;
+    if (nowTs - lastAutoDelete > deleteCooldown) {
+      const now = new Date();
+      const autoDeleteTargets = rows.filter(r => r.current_status === 'lost' && daysBetween(r.created_at, now) >= 30);
+      if (autoDeleteTargets.length > 0) {
+        const slugs = autoDeleteTargets.map(r => r.slug);
+        supabase.from(TABLE).delete().in('slug', slugs)
+          .then(({ error:e }) => { if (e) console.warn('자동 삭제 실패:', e.message); });
+        supabase.functions.invoke('delete-portfolios', { body: { slugs, all: true } })
+          .catch(err => console.warn('자동 삭제 파일 정리 실패:', err.message));
+        toast(`🗑️ 미선정 30일+ 경과 ${autoDeleteTargets.length}건 자동 삭제`, 'info');
+        finalRows = rows.filter(r => !autoDeleteTargets.some(t => t.slug === r.slug));
+        localStorage.setItem('last_auto_delete', String(nowTs));
+      }
     }
-    const finalRows = autoDeleteTargets.length > 0 ? rows.filter(r => !autoDeleteTargets.some(t => t.slug === r.slug)) : rows;
     setData(finalRows); setConnected(true);
     checkMeetingNotifications(finalRows);
   }, [toast, checkMeetingNotifications]);
@@ -3202,7 +3223,7 @@ function App({ session }) {
     loadData();
     loadTeamMembers();
     loadMilestones();
-    const channel = supabase.channel('wishket-realtime')
+    const channel = supabase.channel(`wishket-realtime-${Math.random().toString(36).slice(2, 10)}`)
       .on('postgres_changes',{ event:'*', schema:'public', table:MILESTONES_TABLE },(payload) => {
         setMilestones(prev => {
           const next = { ...prev };
@@ -3721,15 +3742,32 @@ function App({ session }) {
     else { setSortKey(key); setSortOrder('desc'); }
   }, [sortKey]);
 
+  const milestoneStats = useMemo(() => {
+    const stats = {};
+    Object.entries(milestones).forEach(([slug, ms]) => {
+      const list = ms || [];
+      let done = 0;
+      const weekSet = new Set();
+      for (const m of list) {
+        if (m.status === 'done') done++;
+        if (m.week_number != null) weekSet.add(m.week_number);
+      }
+      stats[slug] = { total: list.length, done, uniqueWeeks: weekSet.size };
+    });
+    return stats;
+  }, [milestones]);
+
   const avgWonDays = useMemo(() => {
     if (!data) return null;
-    const wonProjects = data.filter(d => d.current_status==='won' && d.created_at);
-    if (wonProjects.length === 0) return null;
-    const total = wonProjects.reduce((sum,d) => {
-      const wonDate = (d.history||[]).filter(h=>h.status==='won').pop()?.date;
-      return sum+(wonDate?daysBetween(d.created_at,wonDate):0);
-    },0);
-    return Math.round(total/wonProjects.length);
+    const samples = [];
+    data.forEach(d => {
+      if (d.current_status !== 'won' || !d.created_at) return;
+      const wonDate = (d.history||[]).filter(h => h.status==='won').pop()?.date;
+      if (!wonDate) return;
+      samples.push(daysBetween(d.created_at, wonDate));
+    });
+    if (samples.length === 0) return null;
+    return Math.round(samples.reduce((a,b) => a+b, 0) / samples.length);
   }, [data]);
 
   if (!data) return <Loading />;
@@ -3885,18 +3923,18 @@ function App({ session }) {
             <div style={{ display:'flex', gap:8, overflowX:'auto', paddingBottom:4 }}>
               {myProjects.map(p => {
                 const meta = STATUS_META[p.current_status]||{};
-                const ms = milestones[p.slug]||[];
-                const doneCount = ms.filter(m => m.status==='done').length;
-                const totalCount = ms.length;
+                const stat = milestoneStats[p.slug] || { total:0, done:0, uniqueWeeks:0 };
+                const doneCount = stat.done;
+                const totalCount = stat.total;
                 const ticketPct = totalCount > 0 ? Math.round((doneCount/totalCount)*100) : -1;
                 const totalWeeks = Array.isArray(p.weekly_plan) && p.weekly_plan.length > 0
                   ? p.weekly_plan.length
-                  : new Set(ms.filter(m => m.week_number != null).map(m => m.week_number)).size;
+                  : stat.uniqueWeeks;
                 const curWeek = getCurrentWeek(p.start_date);
                 const hasSchedule = totalWeeks > 0 && p.start_date;
                 const weekPct = hasSchedule ? (curWeek != null ? Math.min(Math.round((curWeek / totalWeeks) * 100), 100) : 0) : -1;
                 const overdue = hasSchedule && curWeek != null && curWeek > totalWeeks;
-                const beforeStart = hasSchedule && curWeek == null;
+                const isBeforeStartDate = hasSchedule && curWeek == null;
                 return (
                   <div key={p.slug} onClick={() => navigate({ name:'project', slug:p.slug })} style={{
                     flex:'1 1 180px', minWidth:180, maxWidth:320, padding:'0.6rem 0.8rem', borderRadius:10,
@@ -3917,7 +3955,7 @@ function App({ session }) {
                             <div style={{ flex:1, height:4, borderRadius:2, background:'var(--surface2)', overflow:'hidden' }}>
                               <div style={{ width:weekPct+'%', height:'100%', borderRadius:2, background:overdue?'#e17055':weekPct===100?'var(--green)':meta.color, transition:'width 0.3s' }} />
                             </div>
-                            <span style={{ fontSize:'0.65rem', color:overdue?'#e17055':beforeStart?'var(--text2)':'var(--text2)', flexShrink:0 }}>{beforeStart ? '착수 전' : `${curWeek}/${totalWeeks}주`}</span>
+                            <span style={{ fontSize:'0.65rem', color:overdue?'#e17055':'var(--text2)', flexShrink:0 }}>{isBeforeStartDate ? '착수 전' : `${curWeek}/${totalWeeks}주`}</span>
                           </div>
                         )}
                         {ticketPct >= 0 && (
