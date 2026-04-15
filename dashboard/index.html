@@ -279,6 +279,22 @@ function parseBudgetNum(v) {
   const d = (v||'').replace(/[^0-9]/g,'');
   return d ? Number(d) : 0;
 }
+// Supabase/PostgreSQL 에러를 사용자 친화 메시지로 변환
+function friendlyError(error) {
+  if (!error) return '알 수 없는 오류가 발생했습니다.';
+  const code = error.code || '';
+  const msg = error.message || '';
+  if (code === '42P01' || /does not exist|relation/.test(msg)) return '데이터베이스 테이블이 준비되지 않았습니다. 관리자에게 문의하세요.';
+  if (code === '42703') return '데이터베이스 스키마가 최신 상태가 아닙니다. 관리자에게 문의하세요.';
+  if (code === '23505') return '이미 존재하는 값입니다. 중복되지 않는 값으로 다시 시도해주세요.';
+  if (code === '23503') return '참조 중인 데이터가 있어 처리할 수 없습니다.';
+  if (code === '23502') return '필수 입력 항목이 누락되었습니다.';
+  if (code === 'PGRST116') return '대상 데이터를 찾을 수 없습니다.';
+  if (code === '42501' || /permission|policy/i.test(msg)) return '권한이 없습니다. 로그인 상태를 확인해주세요.';
+  if (/network|fetch|Failed to fetch/i.test(msg)) return '네트워크 연결이 불안정합니다. 잠시 후 다시 시도해주세요.';
+  if (/JWT|token|auth/i.test(msg)) return '인증이 만료되었습니다. 다시 로그인해주세요.';
+  return msg || '요청을 처리할 수 없습니다.';
+}
 function daysBetween(d1, d2) {
   const a = new Date(d1), b = new Date(d2);
   if (isNaN(a) || isNaN(b)) return 0;
@@ -2936,7 +2952,13 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={cols.length+1} style={{ padding:'2rem', textAlign:'center', color:'var(--text2)' }}>결과 없음</td></tr>
+              <tr><td colSpan={cols.length+1} style={{ padding:'2rem', textAlign:'center', color:'var(--text2)' }}>
+                {data.length === 0
+                  ? '등록된 프로젝트가 없습니다. 우측 상단 ＋ 등록 버튼으로 추가해주세요.'
+                  : (search.trim() || memberFilter || (dateRange && dateRange !== 'all') || filter !== 'all')
+                    ? '조건에 일치하는 프로젝트가 없습니다. 필터를 조정해보세요.'
+                    : '표시할 프로젝트가 없습니다.'}
+              </td></tr>
             ) : filtered.map(r => {
               const meta = STATUS_META[r.current_status]||{};
               const meetingStr = formatMeetingAt(r.meeting_at);
@@ -3152,7 +3174,7 @@ function App({ session }) {
         setMilestonesSetupNeeded(true);
         setMilestones({});
       } else {
-        toast('작업 티켓 로드 실패: '+error.message,'error');
+        toast('작업 티켓 로드 실패: '+friendlyError(error),'error');
       }
       return;
     }
@@ -3171,7 +3193,7 @@ function App({ session }) {
       if (error.code==='42P01' || error.message?.includes('does not exist') || error.message?.includes('relation')) {
         setTeamSetupNeeded(true);
       } else {
-        toast('팀원 정보 로드 실패: '+error.message,'error');
+        toast('팀원 정보 로드 실패: '+friendlyError(error),'error');
       }
     } else {
       setTeamMembers(rows||[]);
@@ -3181,7 +3203,7 @@ function App({ session }) {
 
   const loadData = useCallback(async () => {
     const { data:rows, error } = await supabase.from(TABLE).select('*').order('created_at', { ascending:false });
-    if (error) { toast('데이터 로드 실패: '+error.message,'error'); setData([]); return; }
+    if (error) { toast('데이터 로드 실패: '+friendlyError(error),'error'); setData([]); return; }
     const nowTs = Date.now();
     // 마이그레이션: portfolio_count만 있고 portfolio_links가 없는 프로젝트에 links 자동 생성 (세션당 1회)
     const migrateCooldown = 24 * 3600 * 1000;
@@ -3270,21 +3292,21 @@ function App({ session }) {
   // Team CRUD
   const handleAddMember = useCallback(async (fields) => {
     const { data:newM, error } = await supabase.from(TEAM_TABLE).insert([fields]).select().single();
-    if (error) { toast('팀원 추가 실패: '+error.message,'error'); return; }
+    if (error) { toast('팀원 추가 실패: '+friendlyError(error),'error'); return; }
     setTeamMembers(prev => [...prev,newM]);
     toast(`${fields.name} 추가 완료`,'success');
   }, [toast]);
 
   const handleUpdateMember = useCallback(async (id, fields) => {
     const { error } = await supabase.from(TEAM_TABLE).update(fields).eq('id',id);
-    if (error) { toast('수정 실패: '+error.message,'error'); return; }
+    if (error) { toast('수정 실패: '+friendlyError(error),'error'); return; }
     setTeamMembers(prev => prev.map(m => m.id===id?{...m,...fields}:m));
     toast('수정 완료','success');
   }, [toast]);
 
   const handleDeactivateMember = useCallback(async (id) => {
     const { error } = await supabase.from(TEAM_TABLE).update({ is_active:false }).eq('id',id);
-    if (error) { toast('비활성화 실패: '+error.message,'error'); return; }
+    if (error) { toast('비활성화 실패: '+friendlyError(error),'error'); return; }
     setTeamMembers(prev => prev.map(m => m.id===id?{...m,is_active:false}:m));
     toast('비활성화 완료','success');
   }, [toast]);
@@ -3329,7 +3351,7 @@ function App({ session }) {
       if (error.code==='42P01' || error.message?.includes('does not exist') || error.message?.includes('relation')) {
         setMilestonesSetupNeeded(true);
       }
-      toast('마일스톤 생성 실패: '+error.message,'error');
+      toast('마일스톤 생성 실패: '+friendlyError(error),'error');
       return;
     }
     setMilestones(prev => ({ ...prev, [slug]: [...(inserted||[])].sort((a,b)=>a.order_idx-b.order_idx) }));
@@ -3348,7 +3370,7 @@ function App({ session }) {
       if (milestone.status === 'done' && fields.status !== 'done') payload.actual_end = null;
     }
     const { data:updated, error } = await supabase.from(MILESTONES_TABLE).update(payload).eq('id',milestone.id).select().single();
-    if (error) { toast('저장 실패: '+error.message,'error'); return; }
+    if (error) { toast('저장 실패: '+friendlyError(error),'error'); return; }
     setMilestones(prev => {
       const next = { ...prev };
       const list = (next[milestone.project_slug]||[]).map(m => m.id===milestone.id?updated:m);
@@ -3379,7 +3401,7 @@ function App({ session }) {
   const handleMilestoneDelete = useCallback(async (milestone) => {
     if (!confirm(`"${milestone.phase_label}" 작업을 삭제하시겠습니까?`)) return;
     const { error } = await supabase.from(MILESTONES_TABLE).delete().eq('id',milestone.id);
-    if (error) { toast('삭제 실패: '+error.message,'error'); return; }
+    if (error) { toast('삭제 실패: '+friendlyError(error),'error'); return; }
     setMilestones(prev => {
       const next = { ...prev };
       next[milestone.project_slug] = (next[milestone.project_slug]||[]).filter(m => m.id!==milestone.id);
@@ -3429,7 +3451,7 @@ function App({ session }) {
     };
     if (weekNumber != null) row.week_number = weekNumber;
     const { data:inserted, error } = await supabase.from(MILESTONES_TABLE).insert([row]).select().single();
-    if (error) { toast('추가 실패: '+error.message,'error'); return; }
+    if (error) { toast('추가 실패: '+friendlyError(error),'error'); return; }
     setMilestones(prev => ({ ...prev, [slug]: [...(prev[slug]||[]), inserted] }));
   }, [milestones, toast, defaultAssigneeFor]);
 
@@ -3455,7 +3477,7 @@ function App({ session }) {
       return row;
     });
     const { data:inserted, error } = await supabase.from(MILESTONES_TABLE).insert(rows).select();
-    if (error) { toast('일괄 생성 실패: '+error.message,'error'); return; }
+    if (error) { toast('일괄 생성 실패: '+friendlyError(error),'error'); return; }
     setMilestones(prev => ({ ...prev, [slug]: [...(prev[slug]||[]), ...(inserted||[])] }));
     toast(`✨ ${inserted?.length||cleaned.length}개 티켓 생성 완료`,'success');
   }, [milestones, toast, defaultAssigneeFor]);
@@ -3477,7 +3499,7 @@ function App({ session }) {
         if (error.code === '42P01' || error.message?.includes('does not exist') || error.message?.includes('relation')) {
           setMilestonesSetupNeeded(true);
         }
-        toast('백필 실패: '+error.message,'error');
+        toast('백필 실패: '+friendlyError(error),'error');
         return 0;
       }
       setMilestones(prev => ({
@@ -3519,7 +3541,7 @@ function App({ session }) {
         if (error.code === '42703' || /weekly_plan/.test(error.message||'')) {
           toast('weekly_plan 컬럼이 없습니다. 작업 트래커 설정 SQL을 다시 실행하세요 (전체 화면 → DB 설정).','error');
         } else {
-          toast('주차별 계획 저장 실패: '+error.message,'error');
+          toast('주차별 계획 저장 실패: '+friendlyError(error),'error');
         }
         return;
       }
@@ -3571,7 +3593,7 @@ function App({ session }) {
         if (error.code === '42703' || /weekly_plan/.test(error.message||'')) {
           toast('weekly_plan 컬럼이 없습니다. 설정 SQL을 다시 실행하세요.','error');
         } else {
-          toast('주차 계획 삭제 실패: '+error.message,'error');
+          toast('주차 계획 삭제 실패: '+friendlyError(error),'error');
         }
         return;
       }
@@ -3936,13 +3958,17 @@ function App({ session }) {
                 const overdue = hasSchedule && curWeek != null && curWeek > totalWeeks;
                 const isBeforeStartDate = hasSchedule && curWeek == null;
                 return (
-                  <div key={p.slug} onClick={() => navigate({ name:'project', slug:p.slug })} style={{
-                    flex:'1 1 180px', minWidth:180, maxWidth:320, padding:'0.6rem 0.8rem', borderRadius:10,
-                    background:'var(--surface)', border:`1px solid ${meta.color}33`,
-                    cursor:'pointer', transition:'all 0.15s',
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor=meta.color+'88'; e.currentTarget.style.transform='translateY(-1px)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor=meta.color+'33'; e.currentTarget.style.transform='none'; }}>
+                  <div key={p.slug} role="button" tabIndex={0}
+                    aria-label={`${meta.label} - ${p.title||p.slug}${hasSchedule && curWeek != null ? `, ${overdue ? '일정 초과' : `${curWeek}/${totalWeeks}주차`}` : ''}${ticketPct >= 0 ? `, 티켓 ${doneCount}/${totalCount}` : ''}`}
+                    onClick={() => navigate({ name:'project', slug:p.slug })}
+                    onKeyDown={e => { if (e.key==='Enter' || e.key===' ') { e.preventDefault(); navigate({ name:'project', slug:p.slug }); } }}
+                    style={{
+                      flex:'1 1 180px', minWidth:180, maxWidth:320, padding:'0.6rem 0.8rem', borderRadius:10,
+                      background:'var(--surface)', border:`1px solid ${meta.color}33`,
+                      cursor:'pointer', transition:'all 0.15s',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor=meta.color+'88'; e.currentTarget.style.transform='translateY(-1px)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor=meta.color+'33'; e.currentTarget.style.transform='none'; }}>
                     <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
                       <span style={{ padding:'0.1rem 0.4rem', borderRadius:4, fontSize:'0.7rem', fontWeight:600, background:meta.color+'25', color:meta.color }}>{meta.emoji} {meta.label}</span>
                     </div>
@@ -3951,17 +3977,17 @@ function App({ session }) {
                       <div style={{ marginTop:6, display:'flex', flexDirection:'column', gap:4 }}>
                         {weekPct >= 0 && (
                           <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                            <span style={{ fontSize:'0.65rem', color:'var(--text2)', width:14, flexShrink:0 }}>📅</span>
-                            <div style={{ flex:1, height:4, borderRadius:2, background:'var(--surface2)', overflow:'hidden' }}>
+                            <span style={{ fontSize:'0.65rem', color:'var(--text2)', width:14, flexShrink:0 }} aria-hidden="true">📅</span>
+                            <div role="progressbar" aria-label="주차 진행률" aria-valuenow={weekPct} aria-valuemin={0} aria-valuemax={100} style={{ flex:1, height:4, borderRadius:2, background:'var(--surface2)', overflow:'hidden' }}>
                               <div style={{ width:weekPct+'%', height:'100%', borderRadius:2, background:overdue?'#e17055':weekPct===100?'var(--green)':meta.color, transition:'width 0.3s' }} />
                             </div>
-                            <span style={{ fontSize:'0.65rem', color:overdue?'#e17055':'var(--text2)', flexShrink:0 }}>{isBeforeStartDate ? '착수 전' : `${curWeek}/${totalWeeks}주`}</span>
+                            <span style={{ fontSize:'0.65rem', color:overdue?'#e17055':'var(--text2)', flexShrink:0, fontWeight:overdue?600:400 }}>{isBeforeStartDate ? '착수 전' : overdue ? `⚠ ${curWeek}/${totalWeeks}주` : `${curWeek}/${totalWeeks}주`}</span>
                           </div>
                         )}
                         {ticketPct >= 0 && (
                           <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                            <span style={{ fontSize:'0.65rem', color:'var(--text2)', width:14, flexShrink:0 }}>🎫</span>
-                            <div style={{ flex:1, height:4, borderRadius:2, background:'var(--surface2)', overflow:'hidden' }}>
+                            <span style={{ fontSize:'0.65rem', color:'var(--text2)', width:14, flexShrink:0 }} aria-hidden="true">🎫</span>
+                            <div role="progressbar" aria-label="티켓 완료율" aria-valuenow={ticketPct} aria-valuemin={0} aria-valuemax={100} style={{ flex:1, height:4, borderRadius:2, background:'var(--surface2)', overflow:'hidden' }}>
                               <div style={{ width:ticketPct+'%', height:'100%', borderRadius:2, background:ticketPct===100?'var(--green)':'var(--green)', opacity:0.6, transition:'width 0.3s' }} />
                             </div>
                             <span style={{ fontSize:'0.65rem', color:'var(--text2)', flexShrink:0 }}>{doneCount}/{totalCount}</span>
