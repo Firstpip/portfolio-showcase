@@ -229,7 +229,32 @@ END $$;
 ALTER TABLE wishket_projects ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "auth_only_projects" ON wishket_projects;
 CREATE POLICY "auth_only_projects" ON wishket_projects
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);`;
+  FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- 미팅 시각 경과 시 interview → meeting_done 자동 전환 (Atomic, race-safe)
+-- 클라이언트가 loadData에서 RPC로 호출. 서버에서 단일 SQL UPDATE로 처리되어
+-- history append race / 시계 불일치 / 중복 PATCH 문제 모두 해결.
+CREATE OR REPLACE FUNCTION transition_passed_meetings()
+RETURNS int LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE n int;
+BEGIN
+  UPDATE wishket_projects
+  SET current_status = 'meeting_done',
+      history = COALESCE(history, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+        'status', 'meeting_done',
+        'date', to_char(now() AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD'),
+        'note', '미팅 시각 경과 자동 전환',
+        'meeting_at', meeting_at,
+        'meeting_type', meeting_type
+      )),
+      updated_at = (now() AT TIME ZONE 'Asia/Seoul')::date
+  WHERE current_status = 'interview'
+    AND meeting_at IS NOT NULL
+    AND meeting_at < now();
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n;
+END $$;
+GRANT EXECUTE ON FUNCTION transition_passed_meetings() TO authenticated, anon;`;
 
 
 // 착수일 기준 현재 몇 주차인지 계산 (1-based, 착수 전이면 null)
@@ -3271,42 +3296,13 @@ function App({ session }) {
         localStorage.setItem('last_auto_delete', String(nowTs));
       }
     }
-    // 미팅 시각 경과 시 자동 전환: interview → meeting_done
-    // 조건: current_status='interview' & meeting_at < now (시각 지남)
-    // 멱등: 전환 후 조건 false → 중복 전환 불가
-    const today = new Date().toISOString().split('T')[0];
-    const nowDate = new Date();
-    const meetingPassedTargets = finalRows.filter(r =>
-      r.current_status === 'interview' && r.meeting_at && new Date(r.meeting_at) < nowDate
-    );
-    if (meetingPassedTargets.length > 0) {
-      const updates = meetingPassedTargets.map(r => {
-        const entry = { status:'meeting_done', date:today, note:'미팅 시각 경과 자동 전환', meeting_at:r.meeting_at, meeting_type:r.meeting_type||null };
-        return { slug:r.slug, payload:{ current_status:'meeting_done', history:[...(r.history||[]), entry], updated_at:today } };
-      });
-      // 직렬 PATCH (각 row history가 개별이라 batch 불가)
-      Promise.all(updates.map(u =>
-        supabase.from(TABLE).update(u.payload).eq('slug', u.slug)
-          .then(({ error:e }) => e ? { slug:u.slug, ok:false, err:e } : { slug:u.slug, ok:true })
-      )).then(results => {
-        const ok = results.filter(r => r.ok);
-        const failed = results.filter(r => !r.ok);
-        if (ok.length > 0) {
-          const okSlugs = new Set(ok.map(r => r.slug));
-          setData(prev => prev ? prev.map(d => {
-            if (!okSlugs.has(d.slug)) return d;
-            const u = updates.find(x => x.slug === d.slug);
-            return { ...d, ...u.payload };
-          }) : prev);
-          toast(`🤝 미팅 경과 자동 전환 ${ok.length}건 → 계약 논의 중`, 'info');
-        }
-        if (failed.length > 0) console.warn('미팅 자동 전환 실패:', failed);
-      });
-      finalRows = finalRows.map(r => {
-        const u = updates.find(x => x.slug === r.slug);
-        return u ? { ...r, ...u.payload } : r;
-      });
-    }
+    // 미팅 시각 경과 시 interview → meeting_done 자동 전환
+    // 단일 atomic SQL (서버 RPC) — race / 시계 / history append 모두 서버에서 안전 처리
+    // 전환된 row는 Realtime UPDATE 이벤트로 자동 동기화됨 (별도 setData 불필요)
+    supabase.rpc('transition_passed_meetings').then(({ data:n, error:e }) => {
+      if (e) { console.warn('미팅 자동 전환 RPC 실패:', e.message); return; }
+      if (n > 0) toast(`🤝 미팅 경과 자동 전환 ${n}건 → 계약 논의 중`, 'info');
+    });
     // 자동 reconciliation: dual-write 실패로 비일관 상태가 된 row 자동 치유
     // 조건: current_status='lost' & portfolio_links.length > 1 (= P2/P3 정리 누락)
     // 1시간 쿨다운으로 폭주 방지. 함수가 멱등이라 중복 호출 안전.
