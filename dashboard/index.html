@@ -276,8 +276,12 @@ function formatMeetingAt(iso) {
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 function parseBudgetNum(v) {
-  const d = (v||'').replace(/[^0-9]/g,'');
-  return d ? Number(d) : 0;
+  // 범위 표기("1000-3000만원")는 첫 숫자 그룹만, 단일 표기는 전체 숫자 사용
+  const s = String(v||'');
+  const groups = s.match(/\d+/g);
+  if (!groups || groups.length === 0) return 0;
+  if (/[~\-–]/.test(s)) return Number(groups[0]);
+  return Number(groups.join(''));
 }
 // Supabase/PostgreSQL 에러를 사용자 친화 메시지로 변환
 function friendlyError(error) {
@@ -2874,7 +2878,8 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
   const [selected, setSelected] = useState(new Set());
   const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s=new Set(prev); s.has(slug)?s.delete(slug):s.add(slug); return s; }); };
 
-  const filtered = useMemo(() => {
+  // 1) 필터링만
+  const filteredOnly = useMemo(() => {
     let list = filter==='all' ? data : data.filter(d => d.current_status===filter);
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -2891,15 +2896,25 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
     if (memberFilter) {
       list = list.filter(d => d.assigned_manager===memberFilter || d.assigned_main===memberFilter || d.assigned_sub===memberFilter);
     }
+    return list;
+  }, [data, filter, search, dateRange, memberFilter]);
+
+  // 2) urgency/stale 마킹 (필터 결과만 변할 때 재계산)
+  const enriched = useMemo(() => {
     const now = new Date();
-    list = list.map(r => ({ ...r, _stale: r.current_status==='applied' && r.created_at && daysBetween(r.created_at,now)>=30 }));
     const urgent=[]; const rest=[];
-    for (const r of list) {
+    for (const r of filteredOnly) {
+      const _stale = r.current_status==='applied' && r.created_at && daysBetween(r.created_at, now)>=30;
       const urg = getMeetingUrgency(r.meeting_at);
-      if (urg) urgent.push({ ...r, _urgency:urg });
-      else rest.push(r);
+      if (urg) urgent.push({ ...r, _stale, _urgency:urg });
+      else rest.push({ ...r, _stale });
     }
     urgent.sort((a,b) => new Date(a.meeting_at)-new Date(b.meeting_at));
+    return { urgent, rest };
+  }, [filteredOnly]);
+
+  // 3) 정렬 (정렬 키만 바뀔 때 재계산)
+  const filtered = useMemo(() => {
     const sortFn = (a,b) => {
       let va, vb;
       if (sortKey==='budget')     { va=parseBudgetNum(a.budget);  vb=parseBudgetNum(b.budget); }
@@ -2908,9 +2923,9 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
       if (typeof va === 'number') return sortOrder==='desc'?vb-va:va-vb;
       return sortOrder==='desc'?vb.localeCompare(va):va.localeCompare(vb);
     };
-    rest.sort(sortFn);
-    return [...urgent,...rest];
-  }, [data,filter,search,sortKey,sortOrder,dateRange,memberFilter]);
+    const sortedRest = enriched.rest.slice().sort(sortFn);
+    return [...enriched.urgent, ...sortedRest];
+  }, [enriched, sortKey, sortOrder]);
 
   const toggleAll = () => { setSelected(prev => prev.size===filtered.length ? new Set() : new Set(filtered.map(r=>r.slug))); };
 
