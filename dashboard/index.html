@@ -3271,6 +3271,42 @@ function App({ session }) {
         localStorage.setItem('last_auto_delete', String(nowTs));
       }
     }
+    // 미팅 시각 경과 시 자동 전환: interview → meeting_done
+    // 조건: current_status='interview' & meeting_at < now (시각 지남)
+    // 멱등: 전환 후 조건 false → 중복 전환 불가
+    const today = new Date().toISOString().split('T')[0];
+    const nowDate = new Date();
+    const meetingPassedTargets = finalRows.filter(r =>
+      r.current_status === 'interview' && r.meeting_at && new Date(r.meeting_at) < nowDate
+    );
+    if (meetingPassedTargets.length > 0) {
+      const updates = meetingPassedTargets.map(r => {
+        const entry = { status:'meeting_done', date:today, note:'미팅 시각 경과 자동 전환', meeting_at:r.meeting_at, meeting_type:r.meeting_type||null };
+        return { slug:r.slug, payload:{ current_status:'meeting_done', history:[...(r.history||[]), entry], updated_at:today } };
+      });
+      // 직렬 PATCH (각 row history가 개별이라 batch 불가)
+      Promise.all(updates.map(u =>
+        supabase.from(TABLE).update(u.payload).eq('slug', u.slug)
+          .then(({ error:e }) => e ? { slug:u.slug, ok:false, err:e } : { slug:u.slug, ok:true })
+      )).then(results => {
+        const ok = results.filter(r => r.ok);
+        const failed = results.filter(r => !r.ok);
+        if (ok.length > 0) {
+          const okSlugs = new Set(ok.map(r => r.slug));
+          setData(prev => prev ? prev.map(d => {
+            if (!okSlugs.has(d.slug)) return d;
+            const u = updates.find(x => x.slug === d.slug);
+            return { ...d, ...u.payload };
+          }) : prev);
+          toast(`🤝 미팅 경과 자동 전환 ${ok.length}건 → 계약 논의 중`, 'info');
+        }
+        if (failed.length > 0) console.warn('미팅 자동 전환 실패:', failed);
+      });
+      finalRows = finalRows.map(r => {
+        const u = updates.find(x => x.slug === r.slug);
+        return u ? { ...r, ...u.payload } : r;
+      });
+    }
     // 자동 reconciliation: dual-write 실패로 비일관 상태가 된 row 자동 치유
     // 조건: current_status='lost' & portfolio_links.length > 1 (= P2/P3 정리 누락)
     // 1시간 쿨다운으로 폭주 방지. 함수가 멱등이라 중복 호출 안전.
