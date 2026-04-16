@@ -1,0 +1,115 @@
+name: P2/P3 포트폴리오 정리
+
+on:
+  repository_dispatch:
+    types: [cleanup-p2p3]
+  schedule:
+    - cron: '0 15 * * *'   # 매일 KST 자정 — 실패분 재처리 fallback
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 대상 slug 결정
+        id: targets
+        run: |
+          if [ "${{ github.event_type }}" = "repository_dispatch" ]; then
+            # Edge Function에서 전달받은 slugs
+            SLUGS=$(echo '${{ toJson(github.event.client_payload.slugs) }}')
+          else
+            # 스케줄: DB에서 lost + portfolio_links > 1 인 프로젝트 조회
+            SLUGS=$(curl -s \
+              "${SUPABASE_URL}/rest/v1/wishket_projects?current_status=eq.lost&select=slug,portfolio_links" \
+              -H "apikey: ${SUPABASE_SR}" \
+              -H "Authorization: Bearer ${SUPABASE_SR}" | \
+              jq -c '[.[] | select(.portfolio_links | length > 1) | .slug]')
+          fi
+          echo "slugs=${SLUGS}" >> $GITHUB_OUTPUT
+          echo "대상: ${SLUGS}"
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SR: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      - name: P2/P3 디렉터리 삭제 + push
+        id: delete
+        run: |
+          SLUGS='${{ steps.targets.outputs.slugs }}'
+          if [ "$SLUGS" = "[]" ] || [ "$SLUGS" = "null" ] || [ -z "$SLUGS" ]; then
+            echo "대상 없음 — 종료"
+            echo "changed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          CHANGED=false
+          for SLUG in $(echo "$SLUGS" | jq -r '.[]'); do
+            for P in portfolio-2 portfolio-3; do
+              if [ -d "$SLUG/$P" ]; then
+                git rm -rf "$SLUG/$P"
+                CHANGED=true
+                echo "삭제: $SLUG/$P"
+              fi
+            done
+          done
+
+          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
+
+          if [ "$CHANGED" = "false" ]; then
+            echo "삭제할 파일 없음 (이미 정리됨)"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          COUNT=$(echo "$SLUGS" | jq 'length')
+          if [ "$COUNT" -eq 1 ]; then
+            MSG="chore: remove P2/P3 for $(echo "$SLUGS" | jq -r '.[0]')"
+          else
+            MSG="chore: remove P2/P3 for ${COUNT}건 일괄 미선정"
+          fi
+          git commit -m "$MSG"
+
+          # 동시 push 대응: rebase 후 최대 5회 재시도
+          for i in 1 2 3 4 5; do
+            if git push origin main; then
+              echo "Push 성공"
+              exit 0
+            fi
+            echo "Push 실패, rebase 후 재시도 ($i/5)..."
+            sleep $((i * 2))
+            git pull --rebase origin main
+          done
+          echo "::error::5회 재시도 후에도 push 실패"
+          exit 1
+
+      - name: DB portfolio_links 트림
+        if: steps.delete.outputs.changed == 'true'
+        run: |
+          SLUGS='${{ steps.targets.outputs.slugs }}'
+          for SLUG in $(echo "$SLUGS" | jq -r '.[]'); do
+            LINKS=$(curl -s \
+              "${SUPABASE_URL}/rest/v1/wishket_projects?slug=eq.${SLUG}&select=portfolio_links" \
+              -H "apikey: ${SUPABASE_SR}" \
+              -H "Authorization: Bearer ${SUPABASE_SR}" | \
+              jq '.[0].portfolio_links')
+
+            LEN=$(echo "$LINKS" | jq 'length')
+            if [ "$LEN" -gt 1 ]; then
+              TRIMMED=$(echo "$LINKS" | jq -c '.[0:1]')
+              HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
+                "${SUPABASE_URL}/rest/v1/wishket_projects?slug=eq.${SLUG}" \
+                -H "apikey: ${SUPABASE_SR}" \
+                -H "Authorization: Bearer ${SUPABASE_SR}" \
+                -H "Content-Type: application/json" \
+                -H "Prefer: return=minimal" \
+                -d "{\"portfolio_links\": ${TRIMMED}}")
+              echo "Trimmed: $SLUG ($LEN → 1) HTTP $HTTP"
+            else
+              echo "Skip: $SLUG (이미 ${LEN}개)"
+            fi
+          done
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SR: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

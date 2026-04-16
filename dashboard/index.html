@@ -3379,24 +3379,8 @@ function App({ session }) {
         localStorage.setItem('last_portfolio_migrate', String(nowTs));
       }
     }
-    // 자동 삭제: 생성일 기준 30일 경과한 미선정 프로젝트 제거 (DB + GitHub Pages) — 24시간 쿨다운
-    const deleteCooldown = 24 * 3600 * 1000;
-    const lastAutoDelete = parseInt(localStorage.getItem('last_auto_delete')||'0', 10);
+    // 30일+ 미선정 프로젝트 정리는 cleanup-lost-projects.yml 워크플로우가 주 1회 처리
     let finalRows = rows;
-    if (nowTs - lastAutoDelete > deleteCooldown) {
-      const now = new Date();
-      const autoDeleteTargets = rows.filter(r => r.current_status === 'lost' && daysBetween(r.created_at, now) >= 30);
-      if (autoDeleteTargets.length > 0) {
-        const slugs = autoDeleteTargets.map(r => r.slug);
-        supabase.from(TABLE).delete().in('slug', slugs)
-          .then(({ error:e }) => { if (e) console.warn('자동 삭제 실패:', e.message); });
-        supabase.functions.invoke('delete-portfolios', { body: { slugs, all: true } })
-          .catch(err => console.warn('자동 삭제 파일 정리 실패:', err.message));
-        toast(`🗑️ 미선정 30일+ 경과 ${autoDeleteTargets.length}건 자동 삭제`, 'info');
-        finalRows = rows.filter(r => !autoDeleteTargets.some(t => t.slug === r.slug));
-        localStorage.setItem('last_auto_delete', String(nowTs));
-      }
-    }
     // 미팅 시각 경과 시 interview → meeting_done 자동 전환
     // 단일 atomic SQL (서버 RPC) — race / 시계 / history append 모두 서버에서 안전 처리
     // 전환된 row는 Realtime UPDATE 이벤트로 자동 동기화됨 (별도 setData 불필요)
@@ -3404,30 +3388,7 @@ function App({ session }) {
       if (e) { console.warn('미팅 자동 전환 RPC 실패:', e.message); return; }
       if (n > 0) toast(`🤝 미팅 경과 자동 전환 ${n}건 → 계약 논의 중`, 'info');
     });
-    // 자동 reconciliation: dual-write 실패로 비일관 상태가 된 row 자동 치유
-    // 조건: current_status='lost' & portfolio_links.length > 1 (= P2/P3 정리 누락)
-    // 1시간 쿨다운으로 폭주 방지. 함수가 멱등이라 중복 호출 안전.
-    const reconCooldown = 60 * 60 * 1000;
-    const lastRecon = parseInt(localStorage.getItem('last_orphan_recon')||'0', 10);
-    if (nowTs - lastRecon > reconCooldown) {
-      const orphans = finalRows.filter(r => r.current_status === 'lost' && Array.isArray(r.portfolio_links) && r.portfolio_links.length > 1);
-      if (orphans.length > 0) {
-        const orphanSlugs = orphans.map(r => r.slug);
-        supabase.functions.invoke('delete-portfolios', { body:{ slugs: orphanSlugs } })
-          .then(({ data:fnData, error:fnErr }) => {
-            if (fnErr || !fnData?.deleted) {
-              console.warn('orphan reconciliation 실패:', fnErr?.message || fnData?.reason);
-              return;
-            }
-            // 함수가 DB도 트림했으므로 로컬 state 동기화
-            const updatedSlugs = new Set(fnData.db_updated_slugs || orphanSlugs);
-            setData(prev => prev ? prev.map(d => updatedSlugs.has(d.slug) ? { ...d, portfolio_links: (d.portfolio_links||[]).slice(0,1) } : d) : prev);
-            toast(`🔧 누락된 P2/P3 정리 자동 복구 ${orphanSlugs.length}건`, 'info');
-          })
-          .catch(err => console.warn('orphan reconciliation 네트워크 오류:', err.message));
-        localStorage.setItem('last_orphan_recon', String(nowTs));
-      }
-    }
+    // P2/P3 orphan 정리는 cleanup-p2p3.yml 워크플로우가 매일 자정 + dispatch 시 처리
     setData(finalRows); setConnected(true);
     checkMeetingNotifications(finalRows);
   }, [toast, checkMeetingNotifications]);
@@ -3866,17 +3827,14 @@ function App({ session }) {
       return updated;
     }));
     toast(`${success}건 미선정 처리 완료`,'success');
+    // P2/P3 정리: GitHub Actions workflow로 비동기 처리
     const toDelete = slugs.filter(slug => {
       const p = data.find(d => d.slug===slug);
       return p && p.current_status!=='won' && (p.portfolio_links||[]).length > 1;
     });
     if (toDelete.length > 0) {
       supabase.functions.invoke('delete-portfolios', { body:{ slugs:toDelete } })
-        .then(({ data:fnData, error:fnErr }) => {
-          if (fnErr) toast('P2/P3 파일 삭제 실패: '+fnErr.message,'error');
-          else if (!fnData?.deleted) toast('P2/P3 파일 삭제 실패'+(fnData?.reason ? ` — ${fnData.reason}` : ' (GitHub API 오류)'),'error');
-          else toast(`P2/P3 파일 삭제 완료 (${toDelete.length}건)`,'success');
-        }).catch(err => toast('P2/P3 파일 삭제 네트워크 오류: '+err.message,'error'));
+        .catch(err => console.warn('P2/P3 정리 dispatch 실패:', err.message));
     }
   }, [data, toast]);
 
@@ -3907,7 +3865,7 @@ function App({ session }) {
       if (newStatus==='meeting_done' && project.meeting_at) { historyEntry.meeting_at=project.meeting_at; historyEntry.meeting_type=project.meeting_type||null; }
       const newHistory = [...(project.history||[]),historyEntry];
       const updatePayload = { current_status:newStatus, history:newHistory, updated_at:today };
-      // 상태 변경만 먼저 (portfolio_links는 Edge Function이 파일 삭제 성공 후 트림 — 단일 진실 원천화)
+      // 상태 변경만 먼저 (portfolio_links는 GitHub Actions workflow가 파일 삭제 후 트림 → Realtime 반영)
       const { error } = await supabase.from(TABLE).update(updatePayload).eq('slug',project.slug);
       if (error) throw error;
       setData(prev => prev.map(d => d.slug===project.slug?{...d,...updatePayload}:d));
@@ -3928,24 +3886,11 @@ function App({ session }) {
       } else {
         setSelectedProject(null);
       }
-      // P2/P3 정리: 함수가 파일 삭제 + DB 트림을 원자적으로 수행. await로 결과 확정.
-      // 실패 시 portfolio_links 그대로 → 다음 loadData reconciliation이 자동 재시도.
+      // P2/P3 정리: GitHub Actions workflow로 비동기 처리 (dispatch 후 즉시 반환).
+      // workflow가 파일 삭제 + DB 트림 → Realtime으로 UI 자동 반영. 매일 자정 fallback도 동작.
       if (newStatus==='lost' && (project.portfolio_links||[]).length > 1) {
-        try {
-          const { data:fnData, error:fnErr } = await supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug } });
-          if (fnErr) {
-            toast('P2/P3 정리 실패 (자동 재시도 예약됨): '+fnErr.message,'error');
-          } else if (!fnData?.deleted) {
-            toast('P2/P3 정리 실패 (자동 재시도 예약됨)'+(fnData?.reason ? ` — ${fnData.reason}` : ''),'error');
-          } else {
-            // 함수가 DB도 갱신했으므로 로컬 state 동기화
-            setData(prev => prev.map(d => d.slug===project.slug ? { ...d, portfolio_links:(d.portfolio_links||[]).slice(0,1) } : d));
-            if (fnData.db_updated) toast(`P2/P3 정리 완료 (${project.slug})`,'success');
-            else toast('파일은 삭제됐으나 DB 동기화 실패 — 새로고침 시 자동 복구','error');
-          }
-        } catch(fnEx) {
-          toast('P2/P3 정리 네트워크 오류 (자동 재시도 예약됨): '+fnEx.message,'error');
-        }
+        supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug } })
+          .catch(err => console.warn('P2/P3 정리 dispatch 실패:', err.message));
       }
     } catch(err) { toast('저장 실패: '+friendlyError(err),'error'); } finally { setSaving(false); }
   }, [toast, milestones, milestonesSetupNeeded, handleCreateMilestonesFromTemplate]);
