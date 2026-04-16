@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>환자 회송 워크플로우 관리 시스템</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; font-family: 'Pretendard', sans-serif; }
+  #root { display: flex; width: 100%; height: 100vh; overflow: hidden; }
+
+  @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fadeInScale { from { opacity: 0; transform: scale(0.95) } to { opacity: 1; transform: scale(1) } }
+  @keyframes slideInRight { from { opacity: 0; transform: translateX(30px) } to { opacity: 1; transform: translateX(0) } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
+  @keyframes countUp { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
+  @keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+  @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.4 } }
+  @keyframes barGrow { from { width: 0% } to { width: var(--target-width) } }
+  @keyframes slideDown { from { opacity: 0; transform: translateY(-8px) } to { opacity: 1; transform: translateY(0) } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } = Recharts;
+
+const C = {
+  primary: '#1A56DB',
+  primaryLight: '#EBF0FD',
+  accent: '#10B981',
+  accentLight: '#D1FAE5',
+  warning: '#F59E0B',
+  warningLight: '#FEF3C7',
+  danger: '#EF4444',
+  dangerLight: '#FEE2E2',
+  sidebar: '#0F172A',
+  sidebarBorder: '#1E293B',
+  sidebarText: '#94A3B8',
+  sidebarActive: '#3B82F6',
+  bg: '#F0F4FF',
+  surface: '#FFFFFF',
+  border: '#E2E8F0',
+  text: '#111827',
+  textLight: '#6B7280',
+  textMuted: '#9CA3AF',
+};
+
+// ─── 더미 데이터 ─────────────────────────────────────────────────
+const REFERRAL_REQUESTS = [
+  { id: 'REF-2024-0041', patient: '김○○', age: 74, adl: '부분의존', oxygen: true, infection: false, urgency: 'high', status: '수용 확인', hospital: '한강성심병원', requestedBy: '이지영 간호사', time: '09:22', elapsed: '1시간 23분', ward: '순환기내과', notes: '좌심실 부전, 혈압 안정적' },
+  { id: 'REF-2024-0042', patient: '박○○', age: 68, adl: '독립', oxygen: false, infection: true, urgency: 'medium', status: '요청 중', hospital: '—', requestedBy: '최민준 전공의', time: '10:05', elapsed: '40분', ward: '호흡기내과', notes: '격리 필요, 병상 확보 중' },
+  { id: 'REF-2024-0043', patient: '이○○', age: 81, adl: '완전의존', oxygen: true, infection: false, urgency: 'high', status: '수용 확인', hospital: '인하대병원', requestedBy: '박수현 전공의', time: '08:55', elapsed: '2시간 10분', ward: '신경과', notes: '뇌경색 후유증, 재활 목적' },
+  { id: 'REF-2024-0044', patient: '최○○', age: 55, adl: '독립', oxygen: false, infection: false, urgency: 'low', status: '이송 완료', hospital: '부평성모병원', requestedBy: '정민아 간호사', time: '07:30', elapsed: '완료', ward: '정형외과', notes: '수술 후 회복 단계' },
+  { id: 'REF-2024-0045', patient: '정○○', age: 77, adl: '부분의존', oxygen: false, infection: false, urgency: 'medium', status: '수용 검토', hospital: '가천대길병원', requestedBy: '김태현 전공의', time: '10:35', elapsed: '10분', ward: '내분비내과', notes: '당뇨 합병증, 투석 준비' },
+  { id: 'REF-2024-0046', patient: '강○○', age: 63, adl: '독립', oxygen: false, infection: false, urgency: 'low', status: '이송 완료', hospital: '국제성모병원', requestedBy: '이수진 간호사', time: '06:45', elapsed: '완료', ward: '외과', notes: '담낭 수술 후 안정적' },
+];
+
+const HOSPITALS = [
+  { id: 1, name: '한강성심병원', general: 12, isolation: 2, oxygen: 5, available: true, lastUpdate: '5분 전', acceptRate: 87, today: 3 },
+  { id: 2, name: '인하대병원', general: 8, isolation: 0, oxygen: 3, available: true, lastUpdate: '12분 전', acceptRate: 91, today: 2 },
+  { id: 3, name: '부평성모병원', general: 0, isolation: 0, oxygen: 1, available: false, lastUpdate: '3분 전', acceptRate: 76, today: 1 },
+  { id: 4, name: '가천대길병원', general: 15, isolation: 3, oxygen: 7, available: true, lastUpdate: '8분 전', acceptRate: 83, today: 4 },
+  { id: 5, name: '국제성모병원', general: 4, isolation: 1, oxygen: 2, available: true, lastUpdate: '20분 전', acceptRate: 79, today: 1 },
+  { id: 6, name: '중앙보훈병원', general: 9, isolation: 0, oxygen: 4, available: true, lastUpdate: '2분 전', acceptRate: 88, today: 2 },
+];
+
+const TIMELINE_DATA = [
+  { time: '08:00', count: 2 }, { time: '09:00', count: 5 }, { time: '10:00', count: 8 },
+  { time: '11:00', count: 6 }, { time: '12:00', count: 4 }, { time: '13:00', count: 7 },
+  { time: '14:00', count: 9 }, { time: '15:00', count: 5 }, { time: '16:00', count: 3 },
+];
+
+const STATUS_PIE = [
+  { name: '요청 중', value: 4, color: C.warning },
+  { name: '수용 검토', value: 3, color: '#8B5CF6' },
+  { name: '수용 확인', value: 6, color: C.primary },
+  { name: '이송 완료', value: 11, color: C.accent },
+];
+
+// ─── 유틸 ─────────────────────────────────────────────────────────
+function StatusBadge({ status }) {
+  const map = {
+    '요청 중': { bg: C.warningLight, color: '#92400E', dot: C.warning },
+    '수용 검토': { bg: '#EDE9FE', color: '#5B21B6', dot: '#8B5CF6' },
+    '수용 확인': { bg: C.primaryLight, color: '#1E40AF', dot: C.primary },
+    '이송 완료': { bg: C.accentLight, color: '#065F46', dot: C.accent },
+  };
+  const s = map[status] || { bg: '#F3F4F6', color: '#374151', dot: '#9CA3AF' };
+  return (
+    <span style={{ display:'inline-flex', alignItems:'center', gap:5, padding:'3px 10px', borderRadius:20, background:s.bg, color:s.color, fontSize:11, fontWeight:600 }}>
+      <span style={{ width:6, height:6, borderRadius:'50%', background:s.dot, animation: status==='요청 중' ? 'pulse 1.5s infinite' : 'none' }} />
+      {status}
+    </span>
+  );
+}
+
+function UrgencyDot({ level }) {
+  const map = { high: C.danger, medium: C.warning, low: C.accent };
+  return <span style={{ display:'inline-block', width:8, height:8, borderRadius:'50%', background:map[level]||'#999', marginRight:4 }} />;
+}
+
+// ─── CountUp ──────────────────────────────────────────────────────
+function CountUp({ end, suffix='' }) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    let s = 0; const step = end / 60;
+    const t = setInterval(() => { s += step; if (s >= end) { setVal(end); clearInterval(t); } else setVal(Math.floor(s)); }, 16);
+    return () => clearInterval(t);
+  }, [end]);
+  return <span style={{ animation:'countUp 400ms ease' }}>{val.toLocaleString()}{suffix}</span>;
+}
+
+// ─── Toast ────────────────────────────────────────────────────────
+function Toast({ message, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  return (
+    <div style={{ position:'fixed', bottom:24, right:24, zIndex:9999, background:C.sidebar, color:'#fff', padding:'12px 20px', borderRadius:8, animation:'slideUp 300ms ease', boxShadow:'0 4px 16px rgba(0,0,0,0.2)', fontSize:14, display:'flex', alignItems:'center', gap:8 }}>
+      <span style={{ color:C.accent }}>✓</span> {message}
+    </div>
+  );
+}
+
+// ─── Modal ────────────────────────────────────────────────────────
+function Modal({ title, onClose, children, width=600 }) {
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:500, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      <div onClick={onClose} style={{ position:'absolute', inset:0, background:'rgba(0,0,0,0.45)', animation:'fadeIn 200ms ease' }} />
+      <div style={{ position:'relative', width, maxHeight:'88vh', background:C.surface, borderRadius:12, zIndex:501, animation:'fadeInScale 200ms ease', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.2)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'20px 24px', borderBottom:`1px solid ${C.border}` }}>
+          <h3 style={{ fontSize:18, fontWeight:700, color:C.text }}>{title}</h3>
+          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:C.textLight, lineHeight:1 }}>✕</button>
+        </div>
+        <div style={{ padding:24, overflowY:'auto', flex:1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── 대시보드 페이지 ──────────────────────────────────────────────
+function DashboardPage({ onNav, setToast }) {
+  const [selected, setSelected] = useState(null);
+
+  return (
+    <div key="dashboard" style={{ animation:'fadeIn 300ms ease' }}>
+      {/* KPI 카드 */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:20, marginBottom:28 }}>
+        {[
+          { label: '오늘 총 요청', value: 24, suffix: '건', icon: '📋', color: C.primary, bg: C.primaryLight },
+          { label: '수용 대기 중', value: 7, suffix: '건', icon: '⏳', color: C.warning, bg: C.warningLight },
+          { label: '이송 완료', value: 11, suffix: '건', icon: '✅', color: C.accent, bg: C.accentLight },
+          { label: '평균 처리 시간', value: 52, suffix: '분', icon: '⏱️', color: '#8B5CF6', bg: '#EDE9FE' },
+        ].map((k, i) => (
+          <div key={k.label} style={{ background:C.surface, borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)', animation:`slideUp 400ms ease ${i*80}ms both` }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+              <div>
+                <div style={{ fontSize:12, color:C.textLight, marginBottom:8, fontWeight:500 }}>{k.label}</div>
+                <div style={{ fontSize:30, fontWeight:800, color:k.color, letterSpacing:'-0.02em' }}><CountUp end={k.value} suffix={k.suffix} /></div>
+              </div>
+              <div style={{ width:44, height:44, borderRadius:12, background:k.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22 }}>{k.icon}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 차트 + 상태 파이 */}
+      <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:20, marginBottom:24 }}>
+        <div style={{ background:C.surface, borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+          <div style={{ fontSize:14, fontWeight:700, color:C.text, marginBottom:16 }}>시간대별 회송 요청 추이</div>
+          <div style={{ height:180 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={TIMELINE_DATA}>
+                <defs>
+                  <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.primary} stopOpacity={0.15}/>
+                    <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                <XAxis dataKey="time" tick={{ fontSize:11, fill:C.textMuted }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize:11, fill:C.textMuted }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ borderRadius:8, border:'none', boxShadow:'0 4px 12px rgba(0,0,0,0.1)', fontSize:12 }} />
+                <Area type="monotone" dataKey="count" stroke={C.primary} strokeWidth={2} fill="url(#areaGrad)" dot={{ fill:C.primary, r:3 }} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{ background:C.surface, borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+          <div style={{ fontSize:14, fontWeight:700, color:C.text, marginBottom:12 }}>상태별 현황</div>
+          <div style={{ height:140, display:'flex', justifyContent:'center' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={STATUS_PIE} cx="50%" cy="50%" outerRadius={60} innerRadius={35} dataKey="value" paddingAngle={3}>
+                  {STATUS_PIE.map((e,i) => <Cell key={i} fill={e.color} />)}
+                </Pie>
+                <Tooltip contentStyle={{ fontSize:12, borderRadius:8, border:'none', boxShadow:'0 4px 12px rgba(0,0,0,0.1)' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            {STATUS_PIE.map(s => (
+              <div key={s.name} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', fontSize:12 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                  <span style={{ width:8, height:8, borderRadius:2, background:s.color, display:'inline-block' }} />
+                  <span style={{ color:C.textLight }}>{s.name}</span>
+                </div>
+                <span style={{ fontWeight:700, color:C.text }}>{s.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* 요청 목록 */}
+      <div style={{ background:C.surface, borderRadius:12, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+        <div style={{ padding:'16px 20px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <span style={{ fontSize:14, fontWeight:700, color:C.text }}>오늘 회송 요청 목록</span>
+          <button onClick={() => onNav('request-form')} style={{ background:C.primary, color:'#fff', border:'none', borderRadius:8, padding:'7px 14px', fontSize:13, fontWeight:600, cursor:'pointer' }}>+ 새 회송 요청</button>
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ background:'#F8FAFC' }}>
+              {['요청번호', '환자', '병동', '요청사항', '수용병원', '상태', '경과'].map(h => (
+                <th key={h} style={{ padding:'10px 16px', textAlign:'left', fontSize:11, fontWeight:600, color:C.textMuted, letterSpacing:'0.04em', textTransform:'uppercase', borderBottom:`1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {REFERRAL_REQUESTS.map((r, i) => (
+              <tr key={r.id} onClick={() => setSelected(r)}
+                style={{ borderBottom:`1px solid ${C.border}`, cursor:'pointer', transition:'background 150ms', animation:`slideUp 400ms ease ${i*50}ms both` }}
+                onMouseEnter={e => e.currentTarget.style.background = C.primaryLight}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <td style={{ padding:'12px 16px', fontSize:13, fontFamily:'monospace', color:C.textLight }}>{r.id}</td>
+                <td style={{ padding:'12px 16px' }}>
+                  <div style={{ fontWeight:600, fontSize:13, color:C.text }}>{r.patient} <span style={{ color:C.textMuted, fontWeight:400 }}>({r.age}세)</span></div>
+                  <div style={{ fontSize:11, color:C.textMuted, marginTop:2 }}>ADL: {r.adl}</div>
+                </td>
+                <td style={{ padding:'12px 16px', fontSize:13, color:C.textLight }}>{r.ward}</td>
+                <td style={{ padding:'12px 16px' }}>
+                  <div style={{ display:'flex', gap:4 }}>
+                    {r.oxygen && <span style={{ fontSize:10, padding:'2px 6px', borderRadius:4, background:'#DBEAFE', color:'#1E40AF', fontWeight:600 }}>산소</span>}
+                    {r.infection && <span style={{ fontSize:10, padding:'2px 6px', borderRadius:4, background:'#FEE2E2', color:'#991B1B', fontWeight:600 }}>격리</span>}
+                    <UrgencyDot level={r.urgency} />
+                  </div>
+                </td>
+                <td style={{ padding:'12px 16px', fontSize:13, color:C.text, fontWeight:500 }}>{r.hospital}</td>
+                <td style={{ padding:'12px 16px' }}><StatusBadge status={r.status} /></td>
+                <td style={{ padding:'12px 16px', fontSize:12, color:r.elapsed==='완료' ? C.accent : C.textLight, fontWeight: r.elapsed==='완료'?600:400 }}>{r.elapsed}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {selected && (
+        <Modal title={`회송 상세 — ${selected.id}`} onClose={() => setSelected(null)}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginBottom:20 }}>
+            {[
+              ['환자 이름', `${selected.patient} (${selected.age}세)`],
+              ['담당 병동', selected.ward],
+              ['ADL 단계', selected.adl],
+              ['산소 투여', selected.oxygen ? '필요' : '불필요'],
+              ['격리 여부', selected.infection ? '격리 필요' : '일반'],
+              ['수용 병원', selected.hospital || '미정'],
+              ['요청자', selected.requestedBy],
+              ['요청 시각', selected.time],
+            ].map(([k, v]) => (
+              <div key={k} style={{ background:'#F8FAFC', borderRadius:8, padding:'12px 14px' }}>
+                <div style={{ fontSize:11, color:C.textMuted, marginBottom:4, fontWeight:600 }}>{k}</div>
+                <div style={{ fontSize:14, color:C.text, fontWeight:600 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ background:'#F8FAFC', borderRadius:8, padding:14, marginBottom:20 }}>
+            <div style={{ fontSize:11, color:C.textMuted, marginBottom:6, fontWeight:600 }}>임상 메모</div>
+            <div style={{ fontSize:14, color:C.text, lineHeight:1.6 }}>{selected.notes}</div>
+          </div>
+          {/* 상태 타임라인 */}
+          <div style={{ marginBottom:20 }}>
+            <div style={{ fontSize:13, fontWeight:700, color:C.text, marginBottom:12 }}>진행 상태</div>
+            <div style={{ display:'flex', gap:0 }}>
+              {['요청 등록', '수용 검토', '수용 확인', '이송 완료'].map((step, i) => {
+                const statusIdx = ['요청 중','수용 검토','수용 확인','이송 완료'].indexOf(selected.status);
+                const done = i <= statusIdx;
+                return (
+                  <div key={step} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center' }}>
+                    <div style={{ width:28, height:28, borderRadius:'50%', background: done ? C.primary : C.border, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:12, fontWeight:700, zIndex:1 }}>
+                      {done ? '✓' : i+1}
+                    </div>
+                    {i < 3 && <div style={{ position:'absolute', width:'calc(25% - 28px)', height:2, background: done && i < statusIdx ? C.primary : C.border, marginTop:13, marginLeft:'12.5%' }} />}
+                    <div style={{ fontSize:11, color: done ? C.primary : C.textMuted, marginTop:6, fontWeight: done ? 600 : 400 }}>{step}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={() => { setSelected(null); setToast('상태가 업데이트되었습니다'); }} style={{ flex:1, background:C.primary, color:'#fff', border:'none', borderRadius:8, padding:'10px', fontSize:14, fontWeight:600, cursor:'pointer' }}>상태 업데이트</button>
+            <button onClick={() => setSelected(null)} style={{ flex:1, background:'#F1F5F9', color:C.text, border:'none', borderRadius:8, padding:'10px', fontSize:14, cursor:'pointer' }}>닫기</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── 회송 요청 폼 페이지 ──────────────────────────────────────────
+function RequestFormPage({ setToast, onNav }) {
+  const [form, setForm] = useState({ ward: '', adl: '독립', oxygen: false, infection: false, urgency: 'medium', notes: '' });
+  const [submitted, setSubmitted] = useState(false);
+
+  if (submitted) {
+    return (
+      <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:400, animation:'fadeInScale 300ms ease' }}>
+        <div style={{ width:80, height:80, borderRadius:'50%', background:C.accentLight, display:'flex', alignItems:'center', justifyContent:'center', fontSize:36, marginBottom:20 }}>✅</div>
+        <div style={{ fontSize:22, fontWeight:700, color:C.text, marginBottom:8 }}>회송 요청이 접수되었습니다</div>
+        <div style={{ fontSize:14, color:C.textLight, marginBottom:24 }}>협력병원 담당자에게 알림을 전송했습니다</div>
+        <div style={{ display:'flex', gap:12 }}>
+          <button onClick={() => { setSubmitted(false); setForm({ ward:'', adl:'독립', oxygen:false, infection:false, urgency:'medium', notes:'' }); }} style={{ background:C.primaryLight, color:C.primary, border:'none', borderRadius:8, padding:'10px 20px', fontSize:14, fontWeight:600, cursor:'pointer' }}>새 요청 등록</button>
+          <button onClick={() => onNav('dashboard')} style={{ background:C.primary, color:'#fff', border:'none', borderRadius:8, padding:'10px 20px', fontSize:14, fontWeight:600, cursor:'pointer' }}>대시보드로</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div key="form" style={{ maxWidth:760, animation:'fadeIn 300ms ease' }}>
+      <div style={{ background:C.surface, borderRadius:12, padding:28, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+        <h2 style={{ fontSize:18, fontWeight:700, color:C.text, marginBottom:24 }}>환자 회송 요청 등록</h2>
+
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
+          <div>
+            <label style={{ display:'block', fontSize:12, fontWeight:600, color:C.textLight, marginBottom:6 }}>담당 병동 <span style={{ color:C.danger }}>*</span></label>
+            <input value={form.ward} onChange={e => setForm({...form, ward:e.target.value})} placeholder="예: 순환기내과 3병동" style={{ width:'100%', padding:'10px 12px', borderRadius:8, border:`1.5px solid ${C.border}`, fontSize:14, fontFamily:'inherit', outline:'none', transition:'border 200ms' }} onFocus={e => e.target.style.borderColor = C.primary} onBlur={e => e.target.style.borderColor = C.border} />
+          </div>
+          <div>
+            <label style={{ display:'block', fontSize:12, fontWeight:600, color:C.textLight, marginBottom:6 }}>긴급도</label>
+            <select value={form.urgency} onChange={e => setForm({...form, urgency:e.target.value})} style={{ width:'100%', padding:'10px 12px', borderRadius:8, border:`1.5px solid ${C.border}`, fontSize:14, fontFamily:'inherit', outline:'none', background:C.surface }}>
+              <option value="high">🔴 긴급</option>
+              <option value="medium">🟡 일반</option>
+              <option value="low">🟢 여유</option>
+            </select>
+          </div>
+        </div>
+
+        {/* ADL */}
+        <div style={{ marginBottom:20 }}>
+          <label style={{ display:'block', fontSize:12, fontWeight:600, color:C.textLight, marginBottom:8 }}>ADL 단계 <span style={{ color:C.danger }}>*</span></label>
+          <div style={{ display:'flex', gap:8 }}>
+            {['독립', '부분의존', '완전의존'].map(a => (
+              <button key={a} onClick={() => setForm({...form, adl:a})} style={{ flex:1, padding:'10px', borderRadius:8, border:`2px solid ${form.adl===a ? C.primary : C.border}`, background: form.adl===a ? C.primaryLight : C.surface, color: form.adl===a ? C.primary : C.text, fontWeight: form.adl===a ? 700 : 400, cursor:'pointer', fontSize:14, fontFamily:'inherit', transition:'all 200ms' }}>{a}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* 체크박스 */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:20 }}>
+          {[
+            { key:'oxygen', label:'산소 투여 필요', desc:'비강 캐뉼라, 마스크, 벤틸레이터 등', icon:'💨' },
+            { key:'infection', label:'격리 필요', desc:'접촉 주의, 비말 주의, 공기 주의 등', icon:'🦠' },
+          ].map(opt => (
+            <label key={opt.key} onClick={() => setForm({...form, [opt.key]: !form[opt.key]})} style={{ display:'flex', gap:12, alignItems:'flex-start', padding:14, borderRadius:8, border:`2px solid ${form[opt.key] ? C.primary : C.border}`, background: form[opt.key] ? C.primaryLight : C.surface, cursor:'pointer', transition:'all 200ms' }}>
+              <div style={{ width:20, height:20, borderRadius:4, border:`2px solid ${form[opt.key] ? C.primary : C.border}`, background: form[opt.key] ? C.primary : 'transparent', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, marginTop:1 }}>
+                {form[opt.key] && <span style={{ color:'#fff', fontSize:12 }}>✓</span>}
+              </div>
+              <div>
+                <div style={{ fontSize:13, fontWeight:600, color:C.text }}>{opt.icon} {opt.label}</div>
+                <div style={{ fontSize:11, color:C.textMuted, marginTop:2 }}>{opt.desc}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+
+        <div style={{ marginBottom:24 }}>
+          <label style={{ display:'block', fontSize:12, fontWeight:600, color:C.textLight, marginBottom:6 }}>임상 메모</label>
+          <textarea value={form.notes} onChange={e => setForm({...form, notes:e.target.value})} placeholder="환자 상태, 주요 처치 내역, 요청 사항 등을 입력하세요..." rows={4} style={{ width:'100%', padding:'10px 12px', borderRadius:8, border:`1.5px solid ${C.border}`, fontSize:14, fontFamily:'inherit', resize:'vertical', outline:'none', transition:'border 200ms' }} onFocus={e => e.target.style.borderColor = C.primary} onBlur={e => e.target.style.borderColor = C.border} />
+        </div>
+
+        {/* 협력병원 선택 */}
+        <div style={{ marginBottom:24 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:C.text, marginBottom:12 }}>협력병원 선택 (수용 가능 병원)</div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
+            {HOSPITALS.filter(h => h.available).map(h => (
+              <div key={h.id} style={{ padding:12, borderRadius:8, border:`1.5px solid ${C.border}`, background:C.surface, transition:'all 200ms', cursor:'pointer' }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor=C.primary; e.currentTarget.style.background=C.primaryLight; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor=C.border; e.currentTarget.style.background=C.surface; }}
+              >
+                <div style={{ fontWeight:700, fontSize:13, color:C.text, marginBottom:4 }}>{h.name}</div>
+                <div style={{ fontSize:11, color:C.textMuted }}>일반 {h.general}병상 · 산소 {h.oxygen}병상</div>
+                <div style={{ fontSize:11, color:C.accent, marginTop:2 }}>수용 가능 ✓</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display:'flex', gap:10 }}>
+          <button onClick={() => { if (form.ward) { setSubmitted(true); setToast('회송 요청이 접수되었습니다'); } }} style={{ flex:1, background: form.ward ? C.primary : '#E5E7EB', color: form.ward ? '#fff' : C.textMuted, border:'none', borderRadius:8, padding:'12px', fontSize:15, fontWeight:700, cursor: form.ward ? 'pointer' : 'not-allowed', transition:'all 200ms' }}>
+            회송 요청 제출
+          </button>
+          <button onClick={() => onNav('dashboard')} style={{ background:'#F1F5F9', color:C.text, border:'none', borderRadius:8, padding:'12px 20px', fontSize:14, cursor:'pointer' }}>취소</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── 협력병원 현황 페이지 ─────────────────────────────────────────
+function HospitalListPage({ setToast }) {
+  const [selected, setSelected] = useState(null);
+
+  return (
+    <div key="hospitals" style={{ animation:'fadeIn 300ms ease' }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:20 }}>
+        {HOSPITALS.map((h, i) => (
+          <div key={h.id} onClick={() => setSelected(h)}
+            style={{ background:C.surface, borderRadius:12, padding:20, boxShadow:'0 1px 3px rgba(0,0,0,0.08)', animation:`slideUp 400ms ease ${i*80}ms both`, cursor:'pointer', transition:'all 200ms', opacity: h.available ? 1 : 0.6, border: `2px solid ${h.available ? 'transparent' : C.border}` }}
+            onMouseEnter={e => { if (h.available) { e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.12)'; } }}
+            onMouseLeave={e => { e.currentTarget.style.transform=''; e.currentTarget.style.boxShadow='0 1px 3px rgba(0,0,0,0.08)'; }}
+          >
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:14 }}>
+              <div style={{ fontWeight:700, fontSize:15, color:C.text }}>{h.name}</div>
+              <span style={{ fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:20, background: h.available ? C.accentLight : C.border, color: h.available ? '#065F46' : C.textMuted }}>
+                {h.available ? '수용 가능' : '수용 불가'}
+              </span>
+            </div>
+
+            {/* 병상 현황 */}
+            {[
+              { label: '일반 병상', val: h.general, total: 20, color: C.primary },
+              { label: '격리 병상', val: h.isolation, total: 5, color: C.warning },
+              { label: '산소 지원', val: h.oxygen, total: 10, color: C.accent },
+            ].map(b => (
+              <div key={b.label} style={{ marginBottom:10 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, marginBottom:4 }}>
+                  <span style={{ color:C.textLight }}>{b.label}</span>
+                  <span style={{ fontWeight:700, color:b.val > 0 ? b.color : C.textMuted }}>{b.val}개 가용</span>
+                </div>
+                <div style={{ height:6, borderRadius:4, background:'#F1F5F9', overflow:'hidden' }}>
+                  <div style={{ height:'100%', borderRadius:4, background:b.val > 0 ? b.color : '#D1D5DB', width:`${(b.val/b.total)*100}%`, transition:'width 800ms ease' }} />
+                </div>
+              </div>
+            ))}
+
+            <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:C.textMuted, marginTop:12, paddingTop:12, borderTop:`1px solid ${C.border}` }}>
+              <span>수용률 {h.acceptRate}%</span>
+              <span>오늘 {h.today}건 처리</span>
+              <span>갱신 {h.lastUpdate}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {selected && (
+        <Modal title={`${selected.name} — 상세 현황`} onClose={() => setSelected(null)}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:20 }}>
+            {[
+              ['수용 상태', selected.available ? '수용 가능' : '수용 불가'],
+              ['마지막 갱신', selected.lastUpdate],
+              ['오늘 처리 건수', `${selected.today}건`],
+              ['최근 수용률', `${selected.acceptRate}%`],
+            ].map(([k, v]) => (
+              <div key={k} style={{ background:'#F8FAFC', borderRadius:8, padding:'12px 14px' }}>
+                <div style={{ fontSize:11, color:C.textMuted, marginBottom:4, fontWeight:600 }}>{k}</div>
+                <div style={{ fontSize:15, fontWeight:700, color:C.text }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginBottom:20 }}>
+            <div style={{ fontSize:13, fontWeight:700, color:C.text, marginBottom:10 }}>병상 현황</div>
+            {[
+              { label: '일반 병상', val: selected.general, total: 20, color: C.primary },
+              { label: '격리 병상', val: selected.isolation, total: 5, color: C.warning },
+              { label: '산소 지원', val: selected.oxygen, total: 10, color: C.accent },
+            ].map(b => (
+              <div key={b.label} style={{ marginBottom:14 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                  <span style={{ fontSize:13, color:C.text }}>{b.label}</span>
+                  <span style={{ fontSize:13, fontWeight:700, color:b.color }}>{b.val}개 가용</span>
+                </div>
+                <div style={{ height:10, borderRadius:6, background:'#F1F5F9' }}>
+                  <div style={{ height:'100%', borderRadius:6, background:b.color, width:`${(b.val/b.total)*100}%`, transition:'width 800ms ease' }} />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={() => { setSelected(null); setToast('회송 요청서로 이동합니다'); }} style={{ flex:1, background:C.primary, color:'#fff', border:'none', borderRadius:8, padding:'10px', fontSize:14, fontWeight:600, cursor:'pointer' }}>회송 요청 연결</button>
+            <button onClick={() => setSelected(null)} style={{ background:'#F1F5F9', color:C.text, border:'none', borderRadius:8, padding:'10px 20px', fontSize:14, cursor:'pointer' }}>닫기</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── 진행 상태 추적 페이지 ────────────────────────────────────────
+function StatusTrackerPage({ setToast }) {
+  const [selected, setSelected] = useState(REFERRAL_REQUESTS[0]);
+
+  return (
+    <div key="tracker" style={{ display:'grid', gridTemplateColumns:'1fr 2fr', gap:24, animation:'fadeIn 300ms ease' }}>
+      {/* 목록 */}
+      <div style={{ background:C.surface, borderRadius:12, boxShadow:'0 1px 3px rgba(0,0,0,0.08)', overflow:'hidden' }}>
+        <div style={{ padding:'14px 16px', borderBottom:`1px solid ${C.border}`, fontSize:13, fontWeight:700, color:C.text }}>진행 중인 요청</div>
+        {REFERRAL_REQUESTS.map((r, i) => (
+          <div key={r.id} onClick={() => setSelected(r)}
+            style={{ padding:'12px 16px', borderBottom:`1px solid ${C.border}`, cursor:'pointer', transition:'background 150ms', background: selected?.id===r.id ? C.primaryLight : 'transparent', animation:`slideUp 300ms ease ${i*40}ms both` }}
+            onMouseEnter={e => { if (selected?.id!==r.id) e.currentTarget.style.background='#F8FAFC'; }}
+            onMouseLeave={e => { if (selected?.id!==r.id) e.currentTarget.style.background='transparent'; }}
+          >
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
+              <span style={{ fontSize:12, fontWeight:700, color: selected?.id===r.id ? C.primary : C.text }}>{r.patient} ({r.age}세)</span>
+              <StatusBadge status={r.status} />
+            </div>
+            <div style={{ fontSize:11, color:C.textMuted }}>{r.ward} · {r.time}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 상세 타임라인 */}
+      <div style={{ background:C.surface, borderRadius:12, padding:24, boxShadow:'0 1px 3px rgba(0,0,0,0.08)' }}>
+        {selected && (
+          <div key={selected.id} style={{ animation:'slideInRight 300ms ease' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:24 }}>
+              <div>
+                <h2 style={{ fontSize:20, fontWeight:700, color:C.text, marginBottom:4 }}>{selected.patient} 회송 진행 현황</h2>
+                <div style={{ fontSize:13, color:C.textLight }}>{selected.id} · {selected.ward} · 담당: {selected.requestedBy}</div>
+              </div>
+              <StatusBadge status={selected.status} />
+            </div>
+
+            {/* 타임라인 스텝 */}
+            {(() => {
+              const steps = [
+                { label:'요청 등록', time:'09:22', desc:`${selected.requestedBy}이 회송 요청을 등록했습니다. ADL: ${selected.adl}, ${selected.oxygen?'산소 투여 필요,':''} ${selected.infection?'격리 필요':''}.`, done:true },
+                { label:'수용 검토', time:'09:28', desc:'협력병원 담당자에게 알림을 전송했습니다. 6개 협력병원에 요청서 공유.', done: ['수용 검토','수용 확인','이송 완료'].includes(selected.status) },
+                { label:'수용 확인', time: selected.hospital!=='—' ? '09:45' : '—', desc: selected.hospital!=='—' ? `${selected.hospital}에서 수용 가능으로 응답했습니다. 병상 배정 완료.` : '협력병원 응답 대기 중...', done: ['수용 확인','이송 완료'].includes(selected.status) },
+                { label:'이송 완료', time: selected.status==='이송 완료' ? '11:15' : '—', desc: selected.status==='이송 완료' ? '환자 이송이 완료되었습니다. 수용 병원 확인 완료.' : '수용 확인 후 진행됩니다.', done: selected.status==='이송 완료' },
+              ];
+              const statusIdx = ['요청 중','수용 검토','수용 확인','이송 완료'].indexOf(selected.status);
+              return steps.map((step, i) => (
+                <div key={step.label} style={{ display:'flex', gap:16, marginBottom:20, animation:`slideUp 300ms ease ${i*80}ms both` }}>
+                  <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
+                    <div style={{ width:36, height:36, borderRadius:'50%', background: step.done ? C.primary : C.border, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:700, fontSize:14, flexShrink:0, boxShadow: step.done ? `0 0 0 4px ${C.primaryLight}` : 'none', transition:'all 300ms' }}>
+                      {step.done ? '✓' : i+1}
+                    </div>
+                    {i < 3 && <div style={{ width:2, flex:1, minHeight:24, background: i < statusIdx ? C.primary : C.border, marginTop:4, transition:'background 300ms' }} />}
+                  </div>
+                  <div style={{ flex:1, paddingBottom:16 }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
+                      <span style={{ fontWeight:700, fontSize:14, color: step.done ? C.text : C.textMuted }}>{step.label}</span>
+                      <span style={{ fontSize:12, color:C.textMuted }}>{step.time}</span>
+                    </div>
+                    <div style={{ fontSize:13, color:C.textLight, lineHeight:1.6 }}>{step.desc}</div>
+                  </div>
+                </div>
+              ));
+            })()}
+
+            {/* 메모 */}
+            <div style={{ background:'#F8FAFC', borderRadius:8, padding:14, marginTop:8, marginBottom:20 }}>
+              <div style={{ fontSize:11, fontWeight:600, color:C.textMuted, marginBottom:6 }}>임상 메모</div>
+              <div style={{ fontSize:13, color:C.text, lineHeight:1.7 }}>{selected.notes}</div>
+            </div>
+
+            <div style={{ display:'flex', gap:8 }}>
+              {selected.status !== '이송 완료' && (
+                <button onClick={() => setToast('상태가 다음 단계로 업데이트되었습니다')} style={{ background:C.primary, color:'#fff', border:'none', borderRadius:8, padding:'10px 20px', fontSize:14, fontWeight:600, cursor:'pointer' }}>다음 단계로</button>
+              )}
+              <button onClick={() => setToast('담당자에게 알림을 전송했습니다')} style={{ background:C.accentLight, color:'#065F46', border:'none', borderRadius:8, padding:'10px 20px', fontSize:14, fontWeight:600, cursor:'pointer' }}>알림 재발송</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── 알림 페이지 ──────────────────────────────────────────────────
+function NotificationsPage() {
+  const notifications = [
+    { id:1, type:'accept', title:'인하대병원 수용 확인', desc:'REF-2024-0043 · 이○○ 환자 수용을 확인했습니다. 산소 병상 배정 완료.', time:'10:45', read:false },
+    { id:2, type:'request', title:'새 회송 요청 등록', desc:'REF-2024-0045 · 최민준 전공의가 새 요청을 등록했습니다.', time:'10:35', read:false },
+    { id:3, type:'reject', title:'부평성모병원 수용 불가', desc:'REF-2024-0042 · 병상 부족으로 수용이 어렵습니다. 다른 병원에 요청 중.', time:'10:12', read:true },
+    { id:4, type:'complete', title:'이송 완료', desc:'REF-2024-0044 · 최○○ 환자가 부평성모병원으로 이송 완료되었습니다.', time:'09:55', read:true },
+    { id:5, type:'accept', title:'한강성심병원 수용 확인', desc:'REF-2024-0041 · 수용을 확인했습니다. 1시간 이내 이송 준비 요청.', time:'09:30', read:true },
+  ];
+  const typeIcon = { accept:'✅', request:'📋', reject:'❌', complete:'🎉' };
+  const typeBg = { accept:C.accentLight, request:C.primaryLight, reject:C.dangerLight, complete:'#FEF3C7' };
+  return (
+    <div style={{ maxWidth:700, animation:'fadeIn 300ms ease' }}>
+      <div style={{ background:C.surface, borderRadius:12, boxShadow:'0 1px 3px rgba(0,0,0,0.08)', overflow:'hidden' }}>
+        {notifications.map((n, i) => (
+          <div key={n.id} style={{ padding:'16px 20px', borderBottom:`1px solid ${C.border}`, display:'flex', gap:14, alignItems:'flex-start', background: n.read ? 'transparent' : '#FAFBFF', animation:`slideUp 300ms ease ${i*60}ms both` }}>
+            <div style={{ width:40, height:40, borderRadius:12, background:typeBg[n.type], display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, flexShrink:0 }}>{typeIcon[n.type]}</div>
+            <div style={{ flex:1 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
+                <span style={{ fontWeight:700, fontSize:14, color:C.text }}>{n.title}</span>
+                <span style={{ fontSize:11, color:C.textMuted }}>{n.time}</span>
+              </div>
+              <div style={{ fontSize:13, color:C.textLight, lineHeight:1.5 }}>{n.desc}</div>
+            </div>
+            {!n.read && <div style={{ width:8, height:8, borderRadius:'50%', background:C.primary, flexShrink:0, marginTop:6, animation:'pulse 2s infinite' }} />}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── 사이드바 네비 ────────────────────────────────────────────────
+const NAV = [
+  { id:'dashboard', label:'회송 요청 대시보드', icon:'📊' },
+  { id:'request-form', label:'새 회송 요청', icon:'➕' },
+  { id:'hospital-list', label:'협력병원 현황', icon:'🏥' },
+  { id:'status-tracker', label:'진행 상태 추적', icon:'📍' },
+  { id:'notifications', label:'알림', icon:'🔔' },
+];
+
+function Sidebar({ page, onNav }) {
+  return (
+    <aside style={{ width:260, background:C.sidebar, display:'flex', flexDirection:'column', flexShrink:0 }}>
+      {/* 로고 */}
+      <div style={{ padding:'20px 16px 16px', borderBottom:`1px solid ${C.sidebarBorder}` }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:'linear-gradient(135deg, #1A56DB, #06B6D4)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>🏥</div>
+          <div>
+            <div style={{ color:'#fff', fontWeight:800, fontSize:14, letterSpacing:'-0.02em' }}>CMP</div>
+            <div style={{ color:C.sidebarText, fontSize:10, marginTop:1 }}>환자 회송 플랫폼</div>
+          </div>
+        </div>
+      </div>
+
+      {/* 병원 정보 */}
+      <div style={{ padding:'10px 16px', borderBottom:`1px solid ${C.sidebarBorder}` }}>
+        <div style={{ fontSize:10, color:C.sidebarText, fontWeight:600, letterSpacing:'0.08em', marginBottom:6 }}>현재 병원</div>
+        <div style={{ color:'#E2E8F0', fontSize:13, fontWeight:600 }}>서울대병원</div>
+        <div style={{ color:C.sidebarText, fontSize:11, marginTop:2 }}>환자회송팀 · 이지영</div>
+      </div>
+
+      {/* 메뉴 */}
+      <nav style={{ flex:1, padding:'8px 8px', display:'flex', flexDirection:'column', gap:2 }}>
+        {NAV.map(item => (
+          <button key={item.id} onClick={() => onNav(item.id)}
+            style={{ display:'flex', alignItems:'center', gap:10, width:'100%', padding:'10px 12px', borderRadius:8, border:'none', cursor:'pointer', background: page===item.id ? 'rgba(59,130,246,0.15)' : 'transparent', color: page===item.id ? '#60A5FA' : C.sidebarText, borderLeft: page===item.id ? '3px solid #3B82F6' : '3px solid transparent', fontSize:13, fontWeight: page===item.id ? 600 : 400, transition:'all 150ms', fontFamily:'inherit', textAlign:'left' }}
+            onMouseEnter={e => { if (page!==item.id) e.currentTarget.style.background='rgba(255,255,255,0.06)'; }}
+            onMouseLeave={e => { if (page!==item.id) e.currentTarget.style.background='transparent'; }}
+          >
+            <span style={{ fontSize:16 }}>{item.icon}</span>
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      {/* 사용자 */}
+      <div style={{ padding:'12px 16px', borderTop:`1px solid ${C.sidebarBorder}`, display:'flex', alignItems:'center', gap:10 }}>
+        <div style={{ width:32, height:32, borderRadius:'50%', background:'linear-gradient(135deg,#3B82F6,#06B6D4)', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:700, fontSize:13, flexShrink:0 }}>이</div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ color:'#E2E8F0', fontSize:13, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>이지영</div>
+          <div style={{ color:C.sidebarText, fontSize:11 }}>간호 관리자</div>
+        </div>
+        <span style={{ color:C.sidebarText, fontSize:18, cursor:'pointer' }}>⚙️</span>
+      </div>
+    </aside>
+  );
+}
+
+// ─── 상단 TopBar ──────────────────────────────────────────────────
+const PAGE_TITLES = {
+  'dashboard': '회송 요청 대시보드',
+  'request-form': '새 회송 요청 등록',
+  'hospital-list': '협력병원 현황',
+  'status-tracker': '진행 상태 추적',
+  'notifications': '알림 센터',
+};
+
+function TopBar({ title, toast, setToast }) {
+  return (
+    <header style={{ height:58, background:C.surface, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', padding:'0 24px', gap:16, flexShrink:0, boxShadow:'0 1px 3px rgba(0,0,0,0.05)' }}>
+      <h1 style={{ fontSize:18, fontWeight:700, color:C.text, flex:1 }}>{title}</h1>
+      <div style={{ display:'flex', alignItems:'center', gap:8, background:'#F8FAFC', borderRadius:8, padding:'8px 12px', border:`1px solid ${C.border}` }}>
+        <span style={{ fontSize:14 }}>🔍</span>
+        <input placeholder="환자 검색..." style={{ border:'none', background:'transparent', fontSize:13, outline:'none', width:160, fontFamily:'inherit', color:C.text }} />
+      </div>
+      <button onClick={() => setToast('알림 3건이 있습니다')} style={{ background:'none', border:'none', cursor:'pointer', fontSize:22, position:'relative' }}>
+        🔔
+        <span style={{ position:'absolute', top:-2, right:-2, width:16, height:16, borderRadius:'50%', background:C.danger, color:'#fff', fontSize:9, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center' }}>3</span>
+      </button>
+      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+        <div style={{ width:34, height:34, borderRadius:'50%', background:'linear-gradient(135deg,#3B82F6,#06B6D4)', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:700, fontSize:14 }}>이</div>
+        <span style={{ fontSize:13, fontWeight:600, color:C.text }}>이지영</span>
+        <span style={{ color:C.textMuted, fontSize:12 }}>▾</span>
+      </div>
+    </header>
+  );
+}
+
+// ─── 스켈레톤 ─────────────────────────────────────────────────────
+function Skeleton() {
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:16, padding:24 }}>
+      {[...Array(3)].map((_,i) => (
+        <div key={i} style={{ height:100, borderRadius:12, background:'linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)', backgroundSize:'200% 100%', animation:'shimmer 1.5s infinite' }} />
+      ))}
+    </div>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────────
+function App() {
+  const [page, setPage] = useState('dashboard');
+  const [toast, setToast] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { setTimeout(() => setLoading(false), 1200); }, []);
+
+  function renderPage() {
+    if (loading) return <Skeleton />;
+    const key = page;
+    switch(page) {
+      case 'dashboard': return <DashboardPage key={key} onNav={setPage} setToast={setToast} />;
+      case 'request-form': return <RequestFormPage key={key} setToast={setToast} onNav={setPage} />;
+      case 'hospital-list': return <HospitalListPage key={key} setToast={setToast} />;
+      case 'status-tracker': return <StatusTrackerPage key={key} setToast={setToast} />;
+      case 'notifications': return <NotificationsPage key={key} />;
+      default: return <DashboardPage key={key} onNav={setPage} setToast={setToast} />;
+    }
+  }
+
+  return (
+    <div style={{ display:'flex', width:'100%', height:'100vh', overflow:'hidden' }}>
+      <Sidebar page={page} onNav={setPage} />
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:C.bg }}>
+        <TopBar title={PAGE_TITLES[page]} toast={toast} setToast={setToast} />
+        <main style={{ flex:1, overflow:'auto', padding:24 }}>
+          {renderPage()}
+        </main>
+      </div>
+      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>병원 회송 네트워크 분석 플랫폼</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; font-family: 'Pretendard', sans-serif; }
+  #root { display: flex; width: 100%; height: 100vh; overflow: hidden; }
+
+  @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fadeInScale { from { opacity: 0; transform: scale(0.96) } to { opacity: 1; transform: scale(1) } }
+  @keyframes slideInRight { from { opacity: 0; transform: translateX(30px) } to { opacity: 1; transform: translateX(0) } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(16px) } to { opacity: 1; transform: translateY(0) } }
+  @keyframes countUp { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: translateY(0) } }
+  @keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+  @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.4 } }
+  @keyframes barGrow { from { width: 0 } to { width: var(--target-width) } }
+  @keyframes floatArc { 0%, 100% { transform: translateY(0) } 50% { transform: translateY(-4px) } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, ComposedChart } = Recharts;
+
+const C = {
+  primary: '#7C3AED',
+  primaryLight: '#EDE9FE',
+  primaryMid: '#DDD6FE',
+  accent: '#06B6D4',
+  accentLight: '#CFFAFE',
+  green: '#10B981',
+  greenLight: '#D1FAE5',
+  orange: '#F59E0B',
+  orangeLight: '#FEF3C7',
+  bg: '#F8FAFC',
+  surface: '#FFFFFF',
+  border: '#E2E8F0',
+  borderLight: '#F1F5F9',
+  text: '#0F172A',
+  textLight: '#64748B',
+  textMuted: '#94A3B8',
+  sidebarBorder: '#E2E8F0',
+};
+
+// ─── 더미 데이터 ─────────────────────────────────────────────────
+const HOSPITALS_AI = [
+  { id:1, name:'한강성심병원', score:94, acceptRate:91, beds:12, condFit:98, distance:3.2, today:4, trend:'↑', tags:['감염격리','산소'], lastReferral:'15분 전' },
+  { id:2, name:'인하대병원', score:88, acceptRate:87, beds:8, condFit:90, distance:5.8, today:3, trend:'→', tags:['산소'], lastReferral:'32분 전' },
+  { id:3, name:'가천대길병원', score:82, acceptRate:83, beds:15, condFit:85, distance:7.1, today:5, trend:'↑', tags:['일반'], lastReferral:'8분 전' },
+  { id:4, name:'국제성모병원', score:74, acceptRate:79, beds:4, condFit:70, distance:4.5, today:1, trend:'↓', tags:['일반'], lastReferral:'1시간 전' },
+  { id:5, name:'중앙보훈병원', score:71, acceptRate:88, beds:9, condFit:65, distance:9.2, today:2, trend:'→', tags:['산소'], lastReferral:'45분 전' },
+  { id:6, name:'부평성모병원', score:42, acceptRate:76, beds:0, condFit:80, distance:6.4, today:0, trend:'↓', tags:['수용불가'], lastReferral:'3시간 전' },
+];
+
+const MONTHLY_DATA = [
+  { month:'10월', requests:142, accepted:128, rate:90 },
+  { month:'11월', requests:156, accepted:138, rate:88 },
+  { month:'12월', requests:134, accepted:124, rate:93 },
+  { month:'1월', requests:178, accepted:161, rate:90 },
+  { month:'2월', requests:162, accepted:148, rate:91 },
+  { month:'3월', requests:189, accepted:172, rate:91 },
+];
+
+const CONDITION_DATA = [
+  { condition:'일반', acceptRate:94, count:320 },
+  { condition:'산소 필요', acceptRate:88, count:145 },
+  { condition:'격리 필요', acceptRate:72, count:67 },
+  { condition:'산소+격리', acceptRate:61, count:28 },
+];
+
+const STATS_MONTHS = [
+  { month:'10월', total:142, avg:48 }, { month:'11월', total:156, avg:51 },
+  { month:'12월', total:134, avg:44 }, { month:'1월', total:178, avg:54 },
+  { month:'2월', total:162, avg:52 }, { month:'3월', total:189, avg:57 },
+];
+
+const NETWORK_NODES = [
+  { id:'seoul', name:'서울대병원', x:280, y:180, type:'hub', flows:5 },
+  { id:'asan', name:'아산병원', x:480, y:150, type:'hub', flows:4 },
+  { id:'hangang', name:'한강성심', x:160, y:280, type:'partner', flows:3 },
+  { id:'inha', name:'인하대', x:340, y:320, type:'partner', flows:2 },
+  { id:'gachon', name:'가천대길', x:520, y:290, type:'partner', flows:4 },
+  { id:'jungang', name:'중앙보훈', x:200, y:380, type:'partner', flows:1 },
+  { id:'gukje', name:'국제성모', x:420, y:400, type:'partner', flows:2 },
+  { id:'bupyeong', name:'부평성모', x:600, y:350, type:'partner', flows:1 },
+];
+
+const NETWORK_LINKS = [
+  { from:'seoul', to:'hangang', weight:3 }, { from:'seoul', to:'inha', weight:2 },
+  { from:'seoul', to:'gachon', weight:4 }, { from:'seoul', to:'jungang', weight:1 },
+  { from:'asan', to:'gachon', weight:4 }, { from:'asan', to:'gukje', weight:2 },
+  { from:'asan', to:'bupyeong', weight:1 }, { from:'asan', to:'inha', weight:2 },
+];
+
+// ─── 유틸 ────────────────────────────────────────────────────────
+function CountUp({ end, suffix='', duration=900 }) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    let s = 0; const step = end / (duration/16);
+    const t = setInterval(() => { s += step; if (s>=end) { setVal(end); clearInterval(t); } else setVal(Math.floor(s)); }, 16);
+    return () => clearInterval(t);
+  }, [end]);
+  return <span style={{ animation:'countUp 400ms ease' }}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({ message, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  return (
+    <div style={{ position:'fixed', bottom:24, right:24, zIndex:9999, background:C.text, color:'#fff', padding:'12px 20px', borderRadius:10, animation:'slideUp 300ms ease', boxShadow:'0 4px 16px rgba(0,0,0,0.2)', fontSize:14, display:'flex', alignItems:'center', gap:8 }}>
+      <span style={{ color:'#A78BFA' }}>✦</span> {message}
+    </div>
+  );
+}
+
+// ─── Section: 네트워크 분석 (main) ──────────────────────────────
+function AnalyticsDashboard({ selected, setSelected }) {
+  const items = HOSPITALS_AI;
+
+  return (
+    <div style={{ display:'flex', height:'100%', overflow:'hidden' }}>
+      {/* 마스터 */}
+      <div style={{ width:'42%', borderRight:`1px solid ${C.border}`, overflowY:'auto' }}>
+        <div style={{ padding:'12px 16px', borderBottom:`1px solid ${C.borderLight}`, display:'flex', gap:8 }}>
+          {[['전체',6],['추천',3],['불가',1]].map(([l,c]) => (
+            <span key={l} style={{ fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:20, background:C.primaryLight, color:C.primary, cursor:'pointer' }}>{l} {c}</span>
+          ))}
+        </div>
+        {items.map((h, i) => (
+          <div key={h.id} onClick={() => setSelected(h)}
+            style={{ padding:'14px 16px', borderBottom:`1px solid ${C.borderLight}`, cursor:'pointer', transition:'all 150ms', background: selected?.id===h.id ? C.primaryLight : 'transparent', borderLeft: selected?.id===h.id ? `3px solid ${C.primary}` : '3px solid transparent', animation:`slideUp 300ms ease ${i*40}ms both` }}
+            onMouseEnter={e => { if (selected?.id!==h.id) e.currentTarget.style.background='#F8F7FF'; }}
+            onMouseLeave={e => { if (selected?.id!==h.id) e.currentTarget.style.background='transparent'; }}
+          >
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+              <span style={{ fontWeight:700, fontSize:13, color: selected?.id===h.id ? C.primary : C.text }}>{h.name}</span>
+              <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                <span style={{ fontSize:11, color:C.textMuted }}>{h.trend}</span>
+                <div style={{ width:36, height:36, borderRadius:'50%', background: h.score>=80 ? C.primaryLight : h.score>=60 ? C.orangeLight : '#FEE2E2', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:900, fontSize:13, color: h.score>=80 ? C.primary : h.score>=60 ? '#92400E' : '#991B1B' }}>
+                  {h.score}
+                </div>
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+              <div style={{ flex:1, height:5, borderRadius:4, background:'#F1F5F9', overflow:'hidden' }}>
+                <div style={{ height:'100%', background: h.score>=80 ? C.primary : h.score>=60 ? C.orange : '#EF4444', borderRadius:4, width:`${h.score}%`, transition:'width 800ms ease' }} />
+              </div>
+              {h.tags.map(t => <span key={t} style={{ fontSize:10, padding:'2px 6px', borderRadius:4, background: t==='수용불가'?'#FEE2E2' : C.accentLight, color: t==='수용불가'?'#991B1B' : '#0E7490', fontWeight:600 }}>{t}</span>)}
+            </div>
+            <div style={{ fontSize:11, color:C.textMuted, marginTop:6 }}>가용 {h.beds}병상 · 수용률 {h.acceptRate}% · {h.lastReferral}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 디테일 */}
+      <div style={{ flex:1, overflowY:'auto', padding:20 }}>
+        {selected ? (
+          <div key={selected.id} style={{ animation:'slideInRight 280ms ease' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:20 }}>
+              <div>
+                <h3 style={{ fontSize:20, fontWeight:800, color:C.text, marginBottom:4 }}>{selected.name}</h3>
+                <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                  {selected.tags.map(t => <span key={t} style={{ fontSize:11, padding:'3px 9px', borderRadius:20, background: t==='수용불가'?'#FEE2E2' : C.accentLight, color: t==='수용불가'?'#991B1B' : '#0E7490', fontWeight:600 }}>{t}</span>)}
+                </div>
+              </div>
+              <div style={{ width:60, height:60, borderRadius:16, background: selected.score>=80?C.primaryLight:C.orangeLight, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
+                <span style={{ fontSize:22, fontWeight:900, color: selected.score>=80?C.primary:'#92400E' }}>{selected.score}</span>
+                <span style={{ fontSize:10, color:C.textMuted, marginTop:1 }}>추천 점수</span>
+              </div>
+            </div>
+
+            {/* 점수 구성 */}
+            <div style={{ marginBottom:20 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:C.textLight, marginBottom:10, textTransform:'uppercase', letterSpacing:'0.06em' }}>점수 산정 근거</div>
+              {[
+                { label:'최근 수용률', val:selected.acceptRate, max:100, weight:'40%', color:C.primary },
+                { label:'가용 병상 수', val:selected.beds, max:20, weight:'35%', color:C.accent },
+                { label:'환자 조건 적합도', val:selected.condFit, max:100, weight:'25%', color:C.green },
+              ].map(s => (
+                <div key={s.label} style={{ marginBottom:12 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, marginBottom:5 }}>
+                    <span style={{ color:C.text, fontWeight:600 }}>{s.label}</span>
+                    <div style={{ display:'flex', gap:8 }}>
+                      <span style={{ color:C.textMuted, fontSize:11 }}>가중치 {s.weight}</span>
+                      <span style={{ fontWeight:800, color:s.color }}>{s.val}{s.max===100?'%':s.max===20?'개':''}</span>
+                    </div>
+                  </div>
+                  <div style={{ height:8, borderRadius:6, background:'#F1F5F9' }}>
+                    <div style={{ height:'100%', borderRadius:6, background:`linear-gradient(90deg, ${s.color}99, ${s.color})`, width:`${(s.val/s.max)*100}%`, transition:'width 800ms ease 100ms' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:20 }}>
+              {[['오늘 처리',`${selected.today}건`],['거리',`${selected.distance}km`],['추세',selected.trend==='↑'?'개선 중':selected.trend==='↓'?'하락 중':'안정'],['마지막 회송',selected.lastReferral]].map(([k,v]) => (
+                <div key={k} style={{ background:'#F8F9FF', borderRadius:12, padding:'12px 14px', border:`1px solid ${C.border}` }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:4, textTransform:'uppercase', letterSpacing:'0.05em' }}>{k}</div>
+                  <div style={{ fontSize:15, fontWeight:800, color:C.text }}>{v}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ height:140, marginBottom:20 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:C.textLight, marginBottom:8, textTransform:'uppercase', letterSpacing:'0.06em' }}>월별 수용률 추이</div>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={[{m:'10월',r:82},{m:'11월',r:85},{m:'12월',r:selected.acceptRate-5},{m:'1월',r:selected.acceptRate-2},{m:'2월',r:selected.acceptRate},{m:'3월',r:selected.acceptRate}]}>
+                  <defs>
+                    <linearGradient id="scoreGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={C.primary} stopOpacity={0.2} />
+                      <stop offset="95%" stopColor={C.primary} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                  <XAxis dataKey="m" tick={{fontSize:10, fill:C.textMuted}} axisLine={false} tickLine={false} />
+                  <YAxis domain={[60,100]} tick={{fontSize:10, fill:C.textMuted}} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={{fontSize:12, borderRadius:8, border:'none', boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}} />
+                  <Area type="monotone" dataKey="r" stroke={C.primary} strokeWidth={2} fill="url(#scoreGrad)" dot={{fill:C.primary, r:3}} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', color:C.textMuted }}>
+            <div style={{ fontSize:40, marginBottom:12, opacity:0.4 }}>📊</div>
+            <div style={{ fontSize:14 }}>병원을 선택하면 분석 내용이 표시됩니다</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Section: AI 병원 추천 ────────────────────────────────────────
+function AIRecommend({ setToast }) {
+  const [filter, setFilter] = useState('all');
+  const [selectedHosp, setSelectedHosp] = useState(null);
+
+  const filtered = HOSPITALS_AI.filter(h => {
+    if (filter==='available') return h.score >= 70;
+    if (filter==='high') return h.score >= 85;
+    return true;
+  }).sort((a,b) => b.score - a.score);
+
+  return (
+    <div style={{ display:'flex', height:'100%', overflow:'hidden' }}>
+      <div style={{ width:'42%', borderRight:`1px solid ${C.border}`, overflowY:'auto' }}>
+        <div style={{ padding:'10px 14px', borderBottom:`1px solid ${C.borderLight}` }}>
+          <div style={{ fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:8, textTransform:'uppercase', letterSpacing:'0.06em' }}>추천 필터</div>
+          <div style={{ display:'flex', gap:6 }}>
+            {[['all','전체'],['available','수용 가능'],['high','고추천']].map(([k,l]) => (
+              <button key={k} onClick={() => setFilter(k)} style={{ padding:'5px 12px', borderRadius:20, border:'none', cursor:'pointer', fontFamily:'inherit', background: filter===k ? C.primary : C.primaryLight, color: filter===k ? '#fff' : C.primary, fontSize:11, fontWeight:700, transition:'all 150ms' }}>{l}</button>
+            ))}
+          </div>
+        </div>
+        {filtered.map((h, i) => (
+          <div key={h.id} onClick={() => setSelectedHosp(h)}
+            style={{ padding:'12px 14px', borderBottom:`1px solid ${C.borderLight}`, cursor:'pointer', transition:'all 150ms', background: selectedHosp?.id===h.id ? C.primaryLight : 'transparent', borderLeft: selectedHosp?.id===h.id ? `3px solid ${C.primary}` : '3px solid transparent', animation:`slideUp 300ms ease ${i*40}ms both` }}
+            onMouseEnter={e => { if (selectedHosp?.id!==h.id) e.currentTarget.style.background='#F8F7FF'; }}
+            onMouseLeave={e => { if (selectedHosp?.id!==h.id) e.currentTarget.style.background='transparent'; }}
+          >
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:5 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <span style={{ width:22, height:22, borderRadius:6, background: i===0?'#FEF3C7':i===1?'#F0F9FF':C.primaryLight, display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:800, color: i===0?'#92400E':i===1?'#0E7490':C.primary }}>
+                  {i+1}
+                </span>
+                <span style={{ fontWeight:700, fontSize:13, color: selectedHosp?.id===h.id ? C.primary : C.text }}>{h.name}</span>
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                <span style={{ fontSize:10, color:h.score>=70?C.green:'#EF4444' }}>{h.trend}</span>
+                <span style={{ fontWeight:900, fontSize:14, color: h.score>=80?C.primary:h.score>=60?C.orange:'#EF4444' }}>{h.score}점</span>
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:6 }}>
+              {h.tags.map(t => <span key={t} style={{ fontSize:10, padding:'2px 6px', borderRadius:4, background: t==='수용불가'?'#FEE2E2':C.accentLight, color: t==='수용불가'?'#991B1B':'#0E7490', fontWeight:600 }}>{t}</span>)}
+              <span style={{ fontSize:10, color:C.textMuted }}>가용 {h.beds}병상</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ flex:1, overflowY:'auto', padding:20 }}>
+        {selectedHosp ? (
+          <div key={selectedHosp.id} style={{ animation:'slideInRight 280ms ease' }}>
+            <div style={{ marginBottom:20 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+                <h3 style={{ fontSize:18, fontWeight:800, color:C.text }}>{selectedHosp.name}</h3>
+                <div style={{ textAlign:'right' }}>
+                  <div style={{ fontSize:28, fontWeight:900, color:C.primary }}>{selectedHosp.score}점</div>
+                  <div style={{ fontSize:11, color:C.textMuted }}>AI 추천 점수</div>
+                </div>
+              </div>
+
+              {/* 레이더 식 점수 분해 */}
+              <div style={{ background:'#F8F9FF', borderRadius:16, padding:16, border:`1px solid ${C.border}`, marginBottom:16 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:C.textMuted, marginBottom:12, textTransform:'uppercase', letterSpacing:'0.06em' }}>점수 산정 구성</div>
+                {[
+                  { label:'최근 수용률 (가중치 40%)', raw:selectedHosp.acceptRate, max:100, score: Math.round(selectedHosp.acceptRate*0.4), color:C.primary },
+                  { label:'가용 병상 수 (가중치 35%)', raw:selectedHosp.beds, max:20, score: Math.round((selectedHosp.beds/20)*100*0.35), color:C.accent },
+                  { label:'환자 조건 적합도 (가중치 25%)', raw:selectedHosp.condFit, max:100, score: Math.round(selectedHosp.condFit*0.25), color:C.green },
+                ].map(s => (
+                  <div key={s.label} style={{ display:'flex', alignItems:'center', gap:12, marginBottom:10 }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:11, color:C.text, fontWeight:600, marginBottom:4 }}>{s.label}</div>
+                      <div style={{ height:6, borderRadius:4, background:'#E2E8F0' }}>
+                        <div style={{ height:'100%', borderRadius:4, background:s.color, width:`${(s.raw/s.max)*100}%`, transition:'width 800ms ease' }} />
+                      </div>
+                    </div>
+                    <span style={{ fontSize:15, fontWeight:900, color:s.color, minWidth:32, textAlign:'right' }}>+{s.score}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:16 }}>
+                {[['수용률',`${selectedHosp.acceptRate}%`],['가용병상',`${selectedHosp.beds}개`],['오늘 처리',`${selectedHosp.today}건`]].map(([k,v]) => (
+                  <div key={k} style={{ background:'#F8F9FF', borderRadius:10, padding:'10px 12px', border:`1px solid ${C.border}`, textAlign:'center' }}>
+                    <div style={{ fontSize:18, fontWeight:900, color:C.primary, marginBottom:2 }}>{v}</div>
+                    <div style={{ fontSize:11, color:C.textMuted }}>{k}</div>
+                  </div>
+                ))}
+              </div>
+
+              <button onClick={() => setToast(`${selectedHosp.name}에 회송 요청을 전송했습니다`)} style={{ width:'100%', padding:'12px', background: selectedHosp.score>=70 ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : '#E5E7EB', color: selectedHosp.score>=70?'#fff':C.textMuted, border:'none', borderRadius:12, fontSize:14, fontWeight:800, cursor: selectedHosp.score>=70?'pointer':'not-allowed', transition:'all 200ms' }}>
+                {selectedHosp.score>=70 ? '✦ 이 병원에 회송 요청' : '수용 불가'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', color:C.textMuted }}>
+            <div style={{ fontSize:40, marginBottom:12, opacity:0.4 }}>🤖</div>
+            <div style={{ fontSize:14 }}>병원을 선택하면 AI 점수 분석이 표시됩니다</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Section: 병원 네트워크 지도 ─────────────────────────────────
+function NetworkMap({ setToast }) {
+  const [selectedNode, setSelectedNode] = useState(null);
+  const nodeMap = Object.fromEntries(NETWORK_NODES.map(n => [n.id, n]));
+
+  return (
+    <div style={{ display:'flex', height:'100%', overflow:'hidden' }}>
+      <div style={{ width:'42%', borderRight:`1px solid ${C.border}`, overflowY:'auto' }}>
+        <div style={{ padding:'10px 14px', borderBottom:`1px solid ${C.borderLight}` }}>
+          <div style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:'uppercase', letterSpacing:'0.06em' }}>네트워크 노드</div>
+        </div>
+        {NETWORK_NODES.map((n, i) => (
+          <div key={n.id} onClick={() => setSelectedNode(n)}
+            style={{ padding:'12px 14px', borderBottom:`1px solid ${C.borderLight}`, cursor:'pointer', transition:'all 150ms', background: selectedNode?.id===n.id ? C.primaryLight : 'transparent', borderLeft: selectedNode?.id===n.id ? `3px solid ${C.primary}` : '3px solid transparent', animation:`slideUp 300ms ease ${i*40}ms both` }}
+            onMouseEnter={e => { if (selectedNode?.id!==n.id) e.currentTarget.style.background='#F8F7FF'; }}
+            onMouseLeave={e => { if (selectedNode?.id!==n.id) e.currentTarget.style.background='transparent'; }}
+          >
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
+              <div style={{ width:10, height:10, borderRadius:'50%', background: n.type==='hub' ? C.primary : C.accent, boxShadow: n.type==='hub' ? `0 0 0 3px ${C.primaryLight}` : 'none' }} />
+              <span style={{ fontWeight:700, fontSize:13, color: selectedNode?.id===n.id ? C.primary : C.text }}>{n.name}</span>
+              {n.type==='hub' && <span style={{ fontSize:10, padding:'2px 7px', borderRadius:10, background:C.primary, color:'#fff', fontWeight:700 }}>허브</span>}
+            </div>
+            <div style={{ fontSize:11, color:C.textMuted }}>연결 {n.flows}개 · 회송 링크 활성</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ flex:1, overflowY:'auto', padding:20, position:'relative' }}>
+        {/* SVG 네트워크 */}
+        <div style={{ background:'#F0F4FF', borderRadius:16, marginBottom:16, overflow:'hidden', position:'relative' }}>
+          <svg width="100%" height="320" viewBox="0 0 700 460" style={{ display:'block' }}>
+            {/* 링크 아크 */}
+            {NETWORK_LINKS.map((link, i) => {
+              const from = nodeMap[link.from];
+              const to = nodeMap[link.to];
+              if (!from || !to) return null;
+              const mx = (from.x + to.x) / 2;
+              const my = (from.y + to.y) / 2 - 40;
+              return (
+                <g key={i}>
+                  <path d={`M ${from.x} ${from.y} Q ${mx} ${my} ${to.x} ${to.y}`}
+                    fill="none" stroke={C.primary} strokeWidth={link.weight*1.5} strokeOpacity={0.25}
+                    style={{ animation:`floatArc ${2+i*0.3}s ease-in-out infinite` }}
+                  />
+                </g>
+              );
+            })}
+
+            {/* 노드 */}
+            {NETWORK_NODES.map(n => (
+              <g key={n.id} onClick={() => setSelectedNode(n)} style={{ cursor:'pointer' }}>
+                <circle cx={n.x} cy={n.y} r={n.type==='hub'?22:16}
+                  fill={n.type==='hub' ? C.primary : C.accent}
+                  fillOpacity={selectedNode?.id===n.id ? 1 : 0.85}
+                  stroke="#fff" strokeWidth={3}
+                  style={{ filter: selectedNode?.id===n.id ? `drop-shadow(0 4px 8px ${C.primary}60)` : 'none', transition:'all 200ms' }}
+                />
+                <text x={n.x} y={n.y+4} textAnchor="middle" fill="#fff" fontSize={n.type==='hub'?13:11} fontWeight="800" fontFamily="Pretendard">{n.flows}</text>
+                <text x={n.x} y={n.y+(n.type==='hub'?34:27)} textAnchor="middle" fill={C.text} fontSize={11} fontWeight="600" fontFamily="Pretendard">{n.name}</text>
+              </g>
+            ))}
+          </svg>
+
+          <div style={{ position:'absolute', top:10, right:10, display:'flex', gap:8 }}>
+            {[['● 허브 병원',C.primary],['● 협력 병원',C.accent]].map(([l,c]) => (
+              <span key={l} style={{ fontSize:10, fontWeight:700, color:c, background:'rgba(255,255,255,0.9)', padding:'4px 8px', borderRadius:6 }}>{l}</span>
+            ))}
+          </div>
+        </div>
+
+        {selectedNode && (
+          <div key={selectedNode.id} style={{ background:C.surface, borderRadius:16, padding:16, border:`1px solid ${C.border}`, animation:'slideUp 250ms ease' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+              <h4 style={{ fontSize:15, fontWeight:800, color:C.text }}>{selectedNode.name}</h4>
+              {selectedNode.type==='hub' && <span style={{ fontSize:11, padding:'3px 10px', borderRadius:10, background:C.primary, color:'#fff', fontWeight:700 }}>허브 병원</span>}
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+              {[['연결 네트워크',`${selectedNode.flows}개 병원`],['회송 링크','활성'],['역할',selectedNode.type==='hub'?'상급병원':'협력병원'],['노드 위치',`(${selectedNode.x}, ${selectedNode.y})`]].map(([k,v]) => (
+                <div key={k} style={{ background:'#F8F9FF', borderRadius:8, padding:'8px 10px' }}>
+                  <div style={{ fontSize:10, color:C.textMuted, marginBottom:3, fontWeight:700 }}>{k}</div>
+                  <div style={{ fontSize:13, fontWeight:700, color:C.text }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Section: 회송 통계 리포트 ────────────────────────────────────
+function StatsReport() {
+  const [tab, setTab] = useState(0);
+
+  return (
+    <div style={{ display:'flex', height:'100%', overflow:'hidden' }}>
+      <div style={{ width:'42%', borderRight:`1px solid ${C.border}`, overflowY:'auto' }}>
+        <div style={{ padding:'10px 14px', borderBottom:`1px solid ${C.borderLight}` }}>
+          <div style={{ fontSize:11, fontWeight:700, color:C.textMuted, textTransform:'uppercase', letterSpacing:'0.06em' }}>기간 선택</div>
+        </div>
+        {STATS_MONTHS.map((m, i) => (
+          <div key={m.month} onClick={() => setTab(i)}
+            style={{ padding:'12px 14px', borderBottom:`1px solid ${C.borderLight}`, cursor:'pointer', transition:'all 150ms', background: tab===i ? C.primaryLight : 'transparent', borderLeft: tab===i ? `3px solid ${C.primary}` : '3px solid transparent', animation:`slideUp 300ms ease ${i*40}ms both` }}
+            onMouseEnter={e => { if (tab!==i) e.currentTarget.style.background='#F8F7FF'; }}
+            onMouseLeave={e => { if (tab!==i) e.currentTarget.style.background='transparent'; }}
+          >
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span style={{ fontWeight:700, fontSize:13, color: tab===i ? C.primary : C.text }}>2025년 {m.month}</span>
+              <span style={{ fontWeight:800, fontSize:15, color: tab===i ? C.primary : C.text }}>{m.total}건</span>
+            </div>
+            <div style={{ fontSize:11, color:C.textMuted, marginTop:3 }}>평균 처리 {m.avg}분</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ flex:1, overflowY:'auto', padding:20 }}>
+        <div key={tab} style={{ animation:'slideInRight 280ms ease' }}>
+          <h3 style={{ fontSize:16, fontWeight:800, color:C.text, marginBottom:4 }}>2025년 {STATS_MONTHS[tab].month} 회송 통계</h3>
+          <div style={{ fontSize:12, color:C.textMuted, marginBottom:16 }}>회송 요청 {STATS_MONTHS[tab].total}건 · 평균 처리 {STATS_MONTHS[tab].avg}분</div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:20 }}>
+            {[
+              ['총 요청',`${STATS_MONTHS[tab].total}건`],
+              ['수용 완료',`${Math.round(STATS_MONTHS[tab].total*0.91)}건`],
+              ['수용률','91%'],
+              ['평균 처리',`${STATS_MONTHS[tab].avg}분`],
+            ].map(([k,v]) => (
+              <div key={k} style={{ background:'#F8F9FF', borderRadius:12, padding:'12px 14px', border:`1px solid ${C.border}` }}>
+                <div style={{ fontSize:11, fontWeight:700, color:C.textMuted, marginBottom:4, textTransform:'uppercase', letterSpacing:'0.05em' }}>{k}</div>
+                <div style={{ fontSize:22, fontWeight:900, color:C.primary }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* 조건별 수용률 */}
+          <div style={{ marginBottom:20 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:C.textLight, marginBottom:10, textTransform:'uppercase', letterSpacing:'0.06em' }}>환자 조건별 수용률</div>
+            {CONDITION_DATA.map((c, i) => (
+              <div key={c.condition} style={{ marginBottom:12, animation:`slideUp 300ms ease ${i*60}ms both` }}>
+                <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, marginBottom:5 }}>
+                  <span style={{ color:C.text, fontWeight:600 }}>{c.condition}</span>
+                  <div style={{ display:'flex', gap:8 }}>
+                    <span style={{ color:C.textMuted }}>요청 {c.count}건</span>
+                    <span style={{ fontWeight:800, color: c.acceptRate>=85?C.green:c.acceptRate>=70?C.orange:'#EF4444' }}>{c.acceptRate}%</span>
+                  </div>
+                </div>
+                <div style={{ height:7, borderRadius:4, background:'#F1F5F9' }}>
+                  <div style={{ height:'100%', borderRadius:4, background: c.acceptRate>=85?C.green:c.acceptRate>=70?C.orange:'#EF4444', width:`${c.acceptRate}%`, transition:'width 800ms ease' }} />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* 월별 추이 차트 */}
+          <div style={{ height:160 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:C.textLight, marginBottom:8, textTransform:'uppercase', letterSpacing:'0.06em' }}>월별 수용률 추이</div>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={MONTHLY_DATA}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                <XAxis dataKey="month" tick={{fontSize:10, fill:C.textMuted}} axisLine={false} tickLine={false} />
+                <YAxis yAxisId="left" tick={{fontSize:10, fill:C.textMuted}} axisLine={false} tickLine={false} />
+                <YAxis yAxisId="right" orientation="right" domain={[80,100]} tick={{fontSize:10, fill:C.textMuted}} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{fontSize:12, borderRadius:8, border:'none', boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}} />
+                <Bar yAxisId="left" dataKey="requests" fill={C.primaryLight} radius={[4,4,0,0]} name="총 요청" />
+                <Line yAxisId="right" type="monotone" dataKey="rate" stroke={C.primary} strokeWidth={2.5} dot={{fill:C.primary, r:3}} name="수용률(%)" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── 사이드 네비 ─────────────────────────────────────────────────
+const NAV_ITEMS = [
+  { id:'main', label:'네트워크 분석', icon:'📊' },
+  { id:'ai-recommend', label:'AI 병원 추천', icon:'🤖' },
+  { id:'network-map', label:'병원 네트워크 지도', icon:'🗺️' },
+  { id:'stats-report', label:'회송 통계 리포트', icon:'📈' },
+];
+
+const SECTION_TABS = {
+  'main': [{ label:'추천 점수 순' }, { label:'수용 가능' }, { label:'거리 순' }],
+  'ai-recommend': [{ label:'전체 추천' }, { label:'고추천' }, { label:'조건 맞춤' }],
+  'network-map': [{ label:'전체 네트워크' }, { label:'서울 권역' }, { label:'인천 권역' }],
+  'stats-report': [{ label:'월별 추이' }, { label:'조건별 분석' }, { label:'병원별 비교' }],
+};
+
+function SideNavItem({ icon, label, active, onClick }) {
+  return (
+    <button onClick={onClick} style={{ display:'flex', alignItems:'center', gap:10, width:'100%', padding:'9px 12px', borderRadius:8, border:'none', cursor:'pointer', background: active ? `${C.primary}12` : 'transparent', color: active ? C.primary : C.textLight, borderLeft: active ? `3px solid ${C.primary}` : '3px solid transparent', fontSize:13, fontWeight: active ? 700 : 400, transition:'all 150ms', fontFamily:'inherit', textAlign:'left' }}
+      onMouseEnter={e => { if (!active) e.currentTarget.style.background='#F8F9FF'; }}
+      onMouseLeave={e => { if (!active) e.currentTarget.style.background='transparent'; }}
+    >
+      <span style={{ fontSize:17 }}>{icon}</span> {label}
+    </button>
+  );
+}
+
+function TabUnderline({ label, active, onClick }) {
+  return (
+    <button onClick={onClick} style={{ padding:'8px 14px 6px', border:'none', cursor:'pointer', background:'transparent', fontFamily:'inherit', fontSize:12, color: active ? C.primary : C.textLight, fontWeight: active ? 700 : 400, borderBottom: active ? `2px solid ${C.primary}` : '2px solid transparent', marginBottom:-1, transition:'all 150ms' }}>{label}</button>
+  );
+}
+
+function App() {
+  const [section, setSection] = useState('main');
+  const [tabIdx, setTabIdx] = useState(0);
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { setTimeout(() => setLoading(false), 1100); }, []);
+  useEffect(() => { setTabIdx(0); setSelectedItem(null); }, [section]);
+
+  function renderContent() {
+    if (loading) return (
+      <div style={{ display:'flex', flexDirection:'column', gap:12, padding:16 }}>
+        {[...Array(4)].map((_,i) => (
+          <div key={i} style={{ height:72, borderRadius:12, background:'linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)', backgroundSize:'200% 100%', animation:'shimmer 1.5s infinite' }} />
+        ))}
+      </div>
+    );
+    switch(section) {
+      case 'main': return <AnalyticsDashboard selected={selectedItem} setSelected={setSelectedItem} />;
+      case 'ai-recommend': return <AIRecommend setToast={setToast} />;
+      case 'network-map': return <NetworkMap setToast={setToast} />;
+      case 'stats-report': return <StatsReport />;
+    }
+  }
+
+  return (
+    <div style={{ display:'flex', width:'100%', height:'100vh', overflow:'hidden', background:C.bg }}>
+      {/* 밝은 사이드바 */}
+      <nav style={{ width:240, background:C.surface, borderRight:`1px solid ${C.sidebarBorder}`, display:'flex', flexDirection:'column', paddingTop:16, flexShrink:0 }}>
+        <div style={{ padding:'0 16px 16px', borderBottom:`1px solid ${C.border}` }}>
+          <div style={{ display:'flex', alignItems:'center', gap:9 }}>
+            <div style={{ width:34, height:34, borderRadius:10, background:`linear-gradient(135deg, ${C.primary}, ${C.accent})`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:17 }}>🏥</div>
+            <div>
+              <div style={{ fontWeight:800, fontSize:14, color:C.text, letterSpacing:'-0.02em' }}>ReferNet</div>
+              <div style={{ color:C.textMuted, fontSize:10, marginTop:1 }}>회송 네트워크 분석</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding:'10px 12px', borderBottom:`1px solid ${C.border}` }}>
+          <div style={{ fontSize:10, fontWeight:700, color:C.textMuted, letterSpacing:'0.08em', marginBottom:6 }}>현재 기관</div>
+          <div style={{ fontSize:13, fontWeight:700, color:C.text }}>서울대병원</div>
+          <div style={{ fontSize:11, color:C.textMuted, marginTop:1 }}>환자회송팀 · 김지현</div>
+        </div>
+
+        <div style={{ flex:1, padding:'8px', display:'flex', flexDirection:'column', gap:2 }}>
+          {NAV_ITEMS.map(item => (
+            <SideNavItem key={item.id} icon={item.icon} label={item.label} active={section===item.id} onClick={() => setSection(item.id)} />
+          ))}
+        </div>
+
+        <div style={{ padding:'8px 12px', borderTop:`1px solid ${C.border}` }}>
+          <SideNavItem icon="⚙️" label="설정" active={section==='settings'} onClick={() => setSection('settings')} />
+          <div style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 12px', marginTop:4 }}>
+            <div style={{ width:30, height:30, borderRadius:'50%', background:`linear-gradient(135deg, ${C.primary}, ${C.accent})`, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontWeight:800, fontSize:12, flexShrink:0 }}>김</div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:C.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>김지현</div>
+              <div style={{ fontSize:10, color:C.textMuted }}>분석 담당자</div>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      {/* 메인 영역 */}
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        {/* 앱바 */}
+        <header style={{ height:40, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', padding:'0 16px', gap:8, background:C.surface, flexShrink:0 }}>
+          <span style={{ fontSize:12, color:C.textMuted }}>ReferNet</span>
+          <span style={{ color:C.border }}>›</span>
+          <span style={{ fontSize:12, fontWeight:700, color:C.text }}>{NAV_ITEMS.find(n=>n.id===section)?.label}</span>
+          <div style={{ flex:1 }} />
+          <div style={{ display:'flex', alignItems:'center', gap:6, background:'#F8FAFC', borderRadius:6, padding:'4px 10px', border:`1px solid ${C.border}` }}>
+            <span style={{ fontSize:12 }}>🔍</span>
+            <input placeholder="검색..." style={{ border:'none', background:'transparent', fontSize:12, outline:'none', width:120, fontFamily:'inherit' }} />
+          </div>
+          <button style={{ background:'none', border:'none', cursor:'pointer', fontSize:18, position:'relative' }}>
+            🔔
+            <span style={{ position:'absolute', top:-2, right:-2, width:14, height:14, borderRadius:'50%', background:'#EF4444', color:'#fff', fontSize:8, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center' }}>2</span>
+          </button>
+        </header>
+
+        {/* 탭 스트립 */}
+        <div style={{ height:38, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'flex-end', padding:'0 16px', gap:0, background:C.surface, flexShrink:0 }}>
+          {(SECTION_TABS[section]||[]).map((t, i) => (
+            <TabUnderline key={t.label} label={t.label} active={tabIdx===i} onClick={() => setTabIdx(i)} />
+          ))}
+          <div style={{ flex:1 }} />
+          <div style={{ display:'flex', gap:4, alignItems:'center', paddingBottom:6 }}>
+            <button onClick={() => setToast('내보내기가 완료됩니다')} style={{ fontSize:11, padding:'4px 10px', borderRadius:6, border:`1px solid ${C.border}`, background:C.surface, color:C.textLight, cursor:'pointer', fontFamily:'inherit' }}>↓ CSV</button>
+          </div>
+        </div>
+
+        {/* 마스터-디테일 */}
+        <div key={section} style={{ flex:1, overflow:'hidden', animation:'fadeIn 280ms ease' }}>
+          {renderContent()}
+        </div>
+      </div>
+
+      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
