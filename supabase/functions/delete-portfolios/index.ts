@@ -116,27 +116,32 @@ async function deleteRow(slug: string): Promise<{ ok: boolean; reason?: string }
 
 // ─── Handler ─────────────────────────────────────────────────────────────
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "authorization, apikey, x-client-info, content-type",
+};
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, apikey, x-client-info, content-type" },
-    });
+    return new Response(null, { headers: CORS_HEADERS });
   }
+
+  const headers = { "Content-Type": "application/json", ...CORS_HEADERS };
 
   const token = Deno.env.get("GITHUB_TOKEN");
   if (!token) {
-    return new Response(JSON.stringify({ error: "GITHUB_TOKEN not set" }), { status: 500 });
+    return new Response(JSON.stringify({ error: "GITHUB_TOKEN not set" }), { status: 500, headers });
   }
 
   let body: { slug?: string; slugs?: string[]; all?: boolean; skip_db?: boolean };
   try {
     body = await req.json();
   } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400 });
+    return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400, headers });
   }
 
   const { slug, slugs, all, skip_db } = body;
-  const headers = { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" };
 
   try {
     // ── 전체 삭제 (handleDelete / cleanup workflow 전용) ──
