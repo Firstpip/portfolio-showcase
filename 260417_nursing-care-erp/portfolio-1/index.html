@@ -1,0 +1,964 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>요양기관 재무회계 자동화 시스템 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; font-family: 'Pretendard', sans-serif; background: #F0F4F8; }
+  #root { display: flex; width: 100%; height: 100vh; overflow: hidden; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+  button { font-family: 'Pretendard', sans-serif; cursor: pointer; border: none; outline: none; }
+  input, select, textarea { font-family: 'Pretendard', sans-serif; outline: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } = Recharts;
+
+// ─── 디자인 토큰 (Ocean Trust — Corporate Clean) ───
+const C = {
+  primary: '#1D6FA4',
+  primaryDark: '#155E8E',
+  primaryLight: '#EBF4FC',
+  secondary: '#E8F4FD',
+  accent: '#0EA5E9',
+  sidebar: '#0F2744',
+  sidebarHover: '#1D3A5F',
+  sidebarActive: '#1D6FA4',
+  bg: '#F0F4F8',
+  surface: '#FFFFFF',
+  border: '#E2E8F0',
+  text: '#0F172A',
+  textSub: '#64748B',
+  success: '#10B981',
+  warning: '#F59E0B',
+  danger: '#EF4444',
+  info: '#3B82F6',
+};
+
+// ─── 더미 데이터 ───
+const monthlyData = [
+  { month: '11월', 수입: 18500, 지출: 12300 },
+  { month: '12월', 수입: 21200, 지출: 14800 },
+  { month: '1월', 수입: 19800, 지출: 13500 },
+  { month: '2월', 수입: 22400, 지출: 15200 },
+  { month: '3월', 수입: 24100, 지출: 16800 },
+  { month: '4월', 수입: 26300, 지출: 17400 },
+];
+
+const accountPieData = [
+  { name: '인건비', value: 42, color: '#1D6FA4' },
+  { name: '의약품비', value: 18, color: '#0EA5E9' },
+  { name: '식재료비', value: 15, color: '#38BDF8' },
+  { name: '관리운영비', value: 12, color: '#7DD3FC' },
+  { name: '기타', value: 13, color: '#BAE6FD' },
+];
+
+const recentTransactions = [
+  { id: 1, date: '2026-04-17', type: '지출', amount: 3240000, counterpart: '(주)메디케어', account: '의약품비', status: '처리완료', bank: 'KB국민은행' },
+  { id: 2, date: '2026-04-17', type: '수입', amount: 12800000, counterpart: '국민건강보험공단', account: '요양급여수입', status: '처리완료', bank: 'KB국민은행' },
+  { id: 3, date: '2026-04-16', type: '지출', amount: 840000, counterpart: '하나마트', account: '식재료비', status: '미처리', bank: '신한은행' },
+  { id: 4, date: '2026-04-16', type: '지출', amount: 1560000, counterpart: '청소나라', account: '관리운영비', status: '미처리', bank: '신한은행' },
+  { id: 5, date: '2026-04-15', type: '지출', amount: 28400000, counterpart: '직원급여', account: '인건비', status: '처리완료', bank: 'KB국민은행' },
+  { id: 6, date: '2026-04-15', type: '수입', amount: 960000, counterpart: '이용자 본인부담금', account: '본인부담수입', status: '처리완료', bank: '신한은행' },
+  { id: 7, date: '2026-04-14', type: '지출', amount: 430000, counterpart: '한국전력', account: '공과금', status: '미처리', bank: '우리은행' },
+  { id: 8, date: '2026-04-14', type: '지출', amount: 2100000, counterpart: '요양원 소모품', account: '소모품비', status: '처리완료', bank: '우리은행' },
+];
+
+const vouchers = [
+  { id: 'V-2604-0089', date: '2026-04-17', desc: '의약품 구입', debit: '의약품비', credit: '보통예금', amount: 3240000, status: '확정', type: '지출결의서' },
+  { id: 'V-2604-0088', date: '2026-04-17', desc: '요양급여 수령', debit: '보통예금', credit: '요양급여수입', amount: 12800000, status: '확정', type: '수입결의서' },
+  { id: 'V-2604-0087', date: '2026-04-16', desc: '식재료 구입', debit: '식재료비', credit: '보통예금', amount: 840000, status: '임시저장', type: '지출결의서' },
+  { id: 'V-2604-0086', date: '2026-04-15', desc: '4월 직원급여 지급', debit: '인건비', credit: '보통예금', amount: 28400000, status: '확정', type: '지출결의서' },
+  { id: 'V-2604-0085', date: '2026-04-14', desc: '청소용역비', debit: '관리운영비', credit: '보통예금', amount: 1560000, status: '임시저장', type: '지출결의서' },
+];
+
+const accountSubjects = [
+  { code: '101', name: '보통예금', group: '자산', balance: 48320000 },
+  { code: '201', name: '요양급여수입', group: '수익', balance: 145600000 },
+  { code: '202', name: '본인부담수입', group: '수익', balance: 12840000 },
+  { code: '501', name: '인건비', group: '비용', balance: 85200000 },
+  { code: '502', name: '의약품비', group: '비용', balance: 18640000 },
+  { code: '503', name: '식재료비', group: '비용', balance: 15300000 },
+  { code: '504', name: '관리운영비', group: '비용', balance: 9870000 },
+];
+
+// ─── 공통 컴포넌트 ───
+function Modal({ title, children, onClose, size = 'md' }) {
+  const widths = { sm: 480, md: 640, lg: 800 };
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: C.surface, borderRadius: 12, width: widths[size],
+        maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)'
+      }}>
+        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{title}</span>
+          <button onClick={onClose} style={{ background: 'none', fontSize: 20, color: C.textSub, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ padding: 24 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Badge({ label, color = C.primary, bg = C.primaryLight }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 600, color, background: bg }}>
+      {label}
+    </span>
+  );
+}
+
+function Btn({ children, onClick, variant = 'primary', size = 'md', style: s = {} }) {
+  const styles = {
+    primary: { background: C.primary, color: '#fff' },
+    secondary: { background: C.bg, color: C.text, border: `1px solid ${C.border}` },
+    danger: { background: C.danger, color: '#fff' },
+    ghost: { background: 'transparent', color: C.primary, border: `1px solid ${C.primary}` },
+  };
+  const sizes = { sm: { padding: '5px 12px', fontSize: 13 }, md: { padding: '8px 16px', fontSize: 14 }, lg: { padding: '11px 20px', fontSize: 15 } };
+  return (
+    <button onClick={onClick} style={{ ...styles[variant], ...sizes[size], borderRadius: 6, fontWeight: 600, cursor: 'pointer', transition: 'opacity 0.15s', ...s }}>
+      {children}
+    </button>
+  );
+}
+
+function FormField({ label, children }) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textSub, marginBottom: 6 }}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function Input({ value, onChange, placeholder, type = 'text' }) {
+  return (
+    <input type={type} value={value} onChange={onChange} placeholder={placeholder} style={{
+      width: '100%', padding: '9px 12px', border: `1px solid ${C.border}`,
+      borderRadius: 6, fontSize: 14, color: C.text, background: C.surface
+    }} />
+  );
+}
+
+function Select({ value, onChange, options }) {
+  return (
+    <select value={value} onChange={onChange} style={{
+      width: '100%', padding: '9px 12px', border: `1px solid ${C.border}`,
+      borderRadius: 6, fontSize: 14, color: C.text, background: C.surface
+    }}>
+      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
+}
+
+// ─── 사이드바 ───
+const NAV_ITEMS = [
+  { id: 'dashboard', label: '대시보드', icon: '📊' },
+  { id: 'transaction', label: '거래내역', icon: '💳' },
+  { id: 'voucher', label: '전표관리', icon: '📋' },
+  { id: 'settings', label: '기본설정', icon: '⚙️' },
+];
+
+function Sidebar({ active, onNav }) {
+  return (
+    <aside style={{ width: 260, background: C.sidebar, display: 'flex', flexDirection: 'column', flexShrink: 0, height: '100vh' }}>
+      {/* 로고 */}
+      <div style={{ padding: '24px 20px 20px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 8, background: C.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>🏥</div>
+          <div>
+            <div style={{ color: '#F0F6FF', fontSize: 14, fontWeight: 700, lineHeight: 1.2 }}>케어파이낸스</div>
+            <div style={{ color: '#8AAFC8', fontSize: 11 }}>요양기관 재무관리</div>
+          </div>
+        </div>
+      </div>
+      {/* 기관 정보 */}
+      <div style={{ padding: '12px 16px', margin: '12px 12px 4px', background: 'rgba(29,111,164,0.2)', borderRadius: 8 }}>
+        <div style={{ color: '#8AAFC8', fontSize: 11, marginBottom: 2 }}>현재 기관</div>
+        <div style={{ color: '#F0F6FF', fontSize: 13, fontWeight: 600 }}>해피케어 요양원</div>
+        <div style={{ color: '#8AAFC8', fontSize: 11 }}>사업자번호: 123-45-67890</div>
+      </div>
+      {/* 네비 */}
+      <nav style={{ flex: 1, padding: '8px 12px', overflowY: 'auto' }}>
+        {NAV_ITEMS.map(item => (
+          <button key={item.id} onClick={() => onNav(item.id)} style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+            padding: '10px 12px', borderRadius: 8, marginBottom: 2,
+            background: active === item.id ? C.primary : 'transparent',
+            color: active === item.id ? '#fff' : '#8AAFC8',
+            fontWeight: active === item.id ? 600 : 400,
+            fontSize: 14, textAlign: 'left', transition: 'all 0.15s',
+            border: 'none', cursor: 'pointer',
+          }}>
+            <span style={{ fontSize: 16 }}>{item.icon}</span>
+            {item.label}
+            {item.id === 'transaction' && (
+              <span style={{ marginLeft: 'auto', background: C.danger, color: '#fff', borderRadius: 10, fontSize: 11, padding: '1px 7px', fontWeight: 700 }}>3</span>
+            )}
+          </button>
+        ))}
+      </nav>
+      {/* 유저 정보 */}
+      <div style={{ padding: 16, borderTop: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ width: 34, height: 34, borderRadius: '50%', background: C.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, color: '#fff' }}>김</div>
+        <div>
+          <div style={{ color: '#F0F6FF', fontSize: 13, fontWeight: 600 }}>김관리</div>
+          <div style={{ color: '#8AAFC8', fontSize: 11 }}>원장 · 관리자</div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+// ─── TopBar ───
+function TopBar({ title }) {
+  return (
+    <div style={{
+      height: 60, background: C.surface, borderBottom: `1px solid ${C.border}`,
+      display: 'flex', alignItems: 'center', padding: '0 24px', gap: 16, flexShrink: 0
+    }}>
+      <h1 style={{ fontSize: 18, fontWeight: 700, color: C.text, flex: 1 }}>{title}</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div style={{ position: 'relative' }}>
+          <input placeholder="거래내역 검색..." style={{
+            padding: '7px 12px 7px 32px', border: `1px solid ${C.border}`, borderRadius: 8,
+            fontSize: 13, color: C.text, background: C.bg, width: 200
+          }} />
+          <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 14, color: C.textSub }}>🔍</span>
+        </div>
+        <button style={{ position: 'relative', background: 'none', border: 'none', fontSize: 20, cursor: 'pointer' }}>
+          🔔
+          <span style={{ position: 'absolute', top: -2, right: -4, background: C.danger, color: '#fff', borderRadius: '50%', width: 14, height: 14, fontSize: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>3</span>
+        </button>
+        <div style={{ width: 34, height: 34, borderRadius: '50%', background: C.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, cursor: 'pointer' }}>👤</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── 대시보드 ───
+function Dashboard() {
+  const kpis = [
+    { label: '이번달 수입', value: '26,300,000', unit: '원', delta: '+9.1%', color: C.success, icon: '📈' },
+    { label: '이번달 지출', value: '17,400,000', unit: '원', delta: '+3.6%', color: C.warning, icon: '📉' },
+    { label: '미처리 거래', value: '3', unit: '건', delta: '처리 필요', color: C.danger, icon: '⚠️' },
+    { label: '이번달 전표', value: '47', unit: '건', delta: '확정 42건', color: C.info, icon: '📋' },
+  ];
+  return (
+    <div>
+      {/* KPI 카드 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+        {kpis.map(k => (
+          <div key={k.label} style={{ background: C.surface, borderRadius: 10, padding: 20, border: `1px solid ${C.border}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+              <span style={{ fontSize: 22 }}>{k.icon}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, color: k.color, background: k.color + '15', padding: '2px 8px', borderRadius: 20 }}>{k.delta}</span>
+            </div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: C.text }}>{k.value}</div>
+            <div style={{ fontSize: 12, color: C.textSub, marginTop: 2 }}>{k.label} ({k.unit})</div>
+          </div>
+        ))}
+      </div>
+      {/* 차트 + 파이 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16, marginBottom: 24 }}>
+        <div style={{ background: C.surface, borderRadius: 10, padding: 20, border: `1px solid ${C.border}` }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: C.text, marginBottom: 16 }}>월별 수입/지출 현황 (만원)</div>
+          <div style={{ height: 220 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={monthlyData} margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis dataKey="month" tick={{ fontSize: 12, fill: C.textSub }} />
+                <YAxis tick={{ fontSize: 11, fill: C.textSub }} />
+                <Tooltip formatter={(v) => [v.toLocaleString() + '만원']} />
+                <Legend />
+                <Bar dataKey="수입" fill={C.primary} radius={[4,4,0,0]} />
+                <Bar dataKey="지출" fill={C.accent} radius={[4,4,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{ background: C.surface, borderRadius: 10, padding: 20, border: `1px solid ${C.border}` }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: C.text, marginBottom: 16 }}>계정과목별 지출 비중</div>
+          <div style={{ height: 160, marginBottom: 8 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={accountPieData} dataKey="value" cx="50%" cy="50%" innerRadius={45} outerRadius={70}>
+                  {accountPieData.map((e, i) => <Cell key={i} fill={e.color} />)}
+                </Pie>
+                <Tooltip formatter={(v) => [v + '%']} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          {accountPieData.map(d => (
+            <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, fontSize: 12 }}>
+              <div style={{ width: 10, height: 10, borderRadius: 2, background: d.color, flexShrink: 0 }} />
+              <span style={{ color: C.textSub, flex: 1 }}>{d.name}</span>
+              <span style={{ fontWeight: 700, color: C.text }}>{d.value}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      {/* 최근 거래 */}
+      <div style={{ background: C.surface, borderRadius: 10, padding: 20, border: `1px solid ${C.border}` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>최근 거래 내역</div>
+          <Badge label="미처리 3건" color={C.danger} bg={C.danger + '18'} />
+        </div>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: `2px solid ${C.border}` }}>
+              {['날짜', '구분', '거래처', '금액', '계정과목', '상태'].map(h => (
+                <th key={h} style={{ padding: '8px 12px', textAlign: 'left', color: C.textSub, fontWeight: 600, fontSize: 12 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {recentTransactions.slice(0, 5).map(t => (
+              <tr key={t.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                <td style={{ padding: '10px 12px', color: C.textSub, fontSize: 12 }}>{t.date}</td>
+                <td style={{ padding: '10px 12px' }}>
+                  <Badge label={t.type} color={t.type === '수입' ? C.success : C.danger} bg={(t.type === '수입' ? C.success : C.danger) + '15'} />
+                </td>
+                <td style={{ padding: '10px 12px', color: C.text, fontWeight: 500 }}>{t.counterpart}</td>
+                <td style={{ padding: '10px 12px', color: C.text, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                  {t.amount.toLocaleString()}원
+                </td>
+                <td style={{ padding: '10px 12px', color: C.textSub }}>{t.account}</td>
+                <td style={{ padding: '10px 12px' }}>
+                  <Badge label={t.status} color={t.status === '처리완료' ? C.success : C.warning} bg={(t.status === '처리완료' ? C.success : C.warning) + '15'} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── 거래내역 ───
+function TransactionPage() {
+  const [modal, setModal] = useState(null);
+  const [filter, setFilter] = useState('전체');
+  const [selected, setSelected] = useState([]);
+
+  const filtered = filter === '전체' ? recentTransactions : recentTransactions.filter(t => t.status === filter);
+
+  return (
+    <div>
+      {/* 상단 필터 */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {['전체', '미처리', '처리완료'].map(f => (
+            <button key={f} onClick={() => setFilter(f)} style={{
+              padding: '6px 14px', borderRadius: 20, fontSize: 13, fontWeight: 600,
+              background: filter === f ? C.primary : C.bg,
+              color: filter === f ? '#fff' : C.textSub,
+              border: `1px solid ${filter === f ? C.primary : C.border}`, cursor: 'pointer'
+            }}>{f}</button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+          <Btn onClick={() => setModal({ type: 'sync' })} variant="ghost" size="sm">🔄 API 동기화</Btn>
+          <Btn onClick={() => setModal({ type: 'add' })} size="sm">+ 직접 입력</Btn>
+        </div>
+      </div>
+      {/* API 연동 상태 배너 */}
+      <div style={{ background: C.primaryLight, border: `1px solid ${C.primary}30`, borderRadius: 8, padding: '10px 16px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
+        <span style={{ color: C.success, fontSize: 16 }}>✅</span>
+        <span style={{ color: C.primary, fontWeight: 600 }}>KB국민은행, 신한은행, 우리은행 API 연동 정상</span>
+        <span style={{ color: C.textSub, marginLeft: 'auto', fontSize: 12 }}>최종 동기화: 2026-04-17 09:30</span>
+      </div>
+      {/* 테이블 */}
+      <div style={{ background: C.surface, borderRadius: 10, border: `1px solid ${C.border}` }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: `2px solid ${C.border}`, background: C.bg }}>
+              <th style={{ padding: '10px 12px', textAlign: 'left', width: 36 }}>
+                <input type="checkbox" />
+              </th>
+              {['날짜', '구분', '거래처', '금액', '계정과목', '은행', '상태', '액션'].map(h => (
+                <th key={h} style={{ padding: '10px 12px', textAlign: 'left', color: C.textSub, fontWeight: 600, fontSize: 12 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(t => (
+              <tr key={t.id} onClick={() => setModal({ type: 'detail', item: t })} style={{ borderBottom: `1px solid ${C.border}`, cursor: 'pointer', transition: 'background 0.1s' }}
+                onMouseEnter={e => e.currentTarget.style.background = C.bg}
+                onMouseLeave={e => e.currentTarget.style.background = ''}>
+                <td style={{ padding: '10px 12px' }} onClick={e => e.stopPropagation()}>
+                  <input type="checkbox" />
+                </td>
+                <td style={{ padding: '10px 12px', color: C.textSub, fontSize: 12 }}>{t.date}</td>
+                <td style={{ padding: '10px 12px' }}>
+                  <Badge label={t.type} color={t.type === '수입' ? C.success : C.danger} bg={(t.type === '수입' ? C.success : C.danger) + '15'} />
+                </td>
+                <td style={{ padding: '10px 12px', color: C.text, fontWeight: 500 }}>{t.counterpart}</td>
+                <td style={{ padding: '10px 12px', color: C.text, fontWeight: 700 }}>{t.amount.toLocaleString()}원</td>
+                <td style={{ padding: '10px 12px', color: t.account ? C.text : C.danger }}>
+                  {t.account || <span style={{ color: C.danger }}>미지정</span>}
+                </td>
+                <td style={{ padding: '10px 12px', color: C.textSub, fontSize: 12 }}>{t.bank}</td>
+                <td style={{ padding: '10px 12px' }}>
+                  <Badge label={t.status} color={t.status === '처리완료' ? C.success : C.warning} bg={(t.status === '처리완료' ? C.success : C.warning) + '15'} />
+                </td>
+                <td style={{ padding: '10px 12px' }} onClick={e => e.stopPropagation()}>
+                  <Btn onClick={() => setModal({ type: 'edit', item: t })} variant="secondary" size="sm">편집</Btn>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 모달들 */}
+      {modal?.type === 'detail' && (
+        <Modal title="거래 내역 상세" onClose={() => setModal(null)}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
+            {[
+              ['거래일자', modal.item.date],
+              ['구분', modal.item.type],
+              ['거래처', modal.item.counterpart],
+              ['금액', modal.item.amount.toLocaleString() + '원'],
+              ['계정과목', modal.item.account],
+              ['은행', modal.item.bank],
+            ].map(([k, v]) => (
+              <div key={k} style={{ background: C.bg, borderRadius: 8, padding: 12 }}>
+                <div style={{ fontSize: 12, color: C.textSub, marginBottom: 4 }}>{k}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <FormField label="관리자 메모">
+            <textarea rows={3} placeholder="메모를 입력하세요..." style={{
+              width: '100%', padding: '8px 12px', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 14, resize: 'vertical'
+            }} />
+          </FormField>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <Btn onClick={() => setModal({ type: 'edit', item: modal.item })} variant="ghost">편집하기</Btn>
+            <Btn onClick={() => setModal(null)}>닫기</Btn>
+          </div>
+        </Modal>
+      )}
+      {modal?.type === 'edit' && (
+        <Modal title="거래 내역 편집" onClose={() => setModal(null)}>
+          <FormField label="거래처명">
+            <Input defaultValue={modal.item?.counterpart} placeholder="거래처명 입력" />
+          </FormField>
+          <FormField label="계정과목">
+            <Select defaultValue={modal.item?.account} onChange={() => {}} options={[
+              { value: '인건비', label: '인건비' },
+              { value: '의약품비', label: '의약품비' },
+              { value: '식재료비', label: '식재료비' },
+              { value: '관리운영비', label: '관리운영비' },
+              { value: '요양급여수입', label: '요양급여수입' },
+              { value: '본인부담수입', label: '본인부담수입' },
+              { value: '공과금', label: '공과금' },
+              { value: '소모품비', label: '소모품비' },
+            ]} />
+          </FormField>
+          <FormField label="비고">
+            <Input placeholder="추가 설명 입력" />
+          </FormField>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <Btn onClick={() => setModal(null)} variant="secondary">취소</Btn>
+            <Btn onClick={() => setModal(null)}>저장</Btn>
+          </div>
+        </Modal>
+      )}
+      {modal?.type === 'add' && (
+        <Modal title="거래 내역 직접 입력" onClose={() => setModal(null)}>
+          <FormField label="거래일자">
+            <Input type="date" defaultValue="2026-04-17" />
+          </FormField>
+          <FormField label="거래 구분">
+            <Select defaultValue="지출" onChange={() => {}} options={[{ value: '수입', label: '수입' }, { value: '지출', label: '지출' }]} />
+          </FormField>
+          <FormField label="거래처명">
+            <Input placeholder="거래처명 입력" />
+          </FormField>
+          <FormField label="금액 (원)">
+            <Input type="number" placeholder="1000000" />
+          </FormField>
+          <FormField label="계정과목">
+            <Select defaultValue="" onChange={() => {}} options={[
+              { value: '', label: '선택하세요' },
+              { value: '인건비', label: '인건비' },
+              { value: '의약품비', label: '의약품비' },
+              { value: '식재료비', label: '식재료비' },
+              { value: '관리운영비', label: '관리운영비' },
+            ]} />
+          </FormField>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <Btn onClick={() => setModal(null)} variant="secondary">취소</Btn>
+            <Btn onClick={() => setModal(null)}>등록</Btn>
+          </div>
+        </Modal>
+      )}
+      {modal?.type === 'sync' && (
+        <Modal title="금융 API 동기화" onClose={() => setModal(null)} size="sm">
+          <div style={{ marginBottom: 16 }}>
+            {['KB국민은행 (****3847)', '신한은행 (****2156)', '우리은행 (****9023)'].map(b => (
+              <div key={b} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0', borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ fontSize: 14, color: C.text }}>🏦 {b}</span>
+                <Badge label="연동 정상" color={C.success} bg={C.success + '15'} />
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: C.textSub, marginBottom: 16 }}>마지막 동기화: 2026-04-17 09:30 · 신규 거래 3건</div>
+          <Btn onClick={() => setModal(null)} style={{ width: '100%' }}>지금 동기화</Btn>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── 전표관리 ───
+function VoucherPage() {
+  const [modal, setModal] = useState(null);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20, justifyContent: 'flex-end' }}>
+        <Btn onClick={() => setModal({ type: 'create' })} variant="ghost" size="sm">일괄 생성</Btn>
+        <Btn onClick={() => setModal({ type: 'new' })} size="sm">+ 전표 작성</Btn>
+      </div>
+      {/* 요약 카드 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
+        {[
+          { label: '이번달 전표', value: '47건', sub: '확정 42 / 임시 5', color: C.primary },
+          { label: '차변 합계', value: '52,540,000원', sub: '지출 전표 기준', color: C.info },
+          { label: '대변 합계', value: '52,540,000원', sub: '수입 전표 기준', color: C.success },
+        ].map(k => (
+          <div key={k.label} style={{ background: C.surface, borderRadius: 10, padding: 16, border: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 12, color: C.textSub, marginBottom: 6 }}>{k.label}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: k.color }}>{k.value}</div>
+            <div style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+      {/* 전표 목록 */}
+      <div style={{ background: C.surface, borderRadius: 10, border: `1px solid ${C.border}` }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: `2px solid ${C.border}`, background: C.bg }}>
+              {['전표번호', '날짜', '적요', '차변계정', '대변계정', '금액', '구분', '상태', '액션'].map(h => (
+                <th key={h} style={{ padding: '10px 12px', textAlign: 'left', color: C.textSub, fontWeight: 600, fontSize: 12 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {vouchers.map(v => (
+              <tr key={v.id} onClick={() => setModal({ type: 'detail', item: v })}
+                style={{ borderBottom: `1px solid ${C.border}`, cursor: 'pointer' }}
+                onMouseEnter={e => e.currentTarget.style.background = C.bg}
+                onMouseLeave={e => e.currentTarget.style.background = ''}>
+                <td style={{ padding: '10px 12px', color: C.primary, fontWeight: 600 }}>{v.id}</td>
+                <td style={{ padding: '10px 12px', color: C.textSub, fontSize: 12 }}>{v.date}</td>
+                <td style={{ padding: '10px 12px', color: C.text }}>{v.desc}</td>
+                <td style={{ padding: '10px 12px', color: C.text }}>{v.debit}</td>
+                <td style={{ padding: '10px 12px', color: C.text }}>{v.credit}</td>
+                <td style={{ padding: '10px 12px', color: C.text, fontWeight: 700 }}>{v.amount.toLocaleString()}원</td>
+                <td style={{ padding: '10px 12px' }}>
+                  <Badge label={v.type} color={C.info} bg={C.info + '15'} />
+                </td>
+                <td style={{ padding: '10px 12px' }}>
+                  <Badge label={v.status} color={v.status === '확정' ? C.success : C.warning} bg={(v.status === '확정' ? C.success : C.warning) + '15'} />
+                </td>
+                <td style={{ padding: '10px 12px' }} onClick={e => e.stopPropagation()}>
+                  <Btn onClick={() => setModal({ type: 'preview', item: v })} variant="secondary" size="sm">미리보기</Btn>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 모달들 */}
+      {modal?.type === 'detail' && (
+        <Modal title={`전표 상세 — ${modal.item.id}`} onClose={() => setModal(null)} size="lg">
+          <div style={{ background: C.bg, borderRadius: 8, padding: 20, marginBottom: 20 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: `2px solid ${C.border}` }}>
+                  <th style={{ padding: '8px', textAlign: 'left', color: C.textSub }}>구분</th>
+                  <th style={{ padding: '8px', textAlign: 'left', color: C.textSub }}>계정과목</th>
+                  <th style={{ padding: '8px', textAlign: 'right', color: C.textSub }}>차변</th>
+                  <th style={{ padding: '8px', textAlign: 'right', color: C.textSub }}>대변</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <td style={{ padding: '10px 8px' }}><Badge label="차변" color={C.danger} bg={C.danger + '15'} /></td>
+                  <td style={{ padding: '10px 8px', fontWeight: 600 }}>{modal.item.debit}</td>
+                  <td style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 700 }}>{modal.item.amount.toLocaleString()}원</td>
+                  <td style={{ padding: '10px 8px', textAlign: 'right', color: C.textSub }}>—</td>
+                </tr>
+                <tr>
+                  <td style={{ padding: '10px 8px' }}><Badge label="대변" color={C.info} bg={C.info + '15'} /></td>
+                  <td style={{ padding: '10px 8px', fontWeight: 600 }}>  {modal.item.credit}</td>
+                  <td style={{ padding: '10px 8px', textAlign: 'right', color: C.textSub }}>—</td>
+                  <td style={{ padding: '10px 8px', textAlign: 'right', fontWeight: 700 }}>{modal.item.amount.toLocaleString()}원</td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr style={{ borderTop: `2px solid ${C.border}`, background: C.primaryLight }}>
+                  <td colSpan={2} style={{ padding: '8px', fontWeight: 700, color: C.primary }}>합계</td>
+                  <td style={{ padding: '8px', textAlign: 'right', fontWeight: 800, color: C.primary }}>{modal.item.amount.toLocaleString()}원</td>
+                  <td style={{ padding: '8px', textAlign: 'right', fontWeight: 800, color: C.primary }}>{modal.item.amount.toLocaleString()}원</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 12px', background: C.success + '15', borderRadius: 8, marginBottom: 16 }}>
+            <span style={{ color: C.success, fontSize: 14 }}>✅</span>
+            <span style={{ fontSize: 13, color: C.success, fontWeight: 600 }}>차변 합계 = 대변 합계 (복식부기 검증 통과)</span>
+          </div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <Btn onClick={() => setModal({ type: 'preview', item: modal.item })} variant="ghost">결의서 미리보기</Btn>
+            <Btn onClick={() => setModal(null)}>닫기</Btn>
+          </div>
+        </Modal>
+      )}
+      {modal?.type === 'preview' && (
+        <Modal title="결의서 미리보기" onClose={() => setModal(null)} size="lg">
+          <div style={{ border: `2px solid ${C.border}`, borderRadius: 8, padding: 32, fontFamily: 'serif' }}>
+            <div style={{ textAlign: 'center', marginBottom: 24 }}>
+              <div style={{ fontSize: 22, fontWeight: 800 }}>지 출 결 의 서</div>
+              <div style={{ fontSize: 13, color: C.textSub, marginTop: 4 }}>해피케어 요양원</div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20, fontSize: 13 }}>
+              <div>전표번호: {modal.item?.id || 'V-2604-0089'}</div>
+              <div>결의일자: {modal.item?.date || '2026-04-17'}</div>
+              <div>적요: {modal.item?.desc || '의약품 구입'}</div>
+              <div>금액: {(modal.item?.amount || 3240000).toLocaleString()}원</div>
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 20 }}>
+              <thead>
+                <tr style={{ background: C.primaryLight }}>
+                  <th style={{ border: `1px solid ${C.border}`, padding: 8 }}>계정과목</th>
+                  <th style={{ border: `1px solid ${C.border}`, padding: 8 }}>차변</th>
+                  <th style={{ border: `1px solid ${C.border}`, padding: 8 }}>대변</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ border: `1px solid ${C.border}`, padding: 8 }}>{modal.item?.debit || '의약품비'}</td>
+                  <td style={{ border: `1px solid ${C.border}`, padding: 8, textAlign: 'right' }}>{(modal.item?.amount || 3240000).toLocaleString()}</td>
+                  <td style={{ border: `1px solid ${C.border}`, padding: 8 }}></td>
+                </tr>
+                <tr>
+                  <td style={{ border: `1px solid ${C.border}`, padding: 8 }}>{modal.item?.credit || '보통예금'}</td>
+                  <td style={{ border: `1px solid ${C.border}`, padding: 8 }}></td>
+                  <td style={{ border: `1px solid ${C.border}`, padding: 8, textAlign: 'right' }}>{(modal.item?.amount || 3240000).toLocaleString()}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 32, fontSize: 13 }}>
+              <div>기안: 김관리 원장</div>
+              <div>결재: ___________</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+            <Btn onClick={() => setModal(null)} variant="secondary">닫기</Btn>
+            <Btn onClick={() => setModal(null)}>PDF 다운로드</Btn>
+          </div>
+        </Modal>
+      )}
+      {modal?.type === 'new' && (
+        <Modal title="전표 작성" onClose={() => setModal(null)} size="lg">
+          <FormField label="거래일자">
+            <Input type="date" defaultValue="2026-04-17" />
+          </FormField>
+          <FormField label="적요">
+            <Input placeholder="거래 내용을 입력하세요" />
+          </FormField>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <FormField label="차변 계정과목">
+              <Select defaultValue="의약품비" onChange={() => {}} options={accountSubjects.map(a => ({ value: a.name, label: a.name }))} />
+            </FormField>
+            <FormField label="대변 계정과목">
+              <Select defaultValue="보통예금" onChange={() => {}} options={accountSubjects.map(a => ({ value: a.name, label: a.name }))} />
+            </FormField>
+          </div>
+          <FormField label="금액 (원)">
+            <Input type="number" placeholder="1000000" />
+          </FormField>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <Btn onClick={() => setModal(null)} variant="secondary">취소</Btn>
+            <Btn onClick={() => setModal(null)}>전표 생성</Btn>
+          </div>
+        </Modal>
+      )}
+      {modal?.type === 'create' && (
+        <Modal title="일괄 전표 생성" onClose={() => setModal(null)} size="sm">
+          <div style={{ fontSize: 14, color: C.textSub, marginBottom: 16 }}>미처리 거래 내역 3건을 기반으로 전표를 자동 생성합니다.</div>
+          {['식재료 구입 — 840,000원', '청소나라 용역비 — 1,560,000원', '한국전력 공과금 — 430,000원'].map(item => (
+            <div key={item} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderBottom: `1px solid ${C.border}`, fontSize: 13 }}>
+              <input type="checkbox" defaultChecked />
+              <span>{item}</span>
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+            <Btn onClick={() => setModal(null)} variant="secondary">취소</Btn>
+            <Btn onClick={() => setModal(null)}>3건 일괄 생성</Btn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── 기본설정 ───
+function SettingsPage() {
+  const [tab, setTab] = useState('info');
+  const [modal, setModal] = useState(null);
+
+  const tabs = [
+    { id: 'info', label: '기관 기본 정보' },
+    { id: 'banking', label: '금융 계좌 연동' },
+    { id: 'accounts', label: '계정과목 체계' },
+  ];
+
+  return (
+    <div>
+      {/* 탭 */}
+      <div style={{ display: 'flex', gap: 0, marginBottom: 24, background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, overflow: 'hidden' }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{
+            flex: 1, padding: '12px 16px', border: 'none', background: tab === t.id ? C.primary : 'transparent',
+            color: tab === t.id ? '#fff' : C.textSub, fontWeight: tab === t.id ? 700 : 400, fontSize: 14, cursor: 'pointer'
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {tab === 'info' && (
+        <div style={{ background: C.surface, borderRadius: 10, padding: 24, border: `1px solid ${C.border}` }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: C.text, marginBottom: 20 }}>기관 기본 정보</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <FormField label="기관명">
+              <Input defaultValue="해피케어 요양원" />
+            </FormField>
+            <FormField label="사업자번호">
+              <Input defaultValue="123-45-67890" />
+            </FormField>
+            <FormField label="대표자명">
+              <Input defaultValue="김관리" />
+            </FormField>
+            <FormField label="요양기관 기호">
+              <Input defaultValue="51234567" />
+            </FormField>
+            <FormField label="주소">
+              <Input defaultValue="서울시 송파구 올림픽로 123" />
+            </FormField>
+            <FormField label="전화번호">
+              <Input defaultValue="02-1234-5678" />
+            </FormField>
+          </div>
+          <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
+            <Btn onClick={() => {}}>저장</Btn>
+          </div>
+        </div>
+      )}
+
+      {tab === 'banking' && (
+        <div style={{ background: C.surface, borderRadius: 10, padding: 24, border: `1px solid ${C.border}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>금융 계좌 연동 현황</div>
+            <Btn onClick={() => setModal({ type: 'addAccount' })} size="sm">+ 계좌 추가</Btn>
+          </div>
+          {[
+            { bank: 'KB국민은행', account: '123-456-789012', type: '보통예금', status: '연동 정상', lastSync: '09:30' },
+            { bank: '신한은행', account: '110-345-678901', type: '보통예금', status: '연동 정상', lastSync: '09:30' },
+            { bank: '우리은행', account: '1002-456-789012', type: '법인카드', status: '연동 정상', lastSync: '09:28' },
+          ].map(a => (
+            <div key={a.bank} style={{ display: 'flex', alignItems: 'center', padding: '16px 0', borderBottom: `1px solid ${C.border}`, gap: 16 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 8, background: C.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>🏦</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: 14, color: C.text }}>{a.bank}</div>
+                <div style={{ fontSize: 12, color: C.textSub }}>{a.account} · {a.type}</div>
+              </div>
+              <Badge label={a.status} color={C.success} bg={C.success + '15'} />
+              <div style={{ fontSize: 11, color: C.textSub }}>최종: {a.lastSync}</div>
+              <Btn onClick={() => setModal({ type: 'editAccount', item: a })} variant="secondary" size="sm">설정</Btn>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === 'accounts' && (
+        <div style={{ background: C.surface, borderRadius: 10, padding: 24, border: `1px solid ${C.border}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>계정과목 체계</div>
+            <Btn onClick={() => setModal({ type: 'addSubject' })} size="sm">+ 계정과목 추가</Btn>
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: `2px solid ${C.border}`, background: C.bg }}>
+                {['코드', '계정과목명', '그룹', '잔액', '액션'].map(h => (
+                  <th key={h} style={{ padding: '10px 12px', textAlign: 'left', color: C.textSub, fontWeight: 600, fontSize: 12 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {accountSubjects.map(a => (
+                <tr key={a.code} style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <td style={{ padding: '10px 12px', color: C.textSub, fontFamily: 'monospace' }}>{a.code}</td>
+                  <td style={{ padding: '10px 12px', color: C.text, fontWeight: 500 }}>{a.name}</td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <Badge label={a.group} color={a.group === '자산' ? C.info : a.group === '수익' ? C.success : C.warning} bg={(a.group === '자산' ? C.info : a.group === '수익' ? C.success : C.warning) + '15'} />
+                  </td>
+                  <td style={{ padding: '10px 12px', color: C.text, fontWeight: 700 }}>{a.balance.toLocaleString()}원</td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <Btn onClick={() => setModal({ type: 'editSubject', item: a })} variant="secondary" size="sm">수정</Btn>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* 모달 */}
+      {modal?.type === 'addAccount' && (
+        <Modal title="계좌 추가" onClose={() => setModal(null)} size="sm">
+          <FormField label="은행 선택">
+            <Select defaultValue="" onChange={() => {}} options={[
+              { value: '', label: '은행 선택' },
+              { value: 'KB', label: 'KB국민은행' },
+              { value: '신한', label: '신한은행' },
+              { value: '하나', label: '하나은행' },
+              { value: '우리', label: '우리은행' },
+            ]} />
+          </FormField>
+          <FormField label="계좌번호">
+            <Input placeholder="계좌번호 입력 (- 없이)" />
+          </FormField>
+          <FormField label="계좌 유형">
+            <Select defaultValue="보통예금" onChange={() => {}} options={[
+              { value: '보통예금', label: '보통예금' },
+              { value: '법인카드', label: '법인카드' },
+            ]} />
+          </FormField>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <Btn onClick={() => setModal(null)} variant="secondary">취소</Btn>
+            <Btn onClick={() => setModal(null)}>API 연동 테스트</Btn>
+          </div>
+        </Modal>
+      )}
+      {modal?.type === 'editAccount' && (
+        <Modal title={`${modal.item.bank} 설정`} onClose={() => setModal(null)} size="sm">
+          <FormField label="계좌번호">
+            <Input defaultValue={modal.item.account} />
+          </FormField>
+          <FormField label="동기화 주기">
+            <Select defaultValue="30" onChange={() => {}} options={[
+              { value: '10', label: '10분마다' },
+              { value: '30', label: '30분마다' },
+              { value: '60', label: '1시간마다' },
+            ]} />
+          </FormField>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <Btn onClick={() => setModal(null)} variant="danger">연동 해제</Btn>
+            <div style={{ flex: 1 }} />
+            <Btn onClick={() => setModal(null)} variant="secondary">취소</Btn>
+            <Btn onClick={() => setModal(null)}>저장</Btn>
+          </div>
+        </Modal>
+      )}
+      {modal?.type === 'addSubject' && (
+        <Modal title="계정과목 추가" onClose={() => setModal(null)} size="sm">
+          <FormField label="계정 코드">
+            <Input placeholder="예: 505" />
+          </FormField>
+          <FormField label="계정과목명">
+            <Input placeholder="계정과목명 입력" />
+          </FormField>
+          <FormField label="그룹">
+            <Select defaultValue="비용" onChange={() => {}} options={[
+              { value: '자산', label: '자산' },
+              { value: '부채', label: '부채' },
+              { value: '수익', label: '수익' },
+              { value: '비용', label: '비용' },
+            ]} />
+          </FormField>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <Btn onClick={() => setModal(null)} variant="secondary">취소</Btn>
+            <Btn onClick={() => setModal(null)}>추가</Btn>
+          </div>
+        </Modal>
+      )}
+      {modal?.type === 'editSubject' && (
+        <Modal title="계정과목 수정" onClose={() => setModal(null)} size="sm">
+          <FormField label="계정과목명">
+            <Input defaultValue={modal.item.name} />
+          </FormField>
+          <FormField label="그룹">
+            <Select defaultValue={modal.item.group} onChange={() => {}} options={[
+              { value: '자산', label: '자산' },
+              { value: '부채', label: '부채' },
+              { value: '수익', label: '수익' },
+              { value: '비용', label: '비용' },
+            ]} />
+          </FormField>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            <Btn onClick={() => setModal(null)} variant="secondary">취소</Btn>
+            <Btn onClick={() => setModal(null)}>저장</Btn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── 페이지 렌더러 ───
+const PAGE_TITLES = {
+  dashboard: '재무 현황 대시보드',
+  transaction: '거래 내역 관리',
+  voucher: '전표 생성 및 관리',
+  settings: '기본 정보 설정',
+};
+
+// ─── App ───
+function App() {
+  const [page, setPage] = useState('dashboard');
+  return (
+    <div style={{ display: 'flex', width: '100%', height: '100vh', overflow: 'hidden' }}>
+      <Sidebar active={page} onNav={setPage} />
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <TopBar title={PAGE_TITLES[page]} />
+        <main style={{ flex: 1, overflowY: 'auto', padding: 24, background: C.bg }}>
+          {page === 'dashboard' && <Dashboard />}
+          {page === 'transaction' && <TransactionPage />}
+          {page === 'voucher' && <VoucherPage />}
+          {page === 'settings' && <SettingsPage />}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
