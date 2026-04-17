@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>DocExtract AI — 영업 문서 데이터 추출 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:100%;height:100%;font-family:'Pretendard',sans-serif;background:#F1F5F9}
+  #root{display:flex;width:100%;height:100vh;overflow:hidden}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  @keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+  @keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+  @keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+  @keyframes barGrow{from{width:0%}to{width:var(--target-width)}}
+  @keyframes slideDown{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const C = {
+  primary:'#2563EB',secondary:'#1E40AF',accent:'#0EA5E9',
+  bg:'#F1F5F9',surface:'#FFFFFF',
+  text:'#0F172A',textLight:'#64748B',
+  border:'#E2E8F0',sidebar:'#0F172A',sidebarText:'#94A3B8',sidebarActive:'#2563EB',
+  success:'#10B981',warning:'#F59E0B',danger:'#EF4444',
+};
+
+const {RadarChart,Radar,PolarGrid,PolarAngleAxis,PolarRadiusAxis,
+  BarChart,Bar,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,Legend} = Recharts;
+
+/* ─── Toast ─── */
+function Toast({msg,onClose}){
+  React.useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t)},[]);
+  return <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:'#1A1A2E',color:'#fff',padding:'12px 20px',borderRadius:8,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.2)',fontSize:14}}>{msg}</div>;
+}
+
+/* ─── Modal ─── */
+function Modal({title,onClose,children,width=560}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.45)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:'#fff',borderRadius:12,zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.18)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'20px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:18,fontWeight:700,color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textLight}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── CountUp ─── */
+function CountUp({end,suffix='',duration=1200}){
+  const [val,setVal]=React.useState(0);
+  React.useEffect(()=>{let s=0;const step=end/(duration/16);const t=setInterval(()=>{s+=step;if(s>=end){setVal(end);clearInterval(t);}else setVal(Math.floor(s));},16);return()=>clearInterval(t);},[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{val.toLocaleString()}{suffix}</span>;
+}
+
+/* ─── Sidebar ─── */
+const NAV=[
+  {id:'dashboard',icon:'📊',label:'LLM 비교 분석'},
+  {id:'extract-demo',icon:'🔍',label:'데이터 추출'},
+  {id:'prompt-editor',icon:'✏️',label:'프롬프트 에디터'},
+  {id:'export-result',icon:'📤',label:'결과 내보내기'},
+];
+
+function Sidebar({page,onNav}){
+  return(
+    <aside style={{width:260,background:C.sidebar,flexShrink:0,display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden'}}>
+      <div style={{padding:'20px 20px 16px',borderBottom:'1px solid rgba(255,255,255,0.07)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:36,height:36,borderRadius:8,background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>🤖</div>
+          <div>
+            <div style={{color:'#fff',fontWeight:700,fontSize:15,lineHeight:1.2}}>DocExtract AI</div>
+            <div style={{color:C.sidebarText,fontSize:11}}>문서 데이터 추출 플랫폼</div>
+          </div>
+        </div>
+      </div>
+      <div style={{flex:1,padding:'12px 10px',display:'flex',flexDirection:'column',gap:2,overflowY:'auto'}}>
+        <div style={{color:C.sidebarText,fontSize:10,fontWeight:700,letterSpacing:'0.08em',padding:'8px 10px 4px',textTransform:'uppercase'}}>메뉴</div>
+        {NAV.map(n=>(
+          <button key={n.id} onClick={()=>onNav(n.id)} style={{
+            display:'flex',alignItems:'center',gap:10,width:'100%',padding:'10px 12px',
+            borderRadius:8,border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:14,
+            background:page===n.id?'rgba(37,99,235,0.15)':'transparent',
+            color:page===n.id?'#fff':C.sidebarText,
+            borderLeft:page===n.id?`3px solid ${C.primary}`:'3px solid transparent',
+            fontWeight:page===n.id?600:400,transition:'all 150ms',textAlign:'left',
+          }}>
+            <span style={{fontSize:16,minWidth:20,textAlign:'center'}}>{n.icon}</span>{n.label}
+          </button>
+        ))}
+      </div>
+      <div style={{padding:'12px 14px',borderTop:'1px solid rgba(255,255,255,0.07)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:32,height:32,borderRadius:16,background:`linear-gradient(135deg,${C.primary},${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700}}>김</div>
+          <div>
+            <div style={{color:'#fff',fontSize:13,fontWeight:600}}>김도현</div>
+            <div style={{color:C.sidebarText,fontSize:11}}>프롬프트 엔지니어</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+/* ─── TopBar ─── */
+const PAGE_TITLES={
+  'dashboard':'LLM 비교 분석 대시보드',
+  'extract-demo':'인터랙티브 데이터 추출',
+  'prompt-editor':'프롬프트 에디터',
+  'export-result':'결과 내보내기',
+};
+function TopBar({title}){
+  return(
+    <div style={{height:56,background:'#fff',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',padding:'0 24px',gap:16,flexShrink:0}}>
+      <h1 style={{fontSize:20,fontWeight:700,color:C.text,flex:1}}>{title}</h1>
+      <div style={{display:'flex',align:'center',gap:8}}>
+        <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:'6px 12px',display:'flex',alignItems:'center',gap:6,fontSize:13,color:C.textLight}}>
+          <span>🔍</span><span>검색...</span>
+        </div>
+        <button style={{width:36,height:36,borderRadius:8,border:`1px solid ${C.border}`,background:'#fff',cursor:'pointer',fontSize:16}}>🔔</button>
+        <div style={{width:36,height:36,borderRadius:18,background:`linear-gradient(135deg,${C.primary},${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:700,fontSize:14}}>김</div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Dashboard Page ─── */
+const LLM_RADAR=[
+  {subject:'정확도',Claude:92,Gemini:85,GPT4:88},
+  {subject:'속도',Claude:78,Gemini:90,GPT4:80},
+  {subject:'표 생성',Claude:95,Gemini:82,GPT4:87},
+  {subject:'한국어',Claude:93,Gemini:80,GPT4:85},
+  {subject:'비용효율',Claude:75,Gemini:88,GPT4:70},
+];
+const BAR_DATA=[
+  {name:'1월',Claude:142,Gemini:98,GPT4:76},
+  {name:'2월',Claude:168,Gemini:112,GPT4:89},
+  {name:'3월',Claude:195,Gemini:130,GPT4:101},
+  {name:'4월',Claude:220,Gemini:145,GPT4:112},
+];
+
+function DashboardPage({setModal}){
+  const kpis=[
+    {label:'총 추출 건수',val:1847,suf:'건',icon:'📄',color:C.primary,change:'+12.3%'},
+    {label:'평균 정확도',val:91,suf:'%',icon:'🎯',color:C.success,change:'+2.1%'},
+    {label:'이번 달 테스트',val:324,suf:'회',icon:'🧪',color:C.accent,change:'+8.7%'},
+    {label:'프롬프트 버전',val:28,suf:'개',icon:'✏️',color:'#8B5CF6',change:'+5개'},
+  ];
+  const results=[
+    {id:1,file:'삼성전자_기술제안서_2024Q1.pdf',llm:'Claude 3.5',status:'완료',accuracy:'94%',items:47,time:'2.3초'},
+    {id:2,file:'LG전자_영업제안서_강남지점.pdf',llm:'Gemini 1.5',status:'완료',accuracy:'88%',items:32,time:'1.9초'},
+    {id:3,file:'현대자동차_계약서_2024.pdf',llm:'Claude 3.5',status:'완료',accuracy:'96%',items:61,time:'2.7초'},
+    {id:4,file:'SK텔레콤_서비스안내서.pdf',llm:'GPT-4o',status:'완료',accuracy:'85%',items:28,time:'3.1초'},
+    {id:5,file:'카카오뱅크_상품설명서.pdf',llm:'Claude 3.5',status:'처리중',accuracy:'-',items:'-',time:'-'},
+  ];
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:20,marginBottom:24}}>
+        {kpis.map((k,i)=>(
+          <div key={i} onClick={()=>setModal({type:'kpiDetail',item:k})} style={{background:'#fff',borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',cursor:'pointer',transition:'all 200ms',animation:`slideUp 400ms ease ${i*80}ms both`}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.12)'}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='none';e.currentTarget.style.boxShadow='0 1px 3px rgba(0,0,0,0.08)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+              <div style={{fontSize:24}}>{k.icon}</div>
+              <span style={{fontSize:11,color:C.success,fontWeight:600,background:'rgba(16,185,129,0.1)',padding:'2px 8px',borderRadius:20}}>{k.change}</span>
+            </div>
+            <div style={{fontSize:28,fontWeight:800,color:k.color,lineHeight:1}}><CountUp end={k.val} suffix={k.suf}/></div>
+            <div style={{fontSize:13,color:C.textLight,marginTop:6}}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,marginBottom:24}}>
+        <div style={{background:'#fff',borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>LLM 성능 비교 (레이더)</div>
+          <ResponsiveContainer width="100%" height={240}>
+            <RadarChart data={LLM_RADAR}>
+              <PolarGrid stroke="#E2E8F0"/>
+              <PolarAngleAxis dataKey="subject" tick={{fontSize:11,fill:C.textLight}}/>
+              <PolarRadiusAxis domain={[60,100]} tick={false}/>
+              <Radar name="Claude 3.5" dataKey="Claude" stroke={C.primary} fill={C.primary} fillOpacity={0.15}/>
+              <Radar name="Gemini 1.5" dataKey="Gemini" stroke={C.success} fill={C.success} fillOpacity={0.15}/>
+              <Radar name="GPT-4o" dataKey="GPT4" stroke={C.warning} fill={C.warning} fillOpacity={0.15}/>
+              <Legend wrapperStyle={{fontSize:12}}/>
+            </RadarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{background:'#fff',borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>월별 추출 건수</div>
+          <ResponsiveContainer width="100%" height={240}>
+            <BarChart data={BAR_DATA}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0"/>
+              <XAxis dataKey="name" tick={{fontSize:11}} axisLine={false} tickLine={false}/>
+              <YAxis tick={{fontSize:11}} axisLine={false} tickLine={false}/>
+              <Tooltip/>
+              <Bar dataKey="Claude" fill={C.primary} radius={[4,4,0,0]} name="Claude 3.5"/>
+              <Bar dataKey="Gemini" fill={C.success} radius={[4,4,0,0]} name="Gemini 1.5"/>
+              <Bar dataKey="GPT4" fill={C.warning} radius={[4,4,0,0]} name="GPT-4o"/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      <div style={{background:'#fff',borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',overflow:'hidden'}}>
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text}}>최근 추출 이력</div>
+          <div style={{display:'flex',gap:8}}>
+            <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:'5px 10px',fontSize:12,color:C.textLight}}>🔍 검색</div>
+            <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:'5px 10px',fontSize:12,color:C.textLight}}>필터 ▾</div>
+          </div>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:C.bg}}>
+              {['파일명','LLM','상태','정확도','추출 항목','처리 시간'].map(h=>(
+                <th key={h} style={{padding:'10px 16px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textLight}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {results.map((r,i)=>(
+              <tr key={r.id} onClick={()=>setModal({type:'extractDetail',item:r})}
+                style={{borderTop:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms',animation:`slideUp 300ms ease ${i*60}ms both`}}
+                onMouseEnter={e=>e.currentTarget.style.background='rgba(37,99,235,0.04)'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.text,fontWeight:500}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:16}}>📄</span>{r.file}
+                  </div>
+                </td>
+                <td style={{padding:'12px 16px'}}>
+                  <span style={{background:`${C.primary}15`,color:C.primary,fontSize:11,fontWeight:600,padding:'3px 8px',borderRadius:4}}>{r.llm}</span>
+                </td>
+                <td style={{padding:'12px 16px'}}>
+                  <span style={{background:r.status==='완료'?`${C.success}15`:`${C.warning}15`,color:r.status==='완료'?C.success:C.warning,fontSize:11,fontWeight:600,padding:'3px 8px',borderRadius:4}}>{r.status}</span>
+                </td>
+                <td style={{padding:'12px 16px',fontSize:13,fontWeight:600,color:C.text}}>{r.accuracy}</td>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.text}}>{r.items}개</td>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.textLight}}>{r.time}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Extract Demo Page ─── */
+const SAMPLE_TEXTS = [
+  `제품코드: KR-2024-A001\n제품명: 스마트 에어컨 EX-5000\n규격: 1,500W, 냉방면적 19.8㎡\n가격: 1,250,000원\n보증기간: 2년 (부품 5년)\n\n제품코드: KR-2024-B002\n제품명: 프리미엄 공기청정기 AP-300\n규격: 최대 40평형, HEPA 13필터\n가격: 890,000원\n보증기간: 1년\n\n제품코드: KR-2024-C003\n제품명: 에너지 절감 냉장고 RF-700\n규격: 700L, 인버터 컴프레서\n가격: 2,100,000원\n보증기간: 3년 (컴프레서 10년)`,
+];
+
+const EXTRACT_RESULTS = [
+  {id:1,term:'제품코드',code:'KR-2024-A001',page:'P.1',type:'식별자',confidence:'99%'},
+  {id:2,term:'제품명',code:'스마트 에어컨 EX-5000',page:'P.1',type:'명칭',confidence:'98%'},
+  {id:3,term:'규격',code:'1,500W, 냉방면적 19.8㎡',page:'P.1',type:'사양',confidence:'96%'},
+  {id:4,term:'가격',code:'1,250,000원',page:'P.1',type:'금액',confidence:'99%'},
+  {id:5,term:'제품코드',code:'KR-2024-B002',page:'P.1',type:'식별자',confidence:'99%'},
+  {id:6,term:'제품명',code:'프리미엄 공기청정기 AP-300',page:'P.1',type:'명칭',confidence:'97%'},
+  {id:7,term:'가격',code:'890,000원',page:'P.1',type:'금액',confidence:'99%'},
+  {id:8,term:'제품코드',code:'KR-2024-C003',page:'P.2',type:'식별자',confidence:'99%'},
+];
+
+function ExtractPage({setModal,setToast}){
+  const [text,setText]=React.useState('');
+  const [llm,setLlm]=React.useState('claude');
+  const [loading,setLoading]=React.useState(false);
+  const [results,setResults]=React.useState(null);
+  const LLMS=[{val:'claude',label:'Claude 3.5 Sonnet'},{val:'gemini',label:'Gemini 1.5 Pro'},{val:'gpt4',label:'GPT-4o'}];
+  const run=()=>{
+    if(!text.trim()){setToast('텍스트를 입력해주세요.');return;}
+    setLoading(true);setResults(null);
+    setTimeout(()=>{setLoading(false);setResults(EXTRACT_RESULTS);},2000);
+  };
+  const useSample=()=>setText(SAMPLE_TEXTS[0]);
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{background:'#fff',borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <div style={{fontSize:15,fontWeight:700,color:C.text}}>📄 PDF 텍스트 입력</div>
+              <button onClick={useSample} style={{fontSize:12,color:C.primary,background:`${C.primary}10`,border:'none',padding:'4px 10px',borderRadius:6,cursor:'pointer',fontFamily:'inherit'}}>샘플 불러오기</button>
+            </div>
+            <textarea value={text} onChange={e=>setText(e.target.value)}
+              placeholder="PDF에서 복사한 텍스트를 여기에 붙여넣으세요..."
+              style={{width:'100%',height:220,border:`1px solid ${C.border}`,borderRadius:8,padding:12,fontSize:13,fontFamily:'inherit',resize:'none',outline:'none',color:C.text,lineHeight:1.6}}/>
+            <div style={{fontSize:12,color:C.textLight,marginTop:8}}>{text.length}자 입력됨</div>
+          </div>
+          <div style={{background:'#fff',borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+            <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:12}}>🤖 LLM 선택</div>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {LLMS.map(l=>(
+                <label key={l.val} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',border:`2px solid ${llm===l.val?C.primary:C.border}`,borderRadius:8,cursor:'pointer',background:llm===l.val?`${C.primary}08`:'#fff',transition:'all 150ms'}}>
+                  <input type="radio" value={l.val} checked={llm===l.val} onChange={()=>setLlm(l.val)} style={{accentColor:C.primary}}/>
+                  <span style={{fontSize:13,fontWeight:llm===l.val?600:400,color:llm===l.val?C.primary:C.text}}>{l.label}</span>
+                  {llm===l.val&&<span style={{marginLeft:'auto',fontSize:11,color:C.primary,fontWeight:600}}>✓ 선택됨</span>}
+                </label>
+              ))}
+            </div>
+            <button onClick={run} disabled={loading}
+              style={{width:'100%',marginTop:14,padding:'12px',background:loading?C.textLight:C.primary,color:'#fff',border:'none',borderRadius:8,fontSize:14,fontWeight:600,cursor:loading?'not-allowed':'pointer',fontFamily:'inherit',transition:'all 200ms'}}>
+              {loading?'🔄 추출 중...':'🚀 데이터 추출 시작'}
+            </button>
+          </div>
+        </div>
+        <div>
+          <div style={{background:'#fff',borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',height:'100%',display:'flex',flexDirection:'column'}}>
+            <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{fontSize:15,fontWeight:700,color:C.text}}>📊 추출 결과</div>
+              {results&&<button onClick={()=>setModal({type:'exportSingle',items:results})} style={{fontSize:12,color:'#fff',background:C.primary,border:'none',padding:'5px 12px',borderRadius:6,cursor:'pointer',fontFamily:'inherit'}}>내보내기</button>}
+            </div>
+            <div style={{flex:1,overflowY:'auto'}}>
+              {!results&&!loading&&(
+                <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:300,color:C.textLight}}>
+                  <div style={{fontSize:48,marginBottom:12}}>🔍</div>
+                  <div style={{fontSize:14}}>텍스트를 입력하고 추출을 시작하세요</div>
+                </div>
+              )}
+              {loading&&(
+                <div style={{padding:20,display:'flex',flexDirection:'column',gap:12}}>
+                  {[1,2,3,4].map(i=><div key={i} style={{height:44,borderRadius:8,background:'linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>)}
+                  <div style={{textAlign:'center',fontSize:13,color:C.textLight,animation:'pulse 1s infinite'}}>Claude 3.5로 데이터 추출 중...</div>
+                </div>
+              )}
+              {results&&(
+                <table style={{width:'100%',borderCollapse:'collapse'}}>
+                  <thead>
+                    <tr style={{background:C.bg}}>
+                      {['용어','코드/값','페이지','유형','신뢰도'].map(h=><th key={h} style={{padding:'8px 14px',textAlign:'left',fontSize:11,fontWeight:600,color:C.textLight}}>{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {results.map((r,i)=>(
+                      <tr key={r.id} onClick={()=>setModal({type:'extractItemDetail',item:r})}
+                        style={{borderTop:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms',animation:`slideUp 250ms ease ${i*40}ms both`}}
+                        onMouseEnter={e=>e.currentTarget.style.background='rgba(37,99,235,0.04)'}
+                        onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                        <td style={{padding:'10px 14px',fontSize:12,fontWeight:600,color:C.text}}>{r.term}</td>
+                        <td style={{padding:'10px 14px',fontSize:12,color:C.text,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.code}</td>
+                        <td style={{padding:'10px 14px',fontSize:11,color:C.textLight}}>{r.page}</td>
+                        <td style={{padding:'10px 14px'}}><span style={{background:`${C.accent}15`,color:C.accent,fontSize:10,fontWeight:600,padding:'2px 6px',borderRadius:4}}>{r.type}</span></td>
+                        <td style={{padding:'10px 14px',fontSize:12,fontWeight:600,color:C.success}}>{r.confidence}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Prompt Editor Page ─── */
+const PROMPTS=[
+  {id:1,name:'영업제안서 기본 추출',version:'v3.2',category:'영업문서',lastTest:'95%',updated:'2026-04-15',active:true,
+    content:`당신은 PDF 영업 문서에서 핵심 데이터를 추출하는 전문 데이터 분석가입니다.\n\n[지시사항]\n아래 PDF 텍스트에서 다음 항목을 추출하세요:\n- 제품코드 (영문+숫자 조합)\n- 제품명 (명사 형태)\n- 가격 정보 (단위 포함)\n- 규격/사양 데이터\n\n[출력 형식]\nJSON 배열로 반환:\n[\n  {"term": "항목명", "code": "추출값", "page": "페이지위치", "type": "유형"}\n]\n\n[예외처리]\n값을 찾을 수 없으면 null 반환`},
+  {id:2,name:'계약서 코드 추출',version:'v2.1',category:'계약문서',lastTest:'91%',updated:'2026-04-12',active:false,content:`계약서 전용 추출 프롬프트`},
+  {id:3,name:'카탈로그 가격 추출',version:'v1.8',category:'마케팅',lastTest:'89%',updated:'2026-04-10',active:false,content:`카탈로그 가격 추출 프롬프트`},
+];
+const VERSIONS=[
+  {ver:'v3.2',date:'2026-04-15',score:'95%',desc:'예외처리 강화, 복합 코드 패턴 추가'},
+  {ver:'v3.1',date:'2026-04-13',score:'92%',desc:'JSON 출력 형식 명확화'},
+  {ver:'v3.0',date:'2026-04-10',score:'88%',desc:'역할 부여 문구 개선'},
+  {ver:'v2.5',date:'2026-04-07',score:'85%',desc:'컨텍스트 제공 섹션 추가'},
+];
+
+function PromptEditorPage({setModal,setToast}){
+  const [selected,setSelected]=React.useState(PROMPTS[0]);
+  const [content,setContent]=React.useState(PROMPTS[0].content);
+  const [tab,setTab]=React.useState('editor');
+  const save=()=>setToast('✅ 새 버전으로 저장되었습니다.');
+  const test=()=>setModal({type:'testResult',item:selected});
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'260px 1fr',gap:20}}>
+        <div style={{display:'flex',flexDirection:'column',gap:12}}>
+          <div style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <div style={{fontSize:14,fontWeight:700,color:C.text}}>프롬프트 목록</div>
+              <button onClick={()=>setModal({type:'newPrompt'})} style={{fontSize:11,color:'#fff',background:C.primary,border:'none',padding:'4px 8px',borderRadius:6,cursor:'pointer',fontFamily:'inherit'}}>+ 새 템플릿</button>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:6}}>
+              {PROMPTS.map(p=>(
+                <div key={p.id} onClick={()=>{setSelected(p);setContent(p.content);}}
+                  style={{padding:'10px 12px',borderRadius:8,cursor:'pointer',border:`1.5px solid ${selected.id===p.id?C.primary:C.border}`,background:selected.id===p.id?`${C.primary}06`:'#fff',transition:'all 150ms'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:4}}>
+                    <div style={{fontSize:12,fontWeight:600,color:selected.id===p.id?C.primary:C.text,flex:1,lineHeight:1.3}}>{p.name}</div>
+                    {p.active&&<span style={{fontSize:9,color:C.success,fontWeight:700,background:`${C.success}15`,padding:'2px 5px',borderRadius:3,marginLeft:4}}>활성</span>}
+                  </div>
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    <span style={{fontSize:10,color:C.textLight}}>{p.version}</span>
+                    <span style={{fontSize:10,color:C.success,fontWeight:600}}>정확도 {p.lastTest}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div style={{background:'#fff',borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',display:'flex',flexDirection:'column',overflow:'hidden'}}>
+          <div style={{padding:'14px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div style={{display:'flex',gap:4}}>
+              {['editor','history'].map(t=>(
+                <button key={t} onClick={()=>setTab(t)} style={{padding:'6px 14px',border:'none',background:tab===t?C.primary:'transparent',color:tab===t?'#fff':C.textLight,borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:tab===t?600:400}}>
+                  {t==='editor'?'✏️ 에디터':'📋 버전 이력'}
+                </button>
+              ))}
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={test} style={{padding:'6px 14px',background:`${C.accent}15`,color:C.accent,border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600}}>🧪 테스트</button>
+              <button onClick={save} style={{padding:'6px 14px',background:C.primary,color:'#fff',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600}}>💾 저장</button>
+            </div>
+          </div>
+          {tab==='editor'&&(
+            <div style={{flex:1,display:'flex',flexDirection:'column'}}>
+              <div style={{padding:'12px 20px',background:C.bg,borderBottom:`1px solid ${C.border}`,display:'flex',gap:12,flexWrap:'wrap'}}>
+                {[{label:'역할 부여',color:'#8B5CF6'},{label:'지시문',color:C.primary},{label:'출력 형식',color:C.success},{label:'예외 처리',color:C.warning}].map(s=>(
+                  <span key={s.label} style={{fontSize:11,background:`${s.color}15`,color:s.color,fontWeight:600,padding:'3px 8px',borderRadius:4}}>{s.label}</span>
+                ))}
+              </div>
+              <textarea value={content} onChange={e=>setContent(e.target.value)}
+                style={{flex:1,border:'none',padding:20,fontSize:13,fontFamily:`'Consolas','Courier New',monospace`,resize:'none',outline:'none',color:C.text,lineHeight:1.8,minHeight:320}}/>
+            </div>
+          )}
+          {tab==='history'&&(
+            <div style={{flex:1,overflowY:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse'}}>
+                <thead>
+                  <tr style={{background:C.bg}}>
+                    {['버전','저장일','정확도','변경 내용',''].map(h=><th key={h} style={{padding:'10px 16px',textAlign:'left',fontSize:11,fontWeight:600,color:C.textLight}}>{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {VERSIONS.map((v,i)=>(
+                    <tr key={v.ver} onClick={()=>setModal({type:'versionDetail',item:v})}
+                      style={{borderTop:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms'}}
+                      onMouseEnter={e=>e.currentTarget.style.background='rgba(37,99,235,0.04)'}
+                      onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                      <td style={{padding:'12px 16px',fontWeight:700,color:C.primary,fontSize:13}}>{v.ver}</td>
+                      <td style={{padding:'12px 16px',fontSize:12,color:C.textLight}}>{v.date}</td>
+                      <td style={{padding:'12px 16px',fontWeight:600,color:C.success,fontSize:13}}>{v.score}</td>
+                      <td style={{padding:'12px 16px',fontSize:12,color:C.text}}>{v.desc}</td>
+                      <td style={{padding:'12px 16px'}}><button onClick={e=>{e.stopPropagation();setToast(`${v.ver} 버전을 불러왔습니다.`)}} style={{fontSize:11,color:C.primary,background:`${C.primary}10`,border:'none',padding:'3px 8px',borderRadius:4,cursor:'pointer',fontFamily:'inherit'}}>불러오기</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Export Page ─── */
+const EXPORT_HISTORY=[
+  {id:1,date:'2026-04-17 14:32',file:'삼성전자_기술제안서',llm:'Claude 3.5',items:47,format:'xlsx',size:'2.3KB'},
+  {id:2,date:'2026-04-17 11:15',file:'LG전자_영업제안서',llm:'Gemini 1.5',items:32,format:'csv',size:'1.8KB'},
+  {id:3,date:'2026-04-16 16:48',file:'현대자동차_계약서',llm:'Claude 3.5',items:61,format:'xlsx',size:'3.1KB'},
+  {id:4,date:'2026-04-16 10:22',file:'SK텔레콤_서비스안내서',llm:'GPT-4o',items:28,format:'json',size:'4.2KB'},
+  {id:5,date:'2026-04-15 15:03',file:'카카오뱅크_상품설명서',llm:'Claude 3.5',items:53,format:'xlsx',size:'2.8KB'},
+  {id:6,date:'2026-04-15 09:45',file:'네이버_마케팅자료',llm:'Gemini 1.5',items:35,format:'csv',size:'2.0KB'},
+];
+const FORMAT_ICONS={xlsx:'📗',csv:'📋',json:'📦'};
+
+function ExportPage({setModal,setToast}){
+  const [search,setSearch]=React.useState('');
+  const [fmt,setFmt]=React.useState('all');
+  const filtered=EXPORT_HISTORY.filter(h=>(search===''||h.file.includes(search))&&(fmt==='all'||h.format===fmt));
+  const stats=[
+    {label:'총 내보내기',val:218,icon:'📤'},
+    {label:'Excel',val:98,icon:'📗'},
+    {label:'CSV',val:72,icon:'📋'},
+    {label:'JSON',val:48,icon:'📦'},
+  ];
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:20}}>
+        {stats.map((s,i)=>(
+          <div key={i} style={{background:'#fff',borderRadius:12,padding:16,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',animation:`slideUp 300ms ease ${i*60}ms both`}}>
+            <div style={{fontSize:24,marginBottom:8}}>{s.icon}</div>
+            <div style={{fontSize:24,fontWeight:800,color:C.primary}}><CountUp end={s.val}/></div>
+            <div style={{fontSize:12,color:C.textLight,marginTop:4}}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{background:'#fff',borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',overflow:'hidden'}}>
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="파일명 검색..."
+            style={{border:`1px solid ${C.border}`,borderRadius:8,padding:'6px 12px',fontSize:13,outline:'none',fontFamily:'inherit',flex:1,minWidth:160}}/>
+          <div style={{display:'flex',gap:4}}>
+            {['all','xlsx','csv','json'].map(f=>(
+              <button key={f} onClick={()=>setFmt(f)} style={{padding:'6px 12px',border:`1px solid ${fmt===f?C.primary:C.border}`,background:fmt===f?C.primary:'#fff',color:fmt===f?'#fff':C.textLight,borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:fmt===f?600:400}}>
+                {f==='all'?'전체':f.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <button onClick={()=>setModal({type:'bulkExport'})} style={{padding:'6px 14px',background:C.primary,color:'#fff',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600}}>📥 일괄 다운로드</button>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:C.bg}}>
+              {['파일명','LLM','추출 항목','형식','크기','일시',''].map(h=><th key={h} style={{padding:'10px 16px',textAlign:'left',fontSize:11,fontWeight:600,color:C.textLight}}>{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((r,i)=>(
+              <tr key={r.id} onClick={()=>setModal({type:'exportDetail',item:r})}
+                style={{borderTop:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms',animation:`slideUp 250ms ease ${i*40}ms both`}}
+                onMouseEnter={e=>e.currentTarget.style.background='rgba(37,99,235,0.04)'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.text,fontWeight:500}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}><span>📄</span>{r.file}</div>
+                </td>
+                <td style={{padding:'12px 16px'}}><span style={{background:`${C.primary}12`,color:C.primary,fontSize:11,fontWeight:600,padding:'2px 7px',borderRadius:4}}>{r.llm}</span></td>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.text}}>{r.items}개</td>
+                <td style={{padding:'12px 16px',fontSize:16}}>{FORMAT_ICONS[r.format]}</td>
+                <td style={{padding:'12px 16px',fontSize:12,color:C.textLight}}>{r.size}</td>
+                <td style={{padding:'12px 16px',fontSize:12,color:C.textLight}}>{r.date}</td>
+                <td style={{padding:'12px 16px'}}>
+                  <button onClick={e=>{e.stopPropagation();setToast(`${r.file}.${r.format} 다운로드 시작`);}} style={{fontSize:11,color:C.primary,background:`${C.primary}10`,border:'none',padding:'4px 10px',borderRadius:5,cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>다운로드</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{padding:'12px 20px',borderTop:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{fontSize:12,color:C.textLight}}>총 {filtered.length}개 내역</div>
+          <div style={{display:'flex',gap:4}}>
+            {[1,2,3].map(p=><button key={p} style={{width:28,height:28,border:`1px solid ${p===1?C.primary:C.border}`,background:p===1?C.primary:'#fff',color:p===1?'#fff':C.text,borderRadius:4,cursor:'pointer',fontFamily:'inherit',fontSize:12}}>{p}</button>)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Modal Contents ─── */
+function ModalContent({modal,onClose,setToast}){
+  if(!modal)return null;
+  if(modal.type==='extractDetail'){
+    const r=modal.item;
+    return(
+      <Modal title="추출 상세 내역" onClose={onClose} width={520}>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={{background:C.bg,borderRadius:8,padding:14}}>
+            <div style={{fontSize:13,color:C.textLight,marginBottom:4}}>파일명</div>
+            <div style={{fontSize:15,fontWeight:600,color:C.text}}>{r.file}</div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12}}>
+            <div style={{background:`${C.primary}10`,borderRadius:8,padding:12,textAlign:'center'}}>
+              <div style={{fontSize:11,color:C.textLight,marginBottom:4}}>LLM</div>
+              <div style={{fontWeight:700,color:C.primary,fontSize:14}}>{r.llm}</div>
+            </div>
+            <div style={{background:`${C.success}10`,borderRadius:8,padding:12,textAlign:'center'}}>
+              <div style={{fontSize:11,color:C.textLight,marginBottom:4}}>정확도</div>
+              <div style={{fontWeight:700,color:C.success,fontSize:14}}>{r.accuracy}</div>
+            </div>
+            <div style={{background:`${C.accent}10`,borderRadius:8,padding:12,textAlign:'center'}}>
+              <div style={{fontSize:11,color:C.textLight,marginBottom:4}}>추출 항목</div>
+              <div style={{fontWeight:700,color:C.accent,fontSize:14}}>{r.items}개</div>
+            </div>
+          </div>
+          <div style={{padding:12,background:C.bg,borderRadius:8}}>
+            <div style={{fontSize:12,color:C.textLight,marginBottom:6}}>메모</div>
+            <textarea placeholder="검토 메모를 남기세요..." style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:6,padding:8,fontSize:13,outline:'none',fontFamily:'inherit',resize:'none',height:80}}/>
+          </div>
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+            <button onClick={onClose} style={{padding:'8px 16px',background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>닫기</button>
+            <button onClick={()=>{setToast('내보내기가 시작되었습니다.');onClose();}} style={{padding:'8px 16px',background:C.primary,color:'#fff',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600}}>내보내기</button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+  if(modal.type==='exportDetail'){
+    const r=modal.item;
+    return(
+      <Modal title="내보내기 상세" onClose={onClose} width={480}>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:8,fontSize:13}}>
+            {[['파일명',r.file],['LLM',r.llm],['추출 항목',`${r.items}개`],['형식',r.format.toUpperCase()],['크기',r.size],['내보내기 일시',r.date]].map(([k,v])=>(
+              <React.Fragment key={k}>
+                <div style={{color:C.textLight,padding:'4px 0'}}>{k}</div>
+                <div style={{color:C.text,fontWeight:500,padding:'4px 0'}}>{v}</div>
+              </React.Fragment>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:8,marginTop:8}}>
+            <button onClick={()=>{setToast(`${r.file}.${r.format} 다운로드 시작`);onClose();}} style={{flex:1,padding:'10px',background:C.primary,color:'#fff',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600}}>📥 다시 다운로드</button>
+            <button onClick={onClose} style={{padding:'10px 16px',background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>닫기</button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+  if(modal.type==='newPrompt'){
+    return(
+      <Modal title="새 프롬프트 템플릿" onClose={onClose} width={560}>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          {[{label:'템플릿 이름',type:'text',placeholder:'예: 견적서 항목 추출'},
+            {label:'카테고리',type:'select',options:['영업문서','계약문서','마케팅','기타']},
+          ].map(f=>(
+            <div key={f.label}>
+              <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:6}}>{f.label}</div>
+              {f.type==='select'?(
+                <select style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:6,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit'}}>
+                  {f.options.map(o=><option key={o}>{o}</option>)}
+                </select>
+              ):(
+                <input type={f.type} placeholder={f.placeholder} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:6,padding:'8px 10px',fontSize:13,outline:'none',fontFamily:'inherit'}}/>
+              )}
+            </div>
+          ))}
+          <div>
+            <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:6}}>초기 프롬프트 내용</div>
+            <textarea placeholder="프롬프트를 입력하세요..." style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:6,padding:10,fontSize:13,outline:'none',fontFamily:'inherit',resize:'none',height:120}}/>
+          </div>
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+            <button onClick={onClose} style={{padding:'8px 16px',background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>취소</button>
+            <button onClick={()=>{setToast('✅ 새 템플릿이 저장되었습니다.');onClose();}} style={{padding:'8px 16px',background:C.primary,color:'#fff',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600}}>저장</button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+  if(modal.type==='testResult'){
+    return(
+      <Modal title="🧪 프롬프트 테스트 결과" onClose={onClose} width={580}>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={{background:`${C.success}10`,border:`1px solid ${C.success}30`,borderRadius:8,padding:14,display:'flex',alignItems:'center',gap:12}}>
+            <span style={{fontSize:28}}>✅</span>
+            <div>
+              <div style={{fontWeight:700,color:C.success,fontSize:15}}>테스트 성공 — 정확도 95%</div>
+              <div style={{fontSize:12,color:C.textLight,marginTop:2}}>샘플 10건 중 9.5건 정확 추출</div>
+            </div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10}}>
+            {[{label:'전체 항목',val:'48개'},{label:'정확 추출',val:'45개'},{label:'오류',val:'3개'}].map(s=>(
+              <div key={s.label} style={{background:C.bg,borderRadius:8,padding:12,textAlign:'center'}}>
+                <div style={{fontWeight:700,fontSize:18,color:C.text}}>{s.val}</div>
+                <div style={{fontSize:11,color:C.textLight,marginTop:4}}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+            <button onClick={onClose} style={{padding:'8px 16px',background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>닫기</button>
+            <button onClick={()=>{setToast('새 버전으로 저장되었습니다.');onClose();}} style={{padding:'8px 16px',background:C.primary,color:'#fff',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600}}>이 버전 저장</button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+  if(modal.type==='bulkExport'){
+    return(
+      <Modal title="📥 일괄 다운로드" onClose={onClose} width={480}>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={{fontSize:14,color:C.text}}>다운로드할 형식을 선택하세요:</div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {[{fmt:'xlsx',label:'Excel (.xlsx) — 컬럼 서식 포함',icon:'📗'},{fmt:'csv',label:'CSV (.csv) — 한국어 BOM 포함',icon:'📋'},{fmt:'json',label:'JSON (.json) — 원본 구조 포함',icon:'📦'}].map(f=>(
+              <label key={f.fmt} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',border:`1px solid ${C.border}`,borderRadius:8,cursor:'pointer'}}>
+                <input type="checkbox" style={{accentColor:C.primary}}/><span style={{fontSize:16}}>{f.icon}</span><span style={{fontSize:13,color:C.text}}>{f.label}</span>
+              </label>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+            <button onClick={onClose} style={{padding:'8px 16px',background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>취소</button>
+            <button onClick={()=>{setToast('📥 일괄 다운로드를 시작합니다.');onClose();}} style={{padding:'8px 16px',background:C.primary,color:'#fff',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600}}>다운로드 시작</button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+  if(modal.type==='kpiDetail'){
+    return(
+      <Modal title={modal.item.label} onClose={onClose} width={420}>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={{textAlign:'center',padding:20}}>
+            <div style={{fontSize:48,marginBottom:8}}>{modal.item.icon}</div>
+            <div style={{fontSize:40,fontWeight:800,color:modal.item.color}}>{modal.item.val.toLocaleString()}{modal.item.suf}</div>
+            <div style={{fontSize:14,color:C.success,marginTop:8,fontWeight:600}}>{modal.item.change} (이전 대비)</div>
+          </div>
+          <button onClick={onClose} style={{padding:'10px',background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>닫기</button>
+        </div>
+      </Modal>
+    );
+  }
+  if(modal.type==='exportSingle'){
+    return(
+      <Modal title="추출 결과 내보내기" onClose={onClose} width={420}>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={{fontSize:14,color:C.text}}>추출된 {modal.items.length}개 항목을 내보냅니다:</div>
+          {[{fmt:'xlsx',label:'Excel (.xlsx)',icon:'📗'},{fmt:'csv',label:'CSV (.csv)',icon:'📋'},{fmt:'json',label:'JSON (.json)',icon:'📦'}].map(f=>(
+            <button key={f.fmt} onClick={()=>{setToast(`${f.label} 다운로드 시작`);onClose();}} style={{display:'flex',alignItems:'center',gap:10,padding:'12px 16px',border:`1px solid ${C.border}`,borderRadius:8,cursor:'pointer',background:'#fff',fontFamily:'inherit',fontSize:14,fontWeight:500,width:'100%',transition:'background 150ms'}}
+              onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+              onMouseLeave={e=>e.currentTarget.style.background='#fff'}>
+              <span style={{fontSize:20}}>{f.icon}</span>{f.label}<span style={{marginLeft:'auto',color:C.textLight,fontSize:12}}>→</span>
+            </button>
+          ))}
+          <button onClick={onClose} style={{padding:'10px',background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>취소</button>
+        </div>
+      </Modal>
+    );
+  }
+  if(modal.type==='versionDetail'){
+    const v=modal.item;
+    return(
+      <Modal title={`${v.ver} 버전 상세`} onClose={onClose} width={460}>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:8,fontSize:13}}>
+            {[['버전',v.ver],['저장일',v.date],['정확도',v.score],['변경 내용',v.desc]].map(([k,val])=>(
+              <React.Fragment key={k}>
+                <div style={{color:C.textLight,padding:'4px 0'}}>{k}</div>
+                <div style={{color:C.text,fontWeight:500,padding:'4px 0'}}>{val}</div>
+              </React.Fragment>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+            <button onClick={onClose} style={{padding:'8px 16px',background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13}}>닫기</button>
+            <button onClick={()=>{setToast(`${v.ver} 버전을 불러왔습니다.`);onClose();}} style={{padding:'8px 16px',background:C.primary,color:'#fff',border:'none',borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:600}}>불러오기</button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+  if(modal.type==='extractItemDetail'){
+    const r=modal.item;
+    return(
+      <Modal title="추출 항목 상세" onClose={onClose} width={420}>
+        <div style={{display:'flex',flexDirection:'column',gap:12}}>
+          <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:8,fontSize:13}}>
+            {[['용어',r.term],['추출값',r.code],['페이지',r.page],['유형',r.type],['신뢰도',r.confidence]].map(([k,v])=>(
+              <React.Fragment key={k}>
+                <div style={{color:C.textLight,padding:'4px 0'}}>{k}</div>
+                <div style={{color:C.text,fontWeight:500,padding:'4px 0'}}>{v}</div>
+              </React.Fragment>
+            ))}
+          </div>
+          <button onClick={onClose} style={{padding:'10px',background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,cursor:'pointer',fontFamily:'inherit',fontSize:13,marginTop:4}}>닫기</button>
+        </div>
+      </Modal>
+    );
+  }
+  return null;
+}
+
+/* ─── App ─── */
+function App(){
+  const [page,setPage]=React.useState('dashboard');
+  const [modal,setModal]=React.useState(null);
+  const [toast,setToast]=React.useState(null);
+  const renderPage=()=>{
+    const props={setModal,setToast:(m)=>setToast(m)};
+    if(page==='dashboard')return <DashboardPage {...props}/>;
+    if(page==='extract-demo')return <ExtractPage {...props}/>;
+    if(page==='prompt-editor')return <PromptEditorPage {...props}/>;
+    if(page==='export-result')return <ExportPage {...props}/>;
+  };
+  return(
+    <div style={{display:'flex',width:'100%',height:'100vh',overflow:'hidden'}}>
+      <Sidebar page={page} onNav={(p)=>{setPage(p);setModal(null);}}/>
+      <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <TopBar title={PAGE_TITLES[page]}/>
+        <main style={{flex:1,overflowY:'auto',padding:24,background:C.bg}}>
+          {renderPage()}
+        </main>
+      </div>
+      {modal&&<ModalContent modal={modal} onClose={()=>setModal(null)} setToast={(m)=>setToast(m)}/>}
+      {toast&&<Toast msg={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
