@@ -346,6 +346,55 @@ function friendlyError(error) {
   if (/JWT|token|auth/i.test(msg)) return '인증이 만료되었습니다. 다시 로그인해주세요.';
   return msg || '요청을 처리할 수 없습니다.';
 }
+// ─── P2/P3 dispatch 진단 로그 (localStorage 기반, 최근 10건 유지) ───
+const DISPATCH_LOG_KEY = 'p2p3_dispatch_log';
+function appendDispatchLog(entry) {
+  try {
+    const arr = JSON.parse(localStorage.getItem(DISPATCH_LOG_KEY) || '[]');
+    arr.unshift({ ts: new Date().toISOString(), ...entry });
+    localStorage.setItem(DISPATCH_LOG_KEY, JSON.stringify(arr.slice(0, 10)));
+  } catch (e) { console.warn('[dispatch-log] localStorage 저장 실패', e); }
+}
+function recordDispatchAttempt(source, detail) {
+  console.log('[P2/P3 dispatch] attempt', source, detail);
+  appendDispatchLog({ kind: 'attempt', source, detail });
+}
+function recordDispatchSuccess(source, detail) {
+  console.log('[P2/P3 dispatch] success', source, detail);
+  appendDispatchLog({ kind: 'success', source, detail });
+}
+// 실패 원인을 최대한 많이 캡처해서 console + localStorage + toast 3곳 모두에 남김
+window.__p2p3Toast = null;
+function handleDispatchFailure(source, detail) {
+  const { error, data, exception, slug, slugs } = detail;
+  const summary = {
+    source,
+    slug, slugs,
+    reqId: data?.reqId,
+    errorName: error?.name,
+    errorMessage: error?.message,
+    errorContext: error?.context,
+    dispatched: data?.dispatched,
+    dispatchStatus: data?.status,
+    dispatchReason: data?.reason,
+    dispatchBody: data?.body,
+    exceptionName: exception?.name,
+    exceptionMessage: exception?.message,
+  };
+  console.error('[P2/P3 dispatch] FAIL', summary, { rawError: error, rawData: data, rawException: exception });
+  appendDispatchLog({ kind: 'fail', ...summary });
+  // toast에 짧게 표시 — 상세는 console + localStorage에서
+  const short = (summary.dispatchReason || summary.errorMessage || summary.exceptionMessage || source).toString().slice(0, 80);
+  const reqIdTag = summary.reqId ? ` [${summary.reqId}]` : '';
+  if (window.__p2p3Toast) window.__p2p3Toast(`⚠️ P2/P3 dispatch 실패: ${short}${reqIdTag}`, 'error');
+}
+// 브라우저 콘솔에서 window.p2p3Log() 치면 마지막 10건 출력
+window.p2p3Log = () => {
+  const arr = JSON.parse(localStorage.getItem(DISPATCH_LOG_KEY) || '[]');
+  console.table(arr);
+  return arr;
+};
+
 function daysBetween(d1, d2) {
   const a = new Date(d1), b = new Date(d2);
   if (isNaN(a) || isNaN(b)) return 0;
@@ -498,6 +547,7 @@ function useToast() {
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
   }, []);
+  useEffect(() => { window.__p2p3Toast = add; return () => { if (window.__p2p3Toast === add) window.__p2p3Toast = null; }; }, [add]);
   return { toasts, toast: add };
 }
 
@@ -3833,20 +3883,14 @@ function App({ session }) {
       return p && p.current_status!=='won' && (p.portfolio_links||[]).length > 1;
     });
     if (toDelete.length > 0) {
+      recordDispatchAttempt('handleBatchLost', { slugs: toDelete });
       supabase.functions.invoke('delete-portfolios', { body:{ slugs:toDelete } })
         .then(({ data, error }) => {
-          if (error) {
-            console.warn('P2/P3 dispatch 실패:', error.message || error);
-            toast('⚠️ P2/P3 자동 삭제 예약 실패 — 자정 fallback으로 재시도됩니다','error');
-          } else if (data && data.dispatched === false) {
-            console.warn('P2/P3 dispatch 거절:', data.reason);
-            toast('⚠️ P2/P3 자동 삭제 예약 거절 — 자정 fallback으로 재시도됩니다','error');
-          }
+          if (error) handleDispatchFailure('handleBatchLost-error', { slugs: toDelete, error, data });
+          else if (data && data.dispatched === false) handleDispatchFailure('handleBatchLost-rejected', { slugs: toDelete, data });
+          else recordDispatchSuccess('handleBatchLost', { slugs: toDelete, reqId: data?.reqId });
         })
-        .catch(err => {
-          console.warn('P2/P3 dispatch 예외:', err.message || err);
-          toast('⚠️ P2/P3 자동 삭제 예약 실패 — 자정 fallback으로 재시도됩니다','error');
-        });
+        .catch(err => handleDispatchFailure('handleBatchLost-exception', { slugs: toDelete, exception: err }));
     }
   }, [data, toast]);
 
@@ -3901,20 +3945,14 @@ function App({ session }) {
       // P2/P3 정리: GitHub Actions workflow로 비동기 처리 (dispatch 후 즉시 반환).
       // workflow가 파일 삭제 + DB 트림 → Realtime으로 UI 자동 반영. 매일 자정 fallback도 동작.
       if (newStatus==='lost' && (project.portfolio_links||[]).length > 1) {
+        recordDispatchAttempt('handleSave', { slug: project.slug });
         supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug } })
           .then(({ data, error }) => {
-            if (error) {
-              console.warn('P2/P3 dispatch 실패:', error.message || error);
-              toast('⚠️ P2/P3 자동 삭제 예약 실패 — 자정 fallback으로 재시도됩니다','error');
-            } else if (data && data.dispatched === false) {
-              console.warn('P2/P3 dispatch 거절:', data.reason);
-              toast('⚠️ P2/P3 자동 삭제 예약 거절 — 자정 fallback으로 재시도됩니다','error');
-            }
+            if (error) handleDispatchFailure('handleSave-error', { slug: project.slug, error, data });
+            else if (data && data.dispatched === false) handleDispatchFailure('handleSave-rejected', { slug: project.slug, data });
+            else recordDispatchSuccess('handleSave', { slug: project.slug, reqId: data?.reqId });
           })
-          .catch(err => {
-            console.warn('P2/P3 dispatch 예외:', err.message || err);
-            toast('⚠️ P2/P3 자동 삭제 예약 실패 — 자정 fallback으로 재시도됩니다','error');
-          });
+          .catch(err => handleDispatchFailure('handleSave-exception', { slug: project.slug, exception: err }));
       }
     } catch(err) { toast('저장 실패: '+friendlyError(err),'error'); } finally { setSaving(false); }
   }, [toast, milestones, milestonesSetupNeeded, handleCreateMilestonesFromTemplate]);

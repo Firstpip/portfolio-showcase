@@ -17,7 +17,8 @@ const ghFetch = (token: string, path: string, options: RequestInit = {}) =>
 
 // ─── P2/P3 삭제: GitHub Actions workflow로 위임 ──────────────────────────
 
-async function dispatchP2P3Cleanup(token: string, slugs: string[]): Promise<{ ok: boolean; reason?: string }> {
+async function dispatchP2P3Cleanup(token: string, slugs: string[]): Promise<{ ok: boolean; status?: number; reason?: string; body?: string }> {
+  console.log("[dispatch] POST /dispatches", { slugs, event_type: "cleanup-p2p3" });
   const res = await ghFetch(token, `/dispatches`, {
     method: "POST",
     body: JSON.stringify({
@@ -26,9 +27,21 @@ async function dispatchP2P3Cleanup(token: string, slugs: string[]): Promise<{ ok
     }),
   });
   // repository_dispatch는 성공 시 204 No Content 반환
-  if (res.status === 204 || res.ok) return { ok: true };
+  if (res.status === 204 || res.ok) {
+    console.log("[dispatch] OK", { status: res.status });
+    return { ok: true, status: res.status };
+  }
   const body = await res.text();
-  return { ok: false, reason: `dispatch 실패 (${res.status}): ${body}` };
+  const rateLimitRemaining = res.headers.get("x-ratelimit-remaining");
+  const rateLimitReset = res.headers.get("x-ratelimit-reset");
+  console.error("[dispatch] FAIL", {
+    status: res.status,
+    statusText: res.statusText,
+    body: body.slice(0, 500),
+    rateLimitRemaining,
+    rateLimitReset,
+  });
+  return { ok: false, status: res.status, reason: `dispatch 실패 (${res.status} ${res.statusText})`, body: body.slice(0, 500) };
 }
 
 // ─── 전체 삭제: Git Tree API (handleDelete / cleanup workflow 전용) ──────
@@ -128,47 +141,55 @@ Deno.serve(async (req) => {
   }
 
   const headers = { "Content-Type": "application/json", ...CORS_HEADERS };
+  const reqId = crypto.randomUUID().slice(0, 8);
 
   const token = Deno.env.get("GITHUB_TOKEN");
   if (!token) {
-    return new Response(JSON.stringify({ error: "GITHUB_TOKEN not set" }), { status: 500, headers });
+    console.error(`[${reqId}] GITHUB_TOKEN not set`);
+    return new Response(JSON.stringify({ error: "GITHUB_TOKEN not set", reqId }), { status: 500, headers });
   }
 
   let body: { slug?: string; slugs?: string[]; all?: boolean; skip_db?: boolean };
   try {
     body = await req.json();
   } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400, headers });
+    console.error(`[${reqId}] Invalid JSON body`);
+    return new Response(JSON.stringify({ error: "Invalid JSON body", reqId }), { status: 400, headers });
   }
 
   const { slug, slugs, all, skip_db } = body;
+  console.log(`[${reqId}] request`, { slug, slugs, all, skip_db });
 
   try {
     // ── 전체 삭제 (handleDelete / cleanup workflow 전용) ──
     if (all) {
       const targetSlug = slug || (slugs?.[0]);
-      if (!targetSlug) return new Response(JSON.stringify({ error: "slug is required" }), { status: 400, headers });
+      if (!targetSlug) return new Response(JSON.stringify({ error: "slug is required", reqId }), { status: 400, headers });
       const fileResult = await deleteSlug(token, targetSlug);
       if (!fileResult.ok) {
-        return new Response(JSON.stringify({ slug: targetSlug, deleted: false, db_updated: false, reason: fileResult.reason }), { headers });
+        console.error(`[${reqId}] full-delete fail`, { slug: targetSlug, reason: fileResult.reason });
+        return new Response(JSON.stringify({ slug: targetSlug, deleted: false, db_updated: false, reason: fileResult.reason, reqId }), { headers });
       }
       const dbResult = skip_db ? { ok: true } : await deleteRow(targetSlug);
-      return new Response(JSON.stringify({ slug: targetSlug, deleted: true, db_updated: dbResult.ok, reason: dbResult.reason }), { headers });
+      console.log(`[${reqId}] full-delete ok`, { slug: targetSlug, db_updated: dbResult.ok });
+      return new Response(JSON.stringify({ slug: targetSlug, deleted: true, db_updated: dbResult.ok, reason: dbResult.reason, reqId }), { headers });
     }
 
     // ── P2/P3 삭제: GitHub Actions workflow dispatch ──
     const targetSlugs: string[] = slugs || (slug ? [slug] : []);
     if (targetSlugs.length === 0) {
-      return new Response(JSON.stringify({ error: "slug or slugs is required" }), { status: 400, headers });
+      console.error(`[${reqId}] no slugs provided`);
+      return new Response(JSON.stringify({ error: "slug or slugs is required", reqId }), { status: 400, headers });
     }
 
     const result = await dispatchP2P3Cleanup(token, targetSlugs);
     if (!result.ok) {
-      return new Response(JSON.stringify({ dispatched: false, reason: result.reason }), { headers });
+      return new Response(JSON.stringify({ dispatched: false, reason: result.reason, status: result.status, body: result.body, reqId }), { headers });
     }
-    return new Response(JSON.stringify({ dispatched: true, slugs: targetSlugs }), { headers });
+    return new Response(JSON.stringify({ dispatched: true, slugs: targetSlugs, reqId }), { headers });
 
   } catch (err) {
-    return new Response(JSON.stringify({ error: String(err) }), { status: 500, headers });
+    console.error(`[${reqId}] unhandled exception`, err);
+    return new Response(JSON.stringify({ error: String(err), reqId }), { status: 500, headers });
   }
 });
