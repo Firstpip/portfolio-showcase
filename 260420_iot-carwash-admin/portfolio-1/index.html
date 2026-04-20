@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IoT 무인 세차장 관제 시스템</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; font-family: 'Pretendard', sans-serif; background: #F8FAFC; }
+    #root { display: flex; width: 100%; height: 100vh; overflow: hidden; }
+
+    @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes fadeInScale { from { opacity: 0; transform: scale(0.95) } to { opacity: 1; transform: scale(1) } }
+    @keyframes slideInRight { from { opacity: 0; transform: translateX(30px) } to { opacity: 1; transform: translateX(0) } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes ripple { 0% { transform: scale(0); opacity: 0.5 } 100% { transform: scale(4); opacity: 0 } }
+    @keyframes countUp { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+    @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+    @keyframes barGrow { from { width: 0% } to { width: var(--target-width) } }
+    @keyframes slideDown { from { opacity: 0; transform: translateY(-10px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes blink { 0%, 100% { opacity: 1 } 50% { opacity: 0.3 } }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #F1F5F9; }
+    ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+const { AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } = Recharts;
+
+/* ─── 컬러 토큰 ─── */
+const C = {
+  primary: '#1E40AF', primaryLight: '#DBEAFE', primaryDark: '#1E3A8A',
+  accent: '#0EA5E9', accentLight: '#E0F2FE',
+  success: '#10B981', successLight: '#D1FAE5',
+  warning: '#F59E0B', warningLight: '#FEF3C7',
+  danger: '#EF4444', dangerLight: '#FEE2E2',
+  bg: '#F8FAFC', surface: '#FFFFFF',
+  sidebar: '#0F172A', sidebarHover: '#1E293B', sidebarActive: '#1E40AF',
+  border: '#E2E8F0', borderLight: '#F1F5F9',
+  text: '#0F172A', textSub: '#475569', textLight: '#94A3B8',
+};
+
+/* ─── 더미 데이터 ─── */
+const DEVICES = [
+  { id: 'D-001', name: '1번 키오스크', location: '서울 강남구', status: '정상', temp: 42, voltage: 24.1, lastComm: '2분 전', errorCode: null, usageToday: 87, menuEnabled: { vacuum: true, phytoncide: true, combo: true } },
+  { id: 'D-002', name: '2번 키오스크', location: '서울 강남구', status: '경고', temp: 58, voltage: 23.4, lastComm: '5분 전', errorCode: 'E-102', usageToday: 43, menuEnabled: { vacuum: true, phytoncide: false, combo: true } },
+  { id: 'D-003', name: '3번 키오스크', location: '서울 서초구', status: '정상', temp: 39, voltage: 24.3, lastComm: '1분 전', errorCode: null, usageToday: 112, menuEnabled: { vacuum: true, phytoncide: true, combo: true } },
+  { id: 'D-004', name: '4번 키오스크', location: '서울 서초구', status: '오프라인', temp: 0, voltage: 0, lastComm: '47분 전', errorCode: 'E-001', usageToday: 0, menuEnabled: { vacuum: false, phytoncide: false, combo: false } },
+  { id: 'D-005', name: '5번 키오스크', location: '경기 성남시', status: '정상', temp: 45, voltage: 24.0, lastComm: '3분 전', errorCode: null, usageToday: 64, menuEnabled: { vacuum: true, phytoncide: true, combo: true } },
+  { id: 'D-006', name: '6번 키오스크', location: '경기 성남시', status: '정상', temp: 41, voltage: 24.2, lastComm: '2분 전', errorCode: null, usageToday: 78, menuEnabled: { vacuum: true, phytoncide: true, combo: false } },
+];
+
+const PAYMENTS = [
+  { id: 'P-2041', device: 'D-001', menu: '피톤치드', amount: 2000, time: '14:23', date: '2026-04-20', status: '완료' },
+  { id: 'P-2040', device: 'D-003', menu: '통합 메뉴', amount: 3500, time: '14:21', date: '2026-04-20', status: '완료' },
+  { id: 'P-2039', device: 'D-005', menu: '진공청소', amount: 1500, time: '14:18', date: '2026-04-20', status: '완료' },
+  { id: 'P-2038', device: 'D-001', menu: '진공청소', amount: 1500, time: '14:15', date: '2026-04-20', status: '완료' },
+  { id: 'P-2037', device: 'D-006', menu: '피톤치드', amount: 2000, time: '14:10', date: '2026-04-20', status: '완료' },
+  { id: 'P-2036', device: 'D-003', menu: '진공청소', amount: 1500, time: '14:05', date: '2026-04-20', status: '완료' },
+  { id: 'P-2035', device: 'D-005', menu: '통합 메뉴', amount: 3500, time: '13:58', date: '2026-04-20', status: '완료' },
+  { id: 'P-2034', device: 'D-001', menu: '피톤치드', amount: 2000, time: '13:52', date: '2026-04-20', status: '완료' },
+  { id: 'P-2033', device: 'D-002', menu: '진공청소', amount: 1500, time: '13:47', date: '2026-04-20', status: '완료' },
+  { id: 'P-2032', device: 'D-006', menu: '통합 메뉴', amount: 3500, time: '13:40', date: '2026-04-20', status: '완료' },
+  { id: 'P-2031', device: 'D-003', menu: '피톤치드', amount: 2000, time: '13:35', date: '2026-04-20', status: '취소' },
+  { id: 'P-2030', device: 'D-005', menu: '진공청소', amount: 1500, time: '13:28', date: '2026-04-20', status: '완료' },
+];
+
+const SUPPLIES = [
+  { id: 'S-001', deviceId: 'D-001', deviceName: '1번 키오스크', location: '서울 강남구', total: 200, used: 87, remaining: 113, lastRefill: '2026-04-12', status: '정상' },
+  { id: 'S-002', deviceId: 'D-002', deviceName: '2번 키오스크', location: '서울 강남구', total: 200, used: 163, remaining: 37, lastRefill: '2026-03-28', status: '부족' },
+  { id: 'S-003', deviceId: 'D-003', deviceName: '3번 키오스크', location: '서울 서초구', total: 200, used: 112, remaining: 88, lastRefill: '2026-04-08', status: '정상' },
+  { id: 'S-004', deviceId: 'D-004', deviceName: '4번 키오스크', location: '서울 서초구', total: 200, used: 8, remaining: 192, lastRefill: '2026-04-18', status: '정상' },
+  { id: 'S-005', deviceId: 'D-005', deviceName: '5번 키오스크', location: '경기 성남시', total: 200, used: 156, remaining: 44, lastRefill: '2026-03-25', status: '부족' },
+  { id: 'S-006', deviceId: 'D-006', deviceName: '6번 키오스크', location: '경기 성남시', total: 200, used: 78, remaining: 122, lastRefill: '2026-04-10', status: '정상' },
+];
+
+const HOURLY_SALES = [
+  { hour: '09시', 진공청소: 12, 피톤치드: 8, 통합메뉴: 5 },
+  { hour: '10시', 진공청소: 18, 피톤치드: 14, 통합메뉴: 9 },
+  { hour: '11시', 진공청소: 22, 피톤치드: 17, 통합메뉴: 12 },
+  { hour: '12시', 진공청소: 15, 피톤치드: 11, 통합메뉴: 7 },
+  { hour: '13시', 진공청소: 19, 피톤치드: 13, 통합메뉴: 10 },
+  { hour: '14시', 진공청소: 24, 피톤치드: 18, 통합메뉴: 14 },
+];
+
+const WEEKLY_REVENUE = [
+  { day: '월', revenue: 287000 }, { day: '화', revenue: 312000 },
+  { day: '수', revenue: 298000 }, { day: '목', revenue: 342000 },
+  { day: '금', revenue: 378000 }, { day: '토', revenue: 425000 }, { day: '일', revenue: 391000 },
+];
+
+const MENU_PIE = [
+  { name: '진공청소', value: 42, color: '#1E40AF' },
+  { name: '피톤치드', value: 33, color: '#0EA5E9' },
+  { name: '통합 메뉴', value: 25, color: '#10B981' },
+];
+
+const ALERTS = [
+  { id: 1, type: '소모품', device: 'D-002', msg: '2번 키오스크 피톤치드 잔량 부족 (37회 남음)', time: '10분 전', level: 'warning' },
+  { id: 2, type: '장애', device: 'D-004', msg: '4번 키오스크 오프라인 상태 감지 (E-001)', time: '47분 전', level: 'danger' },
+  { id: 3, type: '소모품', device: 'D-005', msg: '5번 키오스크 피톤치드 잔량 부족 (44회 남음)', time: '1시간 전', level: 'warning' },
+  { id: 4, type: '장애', device: 'D-002', msg: '2번 키오스크 온도 경고 58°C (임계값 55°C)', time: '2시간 전', level: 'warning' },
+];
+
+/* ─── 공통 컴포넌트 ─── */
+function CountUp({ end, suffix = '' }) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    let cur = 0; const step = end / 40;
+    const t = setInterval(() => {
+      cur += step;
+      if (cur >= end) { setVal(end); clearInterval(t); }
+      else setVal(Math.floor(cur));
+    }, 20);
+    return () => clearInterval(t);
+  }, [end]);
+  return <span style={{ animation: 'countUp 400ms ease' }}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({ msg, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  return (
+    <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+      background: C.text, color: '#fff', padding: '12px 20px', borderRadius: 8,
+      fontSize: 14, animation: 'slideUp 300ms ease', boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
+      ✅ {msg}
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, width = 560 }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'fadeIn 200ms ease' }} />
+      <div style={{ position: 'relative', width, maxHeight: '85vh', background: C.surface, borderRadius: 14,
+        zIndex: 501, animation: 'fadeInScale 220ms ease', display: 'flex', flexDirection: 'column',
+        boxShadow: '0 20px 60px rgba(0,0,0,0.15)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '18px 24px', borderBottom: `1px solid ${C.border}` }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{title}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20,
+            cursor: 'pointer', color: C.textLight, lineHeight: 1 }}>✕</button>
+        </div>
+        <div style={{ padding: 24, overflowY: 'auto', flex: 1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Badge({ label, color, bg }) {
+  return <span style={{ display: 'inline-block', padding: '2px 10px', borderRadius: 20,
+    fontSize: 12, fontWeight: 600, color, background: bg }}>{label}</span>;
+}
+
+function StatusBadge({ status }) {
+  const map = {
+    '정상': { color: C.success, bg: C.successLight },
+    '경고': { color: C.warning, bg: C.warningLight },
+    '부족': { color: C.warning, bg: C.warningLight },
+    '오프라인': { color: C.danger, bg: C.dangerLight },
+    '완료': { color: C.success, bg: C.successLight },
+    '취소': { color: C.textLight, bg: C.borderLight },
+  };
+  const s = map[status] || { color: C.textSub, bg: C.borderLight };
+  return <Badge label={status} color={s.color} bg={s.bg} />;
+}
+
+/* ─── 사이드바 ─── */
+const NAV = [
+  { id: 'dashboard', label: '관리자 대시보드', icon: '▤' },
+  { id: 'devices', label: '기기 제어보드 연동', icon: '⊞' },
+  { id: 'payments', label: '결제 데이터 관리', icon: '₩' },
+  { id: 'supplies', label: '소모품 잔량 알람', icon: '◎' },
+];
+
+function Sidebar({ page, onNav }) {
+  return (
+    <aside style={{ width: 240, background: C.sidebar, display: 'flex', flexDirection: 'column',
+      flexShrink: 0, height: '100vh', overflow: 'hidden' }}>
+      <div style={{ padding: '24px 20px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: C.primary,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 16, color: '#fff', fontWeight: 700 }}>W</div>
+          <div>
+            <div style={{ color: '#fff', fontSize: 13, fontWeight: 700 }}>WashCtrl</div>
+            <div style={{ color: C.textLight, fontSize: 11 }}>IoT 관제 시스템</div>
+          </div>
+        </div>
+      </div>
+      <div style={{ padding: '8px 12px', flex: 1 }}>
+        {NAV.map(item => (
+          <button key={item.id} onClick={() => onNav(item.id)}
+            title={item.label}
+            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+              padding: '10px 12px', borderRadius: 8, border: 'none', cursor: 'pointer',
+              marginBottom: 2, textAlign: 'left', fontSize: 13, fontWeight: 500,
+              background: page === item.id ? C.primary : 'transparent',
+              color: page === item.id ? '#fff' : '#94A3B8',
+              transition: 'all 150ms' }}>
+            <span style={{ fontSize: 15 }}>{item.icon}</span>
+            <span>{item.label}</span>
+            {(item.id === 'supplies' || item.id === 'devices') && (
+              <span style={{ marginLeft: 'auto', background: C.danger, color: '#fff',
+                borderRadius: 10, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>
+                {item.id === 'supplies' ? 2 : 2}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+      <div style={{ padding: '16px 20px', borderTop: '1px solid #1E293B' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#334155',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#94A3B8', fontSize: 14, fontWeight: 700 }}>김</div>
+          <div>
+            <div style={{ color: '#E2E8F0', fontSize: 12, fontWeight: 600 }}>김관리자</div>
+            <div style={{ color: C.textLight, fontSize: 11 }}>시스템 관리자</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+/* ─── TopBar ─── */
+const PAGE_TITLES = {
+  dashboard: '관리자 대시보드', devices: '기기 제어보드 연동',
+  payments: '결제 데이터 관리', supplies: '소모품 잔량 알람',
+};
+
+function TopBar({ title, alertCount, onAlertClick }) {
+  return (
+    <div style={{ height: 56, background: C.surface, borderBottom: `1px solid ${C.border}`,
+      display: 'flex', alignItems: 'center', padding: '0 24px', gap: 12, flexShrink: 0 }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: C.text, flex: 1 }}>{title}</div>
+      <button onClick={onAlertClick} style={{ position: 'relative', background: 'none', border: 'none',
+        cursor: 'pointer', padding: 6, borderRadius: 8, color: C.textSub, fontSize: 18 }}>
+        🔔
+        {alertCount > 0 && (
+          <span style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16,
+            borderRadius: '50%', background: C.danger, color: '#fff', fontSize: 9, fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{alertCount}</span>
+        )}
+      </button>
+      <div style={{ fontSize: 12, color: C.textLight }}>2026-04-20 14:23</div>
+    </div>
+  );
+}
+
+/* ─── 대시보드 페이지 ─── */
+function DashboardPage({ onDeviceClick }) {
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setLoaded(true), 800); return () => clearTimeout(t); }, []);
+
+  if (!loaded) return (
+    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {[1,2,3].map(i => (
+        <div key={i} style={{ height: 100, borderRadius: 12,
+          background: 'linear-gradient(90deg, #F1F5F9 25%, #E2E8F0 50%, #F1F5F9 75%)',
+          backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite' }} />
+      ))}
+    </div>
+  );
+
+  const kpis = [
+    { label: '총 가동 기기', value: 5, suffix: '대', sub: '전체 6대 중', color: C.primary, bg: C.primaryLight },
+    { label: '오늘 총 결제', value: 384, suffix: '건', sub: '전일 대비 +12%', color: C.accent, bg: C.accentLight },
+    { label: '오늘 매출', value: 897000, suffix: '원', sub: '목표 대비 89%', color: C.success, bg: C.successLight },
+    { label: '알람 발생', value: 4, suffix: '건', sub: '소모품 2 · 장애 2', color: C.danger, bg: C.dangerLight },
+  ];
+
+  return (
+    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 20, animation: 'fadeIn 300ms ease' }}>
+      {/* KPI 카드 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16 }}>
+        {kpis.map((k, i) => (
+          <div key={k.label} style={{ background: C.surface, borderRadius: 12, padding: 20,
+            boxShadow: '0 1px 3px rgba(0,0,0,0.08)', animation: `slideUp 400ms ease ${i*80}ms both`,
+            borderLeft: `4px solid ${k.color}` }}>
+            <div style={{ fontSize: 12, color: C.textSub, marginBottom: 6 }}>{k.label}</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: k.color }}>
+              <CountUp end={k.value} suffix={k.suffix} />
+            </div>
+            <div style={{ fontSize: 11, color: C.textLight, marginTop: 4 }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 차트 영역 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+        <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 16 }}>시간대별 메뉴 결제 현황</div>
+          <div style={{ height: 200 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={HOURLY_SALES}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.borderLight} />
+                <XAxis dataKey="hour" tick={{ fontSize: 11, fill: C.textLight }} />
+                <YAxis tick={{ fontSize: 11, fill: C.textLight }} />
+                <Tooltip contentStyle={{ borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12 }} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="진공청소" fill={C.primary} radius={[3,3,0,0]} />
+                <Bar dataKey="피톤치드" fill={C.accent} radius={[3,3,0,0]} />
+                <Bar dataKey="통합메뉴" fill={C.success} radius={[3,3,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 16 }}>메뉴별 매출 비중</div>
+          <div style={{ height: 160 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={MENU_PIE} cx="50%" cy="50%" innerRadius={45} outerRadius={70} paddingAngle={3} dataKey="value">
+                  {MENU_PIE.map((e, i) => <Cell key={i} fill={e.color} />)}
+                </Pie>
+                <Tooltip formatter={(v) => `${v}%`} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+            {MENU_PIE.map(m => (
+              <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                <div style={{ width: 10, height: 10, borderRadius: 2, background: m.color }} />
+                <span style={{ flex: 1, color: C.textSub }}>{m.name}</span>
+                <span style={{ fontWeight: 700, color: C.text }}>{m.value}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* 주간 매출 + 기기 상태 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 16 }}>주간 매출 추이</div>
+          <div style={{ height: 140 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={WEEKLY_REVENUE}>
+                <defs>
+                  <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.primary} stopOpacity={0.15} />
+                    <stop offset="95%" stopColor={C.primary} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.borderLight} />
+                <XAxis dataKey="day" tick={{ fontSize: 11, fill: C.textLight }} />
+                <YAxis tick={{ fontSize: 11, fill: C.textLight }} tickFormatter={v => `${(v/1000).toFixed(0)}K`} />
+                <Tooltip formatter={v => `${v.toLocaleString()}원`} contentStyle={{ borderRadius: 8, fontSize: 12 }} />
+                <Area type="monotone" dataKey="revenue" stroke={C.primary} fill="url(#rev)" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 12 }}>기기 상태 현황</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {DEVICES.map(d => (
+              <div key={d.id} onClick={() => onDeviceClick(d)}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
+                  borderRadius: 8, cursor: 'pointer', transition: 'background 150ms',
+                  background: 'transparent' }}
+                onMouseEnter={e => e.currentTarget.style.background = C.borderLight}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%',
+                  background: d.status === '정상' ? C.success : d.status === '경고' ? C.warning : C.danger,
+                  animation: d.status === '오프라인' ? 'blink 1.5s infinite' : 'none' }} />
+                <span style={{ flex: 1, fontSize: 12, color: C.textSub }}>{d.name}</span>
+                <StatusBadge status={d.status} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* 최근 알람 */}
+      <div style={{ background: C.surface, borderRadius: 12, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 12 }}>최근 알람</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {ALERTS.map(a => (
+            <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px',
+              borderRadius: 8, background: a.level === 'danger' ? C.dangerLight : C.warningLight }}>
+              <span style={{ fontSize: 16 }}>{a.level === 'danger' ? '🔴' : '🟡'}</span>
+              <div style={{ flex: 1 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: a.level === 'danger' ? C.danger : C.warning }}>
+                  [{a.type}] {a.device}</span>
+                <span style={{ fontSize: 12, color: C.textSub, marginLeft: 8 }}>{a.msg}</span>
+              </div>
+              <span style={{ fontSize: 11, color: C.textLight }}>{a.time}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── 기기 제어보드 페이지 ─── */
+function DevicesPage() {
+  const [filter, setFilter] = useState('전체');
+  const [selected, setSelected] = useState(null);
+  const [toast, setToast] = useState('');
+  const statuses = ['전체', '정상', '경고', '오프라인'];
+
+  const filtered = filter === '전체' ? DEVICES : DEVICES.filter(d => d.status === filter);
+
+  function handleAction(action, device) {
+    setSelected(null);
+    setToast(`${device.name} — ${action} 명령 전송 완료`);
+  }
+
+  return (
+    <div style={{ padding: 24, animation: 'fadeIn 300ms ease' }}>
+      {/* 필터 */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {statuses.map(s => (
+          <button key={s} onClick={() => setFilter(s)}
+            style={{ padding: '6px 14px', borderRadius: 20, border: `1px solid ${filter === s ? C.primary : C.border}`,
+              background: filter === s ? C.primaryLight : C.surface, color: filter === s ? C.primary : C.textSub,
+              fontSize: 12, fontWeight: filter === s ? 700 : 400, cursor: 'pointer', transition: 'all 150ms' }}>
+            {s}
+          </button>
+        ))}
+        <div style={{ marginLeft: 'auto', fontSize: 12, color: C.textLight, display: 'flex', alignItems: 'center' }}>
+          총 {filtered.length}대
+        </div>
+      </div>
+
+      {/* 기기 카드 그리드 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16 }}>
+        {filtered.map((d, i) => (
+          <div key={d.id} onClick={() => setSelected(d)}
+            style={{ background: C.surface, borderRadius: 12, padding: 20, cursor: 'pointer',
+              animation: `slideUp 400ms ease ${i*80}ms both`,
+              boxShadow: '0 1px 3px rgba(0,0,0,0.08)', transition: 'all 200ms',
+              border: `1px solid ${d.status === '오프라인' ? C.danger + '40' : C.border}` }}
+            onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.12)'; }}
+            onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.08)'; }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{d.name}</div>
+                <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>{d.id} · {d.location}</div>
+              </div>
+              <StatusBadge status={d.status} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+              <div style={{ background: C.borderLight, borderRadius: 8, padding: '8px 10px' }}>
+                <div style={{ fontSize: 10, color: C.textLight, marginBottom: 2 }}>온도</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: d.temp > 55 ? C.danger : C.text }}>
+                  {d.temp > 0 ? `${d.temp}°C` : '—'}
+                </div>
+              </div>
+              <div style={{ background: C.borderLight, borderRadius: 8, padding: '8px 10px' }}>
+                <div style={{ fontSize: 10, color: C.textLight, marginBottom: 2 }}>전압</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>
+                  {d.voltage > 0 ? `${d.voltage}V` : '—'}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11 }}>
+              <span style={{ color: C.textLight }}>마지막 통신: {d.lastComm}</span>
+              <span style={{ color: C.primary, fontWeight: 600 }}>오늘 {d.usageToday}건</span>
+            </div>
+            {d.errorCode && (
+              <div style={{ marginTop: 10, padding: '6px 10px', borderRadius: 6,
+                background: C.dangerLight, color: C.danger, fontSize: 11, fontWeight: 600 }}>
+                오류 코드: {d.errorCode}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* 기기 상세 모달 */}
+      {selected && (
+        <Modal title={`기기 상세 — ${selected.name}`} onClose={() => setSelected(null)} width={500}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {[
+                ['기기 ID', selected.id], ['위치', selected.location],
+                ['온도', `${selected.temp}°C`], ['전압', `${selected.voltage}V`],
+                ['마지막 통신', selected.lastComm], ['오늘 이용', `${selected.usageToday}건`],
+              ].map(([k, v]) => (
+                <div key={k} style={{ background: C.borderLight, borderRadius: 8, padding: '10px 12px' }}>
+                  <div style={{ fontSize: 11, color: C.textLight, marginBottom: 4 }}>{k}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ background: C.borderLight, borderRadius: 8, padding: '12px 14px' }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.textSub, marginBottom: 8 }}>메뉴 활성화 상태</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {Object.entries(selected.menuEnabled).map(([k, v]) => (
+                  <span key={k} style={{ padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600,
+                    background: v ? C.successLight : C.dangerLight, color: v ? C.success : C.danger }}>
+                    {k === 'vacuum' ? '진공청소' : k === 'phytoncide' ? '피톤치드' : '통합 메뉴'} {v ? '●' : '○'}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => handleAction('재시작', selected)}
+                style={{ flex: 1, padding: '10px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                  background: C.primary, color: '#fff', fontSize: 13, fontWeight: 600 }}>기기 재시작</button>
+              <button onClick={() => handleAction('점검 모드 전환', selected)}
+                style={{ flex: 1, padding: '10px', borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'pointer',
+                  background: C.surface, color: C.textSub, fontSize: 13, fontWeight: 600 }}>점검 모드</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {toast && <Toast msg={toast} onClose={() => setToast('')} />}
+    </div>
+  );
+}
+
+/* ─── 결제 데이터 관리 페이지 ─── */
+function PaymentsPage() {
+  const [menuFilter, setMenuFilter] = useState('전체');
+  const [dateRange, setDateRange] = useState('오늘');
+  const [selected, setSelected] = useState(null);
+  const menus = ['전체', '진공청소', '피톤치드', '통합 메뉴'];
+  const dates = ['오늘', '이번 주', '이번 달'];
+
+  const filtered = PAYMENTS.filter(p => menuFilter === '전체' || p.menu === menuFilter);
+  const totalAmount = filtered.reduce((s, p) => s + (p.status === '완료' ? p.amount : 0), 0);
+
+  return (
+    <div style={{ padding: 24, animation: 'fadeIn 300ms ease' }}>
+      {/* 요약 카드 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, marginBottom: 20 }}>
+        {[
+          { label: '결제 건수', val: `${filtered.filter(p => p.status === '완료').length}건`, color: C.primary },
+          { label: '총 매출', val: `${totalAmount.toLocaleString()}원`, color: C.accent },
+          { label: '취소 건수', val: `${filtered.filter(p => p.status === '취소').length}건`, color: C.danger },
+        ].map((k, i) => (
+          <div key={k.label} style={{ background: C.surface, borderRadius: 12, padding: '16px 20px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.08)', borderLeft: `4px solid ${k.color}`,
+            animation: `slideUp 400ms ease ${i*80}ms both` }}>
+            <div style={{ fontSize: 12, color: C.textSub }}>{k.label}</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: k.color, marginTop: 4 }}>{k.val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 차트 */}
+      <div style={{ background: C.surface, borderRadius: 12, padding: 20,
+        boxShadow: '0 1px 3px rgba(0,0,0,0.08)', marginBottom: 20 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 16 }}>메뉴별 결제 건수 비교</div>
+        <div style={{ height: 160 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={[
+              { menu: '진공청소', 건수: 42 }, { menu: '피톤치드', 건수: 33 }, { menu: '통합 메뉴', 건수: 25 }
+            ]}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.borderLight} />
+              <XAxis dataKey="menu" tick={{ fontSize: 11, fill: C.textLight }} />
+              <YAxis tick={{ fontSize: 11, fill: C.textLight }} />
+              <Tooltip contentStyle={{ borderRadius: 8, fontSize: 12 }} />
+              <Bar dataKey="건수" fill={C.primary} radius={[4,4,0,0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 필터 */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {menus.map(m => (
+            <button key={m} onClick={() => setMenuFilter(m)}
+              style={{ padding: '6px 12px', borderRadius: 20, border: `1px solid ${menuFilter === m ? C.primary : C.border}`,
+                background: menuFilter === m ? C.primaryLight : C.surface, color: menuFilter === m ? C.primary : C.textSub,
+                fontSize: 12, fontWeight: menuFilter === m ? 700 : 400, cursor: 'pointer' }}>
+              {m}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>
+          {dates.map(d => (
+            <button key={d} onClick={() => setDateRange(d)}
+              style={{ padding: '6px 12px', borderRadius: 20, border: `1px solid ${dateRange === d ? C.accent : C.border}`,
+                background: dateRange === d ? C.accentLight : C.surface, color: dateRange === d ? C.accent : C.textSub,
+                fontSize: 12, fontWeight: dateRange === d ? 700 : 400, cursor: 'pointer' }}>
+              {d}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 결제 테이블 */}
+      <div style={{ background: C.surface, borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: C.borderLight }}>
+              {['결제 ID', '기기', '메뉴', '금액', '시간', '상태'].map(h => (
+                <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12,
+                  fontWeight: 600, color: C.textSub }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((p, i) => (
+              <tr key={p.id} onClick={() => setSelected(p)}
+                style={{ borderTop: `1px solid ${C.borderLight}`, cursor: 'pointer', transition: 'background 150ms' }}
+                onMouseEnter={e => e.currentTarget.style.background = C.borderLight}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <td style={{ padding: '12px 16px', fontSize: 13, color: C.primary, fontWeight: 600 }}>{p.id}</td>
+                <td style={{ padding: '12px 16px', fontSize: 13, color: C.textSub }}>{p.device}</td>
+                <td style={{ padding: '12px 16px', fontSize: 13 }}>
+                  <Badge label={p.menu}
+                    color={p.menu === '진공청소' ? C.primary : p.menu === '피톤치드' ? C.accent : C.success}
+                    bg={p.menu === '진공청소' ? C.primaryLight : p.menu === '피톤치드' ? C.accentLight : C.successLight} />
+                </td>
+                <td style={{ padding: '12px 16px', fontSize: 13, fontWeight: 600, color: C.text }}>
+                  {p.amount.toLocaleString()}원
+                </td>
+                <td style={{ padding: '12px 16px', fontSize: 13, color: C.textSub }}>{p.time}</td>
+                <td style={{ padding: '12px 16px' }}><StatusBadge status={p.status} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 결제 상세 모달 */}
+      {selected && (
+        <Modal title="결제 상세" onClose={() => setSelected(null)} width={440}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            {[
+              ['결제 ID', selected.id], ['기기', selected.device],
+              ['메뉴', selected.menu], ['금액', `${selected.amount.toLocaleString()}원`],
+              ['결제 일시', `${selected.date} ${selected.time}`], ['상태', selected.status],
+            ].map(([k, v]) => (
+              <div key={k} style={{ background: C.borderLight, borderRadius: 8, padding: '10px 12px' }}>
+                <div style={{ fontSize: 11, color: C.textLight, marginBottom: 4 }}>{k}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{v}</div>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ─── 소모품 잔량 알람 페이지 ─── */
+function SuppliesPage() {
+  const [supplies, setSupplies] = useState(SUPPLIES);
+  const [selected, setSelected] = useState(null);
+  const [toast, setToast] = useState('');
+  const [refillModal, setRefillModal] = useState(null);
+
+  function handleRefill(s) {
+    setRefillModal(null);
+    setSelected(null);
+    setSupplies(prev => prev.map(item => item.id === s.id
+      ? { ...item, used: 0, remaining: 200, lastRefill: '방금', status: '정상' }
+      : item
+    ));
+    setToast(`${s.deviceName} 피톤치드 보충 처리 완료`);
+  }
+
+  const shortage = supplies.filter(s => s.remaining <= 50);
+
+  return (
+    <div style={{ padding: 24, animation: 'fadeIn 300ms ease' }}>
+      {/* 요약 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, marginBottom: 20 }}>
+        {[
+          { label: '전체 기기', val: supplies.length, color: C.primary },
+          { label: '잔량 부족', val: shortage.length, color: C.warning },
+          { label: '정상 기기', val: supplies.length - shortage.length, color: C.success },
+        ].map((k, i) => (
+          <div key={k.label} style={{ background: C.surface, borderRadius: 12, padding: '16px 20px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.08)', borderLeft: `4px solid ${k.color}`,
+            animation: `slideUp 400ms ease ${i*80}ms both` }}>
+            <div style={{ fontSize: 12, color: C.textSub }}>{k.label}</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: k.color, marginTop: 4 }}>{k.val}대</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 잔량 부족 알람 */}
+      {shortage.length > 0 && (
+        <div style={{ background: C.warningLight, borderRadius: 12, padding: '14px 18px',
+          marginBottom: 20, border: `1px solid ${C.warning}40` }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.warning, marginBottom: 8 }}>
+            ⚠️ 잔량 부족 알람 ({shortage.length}건)
+          </div>
+          {shortage.map(s => (
+            <div key={s.id} style={{ fontSize: 12, color: '#92400E', marginBottom: 4 }}>
+              • {s.deviceName} ({s.location}) — 잔여 {s.remaining}회 / 200회
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 소모품 카드 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16 }}>
+        {supplies.map((s, i) => {
+          const pct = Math.round((s.remaining / s.total) * 100);
+          return (
+            <div key={s.id} onClick={() => setSelected(s)}
+              style={{ background: C.surface, borderRadius: 12, padding: 20, cursor: 'pointer',
+                animation: `slideUp 400ms ease ${i*80}ms both`,
+                boxShadow: '0 1px 3px rgba(0,0,0,0.08)', transition: 'all 200ms',
+                border: `1px solid ${s.status === '부족' ? C.warning + '60' : C.border}` }}
+              onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.12)'; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.08)'; }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{s.deviceName}</div>
+                  <div style={{ fontSize: 11, color: C.textLight }}>{s.location}</div>
+                </div>
+                <StatusBadge status={s.status} />
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: C.textSub, marginBottom: 6 }}>
+                  <span>피톤치드 잔량</span>
+                  <span style={{ fontWeight: 700 }}>{s.remaining}회 / {s.total}회</span>
+                </div>
+                <div style={{ height: 8, background: C.borderLight, borderRadius: 4, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', borderRadius: 4,
+                    background: pct <= 25 ? C.danger : pct <= 40 ? C.warning : C.success,
+                    width: `${pct}%`, animation: 'barGrow 800ms ease 200ms both',
+                    '--target-width': `${pct}%` }} />
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: C.textLight }}>마지막 보충: {s.lastRefill}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 소모품 상세 모달 */}
+      {selected && (
+        <Modal title={`소모품 상세 — ${selected.deviceName}`} onClose={() => setSelected(null)} width={440}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {[
+                ['기기 ID', selected.deviceId], ['위치', selected.location],
+                ['총 용량', `${selected.total}회`], ['사용량', `${selected.used}회`],
+                ['잔여량', `${selected.remaining}회`], ['마지막 보충', selected.lastRefill],
+              ].map(([k, v]) => (
+                <div key={k} style={{ background: C.borderLight, borderRadius: 8, padding: '10px 12px' }}>
+                  <div style={{ fontSize: 11, color: C.textLight, marginBottom: 4 }}>{k}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            {selected.remaining <= 50 && (
+              <div style={{ padding: '10px 14px', borderRadius: 8, background: C.warningLight,
+                fontSize: 12, color: '#92400E', fontWeight: 600 }}>
+                ⚠️ 잔량 부족 — 보충이 필요합니다 ({selected.remaining}회 남음)
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setRefillModal(selected)}
+                style={{ flex: 1, padding: '10px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                  background: C.primary, color: '#fff', fontSize: 13, fontWeight: 600 }}>
+                보충 처리
+              </button>
+              <button onClick={() => setSelected(null)}
+                style={{ flex: 1, padding: '10px', borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'pointer',
+                  background: C.surface, color: C.textSub, fontSize: 13, fontWeight: 600 }}>
+                닫기
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* 보충 확인 모달 */}
+      {refillModal && (
+        <Modal title="보충 처리 확인" onClose={() => setRefillModal(null)} width={380}>
+          <div style={{ textAlign: 'center', padding: '8px 0' }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>🧴</div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 8 }}>
+              {refillModal.deviceName} 피톤치드를 보충하시겠습니까?
+            </div>
+            <div style={{ fontSize: 13, color: C.textSub, marginBottom: 20 }}>
+              카운트가 0으로 초기화되고 이력에 기록됩니다.
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => handleRefill(refillModal)}
+                style={{ flex: 1, padding: '10px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                  background: C.success, color: '#fff', fontSize: 13, fontWeight: 600 }}>확인</button>
+              <button onClick={() => setRefillModal(null)}
+                style={{ flex: 1, padding: '10px', borderRadius: 8, border: `1px solid ${C.border}`, cursor: 'pointer',
+                  background: C.surface, color: C.textSub, fontSize: 13, fontWeight: 600 }}>취소</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast msg={toast} onClose={() => setToast('')} />}
+    </div>
+  );
+}
+
+/* ─── 알람 패널 ─── */
+function AlertPanel({ onClose }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 400, display: 'flex', justifyContent: 'flex-end' }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.3)', animation: 'fadeIn 200ms ease' }} />
+      <div style={{ position: 'relative', width: 360, background: C.surface, height: '100%',
+        boxShadow: '-8px 0 32px rgba(0,0,0,0.12)', zIndex: 401, overflow: 'auto', padding: 24,
+        animation: 'slideInRight 200ms ease' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>알람 목록</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: C.textLight }}>✕</button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {ALERTS.map(a => (
+            <div key={a.id} style={{ padding: 14, borderRadius: 10,
+              background: a.level === 'danger' ? C.dangerLight : C.warningLight,
+              border: `1px solid ${a.level === 'danger' ? C.danger + '30' : C.warning + '30'}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: a.level === 'danger' ? C.danger : C.warning }}>
+                  [{a.type}] {a.device}
+                </span>
+                <span style={{ fontSize: 11, color: C.textLight }}>{a.time}</span>
+              </div>
+              <div style={{ fontSize: 12, color: C.textSub, lineHeight: 1.5 }}>{a.msg}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── 앱 ─── */
+function App() {
+  const [page, setPage] = useState('dashboard');
+  const [showAlert, setShowAlert] = useState(false);
+  const [selectedDevice, setSelectedDevice] = useState(null);
+
+  function renderPage() {
+    switch (page) {
+      case 'dashboard': return <DashboardPage onDeviceClick={d => { setSelectedDevice(d); setPage('devices'); }} />;
+      case 'devices': return <DevicesPage />;
+      case 'payments': return <PaymentsPage />;
+      case 'supplies': return <SuppliesPage />;
+      default: return null;
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', width: '100%', height: '100vh', overflow: 'hidden' }}>
+      <Sidebar page={page} onNav={setPage} />
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <TopBar title={PAGE_TITLES[page]} alertCount={ALERTS.length} onAlertClick={() => setShowAlert(true)} />
+        <main style={{ flex: 1, overflowY: 'auto', background: C.bg }}>
+          {renderPage()}
+        </main>
+      </div>
+      {showAlert && <AlertPanel onClose={() => setShowAlert(false)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
