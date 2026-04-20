@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>가맹택시 전환 프로세스 자동화 시스템 — 맞춤 구현 데모</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; background: #F0F4F8; }
+    #root { display: flex; width: 100%; height: 100vh; overflow: hidden; }
+
+    @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes fadeInScale { from { opacity: 0; transform: scale(0.95) } to { opacity: 1; transform: scale(1) } }
+    @keyframes slideInRight { from { opacity: 0; transform: translateX(30px) } to { opacity: 1; transform: translateX(0) } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes ripple { 0% { transform: scale(0); opacity: 0.5 } 100% { transform: scale(4); opacity: 0 } }
+    @keyframes countUp { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+    @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+    @keyframes barGrow { from { width: 0% } to { width: var(--target-width) } }
+    @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); max-height: 0 } to { opacity: 1; transform: translateY(0); max-height: 500px } }
+
+    .chart-canvas-wrap { position: relative; height: 240px; }
+    .chart-canvas-wrap canvas { width: 100% !important; height: 100% !important; }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #CBD5E0; border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const C = {
+  primary: '#1E3A5F',
+  secondary: '#2D6A9F',
+  accent: '#4ECDC4',
+  accentLight: '#E0FAF8',
+  bg: '#F0F4F8',
+  surface: '#FFFFFF',
+  border: '#E2E8F0',
+  textPrimary: '#0D1B2A',
+  textSecondary: '#5A7184',
+  sidebar: '#1A3150',
+  sidebarHover: '#2D4A6E',
+  success: '#10B981',
+  warning: '#F59E0B',
+  danger: '#EF4444',
+  info: '#3B82F6',
+};
+
+const STAGES = ['신청 접수','서류 검토','정보공개서 발송','전자서명 완료','사업설명회 안내','추가 서류 제출','운송사 등록','자동이체 등록','CMS 등록','가맹 계약 완료'];
+
+const APPLICANTS = [
+  { id:1, name:'김민수', phone:'010-3245-8901', region:'서울 강남구', stage:9, status:'완료', date:'2026-03-15', days:8, docStatus:'서명완료', note:'빠른 진행 희망' },
+  { id:2, name:'이정호', phone:'010-5512-3467', region:'서울 송파구', stage:6, status:'진행중', date:'2026-03-20', days:14, docStatus:'발송완료', note:'' },
+  { id:3, name:'박재원', phone:'010-7823-5690', region:'경기 성남시', stage:3, status:'진행중', date:'2026-03-28', days:6, docStatus:'발송대기', note:'서류 재확인 필요' },
+  { id:4, name:'최수현', phone:'010-9034-2156', region:'서울 마포구', stage:5, status:'진행중', date:'2026-04-01', days:3, docStatus:'서명완료', note:'' },
+  { id:5, name:'한동훈', phone:'010-2341-7823', region:'인천 남동구', stage:1, status:'대기', date:'2026-04-10', days:1, docStatus:'발송대기', note:'전화 미응답' },
+  { id:6, name:'오세연', phone:'010-6789-1234', region:'서울 강서구', stage:7, status:'진행중', date:'2026-03-22', days:12, docStatus:'서명완료', note:'' },
+  { id:7, name:'장민철', phone:'010-4561-9087', region:'경기 안양시', stage:2, status:'대기', date:'2026-04-08', days:2, docStatus:'발송대기', note:'서류 검토 중' },
+  { id:8, name:'윤지수', phone:'010-8902-3456', region:'서울 동대문구', stage:9, status:'완료', date:'2026-03-10', days:9, docStatus:'서명완료', note:'' },
+  { id:9, name:'임현우', phone:'010-1234-5678', region:'부산 해운대구', stage:4, status:'진행중', date:'2026-04-03', days:5, docStatus:'서명완료', note:'' },
+  { id:10, name:'신은영', phone:'010-3456-7890', region:'서울 관악구', stage:8, status:'진행중', date:'2026-03-25', days:10, docStatus:'서명완료', note:'' },
+];
+
+const DISPATCH_LOGS = [
+  { id:1, type:'정보공개서', to:'김민수', method:'모두싸인', status:'서명완료', time:'2026-03-16 09:15', result:'성공' },
+  { id:2, type:'사업설명회 안내', to:'김민수', method:'알리고 문자', status:'발송완료', time:'2026-03-18 10:30', result:'성공' },
+  { id:3, type:'정보공개서', to:'이정호', method:'모두싸인', status:'서명완료', time:'2026-03-21 14:20', result:'성공' },
+  { id:4, type:'정보공개서', to:'박재원', method:'모두싸인', status:'발송완료', time:'2026-04-01 11:00', result:'성공' },
+  { id:5, type:'사업설명회 안내', to:'최수현', method:'알리고 문자', status:'발송완료', time:'2026-04-02 09:45', result:'성공' },
+  { id:6, type:'정보공개서', to:'한동훈', method:'모두싸인', status:'발송대기', time:'-', result:'-' },
+  { id:7, type:'추가 서류 안내', to:'오세연', method:'알리고 문자', status:'발송완료', time:'2026-03-24 15:10', result:'성공' },
+  { id:8, type:'정보공개서', to:'윤지수', method:'모두싸인', status:'서명완료', time:'2026-03-12 10:00', result:'성공' },
+];
+
+const NOTIFICATIONS = [
+  { id:1, type:'info', title:'신청자 정보 입력 완료', desc:'임현우 님이 추가 서류를 제출했습니다.', time:'5분 전', read:false, stage:'추가 서류 제출' },
+  { id:2, type:'success', title:'전자서명 완료', desc:'오세연 님이 정보공개서에 전자서명을 완료했습니다.', time:'23분 전', read:false, stage:'전자서명 완료' },
+  { id:3, type:'warning', title:'발송 재시도 필요', desc:'한동훈 님 정보공개서 발송에 실패했습니다. 연락처를 확인하세요.', time:'1시간 전', read:false, stage:'신청 접수' },
+  { id:4, type:'success', title:'운송사 등록 완료', desc:'신은영 님 운송사 등록이 카카오 어드민에 반영됐습니다.', time:'2시간 전', read:true, stage:'운송사 등록' },
+  { id:5, type:'info', title:'신규 신청 접수', desc:'장민철 님이 가맹 전환 신청을 완료했습니다.', time:'3시간 전', read:true, stage:'신청 접수' },
+  { id:6, type:'success', title:'가맹 계약 완료', desc:'윤지수 님이 가맹 계약을 최종 완료했습니다.', time:'어제', read:true, stage:'가맹 계약 완료' },
+];
+
+function CountUp({ end, duration=1000, suffix='' }) {
+  const [val, setVal] = React.useState(0);
+  React.useEffect(() => {
+    let start = 0; const step = end / (duration / 16);
+    const timer = setInterval(() => {
+      start += step;
+      if (start >= end) { setVal(end); clearInterval(timer); }
+      else setVal(Math.floor(start));
+    }, 16);
+    return () => clearInterval(timer);
+  }, [end]);
+  return <span>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({ message, type='success', onClose }) {
+  React.useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  const bg = type === 'success' ? C.success : type === 'danger' ? C.danger : C.info;
+  return (
+    <div style={{ position:'fixed', bottom:24, right:24, zIndex:9999, background:bg, color:'#fff', padding:'12px 20px', borderRadius:8, display:'flex', alignItems:'center', gap:12, boxShadow:'0 4px 16px rgba(0,0,0,0.2)', animation:'slideUp 300ms ease', fontSize:14, fontWeight:500 }}>
+      <span>{type==='success'?'✓':type==='danger'?'✕':'ℹ'}</span>
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, width=560 }) {
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:500, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      <div onClick={onClose} style={{ position:'absolute', inset:0, background:'rgba(0,0,0,0.45)', animation:'fadeIn 200ms ease' }} />
+      <div style={{ position:'relative', width, maxHeight:'85vh', background:C.surface, borderRadius:12, zIndex:501, animation:'fadeInScale 200ms ease', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.18)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'18px 24px', borderBottom:`1px solid ${C.border}` }}>
+          <h3 style={{ fontSize:17, fontWeight:700, color:C.textPrimary }}>{title}</h3>
+          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:C.textSecondary, lineHeight:1 }}>✕</button>
+        </div>
+        <div style={{ padding:24, overflowY:'auto', flex:1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Sidebar({ page, setPage }) {
+  const items = [
+    { id:'dashboard', label:'프로세스 현황 대시보드', icon:'📊' },
+    { id:'applicants', label:'신청자 관리', icon:'👥' },
+    { id:'dispatch', label:'발송 관리', icon:'📨' },
+    { id:'notifications', label:'알림 센터', icon:'🔔' },
+  ];
+  return (
+    <aside style={{ width:260, background:C.sidebar, display:'flex', flexDirection:'column', flexShrink:0, height:'100vh', overflow:'hidden' }}>
+      <div style={{ padding:'24px 20px 16px', borderBottom:'1px solid rgba(255,255,255,0.08)' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, background:C.accent, borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>🚖</div>
+          <div>
+            <div style={{ color:'#fff', fontSize:13, fontWeight:700, lineHeight:1.2 }}>HeyWay AutoSystem</div>
+            <div style={{ color:'rgba(255,255,255,0.45)', fontSize:11, marginTop:2 }}>가맹기사 전환 자동화</div>
+          </div>
+        </div>
+      </div>
+      <nav style={{ flex:1, padding:'12px 12px', overflowY:'auto' }}>
+        <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', letterSpacing:'0.08em', fontWeight:600, padding:'8px 8px 4px', textTransform:'uppercase' }}>메뉴</div>
+        {items.map(item => (
+          <button key={item.id} onClick={() => setPage(item.id)}
+            style={{ width:'100%', display:'flex', alignItems:'center', gap:10, padding:'10px 12px', borderRadius:8, border:'none', cursor:'pointer', marginBottom:2, textAlign:'left', transition:'all 150ms', background: page===item.id ? C.secondary : 'transparent', color: page===item.id ? '#fff' : 'rgba(255,255,255,0.65)', fontSize:13, fontWeight: page===item.id ? 600 : 400 }}>
+            <span style={{ fontSize:16 }}>{item.icon}</span>
+            <span>{item.label}</span>
+            {item.id === 'notifications' && (
+              <span style={{ marginLeft:'auto', background:C.danger, color:'#fff', borderRadius:999, padding:'1px 7px', fontSize:11, fontWeight:700 }}>3</span>
+            )}
+          </button>
+        ))}
+      </nav>
+      <div style={{ padding:'16px 20px', borderTop:'1px solid rgba(255,255,255,0.08)', display:'flex', alignItems:'center', gap:10 }}>
+        <div style={{ width:32, height:32, borderRadius:999, background:C.accent, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:700, color:C.primary, flexShrink:0 }}>김</div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:12, fontWeight:600, color:'#fff' }}>김담당자</div>
+          <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>가맹관리팀 책임</div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function TopBar({ title }) {
+  return (
+    <div style={{ height:56, background:C.surface, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', padding:'0 24px', gap:16, flexShrink:0 }}>
+      <h1 style={{ fontSize:17, fontWeight:700, color:C.textPrimary, flex:1 }}>{title}</h1>
+      <div style={{ display:'flex', alignItems:'center', gap:8, background:C.bg, borderRadius:8, padding:'6px 12px', fontSize:13, color:C.textSecondary }}>
+        <span>🔍</span>
+        <span>신청자 검색...</span>
+      </div>
+      <div style={{ width:36, height:36, borderRadius:8, background:C.bg, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer', fontSize:16, border:`1px solid ${C.border}` }}>🔔</div>
+      <div style={{ width:36, height:36, borderRadius:999, background:C.secondary, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:700, color:'#fff', cursor:'pointer' }}>김</div>
+    </div>
+  );
+}
+
+function KpiCard({ label, value, suffix, delta, color, icon, delay, unit }) {
+  return (
+    <div style={{ background:C.surface, borderRadius:12, padding:'20px 22px', boxShadow:'0 1px 3px rgba(0,0,0,0.08)', border:`1px solid ${C.border}`, animation:`slideUp 400ms ease ${delay}ms both`, transition:'transform 200ms, box-shadow 200ms', cursor:'default' }}
+      onMouseEnter={e => { e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.12)'; }}
+      onMouseLeave={e => { e.currentTarget.style.transform=''; e.currentTarget.style.boxShadow='0 1px 3px rgba(0,0,0,0.08)'; }}>
+      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:12 }}>
+        <div style={{ fontSize:12, color:C.textSecondary, fontWeight:500 }}>{label}</div>
+        <div style={{ width:34, height:34, borderRadius:8, background:`${color}18`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:17 }}>{icon}</div>
+      </div>
+      <div style={{ fontSize:28, fontWeight:800, color:C.textPrimary, letterSpacing:'-0.02em', lineHeight:1 }}>
+        <CountUp end={value} duration={1000} />{unit||''}
+        <span style={{ fontSize:15 }}>{suffix||''}</span>
+      </div>
+      {delta && <div style={{ fontSize:12, color:color, fontWeight:500, marginTop:8 }}>▲ {delta}</div>}
+    </div>
+  );
+}
+
+function DashboardPage({ showToast }) {
+  const chartRef = React.useRef(null);
+  const chartInstance = React.useRef(null);
+
+  React.useEffect(() => {
+    if (chartInstance.current) { chartInstance.current.destroy(); chartInstance.current = null; }
+    if (!chartRef.current) return;
+    chartInstance.current = new Chart(chartRef.current, {
+      type: 'bar',
+      data: {
+        labels: ['1월','2월','3월','4월','5월','6월'],
+        datasets: [
+          { label:'신청 접수', data:[18,22,31,28,35,42], backgroundColor:'rgba(45,106,159,0.7)', borderRadius:4 },
+          { label:'전환 완료', data:[12,16,24,22,28,36], backgroundColor:'rgba(78,205,196,0.7)', borderRadius:4 },
+        ],
+      },
+      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'top', labels:{ font:{ family:'Pretendard', size:12 } } } }, scales:{ y:{ beginAtZero:true, grid:{ color:'rgba(0,0,0,0.05)' }, ticks:{ font:{ family:'Pretendard', size:11 } } }, x:{ grid:{ display:false }, ticks:{ font:{ family:'Pretendard', size:11 } } } } },
+    });
+    return () => { if (chartInstance.current) { chartInstance.current.destroy(); chartInstance.current = null; } };
+  }, []);
+
+  const stageStats = [
+    { name:'신청 접수', count:3, color:C.info },
+    { name:'서류 검토', count:2, color:C.warning },
+    { name:'정보공개서', count:3, color:C.secondary },
+    { name:'계약 완료', count:4, color:C.success },
+  ];
+
+  return (
+    <div style={{ animation:'fadeIn 300ms ease' }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:18, marginBottom:24 }}>
+        <KpiCard label="이번 달 신청" value={42} icon="📋" color={C.secondary} delta="이번 주 +7명" delay={0} />
+        <KpiCard label="진행 중" value={8} icon="⚙️" color={C.warning} delta="전주 대비 +2" delay={80} />
+        <KpiCard label="이번 달 완료" value={36} icon="✅" color={C.success} delta="지난 달 대비 +8" delay={160} />
+        <KpiCard label="평균 전환 소요" value={24} unit="일" icon="📅" color={C.accent} delay={240} />
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:18, marginBottom:24 }}>
+        <div style={{ background:C.surface, borderRadius:12, padding:22, boxShadow:'0 1px 3px rgba(0,0,0,0.08)', border:`1px solid ${C.border}` }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18 }}>
+            <div style={{ fontSize:15, fontWeight:700, color:C.textPrimary }}>월별 전환 현황</div>
+            <div style={{ fontSize:12, color:C.textSecondary }}>최근 6개월</div>
+          </div>
+          <div className="chart-canvas-wrap"><canvas ref={chartRef}></canvas></div>
+        </div>
+        <div style={{ background:C.surface, borderRadius:12, padding:22, boxShadow:'0 1px 3px rgba(0,0,0,0.08)', border:`1px solid ${C.border}` }}>
+          <div style={{ fontSize:15, fontWeight:700, color:C.textPrimary, marginBottom:18 }}>단계별 현황</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            {stageStats.map((s, i) => (
+              <div key={i} style={{ animation:`slideUp 400ms ease ${i*60}ms both` }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6, fontSize:12 }}>
+                  <span style={{ color:C.textSecondary }}>{s.name}</span>
+                  <span style={{ fontWeight:600, color:C.textPrimary }}>{s.count}명</span>
+                </div>
+                <div style={{ height:6, background:C.bg, borderRadius:999, overflow:'hidden' }}>
+                  <div style={{ height:'100%', background:s.color, borderRadius:999, animation:`barGrow 800ms ease ${i*100}ms both`, '--target-width':`${s.count/5*100}%`, width:`${s.count/5*100}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div style={{ background:C.surface, borderRadius:12, boxShadow:'0 1px 3px rgba(0,0,0,0.08)', border:`1px solid ${C.border}`, overflow:'hidden' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 22px', borderBottom:`1px solid ${C.border}` }}>
+          <div style={{ fontSize:15, fontWeight:700, color:C.textPrimary }}>최근 신청 현황</div>
+          <button onClick={() => showToast('전체 목록으로 이동합니다')} style={{ fontSize:12, color:C.secondary, background:'none', border:'none', cursor:'pointer', fontWeight:500 }}>전체 보기 →</button>
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ background:C.bg }}>
+              {['신청자','지역','현재 단계','신청일','소요일','상태'].map(h => (
+                <th key={h} style={{ padding:'10px 16px', textAlign:'left', fontSize:12, color:C.textSecondary, fontWeight:500, borderBottom:`1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {APPLICANTS.slice(0,5).map((a, i) => (
+              <tr key={a.id} style={{ borderBottom:`1px solid ${C.border}`, transition:'background 150ms', animation:`slideUp 300ms ease ${i*50}ms both`, cursor:'pointer' }}
+                onMouseEnter={e => e.currentTarget.style.background=`${C.secondary}06`}
+                onMouseLeave={e => e.currentTarget.style.background=''}
+                onClick={() => showToast(`${a.name} 님 상세 정보를 확인합니다`)}>
+                <td style={{ padding:'12px 16px' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                    <div style={{ width:30, height:30, borderRadius:999, background:`${C.secondary}20`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700, color:C.secondary }}>{a.name[0]}</div>
+                    <div>
+                      <div style={{ fontSize:13, fontWeight:600, color:C.textPrimary }}>{a.name}</div>
+                      <div style={{ fontSize:11, color:C.textSecondary }}>{a.phone}</div>
+                    </div>
+                  </div>
+                </td>
+                <td style={{ padding:'12px 16px', fontSize:13, color:C.textSecondary }}>{a.region}</td>
+                <td style={{ padding:'12px 16px' }}>
+                  <span style={{ fontSize:12, padding:'3px 10px', borderRadius:999, background:`${C.secondary}18`, color:C.secondary, fontWeight:500 }}>{STAGES[a.stage-1]}</span>
+                </td>
+                <td style={{ padding:'12px 16px', fontSize:13, color:C.textSecondary }}>{a.date}</td>
+                <td style={{ padding:'12px 16px', fontSize:13, color:C.textPrimary, fontWeight:600 }}>{a.days}일</td>
+                <td style={{ padding:'12px 16px' }}>
+                  <span style={{ fontSize:12, padding:'3px 10px', borderRadius:999, fontWeight:500,
+                    background: a.status==='완료' ? `${C.success}18` : a.status==='진행중' ? `${C.warning}18` : `${C.info}18`,
+                    color: a.status==='완료' ? C.success : a.status==='진행중' ? C.warning : C.info,
+                  }}>{a.status}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ApplicantsPage({ showToast }) {
+  const [filter, setFilter] = React.useState('전체');
+  const [search, setSearch] = React.useState('');
+  const [modal, setModal] = React.useState(null);
+
+  const filters = ['전체','대기','진행중','완료'];
+  const filtered = APPLICANTS.filter(a => {
+    if (filter !== '전체' && a.status !== filter) return false;
+    if (search && !a.name.includes(search) && !a.region.includes(search)) return false;
+    return true;
+  });
+
+  const openDetail = (a) => setModal(a);
+
+  return (
+    <div style={{ animation:'fadeIn 300ms ease' }}>
+      <div style={{ display:'flex', gap:12, marginBottom:20, alignItems:'center' }}>
+        <div style={{ display:'flex', background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, overflow:'hidden' }}>
+          {filters.map(f => (
+            <button key={f} onClick={() => setFilter(f)} style={{ padding:'8px 16px', border:'none', cursor:'pointer', fontSize:13, fontWeight: filter===f ? 600 : 400, background: filter===f ? C.secondary : 'transparent', color: filter===f ? '#fff' : C.textSecondary, transition:'all 150ms' }}>{f}</button>
+          ))}
+        </div>
+        <div style={{ flex:1, display:'flex', alignItems:'center', gap:8, background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:'8px 14px' }}>
+          <span style={{ color:C.textSecondary }}>🔍</span>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="이름, 지역으로 검색..." style={{ border:'none', outline:'none', fontSize:13, color:C.textPrimary, flex:1, background:'transparent' }} />
+        </div>
+        <button onClick={() => showToast('신규 신청 등록 창을 엽니다')} style={{ padding:'8px 18px', background:C.secondary, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:600, cursor:'pointer' }}>+ 신규 등록</button>
+      </div>
+      <div style={{ background:C.surface, borderRadius:12, boxShadow:'0 1px 3px rgba(0,0,0,0.08)', border:`1px solid ${C.border}`, overflow:'hidden' }}>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ background:C.bg }}>
+              {['신청자','지역','현재 단계','신청일','소요일','서류','상태','액션'].map(h => (
+                <th key={h} style={{ padding:'10px 14px', textAlign:'left', fontSize:12, color:C.textSecondary, fontWeight:500, borderBottom:`1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((a, i) => (
+              <tr key={a.id} style={{ borderBottom:`1px solid ${C.border}`, transition:'background 150ms', animation:`slideUp 300ms ease ${i*40}ms both`, cursor:'pointer' }}
+                onMouseEnter={e => e.currentTarget.style.background=`${C.secondary}06`}
+                onMouseLeave={e => e.currentTarget.style.background=''}
+                onClick={() => openDetail(a)}>
+                <td style={{ padding:'13px 14px' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                    <div style={{ width:32, height:32, borderRadius:999, background:`${C.secondary}18`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700, color:C.secondary }}>{a.name[0]}</div>
+                    <div>
+                      <div style={{ fontSize:13, fontWeight:600, color:C.textPrimary }}>{a.name}</div>
+                      <div style={{ fontSize:11, color:C.textSecondary }}>{a.phone}</div>
+                    </div>
+                  </div>
+                </td>
+                <td style={{ padding:'13px 14px', fontSize:13, color:C.textSecondary }}>{a.region}</td>
+                <td style={{ padding:'13px 14px' }}>
+                  <span style={{ fontSize:11, padding:'2px 8px', borderRadius:4, background:`${C.secondary}15`, color:C.secondary, fontWeight:500 }}>{STAGES[a.stage-1]}</span>
+                </td>
+                <td style={{ padding:'13px 14px', fontSize:12, color:C.textSecondary }}>{a.date}</td>
+                <td style={{ padding:'13px 14px', fontSize:13, fontWeight:600, color:a.days>20?C.danger:a.days>10?C.warning:C.textPrimary }}>{a.days}일</td>
+                <td style={{ padding:'13px 14px' }}>
+                  <span style={{ fontSize:11, padding:'2px 8px', borderRadius:4, fontWeight:500,
+                    background: a.docStatus==='서명완료' ? `${C.success}15` : a.docStatus==='발송완료' ? `${C.info}15` : `${C.textSecondary}15`,
+                    color: a.docStatus==='서명완료' ? C.success : a.docStatus==='발송완료' ? C.info : C.textSecondary,
+                  }}>{a.docStatus}</span>
+                </td>
+                <td style={{ padding:'13px 14px' }}>
+                  <span style={{ fontSize:11, padding:'3px 10px', borderRadius:999, fontWeight:500,
+                    background: a.status==='완료' ? `${C.success}15` : a.status==='진행중' ? `${C.warning}15` : `${C.info}15`,
+                    color: a.status==='완료' ? C.success : a.status==='진행중' ? C.warning : C.info,
+                  }}>{a.status}</span>
+                </td>
+                <td style={{ padding:'13px 14px' }} onClick={e => e.stopPropagation()}>
+                  <button onClick={() => { showToast(`${a.name} 님 단계를 진행합니다`); }} style={{ padding:'5px 12px', background:`${C.secondary}15`, color:C.secondary, border:'none', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer' }}>단계 진행</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {modal && (
+        <Modal title={`${modal.name} — 전환 진행 현황`} onClose={() => setModal(null)}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:20 }}>
+            {[['이름', modal.name],['연락처', modal.phone],['지역', modal.region],['신청일', modal.date],['소요일', `${modal.days}일`],['현재 단계', STAGES[modal.stage-1]]].map(([k,v]) => (
+              <div key={k} style={{ background:C.bg, borderRadius:8, padding:'10px 14px' }}>
+                <div style={{ fontSize:11, color:C.textSecondary, marginBottom:3 }}>{k}</div>
+                <div style={{ fontSize:14, fontWeight:600, color:C.textPrimary }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:13, fontWeight:600, color:C.textPrimary, marginBottom:10 }}>전환 프로세스 진행 현황</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+              {STAGES.slice(0,7).map((s, idx) => (
+                <div key={idx} style={{ display:'flex', alignItems:'center', gap:10, padding:'6px 10px', borderRadius:6, background: idx < modal.stage ? `${C.success}10` : idx === modal.stage-1 ? `${C.secondary}15` : C.bg }}>
+                  <div style={{ width:20, height:20, borderRadius:999, display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, flexShrink:0, background: idx < modal.stage ? C.success : idx === modal.stage-1 ? C.secondary : C.border, color: idx < modal.stage || idx === modal.stage-1 ? '#fff' : C.textSecondary, fontWeight:700 }}>{idx < modal.stage ? '✓' : idx+1}</div>
+                  <span style={{ fontSize:13, color: idx < modal.stage ? C.success : idx === modal.stage-1 ? C.secondary : C.textSecondary, fontWeight: idx === modal.stage-1 ? 600 : 400 }}>{s}</span>
+                  {idx === modal.stage-1 && <span style={{ marginLeft:'auto', fontSize:11, color:C.secondary, fontWeight:500, background:`${C.secondary}15`, padding:'2px 8px', borderRadius:999 }}>진행 중</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+          {modal.note && (
+            <div style={{ background:`${C.warning}10`, border:`1px solid ${C.warning}30`, borderRadius:8, padding:'10px 14px', marginBottom:16, fontSize:13, color:C.textPrimary }}>
+              <span style={{ fontWeight:600, color:C.warning }}>📝 메모: </span>{modal.note}
+            </div>
+          )}
+          <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+            <button onClick={() => { setModal(null); showToast('문자 알림을 발송합니다'); }} style={{ padding:'8px 16px', background:`${C.info}15`, color:C.info, border:'none', borderRadius:8, fontSize:13, fontWeight:600, cursor:'pointer' }}>문자 발송</button>
+            <button onClick={() => { setModal(null); showToast(`${modal.name} 님 다음 단계로 진행합니다`); }} style={{ padding:'8px 16px', background:C.secondary, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:600, cursor:'pointer' }}>단계 진행</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function DispatchPage({ showToast }) {
+  const [modal, setModal] = React.useState(null);
+  const [resendModal, setResendModal] = React.useState(false);
+
+  const statusCards = [
+    { label:'발송 대기', count:2, color:C.textSecondary, icon:'⏳' },
+    { label:'발송 완료', count:5, color:C.info, icon:'📤' },
+    { label:'서명 완료', count:12, color:C.success, icon:'✅' },
+    { label:'만료/실패', count:1, color:C.danger, icon:'⚠️' },
+  ];
+
+  return (
+    <div style={{ animation:'fadeIn 300ms ease' }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:16, marginBottom:24 }}>
+        {statusCards.map((s, i) => (
+          <div key={i} style={{ background:C.surface, borderRadius:12, padding:'18px 20px', border:`1px solid ${C.border}`, boxShadow:'0 1px 3px rgba(0,0,0,0.06)', animation:`slideUp 300ms ease ${i*60}ms both`, display:'flex', alignItems:'center', gap:14 }}>
+            <div style={{ width:42, height:42, borderRadius:10, background:`${s.color}15`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:20 }}>{s.icon}</div>
+            <div>
+              <div style={{ fontSize:22, fontWeight:800, color:s.color }}>{s.count}</div>
+              <div style={{ fontSize:12, color:C.textSecondary }}>{s.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <div style={{ fontSize:15, fontWeight:700, color:C.textPrimary }}>발송 이력</div>
+        <div style={{ display:'flex', gap:8 }}>
+          <button onClick={() => setResendModal(true)} style={{ padding:'7px 16px', background:`${C.warning}15`, color:C.warning, border:'none', borderRadius:8, fontSize:13, fontWeight:600, cursor:'pointer' }}>수동 재발송</button>
+          <button onClick={() => showToast('정보공개서 일괄 발송을 시작합니다')} style={{ padding:'7px 16px', background:C.secondary, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:600, cursor:'pointer' }}>일괄 발송</button>
+        </div>
+      </div>
+      <div style={{ background:C.surface, borderRadius:12, boxShadow:'0 1px 3px rgba(0,0,0,0.08)', border:`1px solid ${C.border}`, overflow:'hidden' }}>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ background:C.bg }}>
+              {['발송 유형','수신자','발송 방법','발송 시각','결과','상태','액션'].map(h => (
+                <th key={h} style={{ padding:'10px 16px', textAlign:'left', fontSize:12, color:C.textSecondary, fontWeight:500, borderBottom:`1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {DISPATCH_LOGS.map((d, i) => (
+              <tr key={d.id} style={{ borderBottom:`1px solid ${C.border}`, cursor:'pointer', transition:'background 150ms', animation:`slideUp 300ms ease ${i*40}ms both` }}
+                onMouseEnter={e => e.currentTarget.style.background=`${C.secondary}06`}
+                onMouseLeave={e => e.currentTarget.style.background=''}
+                onClick={() => setModal(d)}>
+                <td style={{ padding:'12px 16px' }}>
+                  <span style={{ fontSize:12, padding:'3px 10px', borderRadius:6, background: d.type==='정보공개서' ? `${C.secondary}15` : `${C.accent}20`, color: d.type==='정보공개서' ? C.secondary : '#0d9488', fontWeight:500 }}>{d.type}</span>
+                </td>
+                <td style={{ padding:'12px 16px', fontSize:13, color:C.textPrimary, fontWeight:500 }}>{d.to}</td>
+                <td style={{ padding:'12px 16px' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:C.textSecondary }}>
+                    <span>{d.method==='모두싸인' ? '🔏' : '📱'}</span>
+                    <span>{d.method}</span>
+                  </div>
+                </td>
+                <td style={{ padding:'12px 16px', fontSize:12, color:C.textSecondary }}>{d.time}</td>
+                <td style={{ padding:'12px 16px' }}>
+                  <span style={{ fontSize:12, color: d.result==='성공' ? C.success : d.result==='-' ? C.textSecondary : C.danger, fontWeight:500 }}>{d.result}</span>
+                </td>
+                <td style={{ padding:'12px 16px' }}>
+                  <span style={{ fontSize:11, padding:'3px 10px', borderRadius:999, fontWeight:500,
+                    background: d.status==='서명완료' ? `${C.success}15` : d.status==='발송완료' ? `${C.info}15` : `${C.textSecondary}15`,
+                    color: d.status==='서명완료' ? C.success : d.status==='발송완료' ? C.info : C.textSecondary,
+                  }}>{d.status}</span>
+                </td>
+                <td style={{ padding:'12px 16px' }} onClick={e => e.stopPropagation()}>
+                  <button onClick={() => showToast(`${d.to} 님에게 재발송합니다`)} style={{ padding:'4px 12px', background:`${C.info}15`, color:C.info, border:'none', borderRadius:6, fontSize:12, fontWeight:600, cursor:'pointer', display: d.status==='발송대기' ? 'inline' : 'none' }}>발송</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {modal && (
+        <Modal title="발송 상세 정보" onClose={() => setModal(null)} width={440}>
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {[['발송 유형',modal.type],['수신자',modal.to],['발송 방법',modal.method],['발송 시각',modal.time],['결과',modal.result],['상태',modal.status]].map(([k,v]) => (
+              <div key={k} style={{ display:'flex', justifyContent:'space-between', padding:'8px 12px', background:C.bg, borderRadius:6 }}>
+                <span style={{ fontSize:12, color:C.textSecondary }}>{k}</span>
+                <span style={{ fontSize:13, fontWeight:600, color:C.textPrimary }}>{v}</span>
+              </div>
+            ))}
+            <button onClick={() => { setModal(null); showToast('재발송을 요청합니다'); }} style={{ marginTop:8, padding:'10px', background:C.secondary, color:'#fff', border:'none', borderRadius:8, fontSize:14, fontWeight:600, cursor:'pointer', width:'100%' }}>재발송 요청</button>
+          </div>
+        </Modal>
+      )}
+      {resendModal && (
+        <Modal title="수동 재발송" onClose={() => setResendModal(false)} width={480}>
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            <div>
+              <label style={{ fontSize:13, color:C.textSecondary, display:'block', marginBottom:6 }}>신청자 선택</label>
+              <select style={{ width:'100%', padding:'10px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, color:C.textPrimary, background:C.surface }}>
+                {APPLICANTS.map(a => <option key={a.id}>{a.name} — {a.region}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize:13, color:C.textSecondary, display:'block', marginBottom:6 }}>발송 유형</label>
+              <div style={{ display:'flex', gap:8 }}>
+                {['정보공개서 (모두싸인)','사업설명회 안내 (알리고)','추가 서류 안내'].map(t => (
+                  <label key={t} style={{ display:'flex', alignItems:'center', gap:6, fontSize:13, cursor:'pointer', padding:'8px 12px', border:`1px solid ${C.border}`, borderRadius:6, flex:1, justifyContent:'center', color:C.textPrimary }}>
+                    <input type="radio" name="type" style={{ accentColor:C.secondary }} />{t.split(' ')[0]}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize:13, color:C.textSecondary, display:'block', marginBottom:6 }}>발송 메모</label>
+              <textarea rows={2} placeholder="담당자 메모 (선택)" style={{ width:'100%', padding:'10px 12px', border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, resize:'none', color:C.textPrimary }} />
+            </div>
+            <button onClick={() => { setResendModal(false); showToast('발송 요청이 큐에 등록됐습니다'); }} style={{ padding:'10px', background:C.secondary, color:'#fff', border:'none', borderRadius:8, fontSize:14, fontWeight:600, cursor:'pointer' }}>발송 요청</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function NotificationsPage({ showToast }) {
+  const [notes, setNotes] = React.useState(NOTIFICATIONS);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [channels, setChannels] = React.useState({ email:true, slack:true, sms:false });
+
+  const markAll = () => { setNotes(n => n.map(x => ({ ...x, read:true }))); showToast('모든 알림을 읽음 처리했습니다'); };
+  const unread = notes.filter(n => !n.read).length;
+
+  const typeColor = { info:C.info, success:C.success, warning:C.warning, danger:C.danger };
+  const typeIcon = { info:'ℹ️', success:'✅', warning:'⚠️', danger:'🚨' };
+
+  return (
+    <div style={{ animation:'fadeIn 300ms ease' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <span style={{ fontSize:14, color:C.textSecondary }}>미읽음</span>
+          <span style={{ background:C.danger, color:'#fff', borderRadius:999, padding:'2px 10px', fontSize:13, fontWeight:700 }}>{unread}</span>
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          <button onClick={markAll} style={{ padding:'7px 16px', background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, fontSize:13, color:C.textSecondary, cursor:'pointer' }}>모두 읽음</button>
+          <button onClick={() => setSettingsOpen(true)} style={{ padding:'7px 16px', background:C.secondary, color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:600, cursor:'pointer' }}>⚙️ 채널 설정</button>
+        </div>
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {notes.map((n, i) => (
+          <div key={n.id} onClick={() => { setNotes(prev => prev.map(x => x.id===n.id ? { ...x, read:true } : x)); }} style={{ background:C.surface, borderRadius:10, padding:'14px 18px', border:`1px solid ${n.read ? C.border : typeColor[n.type]+'40'}`, display:'flex', alignItems:'flex-start', gap:14, cursor:'pointer', transition:'all 150ms', animation:`slideUp 300ms ease ${i*50}ms both`, opacity: n.read ? 0.7 : 1 }}
+            onMouseEnter={e => { e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.08)'; }}
+            onMouseLeave={e => { e.currentTarget.style.transform=''; e.currentTarget.style.boxShadow=''; }}>
+            <div style={{ width:38, height:38, borderRadius:10, background:`${typeColor[n.type]}15`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, flexShrink:0 }}>{typeIcon[n.type]}</div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
+                <span style={{ fontSize:14, fontWeight:n.read ? 500 : 700, color:C.textPrimary }}>{n.title}</span>
+                {!n.read && <span style={{ width:7, height:7, borderRadius:999, background:typeColor[n.type], display:'inline-block', flexShrink:0 }} />}
+              </div>
+              <div style={{ fontSize:13, color:C.textSecondary, lineHeight:1.5 }}>{n.desc}</div>
+              <div style={{ display:'flex', gap:8, marginTop:6, alignItems:'center' }}>
+                <span style={{ fontSize:11, padding:'2px 8px', borderRadius:4, background:`${typeColor[n.type]}12`, color:typeColor[n.type], fontWeight:500 }}>{n.stage}</span>
+                <span style={{ fontSize:11, color:C.textSecondary }}>{n.time}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {settingsOpen && (
+        <Modal title="알림 채널 설정" onClose={() => setSettingsOpen(false)} width={440}>
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            <p style={{ fontSize:13, color:C.textSecondary }}>신청자 프로세스 이벤트 발생 시 알림을 받을 채널을 설정합니다.</p>
+            {[['email','이메일','담당자 이메일로 알림 전송'],['slack','슬랙','팀 슬랙 채널로 실시간 알림'],['sms','문자(SMS)','담당자 휴대폰으로 긴급 알림']].map(([key, label, desc]) => (
+              <div key={key} style={{ display:'flex', alignItems:'center', gap:14, padding:'14px 16px', border:`1px solid ${C.border}`, borderRadius:10 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:14, fontWeight:600, color:C.textPrimary }}>{label}</div>
+                  <div style={{ fontSize:12, color:C.textSecondary, marginTop:2 }}>{desc}</div>
+                </div>
+                <div onClick={() => setChannels(c => ({ ...c, [key]: !c[key] }))} style={{ width:44, height:24, borderRadius:999, background: channels[key] ? C.secondary : C.border, position:'relative', cursor:'pointer', transition:'background 200ms', flexShrink:0 }}>
+                  <div style={{ position:'absolute', top:2, left: channels[key] ? 22 : 2, width:20, height:20, borderRadius:999, background:'#fff', transition:'left 200ms', boxShadow:'0 1px 4px rgba(0,0,0,0.2)' }} />
+                </div>
+              </div>
+            ))}
+            <button onClick={() => { setSettingsOpen(false); showToast('알림 설정이 저장됐습니다'); }} style={{ padding:'10px', background:C.secondary, color:'#fff', border:'none', borderRadius:8, fontSize:14, fontWeight:600, cursor:'pointer' }}>저장</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+const PAGE_TITLES = {
+  dashboard: '프로세스 현황 대시보드',
+  applicants: '신청자 관리',
+  dispatch: '발송 관리',
+  notifications: '알림 센터',
+};
+
+function App() {
+  const [page, setPage] = React.useState('dashboard');
+  const [toast, setToast] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => { setTimeout(() => setLoading(false), 1200); }, []);
+
+  const showToast = (msg, type='success') => { setToast({ msg, type }); };
+
+  const renderPage = () => {
+    const props = { showToast };
+    const key = page;
+    if (page === 'dashboard') return <div key={key}><DashboardPage {...props} /></div>;
+    if (page === 'applicants') return <div key={key}><ApplicantsPage {...props} /></div>;
+    if (page === 'dispatch') return <div key={key}><DispatchPage {...props} /></div>;
+    if (page === 'notifications') return <div key={key}><NotificationsPage {...props} /></div>;
+  };
+
+  if (loading) {
+    return (
+      <div style={{ display:'flex', width:'100%', height:'100vh', alignItems:'center', justifyContent:'center', background:C.bg }}>
+        <div style={{ textAlign:'center' }}>
+          <div style={{ width:48, height:48, borderRadius:12, background:C.accent, display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, margin:'0 auto 16px', animation:'pulse 1.5s infinite' }}>🚖</div>
+          <div style={{ fontSize:14, color:C.textSecondary, animation:'pulse 1.5s infinite' }}>시스템을 불러오는 중...</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display:'flex', width:'100%', height:'100vh', overflow:'hidden' }}>
+      <Sidebar page={page} setPage={setPage} />
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
+        <TopBar title={PAGE_TITLES[page]} />
+        <main style={{ flex:1, overflow:'auto', padding:24, background:C.bg }}>
+          {renderPage()}
+        </main>
+      </div>
+      {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
