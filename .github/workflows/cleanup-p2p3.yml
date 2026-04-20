@@ -20,12 +20,19 @@ jobs:
             # Edge Function에서 전달받은 slugs — compact JSON으로 변환
             SLUGS=$(echo '${{ toJson(github.event.client_payload.slugs) }}' | jq -c '.')
           else
-            # 스케줄: DB에서 lost + portfolio_links > 1 인 프로젝트 조회
-            SLUGS=$(curl -s \
-              "${SUPABASE_URL}/rest/v1/wishket_projects?current_status=eq.lost&select=slug,portfolio_links" \
+            # 스케줄: DB에서 lost slug 조회 → 파일시스템에 P2/P3가 남아있는 slug만 필터
+            # (DB portfolio_links 의존 제거: 사전 트림된 고아 파일도 자동 수복)
+            LOST_SLUGS=$(curl -s \
+              "${SUPABASE_URL}/rest/v1/wishket_projects?current_status=eq.lost&select=slug" \
               -H "apikey: ${SUPABASE_SR}" \
               -H "Authorization: Bearer ${SUPABASE_SR}" | \
-              jq -c '[.[] | select(.portfolio_links | length > 1) | .slug]')
+              jq -r '.[].slug')
+            SLUGS='[]'
+            for SLUG in $LOST_SLUGS; do
+              if [ -d "$SLUG/portfolio-2" ] || [ -d "$SLUG/portfolio-3" ]; then
+                SLUGS=$(echo "$SLUGS" | jq -c --arg s "$SLUG" '. + [$s]')
+              fi
+            done
           fi
           echo "slugs=${SLUGS}" >> $GITHUB_OUTPUT
           echo "대상: ${SLUGS}"
