@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>약알 리뷰 커뮤니티 시스템 — 맞춤 구현 데모</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; font-family: 'Pretendard', sans-serif; background: #F8F4FF; }
+    #root { display: flex; flex-direction: column; width: 100%; min-height: 100vh; }
+    @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes fadeInScale { from { opacity: 0; transform: scale(0.95) } to { opacity: 1; transform: scale(1) } }
+    @keyframes slideInRight { from { opacity: 0; transform: translateX(30px) } to { opacity: 1; transform: translateX(0) } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes ripple { 0% { transform: scale(0); opacity: 0.5 } 100% { transform: scale(4); opacity: 0 } }
+    @keyframes countUp { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+    @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+    @keyframes barGrow { from { width: 0% } to { width: var(--target-width, 100%) } }
+    @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); max-height: 0 } to { opacity: 1; transform: translateY(0); max-height: 500px } }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } = Recharts;
+
+const C = {
+  primary: '#FF4D4D',
+  primaryDark: '#E63939',
+  secondary: '#1A1A2E',
+  accent: '#FFB347',
+  bg: '#F8F4FF',
+  surface: '#FFFFFF',
+  border: '#E8E0F0',
+  textPrimary: '#1A1A2E',
+  textSecondary: '#6B7280',
+  textLight: '#9CA3AF',
+  success: '#10B981',
+  warning: '#F59E0B',
+  error: '#EF4444',
+};
+
+const TABS = [
+  { id: 'main', label: '리뷰 목록' },
+  { id: 'interaction', label: '댓글·좋아요' },
+  { id: 'reward', label: '리워드' },
+  { id: 'search', label: '약품 검색' },
+];
+
+const PAGE_META = {
+  main: {
+    title: '약품 리뷰 커뮤니티',
+    subtitle: '약알 사용자들의 생생한 약품 리뷰와 경험을 공유하는 공간',
+    kpis: [
+      { label: '총 리뷰', value: 12847, suffix: '개' },
+      { label: '오늘 등록', value: 128, suffix: '건' },
+      { label: '인기 약품', value: 342, suffix: '종' },
+    ],
+    gradient: `linear-gradient(135deg, ${C.primary}, ${C.accent})`,
+  },
+  interaction: {
+    title: '댓글 · 좋아요',
+    subtitle: '리뷰에 대한 공감과 소통 — 댓글, 대댓글, 좋아요 인터랙션',
+    kpis: [
+      { label: '총 좋아요', value: 48320, suffix: '개' },
+      { label: '오늘 댓글', value: 94, suffix: '건' },
+      { label: '대댓글 수', value: 1203, suffix: '개' },
+    ],
+    gradient: `linear-gradient(135deg, #7C3AED, #DB2777)`,
+  },
+  reward: {
+    title: '리워드 시스템',
+    subtitle: '활동 기반 포인트 · 배지 · 등급 — 사용자 참여를 높이는 리워드 체계',
+    kpis: [
+      { label: '적립 포인트', value: 2840000, suffix: 'P' },
+      { label: '배지 달성', value: 3421, suffix: '건' },
+      { label: '플래티넘 회원', value: 87, suffix: '명' },
+    ],
+    gradient: `linear-gradient(135deg, #F59E0B, #EF4444)`,
+  },
+  search: {
+    title: '약품 검색 · 탐색',
+    subtitle: '약품명 · 성분 · 효능 기반 스마트 검색 — MySQL FULLTEXT 한국어 검색',
+    kpis: [
+      { label: '등록 약품', value: 15280, suffix: '종' },
+      { label: '오늘 검색', value: 8432, suffix: '회' },
+      { label: '인기 카테고리', value: 24, suffix: '개' },
+    ],
+    gradient: `linear-gradient(135deg, #0891B2, #1D4ED8)`,
+  },
+};
+
+const REVIEWS = [
+  { id: 1, drug: '타이레놀 ER 650mg', user: '김민준', avatar: '김', rating: 5, content: '두통에 정말 효과적이에요. 빠르게 흡수되고 지속 시간도 길어서 만족합니다. 위에 부담도 적은 편이에요.', likes: 234, comments: 18, badge: '플래티넘', date: '2024.03.15', images: true, category: '진통제' },
+  { id: 2, drug: '오메가3 1000mg', user: '이지은', avatar: '이', rating: 4, content: '혈중 중성지방 수치 관리를 위해 먹기 시작했는데 3개월 후 검사에서 개선됐어요. 냄새가 조금 나지만 참을 만해요.', likes: 187, comments: 12, badge: '골드', date: '2024.03.14', images: false, category: '영양제' },
+  { id: 3, drug: '아세트아미노펜 500mg', user: '박서연', avatar: '박', rating: 3, content: '효과는 있는데 개인마다 차이가 있는 것 같아요. 저는 1정으로는 효과가 부족해서 2정 복용합니다.', likes: 98, comments: 7, badge: '실버', date: '2024.03.13', images: true, category: '진통제' },
+  { id: 4, drug: '비타민D3 2000IU', user: '최준혁', avatar: '최', rating: 5, content: '겨울에 햇빛이 부족할 때 꼭 챙기는 영양제예요. 피로감이 많이 줄었고 면역력도 좋아진 것 같아요.', likes: 312, comments: 24, badge: '플래티넘', date: '2024.03.12', images: false, category: '영양제' },
+  { id: 5, drug: '마그네슘 310mg', user: '정수빈', avatar: '정', rating: 4, content: '수면의 질 개선을 목적으로 복용 중인데 취침 전 먹으면 확실히 깊게 자는 것 같아요. 근육 경련도 줄었어요.', likes: 156, comments: 9, badge: '골드', date: '2024.03.11', images: true, category: '영양제' },
+  { id: 6, drug: '가스모틴 5mg', user: '한지원', avatar: '한', rating: 4, content: '위장 운동 촉진제로 처방받았는데 식후 더부룩함이 많이 개선됐어요. 식전 30분 복용이 포인트예요.', likes: 73, comments: 5, badge: '브론즈', date: '2024.03.10', images: false, category: '소화제' },
+];
+
+const COMMENTS_DATA = [
+  { id: 1, reviewer: '김민준', drug: '타이레놀 ER 650mg', commentUser: '이지영', avatar: '이', content: '저도 같은 경험이에요! 속 쓰림이 거의 없어서 좋더라고요.', likes: 12, time: '2시간 전', replies: [
+    { id: 11, user: '박찬우', avatar: '박', content: '저는 공복에 먹으면 조금 불편했어요.', time: '1시간 전', likes: 3 },
+  ]},
+  { id: 2, reviewer: '이지은', drug: '오메가3 1000mg', commentUser: '최승현', avatar: '최', content: '냄새는 냉동 보관하면 많이 줄어요! 꿀팁 공유합니다 :)', likes: 28, time: '3시간 전', replies: [] },
+  { id: 3, reviewer: '최준혁', drug: '비타민D3 2000IU', commentUser: '강민서', avatar: '강', content: '마그네슘이랑 같이 먹으면 흡수율이 높아진다는 얘기도 있더라고요.', likes: 45, time: '5시간 전', replies: [
+    { id: 31, user: '정유진', avatar: '정', content: '저도 조합으로 먹고 있어요. 확실히 다른 것 같아요!', time: '4시간 전', likes: 15 },
+    { id: 32, user: '임재현', avatar: '임', content: 'K2 같이 먹으면 더 좋다고 해요.', time: '3시간 전', likes: 8 },
+  ]},
+  { id: 4, reviewer: '박서연', drug: '아세트아미노펜 500mg', commentUser: '오지수', avatar: '오', content: '공복에 드시면 더 효과 좋아요. 물이랑 같이 드세요.', likes: 6, time: '6시간 전', replies: [] },
+];
+
+const REWARDS_DATA = [
+  { id: 1, user: '김민준', avatar: '김', grade: '플래티넘', points: 14280, badges: ['리뷰왕', '도움왕', '소통왕'], activity: 324, monthChange: '+1,240' },
+  { id: 2, user: '최준혁', avatar: '최', grade: '플래티넘', points: 12450, badges: ['리뷰왕', '전문가'], activity: 287, monthChange: '+980' },
+  { id: 3, user: '이지은', avatar: '이', grade: '골드', points: 8730, badges: ['도움왕', '소통왕'], activity: 198, monthChange: '+720' },
+  { id: 4, user: '정수빈', avatar: '정', grade: '골드', points: 7240, badges: ['리뷰왕'], activity: 165, monthChange: '+540' },
+  { id: 5, user: '박서연', avatar: '박', grade: '실버', points: 4120, badges: ['소통왕'], activity: 94, monthChange: '+320' },
+  { id: 6, user: '한지원', avatar: '한', grade: '브론즈', points: 1840, badges: [], activity: 42, monthChange: '+180' },
+];
+
+const DRUGS = [
+  { id: 1, name: '타이레놀 ER 650mg', category: '진통제', company: '한국얀센', reviews: 1284, avgRating: 4.3, ingredients: '아세트아미노펜', effect: '해열, 진통', image: '💊' },
+  { id: 2, name: '오메가3 1000mg', category: '영양제', company: '종근당', reviews: 987, avgRating: 4.1, ingredients: 'EPA, DHA', effect: '혈중 중성지방 개선', image: '🐟' },
+  { id: 3, name: '비타민D3 2000IU', category: '영양제', company: '동아제약', reviews: 2341, avgRating: 4.6, ingredients: '콜레칼시페롤', effect: '뼈 강화, 면역력', image: '☀️' },
+  { id: 4, name: '마그네슘 310mg', category: '영양제', company: '일동제약', reviews: 756, avgRating: 4.2, ingredients: '산화마그네슘', effect: '근육 이완, 수면 개선', image: '🌿' },
+  { id: 5, name: '아세트아미노펜 500mg', category: '진통제', company: '광동제약', reviews: 1892, avgRating: 3.9, ingredients: '아세트아미노펜', effect: '해열, 진통', image: '💊' },
+  { id: 6, name: '가스모틴 5mg', category: '소화제', company: '보령제약', reviews: 432, avgRating: 4.0, ingredients: '모사프리드', effect: '위장 운동 촉진', image: '🫙' },
+  { id: 7, name: '코엔자임Q10 100mg', category: '영양제', company: 'GC녹십자', reviews: 654, avgRating: 4.4, ingredients: '유비퀴논', effect: '항산화, 에너지 생성', image: '⚡' },
+  { id: 8, name: '클라리틴 10mg', category: '항히스타민', company: '바이엘코리아', reviews: 1124, avgRating: 4.5, ingredients: '로라타딘', effect: '알레르기 완화', image: '🌸' },
+];
+
+const GRADE_COLORS = { '플래티넘': '#7C3AED', '골드': '#F59E0B', '실버': '#64748B', '브론즈': '#B45309' };
+const BADGE_COLORS = { '리뷰왕': C.primary, '도움왕': '#10B981', '소통왕': '#0891B2', '전문가': '#7C3AED' };
+
+function CountUp({ end, duration = 1200, suffix = '' }) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    let start = 0;
+    const step = end / (duration / 16);
+    const timer = setInterval(() => {
+      start += step;
+      if (start >= end) { setVal(end); clearInterval(timer); }
+      else setVal(Math.floor(start));
+    }, 16);
+    return () => clearInterval(timer);
+  }, [end]);
+  return <span style={{ animation: 'countUp 400ms ease' }}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({ message, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  return (
+    <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999, background: C.secondary, color: '#fff', padding: '12px 24px', borderRadius: 10, animation: 'slideUp 300ms ease', boxShadow: '0 4px 16px rgba(0,0,0,0.2)', fontSize: 14 }}>
+      {message}
+    </div>
+  );
+}
+
+function StarRating({ rating, size = 14 }) {
+  return (
+    <span>
+      {[1,2,3,4,5].map(i => (
+        <span key={i} style={{ color: i <= rating ? '#F59E0B' : '#D1D5DB', fontSize: size }}>★</span>
+      ))}
+    </span>
+  );
+}
+
+function GradeBadge({ grade }) {
+  return (
+    <span style={{ background: GRADE_COLORS[grade] + '22', color: GRADE_COLORS[grade], padding: '2px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
+      {grade}
+    </span>
+  );
+}
+
+function Drawer({ item, onClose, type }) {
+  if (!item) return null;
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 200 }} />
+      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 500, background: C.surface, boxShadow: '-8px 0 40px rgba(0,0,0,0.15)', zIndex: 201, overflowY: 'auto', padding: 28, animation: 'slideInRight 200ms ease' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          <h3 style={{ fontSize: 18, fontWeight: 700, color: C.textPrimary }}>상세 정보</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: C.textSecondary }}>✕</button>
+        </div>
+
+        {type === 'review' && (
+          <div>
+            <div style={{ background: C.bg, borderRadius: 12, padding: 20, marginBottom: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                <div style={{ width: 44, height: 44, borderRadius: 22, background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 16 }}>{item.avatar}</div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>{item.user}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <GradeBadge grade={item.badge} />
+                    <span style={{ fontSize: 12, color: C.textLight }}>{item.date}</span>
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <span style={{ background: C.primary + '15', color: C.primary, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{item.category}</span>
+                <StarRating rating={item.rating} />
+              </div>
+              <h4 style={{ fontWeight: 700, fontSize: 15, marginBottom: 8, color: C.primary }}>{item.drug}</h4>
+              <p style={{ fontSize: 14, color: C.textPrimary, lineHeight: 1.7 }}>{item.content}</p>
+            </div>
+
+            <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
+              <div style={{ flex: 1, background: C.bg, borderRadius: 10, padding: 16, textAlign: 'center' }}>
+                <div style={{ fontSize: 24, fontWeight: 800, color: C.primary }}>❤️ {item.likes}</div>
+                <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 4 }}>좋아요</div>
+              </div>
+              <div style={{ flex: 1, background: C.bg, borderRadius: 10, padding: 16, textAlign: 'center' }}>
+                <div style={{ fontSize: 24, fontWeight: 800, color: '#7C3AED' }}>💬 {item.comments}</div>
+                <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 4 }}>댓글</div>
+              </div>
+            </div>
+
+            <h4 style={{ fontWeight: 700, marginBottom: 12, color: C.textPrimary }}>댓글 달기</h4>
+            <textarea style={{ width: '100%', height: 80, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, fontSize: 14, resize: 'none', outline: 'none', fontFamily: 'Pretendard' }} placeholder="이 리뷰에 댓글을 남겨보세요..." />
+            <button style={{ marginTop: 10, width: '100%', padding: '12px', background: C.primary, color: '#fff', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>댓글 등록</button>
+          </div>
+        )}
+
+        {type === 'drug' && (
+          <div>
+            <div style={{ textAlign: 'center', marginBottom: 24, padding: 24, background: C.bg, borderRadius: 12 }}>
+              <div style={{ fontSize: 60, marginBottom: 12 }}>{item.image}</div>
+              <h3 style={{ fontSize: 20, fontWeight: 800, color: C.textPrimary, marginBottom: 4 }}>{item.name}</h3>
+              <span style={{ background: C.primary + '15', color: C.primary, padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{item.category}</span>
+            </div>
+            {[
+              { label: '제조사', value: item.company },
+              { label: '주요 성분', value: item.ingredients },
+              { label: '주요 효능', value: item.effect },
+              { label: '리뷰 수', value: `${item.reviews.toLocaleString()}개` },
+              { label: '평균 평점', value: `${item.avgRating}/5.0` },
+            ].map(row => (
+              <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ color: C.textSecondary, fontSize: 14 }}>{row.label}</span>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{row.value}</span>
+              </div>
+            ))}
+            <button style={{ marginTop: 20, width: '100%', padding: '14px', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, color: '#fff', border: 'none', borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>이 약품 리뷰 작성하기</button>
+          </div>
+        )}
+
+        {type === 'reward' && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24, padding: 20, background: C.bg, borderRadius: 12 }}>
+              <div style={{ width: 56, height: 56, borderRadius: 28, background: `linear-gradient(135deg, ${GRADE_COLORS[item.grade]}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: 20 }}>{item.avatar}</div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 18 }}>{item.user}</div>
+                <GradeBadge grade={item.grade} />
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+              {[
+                { label: '보유 포인트', value: `${item.points.toLocaleString()} P`, color: C.primary },
+                { label: '총 활동 수', value: `${item.activity}건`, color: '#7C3AED' },
+                { label: '이번 달 획득', value: item.monthChange, color: '#10B981' },
+                { label: '달성 배지', value: `${item.badges.length}개`, color: C.accent },
+              ].map(kpi => (
+                <div key={kpi.label} style={{ background: kpi.color + '12', borderRadius: 10, padding: 16, textAlign: 'center' }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: kpi.color }}>{kpi.value}</div>
+                  <div style={{ fontSize: 11, color: C.textSecondary, marginTop: 4 }}>{kpi.label}</div>
+                </div>
+              ))}
+            </div>
+            <h4 style={{ fontWeight: 700, marginBottom: 12 }}>달성 배지</h4>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+              {['리뷰왕', '도움왕', '소통왕', '전문가'].map(badge => (
+                <span key={badge} style={{ padding: '6px 14px', borderRadius: 20, fontSize: 12, fontWeight: 700, background: item.badges.includes(badge) ? BADGE_COLORS[badge] : '#E5E7EB', color: item.badges.includes(badge) ? '#fff' : C.textSecondary }}>
+                  {item.badges.includes(badge) ? '✓ ' : ''}{badge}
+                </span>
+              ))}
+            </div>
+            <h4 style={{ fontWeight: 700, marginBottom: 12 }}>다음 등급까지</h4>
+            <div style={{ background: C.bg, borderRadius: 10, padding: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13 }}>
+                <span style={{ color: C.textSecondary }}>현재: {item.grade}</span>
+                <span style={{ fontWeight: 600 }}>{item.points.toLocaleString()} / 20,000 P</span>
+              </div>
+              <div style={{ height: 8, background: '#E5E7EB', borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{ height: '100%', background: `linear-gradient(90deg, ${GRADE_COLORS[item.grade]}, ${C.accent})`, borderRadius: 4, width: `${Math.min((item.points / 20000) * 100, 100)}%`, animation: 'barGrow 800ms ease 200ms both', '--target-width': `${Math.min((item.points / 20000) * 100, 100)}%` }} />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function WriteReviewModal({ onClose, onSubmit }) {
+  const [drug, setDrug] = useState('');
+  const [rating, setRating] = useState(5);
+  const [content, setContent] = useState('');
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)', animation: 'fadeIn 200ms ease' }} />
+      <div style={{ position: 'relative', width: 560, maxHeight: '85vh', background: C.surface, borderRadius: 20, zIndex: 501, animation: 'fadeInScale 200ms ease', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 28px', borderBottom: `1px solid ${C.border}` }}>
+          <h3 style={{ fontSize: 18, fontWeight: 700 }}>리뷰 작성</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer' }}>✕</button>
+        </div>
+        <div style={{ padding: '24px 28px', overflowY: 'auto', flex: 1 }}>
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', fontWeight: 600, marginBottom: 8, fontSize: 14 }}>약품명 *</label>
+            <input value={drug} onChange={e => setDrug(e.target.value)} placeholder="약품명을 검색하거나 직접 입력하세요" style={{ width: '100%', padding: '12px 16px', border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 14, outline: 'none', fontFamily: 'Pretendard' }} />
+          </div>
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', fontWeight: 600, marginBottom: 8, fontSize: 14 }}>평점</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[1,2,3,4,5].map(i => (
+                <button key={i} onClick={() => setRating(i)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 28, color: i <= rating ? '#F59E0B' : '#D1D5DB', transition: 'color 150ms' }}>★</button>
+              ))}
+              <span style={{ marginLeft: 8, fontSize: 14, color: C.textSecondary, alignSelf: 'center' }}>{rating}/5.0</span>
+            </div>
+          </div>
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', fontWeight: 600, marginBottom: 8, fontSize: 14 }}>리뷰 내용 *</label>
+            <textarea value={content} onChange={e => setContent(e.target.value)} rows={5} placeholder="약품에 대한 솔직한 경험을 공유해주세요. 복용 목적, 효과, 부작용 등을 작성해주시면 다른 사용자에게 도움이 됩니다." style={{ width: '100%', padding: '12px 16px', border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 14, resize: 'vertical', outline: 'none', fontFamily: 'Pretendard', lineHeight: 1.6 }} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontWeight: 600, marginBottom: 8, fontSize: 14 }}>사진 첨부 (선택)</label>
+            <div style={{ border: `2px dashed ${C.border}`, borderRadius: 12, padding: 24, textAlign: 'center', cursor: 'pointer', color: C.textSecondary }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>📸</div>
+              <div style={{ fontSize: 14 }}>사진을 드래그하거나 클릭하여 업로드</div>
+              <div style={{ fontSize: 12, marginTop: 4, color: C.textLight }}>최대 3장, JPG/PNG/HEIC (10MB 이하)</div>
+            </div>
+          </div>
+        </div>
+        <div style={{ padding: '16px 28px', borderTop: `1px solid ${C.border}`, display: 'flex', gap: 12 }}>
+          <button onClick={onClose} style={{ flex: 1, padding: '12px', border: `1px solid ${C.border}`, borderRadius: 10, background: 'none', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>취소</button>
+          <button onClick={() => { onSubmit(); onClose(); }} style={{ flex: 2, padding: '12px', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, color: '#fff', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>리뷰 등록하기</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MainPage({ setDrawer }) {
+  const [sort, setSort] = useState('latest');
+  const [filter, setFilter] = useState('전체');
+  const [loading, setLoading] = useState(true);
+  const [reviews, setReviews] = useState(REVIEWS);
+  const [showModal, setShowModal] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => { const t = setTimeout(() => setLoading(false), 1200); return () => clearTimeout(t); }, []);
+
+  const categories = ['전체', '진통제', '영양제', '소화제', '항히스타민'];
+  const filtered = reviews.filter(r => filter === '전체' || r.category === filter);
+  const sorted = [...filtered].sort((a, b) => sort === 'popular' ? b.likes - a.likes : b.id - a.id);
+
+  if (loading) return (
+    <div style={{ padding: 24 }}>
+      {[1,2,3].map(i => (
+        <div key={i} style={{ height: 140, borderRadius: 16, marginBottom: 16, background: 'linear-gradient(90deg, #F1F5F9 25%, #E8E0F0 50%, #F1F5F9 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite' }} />
+      ))}
+    </div>
+  );
+
+  return (
+    <div style={{ padding: '24px 32px' }} key="main">
+      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+      {showModal && <WriteReviewModal onClose={() => setShowModal(false)} onSubmit={() => setToast('리뷰가 등록되었습니다! +50P 적립')} />}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {categories.map(cat => (
+            <button key={cat} onClick={() => setFilter(cat)} style={{ padding: '8px 16px', borderRadius: 20, border: 'none', cursor: 'pointer', background: filter === cat ? C.primary : C.bg, color: filter === cat ? '#fff' : C.textSecondary, fontWeight: filter === cat ? 700 : 400, fontSize: 13, transition: 'all 150ms' }}>{cat}</button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <div style={{ display: 'flex', background: C.bg, borderRadius: 10, overflow: 'hidden', border: `1px solid ${C.border}` }}>
+            {[['latest','최신순'], ['popular','인기순']].map(([val, label]) => (
+              <button key={val} onClick={() => setSort(val)} style={{ padding: '8px 16px', border: 'none', cursor: 'pointer', background: sort === val ? C.primary : 'transparent', color: sort === val ? '#fff' : C.textSecondary, fontWeight: sort === val ? 700 : 400, fontSize: 13, transition: 'all 150ms' }}>{label}</button>
+            ))}
+          </div>
+          <button onClick={() => setShowModal(true)} style={{ padding: '10px 20px', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, color: '#fff', border: 'none', borderRadius: 12, fontWeight: 700, fontSize: 14, cursor: 'pointer', boxShadow: '0 4px 12px rgba(255,77,77,0.3)' }}>+ 리뷰 작성</button>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gap: 16 }}>
+        {sorted.map((review, i) => (
+          <div key={review.id} onClick={() => setDrawer({ item: review, type: 'review' })} style={{ background: C.surface, borderRadius: 16, padding: 24, boxShadow: '0 4px 16px rgba(0,0,0,0.08)', cursor: 'pointer', transition: 'all 200ms', animation: `slideUp 400ms ease ${i * 80}ms both` }}
+            onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.01)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)'; }}
+            onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.08)'; }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 20, background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700 }}>{review.avatar}</div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{review.user} <GradeBadge grade={review.badge} /></div>
+                  <div style={{ fontSize: 12, color: C.textLight, marginTop: 2 }}>{review.date}</div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ background: C.primary + '15', color: C.primary, padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{review.category}</span>
+                {review.images && <span style={{ fontSize: 11, color: C.textLight }}>📷 사진</span>}
+              </div>
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: C.textPrimary, marginBottom: 4 }}>{review.drug}</div>
+              <StarRating rating={review.rating} />
+            </div>
+            <p style={{ fontSize: 14, color: C.textSecondary, lineHeight: 1.6, marginBottom: 16 }}>{review.content}</p>
+            <div style={{ display: 'flex', gap: 16, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+              <button onClick={e => { e.stopPropagation(); setToast('좋아요를 눌렀습니다! +1P'); }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: C.textSecondary, display: 'flex', alignItems: 'center', gap: 4, transition: 'color 150ms' }} onMouseEnter={e => e.currentTarget.style.color = C.primary} onMouseLeave={e => e.currentTarget.style.color = C.textSecondary}>
+                ❤️ {review.likes}
+              </button>
+              <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: C.textSecondary, display: 'flex', alignItems: 'center', gap: 4 }}>💬 {review.comments}</button>
+              <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, color: C.textSecondary, marginLeft: 'auto' }}>공유하기</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InteractionPage({ setDrawer }) {
+  const [expanded, setExpanded] = useState({});
+  const [liked, setLiked] = useState({});
+  const [newComment, setNewComment] = useState({});
+  const [toast, setToast] = useState(null);
+
+  const toggleExpand = (id) => setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+  const handleLike = (id) => { setLiked(prev => ({ ...prev, [id]: !prev[id] })); setToast('좋아요! +1P 적립'); };
+
+  return (
+    <div style={{ padding: '24px 32px' }} key="interaction">
+      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+      <div style={{ marginBottom: 24, display: 'flex', gap: 16 }}>
+        {[['❤️ 48,320', '총 좋아요'], ['💬 94', '오늘 댓글'], ['↩️ 1,203', '총 대댓글']].map(([val, label]) => (
+          <div key={label} style={{ flex: 1, background: C.surface, borderRadius: 16, padding: '20px 24px', boxShadow: '0 4px 16px rgba(0,0,0,0.08)', animation: 'slideUp 400ms ease both' }}>
+            <div style={{ fontSize: 24, fontWeight: 800, color: C.primary, marginBottom: 4 }}>{val}</div>
+            <div style={{ fontSize: 13, color: C.textSecondary }}>{label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gap: 16 }}>
+        {COMMENTS_DATA.map((item, i) => (
+          <div key={item.id} style={{ background: C.surface, borderRadius: 16, padding: 24, boxShadow: '0 4px 16px rgba(0,0,0,0.08)', animation: `slideUp 400ms ease ${i * 80}ms both` }}>
+            <div style={{ display: 'flex', gap: 12, marginBottom: 16, padding: '12px 16px', background: C.bg, borderRadius: 10 }}>
+              <div style={{ fontSize: 20 }}>💊</div>
+              <div>
+                <span style={{ fontSize: 12, color: C.textSecondary }}>원본 리뷰: </span>
+                <span style={{ fontWeight: 600, fontSize: 13 }}>{item.reviewer}</span>
+                <span style={{ fontSize: 12, color: C.textSecondary }}>님의 </span>
+                <span style={{ fontWeight: 600, fontSize: 13, color: C.primary }}>{item.drug}</span>
+                <span style={{ fontSize: 12, color: C.textSecondary }}> 리뷰</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 18, background: `linear-gradient(135deg, #7C3AED, #DB2777)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, flexShrink: 0 }}>{item.commentUser.charAt(0)}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>{item.commentUser}</div>
+                <p style={{ fontSize: 14, color: C.textPrimary, lineHeight: 1.6 }}>{item.content}</p>
+                <div style={{ display: 'flex', gap: 12, marginTop: 10, alignItems: 'center' }}>
+                  <button onClick={() => handleLike(item.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: liked[item.id] ? C.primary : C.textSecondary, fontWeight: liked[item.id] ? 700 : 400, transition: 'all 150ms' }}>❤️ {liked[item.id] ? item.likes + 1 : item.likes}</button>
+                  <button onClick={() => toggleExpand(item.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: C.textSecondary }}>↩️ 대댓글 {item.replies.length}개 {expanded[item.id] ? '▲' : '▼'}</button>
+                  <span style={{ fontSize: 12, color: C.textLight }}>{item.time}</span>
+                </div>
+              </div>
+            </div>
+
+            {expanded[item.id] && item.replies.length > 0 && (
+              <div style={{ marginLeft: 48, animation: 'slideDown 200ms ease' }}>
+                {item.replies.map(reply => (
+                  <div key={reply.id} style={{ display: 'flex', gap: 12, marginBottom: 12, paddingLeft: 16, borderLeft: `3px solid ${C.border}` }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 16, background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 12, flexShrink: 0 }}>{reply.avatar}</div>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>{reply.user}</div>
+                      <p style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.6 }}>{reply.content}</p>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 6, fontSize: 11, color: C.textLight }}>
+                        <span>❤️ {reply.likes}</span>
+                        <span>{reply.time}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 16, marginTop: 8 }}>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <input value={newComment[item.id] || ''} onChange={e => setNewComment(prev => ({ ...prev, [item.id]: e.target.value }))} placeholder="댓글을 입력하세요..." style={{ flex: 1, padding: '10px 14px', border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 13, outline: 'none', fontFamily: 'Pretendard' }} />
+                <button onClick={() => { setNewComment(prev => ({ ...prev, [item.id]: '' })); setToast('댓글이 등록되었습니다! +5P'); }} style={{ padding: '10px 18px', background: C.primary, color: '#fff', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>등록</button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RewardPage({ setDrawer }) {
+  const gradeData = [
+    { name: '플래티넘', count: 87, color: '#7C3AED' },
+    { name: '골드', count: 324, color: '#F59E0B' },
+    { name: '실버', count: 1284, color: '#64748B' },
+    { name: '브론즈', count: 4821, color: '#B45309' },
+  ];
+  const activityData = [
+    { month: '10월', points: 184000 },
+    { month: '11월', points: 212000 },
+    { month: '12월', points: 198000 },
+    { month: '1월', points: 241000 },
+    { month: '2월', points: 267000 },
+    { month: '3월', points: 284000 },
+  ];
+  const badges = [
+    { name: '리뷰왕', desc: '리뷰 50개 작성', icon: '✍️', holders: 324, color: C.primary },
+    { name: '도움왕', desc: '리뷰 좋아요 100개', icon: '❤️', holders: 187, color: '#10B981' },
+    { name: '소통왕', desc: '댓글 200개 작성', icon: '💬', holders: 256, color: '#0891B2' },
+    { name: '전문가', desc: '평균 별점 4.5 이상', icon: '⭐', holders: 89, color: '#7C3AED' },
+  ];
+
+  return (
+    <div style={{ padding: '24px 32px' }} key="reward">
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 24 }}>
+        <div style={{ background: C.surface, borderRadius: 16, padding: 24, boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}>
+          <h4 style={{ fontWeight: 700, marginBottom: 16, fontSize: 15 }}>등급별 회원 현황</h4>
+          {gradeData.map((g, i) => (
+            <div key={g.name} style={{ marginBottom: 14, animation: `slideUp 400ms ease ${i * 80}ms both` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: g.color }}>{g.name}</span>
+                <span style={{ fontSize: 13, color: C.textSecondary }}>{g.count.toLocaleString()}명</span>
+              </div>
+              <div style={{ height: 8, background: '#F3F4F6', borderRadius: 4 }}>
+                <div style={{ height: '100%', background: g.color, borderRadius: 4, animation: 'barGrow 800ms ease 300ms both', '--target-width': `${(g.count / 4821) * 100}%`, width: `${(g.count / 4821) * 100}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ background: C.surface, borderRadius: 16, padding: 24, boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}>
+          <h4 style={{ fontWeight: 700, marginBottom: 16, fontSize: 15 }}>월별 포인트 적립 추이</h4>
+          <div style={{ position: 'relative', height: 180 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={activityData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
+                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 10 }} />
+                <Tooltip formatter={(v) => [`${(v/10000).toFixed(0)}만P`]} />
+                <Bar dataKey="points" fill={C.primary} radius={[4,4,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 24 }}>
+        <h4 style={{ fontWeight: 700, fontSize: 15, marginBottom: 16 }}>달성 배지 종류</h4>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+          {badges.map((b, i) => (
+            <div key={b.name} style={{ background: C.surface, borderRadius: 16, padding: 20, textAlign: 'center', boxShadow: '0 4px 16px rgba(0,0,0,0.08)', animation: `slideUp 400ms ease ${i * 80}ms both`, cursor: 'default' }}>
+              <div style={{ fontSize: 32, marginBottom: 10 }}>{b.icon}</div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: b.color, marginBottom: 4 }}>{b.name}</div>
+              <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 8, lineHeight: 1.4 }}>{b.desc}</div>
+              <div style={{ fontSize: 11, color: C.textLight }}>{b.holders}명 달성</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <h4 style={{ fontWeight: 700, fontSize: 15 }}>베스트 리뷰어 TOP 6</h4>
+          <span style={{ fontSize: 12, color: C.textLight }}>실시간 포인트 기준</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+          {REWARDS_DATA.map((user, i) => (
+            <div key={user.id} onClick={() => setDrawer({ item: user, type: 'reward' })} style={{ background: C.surface, borderRadius: 16, padding: 20, boxShadow: '0 4px 16px rgba(0,0,0,0.08)', cursor: 'pointer', transition: 'all 200ms', animation: `slideUp 400ms ease ${i * 80}ms both`, display: 'flex', alignItems: 'center', gap: 16 }}
+              onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.02)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)'; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.08)'; }}>
+              <div style={{ position: 'relative' }}>
+                <div style={{ width: 48, height: 48, borderRadius: 24, background: `linear-gradient(135deg, ${GRADE_COLORS[user.grade]}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: 18 }}>{user.avatar}</div>
+                {i < 3 && <div style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20, borderRadius: 10, background: ['#FFD700','#C0C0C0','#CD7F32'][i], display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 800, color: '#fff' }}>{i+1}</div>}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{user.user}</div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <GradeBadge grade={user.grade} />
+                  <span style={{ fontSize: 12, color: C.textSecondary }}>{user.points.toLocaleString()} P</span>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: '#10B981', fontWeight: 700 }}>{user.monthChange}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SearchPage({ setDrawer }) {
+  const [query, setQuery] = useState('');
+  const [catFilter, setCatFilter] = useState('전체');
+  const [loading, setLoading] = useState(false);
+
+  const categories = ['전체', '진통제', '영양제', '소화제', '항히스타민'];
+  const filtered = DRUGS.filter(d =>
+    (catFilter === '전체' || d.category === catFilter) &&
+    (query === '' || d.name.includes(query) || d.ingredients.includes(query) || d.effect.includes(query))
+  );
+
+  const handleSearch = () => {
+    if (!query) return;
+    setLoading(true);
+    setTimeout(() => setLoading(false), 800);
+  };
+
+  return (
+    <div style={{ padding: '24px 32px' }} key="search">
+      <div style={{ background: C.surface, borderRadius: 16, padding: 24, marginBottom: 24, boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+          <div style={{ flex: 1, position: 'relative' }}>
+            <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', fontSize: 16 }}>🔍</span>
+            <input value={query} onChange={e => { setQuery(e.target.value); handleSearch(); }} placeholder="약품명, 성분명, 효능으로 검색..." style={{ width: '100%', padding: '12px 16px 12px 42px', border: `1px solid ${C.border}`, borderRadius: 12, fontSize: 14, outline: 'none', fontFamily: 'Pretendard' }} />
+          </div>
+          <button onClick={handleSearch} style={{ padding: '12px 28px', background: `linear-gradient(135deg, #0891B2, #1D4ED8)`, color: '#fff', border: 'none', borderRadius: 12, fontWeight: 700, cursor: 'pointer', fontSize: 14 }}>검색</button>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {categories.map(cat => (
+            <button key={cat} onClick={() => setCatFilter(cat)} style={{ padding: '6px 14px', borderRadius: 20, border: `1px solid ${catFilter === cat ? '#0891B2' : C.border}`, cursor: 'pointer', background: catFilter === cat ? '#0891B2' : 'transparent', color: catFilter === cat ? '#fff' : C.textSecondary, fontWeight: catFilter === cat ? 700 : 400, fontSize: 12, transition: 'all 150ms' }}>{cat}</button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+          {[1,2,3,4].map(i => <div key={i} style={{ height: 180, borderRadius: 16, background: 'linear-gradient(90deg, #F1F5F9 25%, #E8E0F0 50%, #F1F5F9 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite' }} />)}
+        </div>
+      ) : (
+        <>
+          <div style={{ marginBottom: 12, fontSize: 13, color: C.textSecondary }}>검색 결과 <strong>{filtered.length}</strong>개</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+            {filtered.map((drug, i) => (
+              <div key={drug.id} onClick={() => setDrawer({ item: drug, type: 'drug' })} style={{ background: C.surface, borderRadius: 16, padding: 20, boxShadow: '0 4px 16px rgba(0,0,0,0.08)', cursor: 'pointer', transition: 'all 200ms', animation: `slideUp 400ms ease ${i * 80}ms both`, textAlign: 'center' }}
+                onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.03)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.15)'; }}
+                onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.08)'; }}>
+                <div style={{ fontSize: 36, marginBottom: 12 }}>{drug.image}</div>
+                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6, lineHeight: 1.4 }}>{drug.name}</div>
+                <span style={{ background: '#0891B2' + '15', color: '#0891B2', padding: '2px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600 }}>{drug.category}</span>
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 10, gap: 8 }}>
+                  <StarRating rating={Math.round(drug.avgRating)} size={12} />
+                  <span style={{ fontSize: 11, color: C.textSecondary }}>{drug.avgRating}</span>
+                </div>
+                <div style={{ fontSize: 11, color: C.textLight, marginTop: 4 }}>리뷰 {drug.reviews.toLocaleString()}개</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function App() {
+  const [tab, setTab] = useState('main');
+  const [drawer, setDrawer] = useState(null);
+  const meta = PAGE_META[tab];
+
+  const renderContent = () => {
+    const props = { setDrawer: (d) => setDrawer(d) };
+    const map = { main: <MainPage {...props} />, interaction: <InteractionPage {...props} />, reward: <RewardPage {...props} />, search: <SearchPage {...props} /> };
+    return <div key={tab} style={{ animation: 'fadeIn 300ms ease' }}>{map[tab]}</div>;
+  };
+
+  return (
+    <div style={{ width: '100%', minHeight: '100vh', background: C.bg, display: 'flex', flexDirection: 'column' }}>
+      <header style={{ position: 'sticky', top: 0, zIndex: 100, background: C.surface, borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', height: 56, padding: '0 24px', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 16 }}>
+          <div style={{ width: 28, height: 28, borderRadius: 8, background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: 14 }}>약</div>
+          <span style={{ fontWeight: 800, fontSize: 15, color: C.textPrimary }}>약알 리뷰</span>
+        </div>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{ padding: '6px 16px', borderRadius: 8, border: 'none', cursor: 'pointer', background: tab === t.id ? C.primary + '15' : 'transparent', color: tab === t.id ? C.primary : C.textSecondary, fontWeight: tab === t.id ? 700 : 500, fontSize: 14, transition: 'all 150ms' }}>{t.label}</button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: 200, position: 'relative' }}>
+            <input placeholder="약품 검색..." style={{ width: '100%', padding: '8px 12px 8px 32px', border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 13, outline: 'none', fontFamily: 'Pretendard' }} />
+            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 13 }}>🔍</span>
+          </div>
+          <button style={{ width: 34, height: 34, borderRadius: 17, background: C.bg, border: `1px solid ${C.border}`, cursor: 'pointer', fontSize: 16 }}>🔔</button>
+          <div style={{ width: 34, height: 34, borderRadius: 17, background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>김</div>
+        </div>
+      </header>
+
+      <div style={{ background: meta.gradient, padding: '28px 32px', color: '#fff' }}>
+        <h1 style={{ fontSize: 26, fontWeight: 800, marginBottom: 6 }}>{meta.title}</h1>
+        <p style={{ fontSize: 14, opacity: 0.85, marginBottom: 16 }}>{meta.subtitle}</p>
+        <div style={{ display: 'flex', gap: 32 }}>
+          {meta.kpis.map((kpi, i) => (
+            <div key={kpi.label} style={{ animation: `countUp 400ms ease ${i * 120}ms both` }}>
+              <div style={{ fontSize: 24, fontWeight: 800 }}><CountUp end={kpi.value} suffix={kpi.suffix} /></div>
+              <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>{kpi.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <main style={{ flex: 1 }}>{renderContent()}</main>
+
+      {drawer && <Drawer item={drawer.item} type={drawer.type} onClose={() => setDrawer(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
