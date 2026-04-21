@@ -395,6 +395,35 @@ window.p2p3Log = () => {
   return arr;
 };
 
+// verify_jwt=true edge function을 호출할 때 만료된 세션으로 401을 맞는 재발 이슈 대응.
+// 호출 전 임박 만료면 선제 refresh, 401이면 강제 refresh 후 1회 재시도,
+// 그래도 401이면 signOut하여 LoginScreen으로 자연 복귀.
+async function invokeWithAuthRetry(name, options) {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.expires_at) {
+      const secondsLeft = session.expires_at - Math.floor(Date.now() / 1000);
+      if (secondsLeft < 60) await supabase.auth.refreshSession();
+    }
+  } catch (_) { /* refresh 실패는 아래 재시도에서 처리 */ }
+
+  let result = await supabase.functions.invoke(name, options);
+  if (result.error?.context?.status !== 401) return result;
+
+  const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
+  if (refreshErr || !refreshed?.session) {
+    await supabase.auth.signOut();
+    if (window.__p2p3Toast) window.__p2p3Toast('로그인 세션이 만료되어 로그아웃되었습니다. 다시 로그인해주세요.', 'error');
+    return result;
+  }
+  result = await supabase.functions.invoke(name, options);
+  if (result.error?.context?.status === 401) {
+    await supabase.auth.signOut();
+    if (window.__p2p3Toast) window.__p2p3Toast('인증 갱신 후에도 거부되어 로그아웃되었습니다. 다시 로그인해주세요.', 'error');
+  }
+  return result;
+}
+
 function daysBetween(d1, d2) {
   const a = new Date(d1), b = new Date(d2);
   if (isNaN(a) || isNaN(b)) return 0;
@@ -3879,7 +3908,7 @@ function App({ session }) {
     });
     if (toDelete.length > 0) {
       recordDispatchAttempt('handleBatchLost', { slugs: toDelete });
-      supabase.functions.invoke('delete-portfolios', { body:{ slugs:toDelete } })
+      invokeWithAuthRetry('delete-portfolios', { body:{ slugs:toDelete } })
         .then(({ data, error }) => {
           if (error) handleDispatchFailure('handleBatchLost-error', { slugs: toDelete, error, data });
           else if (data && data.dispatched === false) handleDispatchFailure('handleBatchLost-rejected', { slugs: toDelete, data });
@@ -3893,7 +3922,7 @@ function App({ session }) {
     setSaving(true);
     try {
       // 파일 → DB 순으로 함수가 책임짐. 실패 시 row 보존되어 재시도 가능.
-      const { data:fnData, error:fnErr } = await supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug, all:true } });
+      const { data:fnData, error:fnErr } = await invokeWithAuthRetry('delete-portfolios', { body:{ slug:project.slug, all:true } });
       if (fnErr) throw new Error(fnErr.message);
       if (!fnData?.deleted) throw new Error(fnData?.reason || 'GitHub 파일 삭제 실패');
       if (!fnData?.db_updated) {
@@ -3941,7 +3970,7 @@ function App({ session }) {
       // workflow가 파일 삭제 + DB 트림 → Realtime으로 UI 자동 반영. 매일 자정 fallback도 동작.
       if (newStatus==='lost' && (project.portfolio_links||[]).length > 1) {
         recordDispatchAttempt('handleSave', { slug: project.slug });
-        supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug } })
+        invokeWithAuthRetry('delete-portfolios', { body:{ slug:project.slug } })
           .then(({ data, error }) => {
             if (error) handleDispatchFailure('handleSave-error', { slug: project.slug, error, data });
             else if (data && data.dispatched === false) handleDispatchFailure('handleSave-rejected', { slug: project.slug, data });
