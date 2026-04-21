@@ -1,0 +1,964 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>종합 투자 플랫폼 통합 관리 시스템 — 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; min-height: 100vh; font-family: 'Pretendard', -apple-system, sans-serif; }
+#root { display: flex; flex-direction: column; width: 100%; min-height: 100vh; }
+
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+@keyframes fadeInScale { from { opacity: 0; transform: scale(0.95) } to { opacity: 1; transform: scale(1) } }
+@keyframes slideInRight { from { opacity: 0; transform: translateX(30px) } to { opacity: 1; transform: translateX(0) } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes ripple { 0% { transform: scale(0); opacity: 0.5 } 100% { transform: scale(4); opacity: 0 } }
+@keyframes countUp { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+@keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+@keyframes barGrow { from { width: 0% } to { width: var(--target-width) } }
+@keyframes slideDown { from { opacity: 0; transform: translateY(-10px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes blink { 0%, 100% { opacity: 1 } 50% { opacity: 0 } }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+const { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } = Recharts;
+
+// ── 다크 컬러 토큰 ────────────────────────────
+const C = {
+  navBg: '#0A0E1A',
+  bg: '#0F172A',
+  surface: '#1E293B',
+  surface2: '#263348',
+  primary: '#7C3AED',
+  primaryLight: '#A78BFA',
+  accent: '#38BDF8',
+  accent2: '#0EA5E9',
+  positive: '#4ADE80',
+  negative: '#F87171',
+  warning: '#FB923C',
+  border: '#2D3748',
+  borderLight: '#374151',
+  textPrimary: '#F1F5F9',
+  textSecondary: '#94A3B8',
+  textMuted: '#64748B',
+  heroGrad1: '#7C3AED',
+  heroGrad2: '#1E1B4B',
+};
+
+// ── 더미 데이터 ─────────────────────────────
+const STATS_DATA = [
+  { month: '11월', 가입: 42, 리포트: 180, 상담: 28 },
+  { month: '12월', 가입: 56, 리포트: 215, 상담: 35 },
+  { month: '1월', 가입: 38, 리포트: 190, 상담: 22 },
+  { month: '2월', 가입: 71, 리포트: 260, 상담: 44 },
+  { month: '3월', 가입: 85, 리포트: 310, 상담: 52 },
+  { month: '4월', 가입: 64, 리포트: 274, 상담: 39 },
+];
+
+const CHAT_SESSIONS = [
+  { id: 1, name: '김민준', grade: '프리미엄', lastMsg: '포트폴리오 리밸런싱 관련해서 문의드립니다.', time: '14:32', unread: 2, status: 'online' },
+  { id: 2, name: '이서연', grade: 'VIP', lastMsg: '말씀하신 ETF 비중 조정 방법 이해했습니다.', time: '13:15', unread: 0, status: 'online' },
+  { id: 3, name: '박도현', grade: '일반', lastMsg: '감사합니다. 다음 상담 예약하겠습니다.', time: '11:40', unread: 0, status: 'offline' },
+  { id: 4, name: '최지우', grade: 'VIP', lastMsg: '해외 ETF 분산 전략에 대해 궁금한 점이 있어요.', time: '어제', unread: 1, status: 'offline' },
+];
+
+const CHAT_MESSAGES_INIT = [
+  { id: 1, sender: 'user', name: '김민준', text: '안녕하세요. 포트폴리오 리밸런싱 관련해서 문의드립니다.', time: '14:30' },
+  { id: 2, sender: 'advisor', name: '어드바이저', text: '안녕하세요, 김민준 고객님. 현재 보유하신 종목 구성을 말씀해 주시면 분석해 드리겠습니다.', time: '14:31' },
+  { id: 3, sender: 'user', name: '김민준', text: '삼성전자, SK하이닉스, NAVER, 현대차 정도입니다. IT 비중이 너무 높은 것 같아서요.', time: '14:32' },
+];
+
+const AUTO_REPLIES = [
+  '말씀하신 IT 섹터 비중이 높으시군요. 현재 시장 상황을 고려하면 방어주 추가를 권해드립니다.',
+  '구체적인 비중 조정 계획을 세워보겠습니다. 투자 기간과 리스크 선호도는 어떻게 되시나요?',
+  '알겠습니다. 맞춤형 리밸런싱 리포트를 작성해 드리겠습니다. 잠시 기다려 주세요.',
+];
+
+const REPORTS_ADMIN = [
+  { id: 1, title: '2026년 2분기 글로벌 시장 전망', category: '시장분석', publishDate: '2026.04.15', grade: '전체', views: 234, status: 'published' },
+  { id: 2, title: '반도체 섹터 중장기 투자 전략', category: '섹터분석', publishDate: '2026.04.10', grade: '프리미엄', views: 189, status: 'published' },
+  { id: 3, title: 'AI·데이터센터 인프라 투자 리포트', category: '테마분석', publishDate: '2026.04.05', grade: 'VIP', views: 156, status: 'published' },
+  { id: 4, title: '5월 운용 전략 리포트 (초안)', category: '운용전략', publishDate: '작성 중', grade: '프리미엄', views: 0, status: 'draft' },
+];
+
+const MEMBERS_LIST = [
+  { id: 1, name: '김민준', email: 'kim@example.com', grade: '프리미엄', joinDate: '2025.01.15', asset: '41,350,000', status: 'active', lang: 'ko' },
+  { id: 2, name: '이서연', email: 'lee@example.com', grade: 'VIP', joinDate: '2024.11.02', asset: '128,700,000', status: 'active', lang: 'ko' },
+  { id: 3, name: '박도현', email: 'park@example.com', grade: '일반', joinDate: '2025.03.21', asset: '8,500,000', status: 'active', lang: 'ko' },
+  { id: 4, name: 'John Smith', email: 'john@example.com', grade: 'VIP', joinDate: '2025.02.10', asset: '85,200,000', status: 'active', lang: 'en' },
+  { id: 5, name: 'Sarah Kim', email: 'sarah@example.com', grade: '프리미엄', joinDate: '2025.04.05', asset: '32,100,000', status: 'active', lang: 'en' },
+];
+
+// i18n 콘텐츠
+const I18N = {
+  ko: {
+    heroTitle: '알파어드바이저',
+    heroSub: '전문 투자자문 서비스',
+    welcome: '환영합니다',
+    reports: '투자 리포트',
+    consult: '1:1 상담',
+    myPage: '마이페이지',
+    latest: '최신 리포트',
+    subscribe: '뉴스레터 구독',
+    subscribeDesc: '주간 시장 분석과 투자 전략을 이메일로 받아보세요',
+  },
+  en: {
+    heroTitle: 'Alpha Advisor',
+    heroSub: 'Professional Investment Advisory',
+    welcome: 'Welcome',
+    reports: 'Investment Reports',
+    consult: '1:1 Consultation',
+    myPage: 'My Page',
+    latest: 'Latest Reports',
+    subscribe: 'Newsletter',
+    subscribeDesc: 'Get weekly market analysis and investment strategies by email',
+  },
+};
+
+// ── 유틸 ───────────────────────────────────
+function fmt(n) { return n?.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') || '0'; }
+
+// ── Toast ──────────────────────────────────
+function Toast({ message, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  return (
+    <div style={{
+      position: 'fixed', bottom: 28, right: 28, zIndex: 9999,
+      background: C.primary, color: '#fff', padding: '12px 22px',
+      borderRadius: 8, fontSize: 14, fontWeight: 500,
+      animation: 'slideUp 300ms ease', boxShadow: '0 4px 24px rgba(124,58,237,0.4)',
+    }}>✅ {message}</div>
+  );
+}
+
+// ── Modal ──────────────────────────────────
+function Modal({ title, onClose, children, width = 560 }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', animation: 'fadeIn 200ms ease' }} />
+      <div style={{
+        position: 'relative', width, maxHeight: '85vh', background: C.surface,
+        borderRadius: 18, zIndex: 501, animation: 'fadeInScale 200ms ease',
+        display: 'flex', flexDirection: 'column', boxShadow: '0 24px 80px rgba(0,0,0,0.4)',
+        border: `1px solid ${C.border}`,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 24px', borderBottom: `1px solid ${C.border}` }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700, color: C.textPrimary }}>{title}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.textMuted }}>✕</button>
+        </div>
+        <div style={{ padding: 24, overflowY: 'auto', flex: 1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Drawer ─────────────────────────────────
+function Drawer({ item, onClose, children, title }) {
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200, animation: 'fadeIn 200ms ease' }} />
+      <div style={{
+        position: 'fixed', top: 0, right: 0, bottom: 0, width: 460,
+        background: C.surface, borderLeft: `1px solid ${C.border}`,
+        zIndex: 201, overflowY: 'auto', padding: 28,
+        animation: 'slideInRight 200ms ease', boxShadow: '-8px 0 40px rgba(0,0,0,0.3)',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700, color: C.textPrimary }}>{title || item?.name}</h3>
+          <button onClick={onClose} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, width: 32, height: 32, cursor: 'pointer', color: C.textSecondary, fontSize: 14 }}>✕</button>
+        </div>
+        {children}
+      </div>
+    </>
+  );
+}
+
+// ── CountUp ────────────────────────────────
+function CountUp({ end, suffix = '', prefix = '' }) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    let s = 0; const step = end / 60;
+    const t = setInterval(() => { s += step; if (s >= end) { setVal(end); clearInterval(t); } else setVal(Math.floor(s)); }, 16);
+    return () => clearInterval(t);
+  }, [end]);
+  return <span>{prefix}{val.toLocaleString()}{suffix}</span>;
+}
+
+// ── Topnav ─────────────────────────────────
+const TABS = [
+  { id: 'dashboard', label: '관리자 통합 대시보드', icon: '⚡' },
+  { id: 'chat', label: '실시간 상담 채팅', icon: '💬' },
+  { id: 'content', label: '콘텐츠 관리', icon: '📁' },
+  { id: 'i18n', label: '다국어 전환', icon: '🌐' },
+  { id: 'members', label: '회원 관리', icon: '👥' },
+];
+
+function Topnav({ tab, setTab }) {
+  return (
+    <header style={{
+      position: 'sticky', top: 0, zIndex: 100,
+      background: C.navBg, borderBottom: `1px solid ${C.border}`,
+      display: 'flex', alignItems: 'center', height: 56, padding: '0 24px', gap: 4,
+    }}>
+      {/* 로고 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 20, flexShrink: 0 }}>
+        <div style={{ width: 30, height: 30, borderRadius: 8, background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>📈</div>
+        <span style={{ color: C.textPrimary, fontWeight: 800, fontSize: 14 }}>AlphaAdmin</span>
+      </div>
+
+      {/* 탭 */}
+      <div style={{ display: 'flex', gap: 2, flex: 1, overflowX: 'auto' }}>
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            title={t.label}
+            onClick={() => setTab(t.id)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 14px', borderRadius: 8, border: 'none', cursor: 'pointer',
+              fontFamily: 'Pretendard, sans-serif', fontSize: 12, fontWeight: 500,
+              whiteSpace: 'nowrap', transition: 'all 150ms',
+              background: tab === t.id ? C.primary : 'transparent',
+              color: tab === t.id ? '#fff' : C.textSecondary,
+            }}
+          >
+            <span>{t.icon}</span>
+            <span>{t.label}</span>
+            {t.id === 'chat' && (
+              <span style={{ background: C.negative, color: '#fff', fontSize: 9, padding: '1px 5px', borderRadius: 8, fontWeight: 700 }}>3</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: C.positive, animation: 'pulse 2s infinite', display: 'inline-block' }}></span>
+          <span style={{ fontSize: 11, color: C.positive }}>실시간</span>
+        </div>
+        <div style={{ width: 30, height: 30, borderRadius: '50%', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>관</div>
+      </div>
+    </header>
+  );
+}
+
+// ── Hero Banner ─────────────────────────────
+function HeroBanner({ tab, kpis }) {
+  const tabInfo = TABS.find(t => t.id === tab);
+  const gradients = {
+    dashboard: `linear-gradient(135deg, #1E1B4B 0%, #7C3AED 60%, #0EA5E9 100%)`,
+    chat: `linear-gradient(135deg, #0C4A6E 0%, #0EA5E9 60%, #38BDF8 100%)`,
+    content: `linear-gradient(135deg, #14532D 0%, #16A34A 60%, #4ADE80 100%)`,
+    i18n: `linear-gradient(135deg, #4A1D96 0%, #7C3AED 60%, #A78BFA 100%)`,
+    members: `linear-gradient(135deg, #1E3A5F 0%, #1A4E8C 60%, #38BDF8 100%)`,
+  };
+
+  return (
+    <div style={{ background: gradients[tab], padding: '28px 32px', position: 'relative', overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', top: -40, right: -40, width: 220, height: 220, borderRadius: '50%', background: 'rgba(255,255,255,0.04)' }}></div>
+      <div style={{ position: 'absolute', bottom: -30, left: '30%', width: 160, height: 160, borderRadius: '50%', background: 'rgba(255,255,255,0.03)' }}></div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 22 }}>{tabInfo?.icon}</span>
+            <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', letterSpacing: '-0.03em' }}>{tabInfo?.label}</h1>
+          </div>
+          <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, marginTop: 4 }}>종합 투자 플랫폼 관리 시스템</p>
+        </div>
+        <div style={{ display: 'flex', gap: 28 }}>
+          {kpis.map((k, i) => (
+            <div key={i} style={{ textAlign: 'center', animation: `slideUp 400ms ease ${i * 80}ms both` }}>
+              <div style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}><CountUp end={k.value} suffix={k.suffix} /></div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.65)', marginTop: 2 }}>{k.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Dashboard Page ──────────────────────────
+function DashboardPage({ setToast, setDrawer }) {
+  return (
+    <div key="dashboard" style={{ padding: '24px 32px', animation: 'fadeIn 300ms ease' }}>
+      {/* 실시간 KPI 카드 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+        {[
+          { label: '전체 회원', val: 1284, suffix: '명', icon: '👥', color: C.primary },
+          { label: '오늘 신규 상담', val: 8, suffix: '건', icon: '💬', color: C.accent },
+          { label: '실시간 접속자', val: 47, suffix: '명', icon: '🟢', color: C.positive },
+          { label: '이번 달 리포트 열람', val: 2741, suffix: '회', icon: '📄', color: C.warning },
+        ].map((k, i) => (
+          <div key={i} style={{
+            background: C.surface, borderRadius: 18, padding: '18px 20px',
+            border: `1px solid ${C.border}`, animation: `slideUp 400ms ease ${i * 80}ms both`,
+            cursor: 'pointer', transition: 'all 200ms',
+          }}
+            onClick={() => setToast(`${k.label} 상세 통계`)}
+            onMouseEnter={e => { e.currentTarget.style.boxShadow = `0 10px 30px rgba(124,58,237,0.22)`; e.currentTarget.style.transform = 'scale(1.02)'; }}
+            onMouseLeave={e => { e.currentTarget.style.boxShadow = ''; e.currentTarget.style.transform = ''; }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+              <span style={{ fontSize: 11, color: C.textSecondary, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{k.label}</span>
+              <span style={{ fontSize: 18 }}>{k.icon}</span>
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: k.color }}><CountUp end={k.val} suffix={k.suffix} /></div>
+          </div>
+        ))}
+      </div>
+
+      {/* 차트 2개 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 20, marginBottom: 24 }}>
+        {/* 월별 트렌드 */}
+        <div style={{ background: C.surface, borderRadius: 18, padding: '20px', border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary, marginBottom: 16, textTransform: 'uppercase', letterSpacing: '0.04em' }}>월별 트렌드</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={STATS_DATA}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="month" tick={{ fill: C.textMuted, fontSize: 11 }} />
+              <YAxis tick={{ fill: C.textMuted, fontSize: 11 }} />
+              <Tooltip contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, color: C.textPrimary }} />
+              <Area type="monotone" dataKey="가입" stroke={C.primary} fill={C.primary + '30'} strokeWidth={2} />
+              <Area type="monotone" dataKey="상담" stroke={C.accent} fill={C.accent + '20'} strokeWidth={2} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* 리포트 열람 추이 */}
+        <div style={{ background: C.surface, borderRadius: 18, padding: '20px', border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary, marginBottom: 16, textTransform: 'uppercase', letterSpacing: '0.04em' }}>리포트 열람</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={STATS_DATA}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="month" tick={{ fill: C.textMuted, fontSize: 11 }} />
+              <YAxis tick={{ fill: C.textMuted, fontSize: 11 }} />
+              <Tooltip contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, color: C.textPrimary }} />
+              <Bar dataKey="리포트" fill={C.primaryLight} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 최근 상담 목록 */}
+      <div style={{ background: C.surface, borderRadius: 18, padding: '20px', border: `1px solid ${C.border}` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary, textTransform: 'uppercase', letterSpacing: '0.04em' }}>최근 상담 요청</div>
+          <button onClick={() => setToast('전체 상담 목록')} style={{ background: 'transparent', border: `1px solid ${C.border}`, color: C.textSecondary, borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer', fontFamily: 'Pretendard, sans-serif' }}>전체 보기</button>
+        </div>
+        {CHAT_SESSIONS.map((s, i) => (
+          <div key={s.id}
+            onClick={() => setDrawer({ type: 'chat', item: s })}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
+              borderRadius: 10, cursor: 'pointer', transition: 'all 150ms',
+              animation: `slideUp 300ms ease ${i * 60}ms both`,
+              marginBottom: i < CHAT_SESSIONS.length - 1 ? 6 : 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = C.surface2; e.currentTarget.style.borderLeft = `3px solid ${C.primary}`; }}
+            onMouseLeave={e => { e.currentTarget.style.background = ''; e.currentTarget.style.borderLeft = ''; }}
+          >
+            <div style={{ width: 38, height: 38, borderRadius: '50%', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 14, flexShrink: 0, position: 'relative' }}>
+              {s.name[0]}
+              <span style={{ position: 'absolute', bottom: 0, right: 0, width: 10, height: 10, borderRadius: '50%', background: s.status === 'online' ? C.positive : C.textMuted, border: `2px solid ${C.surface}` }}></span>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary }}>{s.name}</span>
+                <span style={{ fontSize: 11, color: C.textMuted }}>{s.time}</span>
+              </div>
+              <div style={{ fontSize: 12, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>{s.lastMsg}</div>
+            </div>
+            {s.unread > 0 && (
+              <span style={{ background: C.negative, color: '#fff', fontSize: 10, padding: '2px 6px', borderRadius: 10, fontWeight: 700, flexShrink: 0 }}>{s.unread}</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Chat Page ───────────────────────────────
+function ChatPage({ setToast }) {
+  const [selectedSession, setSelectedSession] = useState(CHAT_SESSIONS[0]);
+  const [messages, setMessages] = useState(CHAT_MESSAGES_INIT);
+  const [inputText, setInputText] = useState('');
+  const [replyIdx, setReplyIdx] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const messagesEndRef = useRef(null);
+
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  const sendMsg = () => {
+    if (!inputText.trim()) return;
+    const now = new Date(); const t = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
+    setMessages(m => [...m, { id: Date.now(), sender: 'advisor', name: '어드바이저', text: inputText, time: t }]);
+    setInputText('');
+    setTimeout(() => {
+      const reply = AUTO_REPLIES[replyIdx % AUTO_REPLIES.length];
+      setMessages(m => [...m, { id: Date.now() + 1, sender: 'user', name: selectedSession.name, text: reply, time: t }]);
+      setReplyIdx(r => r + 1);
+    }, 1200);
+  };
+
+  const handleUpload = () => {
+    setUploading(true);
+    setTimeout(() => { setUploading(false); setMessages(m => [...m, { id: Date.now(), sender: 'advisor', name: '어드바이저', text: '[파일 첨부] 투자분석_리포트.pdf (2.4MB)', time: '지금', isFile: true }]); }, 1500);
+  };
+
+  const gradeColor = { 'VIP': C.primary, '프리미엄': C.accent, '일반': C.textSecondary };
+
+  return (
+    <div key="chat" style={{ animation: 'fadeIn 300ms ease', display: 'flex', height: 'calc(100vh - 160px)' }}>
+      {/* 상담 목록 */}
+      <div style={{ width: 280, background: C.surface, borderRight: `1px solid ${C.border}`, overflowY: 'auto', flexShrink: 0 }}>
+        <div style={{ padding: '16px', borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ background: C.surface2, borderRadius: 8, padding: '7px 12px', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontSize: 12, color: C.textMuted }}>🔍</span>
+            <input placeholder="회원 검색..." style={{ background: 'transparent', border: 'none', outline: 'none', fontSize: 12, color: C.textPrimary, width: '100%', fontFamily: 'Pretendard, sans-serif' }} />
+          </div>
+        </div>
+        {CHAT_SESSIONS.map((s, i) => (
+          <div key={s.id}
+            onClick={() => setSelectedSession(s)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', cursor: 'pointer',
+              transition: 'all 150ms', borderBottom: `1px solid ${C.border}`,
+              background: selectedSession?.id === s.id ? C.surface2 : 'transparent',
+              borderLeft: selectedSession?.id === s.id ? `3px solid ${C.primary}` : '3px solid transparent',
+            }}
+          >
+            <div style={{ width: 36, height: 36, borderRadius: '50%', background: `linear-gradient(135deg, ${C.primary}80, ${C.accent}80)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 13, position: 'relative', flexShrink: 0 }}>
+              {s.name[0]}
+              <span style={{ position: 'absolute', bottom: 0, right: 0, width: 9, height: 9, borderRadius: '50%', background: s.status === 'online' ? C.positive : C.textMuted, border: `2px solid ${selectedSession?.id === s.id ? C.surface2 : C.surface}` }}></span>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary }}>{s.name}</span>
+                <span style={{ fontSize: 10, color: C.textMuted }}>{s.time}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                <span style={{ color: gradeColor[s.grade] || C.textMuted, fontSize: 10, fontWeight: 700 }}>{s.grade}</span>
+              </div>
+            </div>
+            {s.unread > 0 && <span style={{ background: C.negative, color: '#fff', fontSize: 9, padding: '1px 5px', borderRadius: 8, flexShrink: 0, fontWeight: 700 }}>{s.unread}</span>}
+          </div>
+        ))}
+      </div>
+
+      {/* 채팅 룸 */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: C.bg }}>
+        {/* 채팅 헤더 */}
+        <div style={{ padding: '14px 20px', background: C.surface, borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: '50%', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 13 }}>{selectedSession?.name[0]}</div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.textPrimary }}>{selectedSession?.name}</div>
+              <div style={{ fontSize: 11, color: C.positive }}>● 온라인</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setToast('상담 이력 저장')} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 7, padding: '5px 12px', fontSize: 11, cursor: 'pointer', color: C.textSecondary, fontFamily: 'Pretendard, sans-serif' }}>기록 저장</button>
+            <button onClick={() => setToast('상담 종료 처리')} style={{ background: '#FEE2E2', border: `1px solid #FECACA`, borderRadius: 7, padding: '5px 12px', fontSize: 11, cursor: 'pointer', color: '#DC2626', fontFamily: 'Pretendard, sans-serif' }}>종료</button>
+          </div>
+        </div>
+
+        {/* 메시지 영역 */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {messages.map((msg, i) => (
+            <div key={msg.id} style={{ display: 'flex', justifyContent: msg.sender === 'advisor' ? 'flex-end' : 'flex-start', animation: `slideUp 200ms ease ${i * 30}ms both` }}>
+              <div style={{ maxWidth: '70%' }}>
+                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4, textAlign: msg.sender === 'advisor' ? 'right' : 'left' }}>{msg.name} · {msg.time}</div>
+                <div style={{
+                  padding: '10px 14px', borderRadius: msg.sender === 'advisor' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+                  background: msg.sender === 'advisor' ? C.primary : C.surface,
+                  color: msg.sender === 'advisor' ? '#fff' : C.textPrimary,
+                  fontSize: 13, lineHeight: 1.6, border: msg.sender !== 'advisor' ? `1px solid ${C.border}` : 'none',
+                }}>
+                  {msg.isFile ? <span>📎 {msg.text}</span> : msg.text}
+                </div>
+              </div>
+            </div>
+          ))}
+          {uploading && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 10, padding: '8px 14px', fontSize: 12, color: C.textMuted, animation: 'shimmer 1.5s infinite', backgroundSize: '200% 100%' }}>파일 업로드 중...</div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* 입력 영역 */}
+        <div style={{ padding: '14px 20px', background: C.surface, borderTop: `1px solid ${C.border}`, display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          <button onClick={handleUpload} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, width: 36, height: 36, cursor: 'pointer', fontSize: 14, flexShrink: 0, color: C.textSecondary }}>📎</button>
+          <div style={{ flex: 1, background: C.surface2, borderRadius: 10, border: `1px solid ${C.border}`, padding: '8px 14px' }}>
+            <textarea
+              value={inputText}
+              onChange={e => setInputText(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); } }}
+              placeholder="메시지를 입력하세요... (Enter 전송)"
+              rows={1}
+              style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', resize: 'none', fontSize: 13, color: C.textPrimary, fontFamily: 'Pretendard, sans-serif', lineHeight: 1.5 }}
+            />
+          </div>
+          <button onClick={sendMsg} style={{ background: C.primary, border: 'none', borderRadius: 8, width: 36, height: 36, cursor: 'pointer', fontSize: 14, flexShrink: 0, color: '#fff' }}>↑</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Content Page ────────────────────────────
+function ContentPage({ setToast }) {
+  const [reports, setReports] = useState(REPORTS_ADMIN);
+  const [selectedReport, setSelectedReport] = useState(null);
+  const [uploadModal, setUploadModal] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const [newsletterModal, setNewsletterModal] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendProgress, setSendProgress] = useState(0);
+
+  const handleUpload = () => {
+    setUploading(true); setUploadProgress(0);
+    const timer = setInterval(() => {
+      setUploadProgress(p => {
+        if (p >= 100) { clearInterval(timer); setUploading(false); setUploadModal(false); setToast('리포트가 업로드되었습니다'); return 100; }
+        return p + 12;
+      });
+    }, 200);
+  };
+
+  const handleSendNewsletter = () => {
+    setSending(true); setSendProgress(0);
+    const timer = setInterval(() => {
+      setSendProgress(p => {
+        if (p >= 100) { clearInterval(timer); setSending(false); setNewsletterModal(false); setToast('뉴스레터 발송이 큐에 추가되었습니다 (구독자 1,284명)'); return 100; }
+        return p + 8;
+      });
+    }, 150);
+  };
+
+  const statusStyle = { published: { bg: '#DCFCE7', color: '#16A34A', label: '게시됨' }, draft: { bg: '#FEF9C3', color: '#D97706', label: '초안' } };
+
+  return (
+    <div key="content" style={{ padding: '24px 32px', animation: 'fadeIn 300ms ease' }}>
+      {/* 액션 버튼 */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+        <button onClick={() => setUploadModal(true)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Pretendard, sans-serif' }}>+ 리포트 업로드</button>
+        <button onClick={() => setNewsletterModal(true)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.surface, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Pretendard, sans-serif' }}>📧 뉴스레터 발송</button>
+        <button onClick={() => setToast('공지사항 에디터가 열립니다')} style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.surface, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Pretendard, sans-serif' }}>📝 공지사항 작성</button>
+      </div>
+
+      {/* 리포트 목록 */}
+      <div style={{ background: C.surface, borderRadius: 18, border: `1px solid ${C.border}`, overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary, textTransform: 'uppercase', letterSpacing: '0.04em' }}>리포트 관리</div>
+        </div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: C.surface2 }}>
+              {['제목', '카테고리', '등급', '발행일', '열람', '상태', '액션'].map((h, i) => (
+                <th key={i} style={{ padding: '10px 16px', textAlign: i === 0 ? 'left' : 'center', fontSize: 11, color: C.textMuted, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {reports.map((r, i) => (
+              <tr key={r.id}
+                onClick={() => setSelectedReport(r)}
+                style={{ borderBottom: `1px solid ${C.border}`, cursor: 'pointer', transition: 'background 150ms', animation: `slideUp 300ms ease ${i * 60}ms both` }}
+                onMouseEnter={e => e.currentTarget.style.background = C.surface2}
+                onMouseLeave={e => e.currentTarget.style.background = ''}
+              >
+                <td style={{ padding: '14px 16px', fontSize: 13, fontWeight: 500, color: C.textPrimary }}>{r.title}</td>
+                <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 12, color: C.textSecondary }}>{r.category}</td>
+                <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                  <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, fontWeight: 600, background: r.grade === 'VIP' ? `${C.primary}25` : r.grade === '프리미엄' ? `${C.accent}20` : `${C.positive}20`, color: r.grade === 'VIP' ? C.primaryLight : r.grade === '프리미엄' ? C.accent : C.positive }}>{r.grade}</span>
+                </td>
+                <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 12, color: C.textSecondary }}>{r.publishDate}</td>
+                <td style={{ padding: '14px 16px', textAlign: 'center', fontSize: 13, fontWeight: 600, color: C.textPrimary }}>{r.views.toLocaleString()}</td>
+                <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                  <span style={{ background: statusStyle[r.status].bg, color: statusStyle[r.status].color, fontSize: 11, padding: '3px 8px', borderRadius: 6, fontWeight: 600 }}>{statusStyle[r.status].label}</span>
+                </td>
+                <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                  <button onClick={e => { e.stopPropagation(); setToast(`${r.title} 편집 화면`); }} style={{ background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer', color: C.textSecondary, fontFamily: 'Pretendard, sans-serif' }}>편집</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 업로드 모달 */}
+      {uploadModal && (
+        <Modal title="리포트 PDF 업로드" onClose={() => !uploading && setUploadModal(false)}>
+          {[['제목', 'text', '리포트 제목 입력'], ['카테고리', 'text', '예: 시장분석'], ['접근 등급', 'text', '전체 / 프리미엄 / VIP']].map(([l, t, p]) => (
+            <div key={l} style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 12, color: C.textSecondary, display: 'block', marginBottom: 5, fontWeight: 500 }}>{l}</label>
+              <input type={t} placeholder={p} style={{ width: '100%', background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 12px', fontSize: 13, color: C.textPrimary, outline: 'none', fontFamily: 'Pretendard, sans-serif' }} />
+            </div>
+          ))}
+          {/* 드래그 앤 드롭 */}
+          <div style={{ border: `2px dashed ${C.border}`, borderRadius: 10, padding: '28px', textAlign: 'center', background: C.surface2, marginBottom: 14, cursor: 'pointer' }}
+            onClick={() => !uploading && handleUpload()}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>📤</div>
+            <div style={{ fontSize: 13, color: C.textSecondary }}>PDF 파일을 드래그하거나 클릭하여 선택</div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>AWS S3 스트리밍 업로드 · 최대 100MB</div>
+          </div>
+          {uploading && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 6 }}>업로드 중... {uploadProgress}%</div>
+              <div style={{ height: 6, background: C.surface2, borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${uploadProgress}%`, background: `linear-gradient(90deg, ${C.primary}, ${C.accent})`, borderRadius: 3, transition: 'width 200ms' }}></div>
+              </div>
+            </div>
+          )}
+          <button onClick={() => !uploading && handleUpload()} disabled={uploading} style={{ width: '100%', background: uploading ? C.textMuted : C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '11px', fontSize: 13, fontWeight: 600, cursor: uploading ? 'default' : 'pointer', fontFamily: 'Pretendard, sans-serif' }}>
+            {uploading ? '업로드 중...' : '업로드 시작'}
+          </button>
+        </Modal>
+      )}
+
+      {/* 뉴스레터 발송 모달 */}
+      {newsletterModal && (
+        <Modal title="뉴스레터 발송" onClose={() => !sending && setNewsletterModal(false)}>
+          <div style={{ background: C.surface2, borderRadius: 8, padding: '12px 14px', marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: C.textSecondary }}>발송 대상: 구독자 <strong style={{ color: C.textPrimary }}>1,284명</strong></div>
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>Bull Queue 기반 배치 발송 · 100명 단위 처리</div>
+          </div>
+          {[['제목', '예: [4월 3주] 반도체 섹터 투자 인사이트'], ['발신자 이름', '알파어드바이저']].map(([l, p]) => (
+            <div key={l} style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, color: C.textSecondary, display: 'block', marginBottom: 5, fontWeight: 500 }}>{l}</label>
+              <input placeholder={p} style={{ width: '100%', background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 12px', fontSize: 13, color: C.textPrimary, outline: 'none', fontFamily: 'Pretendard, sans-serif' }} />
+            </div>
+          ))}
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ fontSize: 12, color: C.textSecondary, display: 'block', marginBottom: 5, fontWeight: 500 }}>본문</label>
+            <textarea rows={4} placeholder="뉴스레터 내용을 입력하세요..." style={{ width: '100%', background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 12px', fontSize: 13, color: C.textPrimary, outline: 'none', resize: 'none', fontFamily: 'Pretendard, sans-serif' }}></textarea>
+          </div>
+          {sending && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 6 }}>큐 적재 중... {sendProgress}%</div>
+              <div style={{ height: 6, background: C.surface2, borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${sendProgress}%`, background: `linear-gradient(90deg, ${C.primary}, ${C.positive})`, borderRadius: 3, transition: 'width 150ms' }}></div>
+              </div>
+            </div>
+          )}
+          <button onClick={handleSendNewsletter} disabled={sending} style={{ width: '100%', background: sending ? C.textMuted : C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '11px', fontSize: 13, fontWeight: 600, cursor: sending ? 'default' : 'pointer', fontFamily: 'Pretendard, sans-serif' }}>
+            {sending ? '큐 등록 중...' : '발송 예약'}
+          </button>
+        </Modal>
+      )}
+
+      {selectedReport && (
+        <Drawer item={selectedReport} onClose={() => setSelectedReport(null)} title="리포트 상세">
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+            {[['카테고리', selectedReport.category], ['등급', selectedReport.grade], ['발행일', selectedReport.publishDate], ['누적 열람', selectedReport.views + '회']].map(([k, v]) => (
+              <div key={k} style={{ background: C.surface2, borderRadius: 8, padding: '10px 12px' }}>
+                <div style={{ fontSize: 11, color: C.textMuted }}>{k}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary, marginTop: 3 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button onClick={() => { setSelectedReport(null); setToast('리포트 편집 화면'); }} style={{ background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '11px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Pretendard, sans-serif' }}>편집하기</button>
+            <button onClick={() => { setSelectedReport(null); setToast('리포트 비공개 전환'); }} style={{ background: C.surface2, color: C.textSecondary, border: `1px solid ${C.border}`, borderRadius: 8, padding: '11px', fontSize: 13, cursor: 'pointer', fontFamily: 'Pretendard, sans-serif' }}>비공개 전환</button>
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+// ── I18n Page ───────────────────────────────
+function I18nPage({ setToast }) {
+  const [lang, setLang] = useState('ko');
+  const [previewMode, setPreviewMode] = useState('desktop');
+  const t = I18N[lang];
+
+  return (
+    <div key="i18n" style={{ padding: '24px 32px', animation: 'fadeIn 300ms ease' }}>
+      {/* 언어 전환 컨트롤 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24, background: C.surface, borderRadius: 12, padding: '16px 20px', border: `1px solid ${C.border}` }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary }}>언어 전환 테스트</div>
+        <div style={{ display: 'flex', gap: 0, background: C.surface2, borderRadius: 8, padding: 3 }}>
+          {[['ko', '🇰🇷 한국어'], ['en', '🇺🇸 English']].map(([l, label]) => (
+            <button key={l} onClick={() => { setLang(l); setToast(`${label} 전환 완료`); }} style={{
+              padding: '7px 16px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 500,
+              fontFamily: 'Pretendard, sans-serif', transition: 'all 200ms',
+              background: lang === l ? C.primary : 'transparent',
+              color: lang === l ? '#fff' : C.textSecondary,
+            }}>{label}</button>
+          ))}
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          {['desktop', 'mobile'].map(m => (
+            <button key={m} onClick={() => setPreviewMode(m)} style={{ padding: '6px 12px', borderRadius: 6, border: `1px solid ${C.border}`, cursor: 'pointer', fontSize: 11, fontFamily: 'Pretendard, sans-serif', background: previewMode === m ? C.surface2 : 'transparent', color: previewMode === m ? C.textPrimary : C.textMuted }}>
+              {m === 'desktop' ? '🖥 데스크톱' : '📱 모바일'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+        {/* 사이트 미리보기 */}
+        <div>
+          <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 500, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}>홈페이지 미리보기 ({lang === 'ko' ? '국문' : '영문'})</div>
+          <div style={{ background: '#fff', borderRadius: 12, overflow: 'hidden', border: `1px solid ${C.border}`, transform: previewMode === 'mobile' ? 'scale(0.7) translateX(-20%)' : 'none', transition: 'transform 300ms', transformOrigin: 'top left' }}>
+            {/* 미니 nav */}
+            <div style={{ background: '#0D2147', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 22, height: 22, borderRadius: 4, background: '#2E8BC0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>📈</div>
+              <span style={{ color: '#fff', fontSize: 12, fontWeight: 700 }}>{t.heroTitle}</span>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 10 }}>
+                {[t.reports, t.consult, t.myPage].map((n, i) => <span key={i} style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10 }}>{n}</span>)}
+              </div>
+            </div>
+            {/* Hero */}
+            <div style={{ background: 'linear-gradient(135deg, #1A4E8C, #2E8BC0)', padding: '24px 16px', color: '#fff', textAlign: 'center' }}>
+              <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>{t.heroTitle}</div>
+              <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 12 }}>{t.heroSub}</div>
+              <div style={{ display: 'inline-block', background: 'rgba(255,255,255,0.2)', borderRadius: 20, padding: '5px 14px', fontSize: 11, border: '1px solid rgba(255,255,255,0.3)' }}>{t.welcome} →</div>
+            </div>
+            {/* 리포트 목록 */}
+            <div style={{ padding: '12px 16px', background: '#F8FAFD' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#1C2B4A', marginBottom: 8 }}>{t.latest}</div>
+              {REPORTS_ADMIN.slice(0, 2).map(r => (
+                <div key={r.id} style={{ background: '#fff', borderRadius: 6, padding: '8px 10px', marginBottom: 6, border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 10, color: '#1C2B4A' }}>{r.title}</span>
+                  <span style={{ fontSize: 9, color: '#5A6B82', background: '#F0F4FA', padding: '2px 5px', borderRadius: 4 }}>{r.category}</span>
+                </div>
+              ))}
+              {/* 뉴스레터 */}
+              <div style={{ background: 'linear-gradient(135deg, #1A4E8C15, #2E8BC015)', border: '1px solid #1A4E8C30', borderRadius: 8, padding: '10px 12px', marginTop: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#1A4E8C' }}>📬 {t.subscribe}</div>
+                <div style={{ fontSize: 9, color: '#5A6B82', marginTop: 3 }}>{t.subscribeDesc}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 다국어 콘텐츠 관리 */}
+        <div>
+          <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 500, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.04em' }}>다국어 콘텐츠 등록</div>
+          <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, overflow: 'hidden' }}>
+            {/* 탭 */}
+            <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}` }}>
+              {['국문 (ko)', '영문 (en)'].map((l, i) => (
+                <button key={i} style={{ flex: 1, padding: '10px', background: i === 0 ? C.surface2 : 'transparent', border: 'none', fontSize: 12, fontWeight: i === 0 ? 600 : 400, color: i === 0 ? C.textPrimary : C.textMuted, cursor: 'pointer', fontFamily: 'Pretendard, sans-serif', borderBottom: i === 0 ? `2px solid ${C.primary}` : 'none' }}>{l}</button>
+              ))}
+            </div>
+            <div style={{ padding: 16 }}>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 11, color: C.textMuted, display: 'block', marginBottom: 5, fontWeight: 500 }}>리포트 제목</label>
+                <input defaultValue="반도체 섹터 중장기 투자 전략" style={{ width: '100%', background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 7, padding: '8px 11px', fontSize: 13, color: C.textPrimary, outline: 'none', fontFamily: 'Pretendard, sans-serif' }} />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 11, color: C.textMuted, display: 'block', marginBottom: 5, fontWeight: 500 }}>요약</label>
+                <textarea rows={3} defaultValue="반도체 업황 회복과 AI 수요 급증에 따른 중장기 투자 기회를 분석합니다." style={{ width: '100%', background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 7, padding: '8px 11px', fontSize: 12, color: C.textPrimary, outline: 'none', resize: 'none', fontFamily: 'Pretendard, sans-serif' }}></textarea>
+              </div>
+              <div style={{ background: C.surface2, borderRadius: 7, padding: '8px 12px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, color: C.warning }}>⚠️</span>
+                <span style={{ fontSize: 11, color: C.textSecondary }}>영문 미입력 시 국문으로 fallback 표시됩니다</span>
+              </div>
+              <button onClick={() => setToast('콘텐츠 저장 완료 (PostgreSQL JSONB 저장)')} style={{ width: '100%', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Pretendard, sans-serif' }}>저장</button>
+            </div>
+          </div>
+
+          {/* 번역 통계 */}
+          <div style={{ background: C.surface, borderRadius: 12, border: `1px solid ${C.border}`, padding: 16, marginTop: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textPrimary, marginBottom: 12 }}>다국어 커버리지</div>
+            {[['리포트', 18, 12], ['공지사항', 6, 4], ['FAQ', 24, 24]].map(([cat, total, en]) => (
+              <div key={cat} style={{ marginBottom: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, color: C.textSecondary }}>{cat}</span>
+                  <span style={{ fontSize: 11, color: C.textMuted }}>{en}/{total} 영문</span>
+                </div>
+                <div style={{ height: 5, background: C.surface2, borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${(en / total) * 100}%`, background: en === total ? C.positive : C.primary, borderRadius: 3, transition: 'width 600ms ease' }}></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Members Page ────────────────────────────
+function MembersPage({ setToast }) {
+  const [members, setMembers] = useState(MEMBERS_LIST);
+  const [selectedMember, setSelectedMember] = useState(null);
+  const [filterGrade, setFilterGrade] = useState('전체');
+
+  const grades = ['전체', 'VIP', '프리미엄', '일반'];
+  const filtered = members.filter(m => filterGrade === '전체' || m.grade === filterGrade);
+  const gradeColor = { 'VIP': C.primary, '프리미엄': C.accent, '일반': C.textMuted };
+
+  return (
+    <div key="members" style={{ padding: '24px 32px', animation: 'fadeIn 300ms ease' }}>
+      {/* 필터 */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {grades.map(g => (
+          <button key={g} onClick={() => setFilterGrade(g)} style={{
+            padding: '6px 14px', borderRadius: 20, fontSize: 12, cursor: 'pointer', fontFamily: 'Pretendard, sans-serif', fontWeight: 500,
+            background: filterGrade === g ? C.primary : C.surface,
+            color: filterGrade === g ? '#fff' : C.textSecondary,
+            border: `1px solid ${filterGrade === g ? C.primary : C.border}`,
+          }}>{g} {g !== '전체' && `(${members.filter(m => m.grade === g).length})`}</button>
+        ))}
+        <button onClick={() => setToast('회원 내보내기 (CSV)')} style={{ marginLeft: 'auto', padding: '6px 14px', borderRadius: 8, fontSize: 12, cursor: 'pointer', fontFamily: 'Pretendard, sans-serif', background: C.surface, color: C.textSecondary, border: `1px solid ${C.border}` }}>📥 내보내기</button>
+      </div>
+
+      {/* 회원 카드 그리드 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+        {filtered.map((m, i) => (
+          <div key={m.id}
+            onClick={() => setSelectedMember(m)}
+            style={{
+              background: C.surface, borderRadius: 18, padding: '18px 20px',
+              border: `1px solid ${C.border}`, cursor: 'pointer',
+              transition: 'all 200ms', animation: `slideUp 300ms ease ${i * 60}ms both`,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.boxShadow = `0 10px 32px rgba(124,58,237,0.18)`; e.currentTarget.style.transform = 'scale(1.02)'; e.currentTarget.style.borderColor = C.primary; }}
+            onMouseLeave={e => { e.currentTarget.style.boxShadow = ''; e.currentTarget.style.transform = ''; e.currentTarget.style.borderColor = C.border; }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 38, height: 38, borderRadius: '50%', background: `linear-gradient(135deg, ${gradeColor[m.grade] || C.textMuted}80, ${C.accent}80)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 14 }}>{m.name[0]}</div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.textPrimary }}>{m.name}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted }}>{m.email}</div>
+                </div>
+              </div>
+              <span style={{ fontSize: 10, padding: '3px 8px', borderRadius: 6, fontWeight: 700, background: `${gradeColor[m.grade] || C.textMuted}25`, color: gradeColor[m.grade] || C.textMuted, border: `1px solid ${gradeColor[m.grade] || C.textMuted}40` }}>{m.grade}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', background: C.surface2, borderRadius: 8 }}>
+              <div>
+                <div style={{ fontSize: 10, color: C.textMuted }}>총 자산</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary, marginTop: 2 }}>{m.asset}원</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 10, color: C.textMuted }}>가입일</div>
+                <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>{m.joinDate}</div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 4, marginTop: 10 }}>
+              <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 4, background: m.lang === 'ko' ? '#DBEAFE' : '#FCE7F3', color: m.lang === 'ko' ? '#1D4ED8' : '#9D174D', fontWeight: 600 }}>
+                {m.lang === 'ko' ? '🇰🇷 KO' : '🇺🇸 EN'}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {selectedMember && (
+        <Drawer item={selectedMember} onClose={() => setSelectedMember(null)} title="회원 상세 정보">
+          {[['이메일', selectedMember.email], ['등급', selectedMember.grade], ['가입일', selectedMember.joinDate], ['총 자산', selectedMember.asset + '원'], ['언어 설정', selectedMember.lang === 'ko' ? '한국어' : 'English']].map(([k, v]) => (
+            <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${C.border}` }}>
+              <span style={{ fontSize: 13, color: C.textSecondary }}>{k}</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary }}>{v}</span>
+            </div>
+          ))}
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 10 }}>등급 변경</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {['일반', '프리미엄', 'VIP'].map(g => (
+                <button key={g} onClick={() => { setToast(`${selectedMember.name} → ${g} 등급 변경`); setSelectedMember(null); }} style={{
+                  flex: 1, padding: '9px', borderRadius: 8, border: `1px solid ${gradeColor[g] || C.border}`, cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'Pretendard, sans-serif',
+                  background: selectedMember.grade === g ? `${gradeColor[g] || C.primary}30` : 'transparent',
+                  color: gradeColor[g] || C.textSecondary,
+                }}>{g}</button>
+              ))}
+            </div>
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+// ── Skeleton ───────────────────────────────
+function SkeletonLoader() {
+  return (
+    <div style={{ padding: '24px 32px' }}>
+      {[1, 2, 3].map(i => (
+        <div key={i} style={{ height: 80, borderRadius: 12, marginBottom: 16, background: `linear-gradient(90deg, ${C.surface2} 25%, ${C.border} 50%, ${C.surface2} 75%)`, backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite' }} />
+      ))}
+    </div>
+  );
+}
+
+// ── App ─────────────────────────────────────
+function App() {
+  const [tab, setTab] = useState('dashboard');
+  const [toast, setToast] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [drawer, setDrawer] = useState(null);
+
+  useEffect(() => { setTimeout(() => setLoading(false), 1200); }, []);
+
+  const KPIS = {
+    dashboard: [{ value: 1284, suffix: '명', label: '전체 회원' }, { value: 47, suffix: '명', label: '실시간 접속' }, { value: 2741, suffix: '회', label: '리포트 열람' }],
+    chat: [{ value: 3, suffix: '건', label: '미읽음 상담' }, { value: 12, suffix: '명', label: '오늘 상담' }, { value: 98, suffix: '%', label: '응답률' }],
+    content: [{ value: 6, suffix: '건', label: '게시 리포트' }, { value: 1284, suffix: '명', label: '뉴스레터 구독' }, { value: 274, suffix: '회', label: '오늘 열람' }],
+    i18n: [{ value: 2, suffix: '개', label: '지원 언어' }, { value: 48, suffix: '%', label: '영문 커버리지' }, { value: 5, suffix: '건', label: '미번역 콘텐츠' }],
+    members: [{ value: 1284, suffix: '명', label: '전체 회원' }, { value: 42, suffix: '명', label: 'VIP' }, { value: 156, suffix: '명', label: '프리미엄' }],
+  };
+
+  const handleSetTab = (t) => {
+    setLoading(true); setTab(t); setTimeout(() => setLoading(false), 500);
+  };
+
+  const renderPage = () => {
+    if (loading) return <SkeletonLoader />;
+    switch (tab) {
+      case 'dashboard': return <DashboardPage setToast={setToast} setDrawer={setDrawer} />;
+      case 'chat': return <ChatPage setToast={setToast} />;
+      case 'content': return <ContentPage setToast={setToast} />;
+      case 'i18n': return <I18nPage setToast={setToast} />;
+      case 'members': return <MembersPage setToast={setToast} />;
+      default: return null;
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', minHeight: '100vh', background: C.bg }}>
+      <Topnav tab={tab} setTab={handleSetTab} />
+      <HeroBanner tab={tab} kpis={KPIS[tab] || []} />
+      <main style={{ flex: 1 }}>{renderPage()}</main>
+      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+      {drawer?.type === 'chat' && (
+        <Drawer item={drawer.item} onClose={() => setDrawer(null)} title="상담 세션 상세">
+          <div style={{ marginBottom: 16, background: C.surface2, borderRadius: 8, padding: '12px 14px' }}>
+            <div style={{ fontSize: 12, color: C.textMuted }}>마지막 메시지</div>
+            <div style={{ fontSize: 13, color: C.textPrimary, marginTop: 4 }}>{drawer.item.lastMsg}</div>
+          </div>
+          <button onClick={() => { setDrawer(null); setToast('채팅 화면으로 이동'); handleSetTab('chat'); }} style={{ width: '100%', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '11px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Pretendard, sans-serif' }}>채팅 열기</button>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
