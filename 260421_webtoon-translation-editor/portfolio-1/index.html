@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>웹툰·소설 번역 자동화 에디터 MVP — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net/npm/pretendard@latest/dist/web/static/pretendard.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@latest/dist/web/static/pretendard.css" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; background: #0F0F1A; }
+  #root { display: flex; width: 100%; height: 100vh; overflow: hidden; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2D2D4E; border-radius: 3px; }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes fadeInScale { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
+  @keyframes slideInRight { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: none; } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }
+  @keyframes slideDown { from { opacity: 0; transform: translateY(-16px); } to { opacity: 1; transform: none; } }
+  @keyframes ripple { 0% { transform: scale(0); opacity: 0.6; } 100% { transform: scale(4); opacity: 0; } }
+  @keyframes barGrow { from { width: 0%; } to { width: 100%; } }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+  @keyframes glowPulse { 0%,100% { box-shadow: 0 0 8px rgba(99,102,241,0.3); } 50% { box-shadow: 0 0 20px rgba(99,102,241,0.6); } }
+  @keyframes countUp { from { opacity: 0; transform: scale(0.8); } to { opacity: 1; transform: scale(1); } }
+  @keyframes dotBlink { 0%,80%,100% { opacity: 0; } 40% { opacity: 1; } }
+  @keyframes toastSlide { from { opacity: 0; transform: translateX(120%); } to { opacity: 1; transform: none; } }
+
+  .fade-in { animation: fadeIn 0.3s ease both; }
+  .slide-in { animation: slideIn 0.3s ease both; }
+  .glow-pulse { animation: glowPulse 2s ease-in-out infinite; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+const { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } = Recharts;
+
+/* ── CountUp 훅 ── */
+function useCountUp(target, duration = 1200) {
+  const [value, setValue] = useState(0);
+  useEffect(() => {
+    let start = 0;
+    const step = target / (duration / 16);
+    const timer = setInterval(() => {
+      start += step;
+      if (start >= target) { setValue(target); clearInterval(timer); }
+      else setValue(Math.floor(start));
+    }, 16);
+    return () => clearInterval(timer);
+  }, [target]);
+  return value;
+}
+
+/* ── 색상 토큰 ── */
+const C = {
+  primary: '#6366F1', primaryHover: '#4F52CC', primaryLight: 'rgba(99,102,241,0.15)',
+  secondary: '#22D3EE', accent: '#A78BFA',
+  bg: '#0F0F1A', surface: '#1A1A2E', surface2: '#16213E', surface3: '#1E1E30',
+  border: '#2D2D4E', borderLight: '#3A3A5C',
+  text: '#F1F5F9', textMuted: '#94A3B8', textDim: '#64748B',
+  success: '#34D399', warning: '#FBBF24', error: '#F87171', info: '#60A5FA',
+  gradient: 'linear-gradient(135deg, #6366F1, #A78BFA)',
+};
+
+/* ── 더미 데이터 ── */
+const WORKS = [
+  { id: 1, title: '빛의 전사 — 시즌 2', type: 'webtoon', episodes: 48, langs: ['EN','JA','ZH','ES'], status: 'active', progress: { EN:92, JA:78, ZH:65, ES:43 }, views: 12840, updated: '2026-04-20' },
+  { id: 2, title: '달빛 소나타', type: 'novel', episodes: 32, langs: ['EN','JA','FR'], status: 'active', progress: { EN:100, JA:88, FR:61 }, views: 8320, updated: '2026-04-19' },
+  { id: 3, title: '강철 도시 연대기', type: 'webtoon', episodes: 24, langs: ['EN','JA','ZH','DE','ES'], status: 'review', progress: { EN:100, JA:100, ZH:95, DE:72, ES:58 }, views: 21550, updated: '2026-04-18' },
+  { id: 4, title: '벚꽃이 지는 날', type: 'novel', episodes: 18, langs: ['EN','ZH'], status: 'draft', progress: { EN:34, ZH:12 }, views: 3210, updated: '2026-04-17' },
+  { id: 5, title: '미래 탐정단', type: 'webtoon', episodes: 60, langs: ['EN','JA','ZH','KO_REVIEW'], status: 'published', progress: { EN:100, JA:100, ZH:100, KO_REVIEW:100 }, views: 45900, updated: '2026-04-15' },
+];
+
+const TRANSLATION_STATS = [
+  { month: '11월', total: 8420, auto: 6100, manual: 2320 },
+  { month: '12월', total: 11200, auto: 8300, manual: 2900 },
+  { month: '1월', total: 9800, auto: 7200, manual: 2600 },
+  { month: '2월', total: 14500, auto: 11000, manual: 3500 },
+  { month: '3월', total: 16800, auto: 13200, manual: 3600 },
+  { month: '4월', total: 13400, auto: 10800, manual: 2600 },
+];
+
+const WEBTOON_PAGES = [
+  { page: 1, panels: [
+    { id:'p1-1', x: 5, y: 8, w: 42, h: 12, original: "Darkness…", translation: "어둠이 깊어지는 밤…" },
+    { id:'p1-2', x: 55, y: 5, w: 40, h: 10, original: "The signal!", translation: "신호다!" },
+    { id:'p1-3', x: 15, y: 55, w: 70, h: 14, original: "We move at dawn.", translation: "새벽에 출발한다." },
+  ]},
+];
+
+const NOVEL_PARAGRAPHS = [
+  { id: 1, original: "The city of New Arcos stretched endlessly beneath the violet sky, its towers piercing the low-hanging clouds like silver needles.", translated: "보라빛 하늘 아래 뉴아르코스 시가 끝없이 펼쳐졌고, 그 탑들은 낮게 드리운 구름을 은빛 바늘처럼 꿰뚫었다.", status: 'approved' },
+  { id: 2, original: "Mira adjusted the collar of her translator's coat and stepped onto the crowded platform.", translated: "미라는 번역가 코트의 깃을 여미고 북적이는 플랫폼으로 발을 내디뎠다.", status: 'approved' },
+  { id: 3, original: "The automated voice announced platform seven in six languages simultaneously.", translated: "", status: 'pending', autoResult: "자동화된 목소리가 6개 언어로 7번 플랫폼을 동시에 안내했다." },
+  { id: 4, original: "She had exactly fourteen minutes before the last train departed for the outer districts.", translated: "", status: 'auto', autoResult: "그녀에게는 외곽 구역으로 향하는 마지막 열차가 출발하기까지 정확히 14분이 남아 있었다." },
+  { id: 5, original: "Fourteen minutes to find the artifact and disappear without a trace.", translated: "유물을 찾아 흔적 없이 사라질 14분.", status: 'approved' },
+  { id: 6, original: "But the city had other plans.", translated: "", status: 'pending', autoResult: "" },
+];
+
+const LANG_DATA = [
+  { code: 'EN', label: 'English', flag: '🇺🇸', progress: 92, approved: 44, pending: 4 },
+  { code: 'JA', label: '日本語', flag: '🇯🇵', progress: 78, approved: 37, pending: 11 },
+  { code: 'ZH', label: '中文', flag: '🇨🇳', progress: 65, approved: 31, pending: 17 },
+  { code: 'ES', label: 'Español', flag: '🇪🇸', progress: 43, approved: 20, pending: 28 },
+];
+
+/* ── 공통 컴포넌트 ── */
+function Modal({ title, onClose, children, width = 600 }) {
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:1000, background:'rgba(0,0,0,0.7)', display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(4px)' }} onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className="fade-in" style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, width, maxWidth:'90vw', maxHeight:'85vh', overflow:'hidden', display:'flex', flexDirection:'column' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px', borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ color:C.text, fontWeight:700, fontSize:16 }}>{title}</span>
+          <button onClick={onClose} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:20, lineHeight:1 }}>×</button>
+        </div>
+        <div style={{ overflow:'auto', flex:1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Toast({ message, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  return (
+    <div style={{ position:'fixed', bottom:24, right:24, zIndex:2000, background:C.surface, border:`1px solid ${C.success}`, borderRadius:10, padding:'12px 20px', color:C.text, animation:'toastSlide 0.3s ease', display:'flex', alignItems:'center', gap:10, boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
+      <span style={{ color:C.success, fontSize:18 }}>✓</span>
+      <span style={{ fontSize:14 }}>{message}</span>
+      <button onClick={onClose} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', marginLeft:8 }}>×</button>
+    </div>
+  );
+}
+
+function Badge({ status }) {
+  const map = { active:{ bg:'rgba(52,211,153,0.15)', color:C.success, label:'진행중' }, review:{ bg:'rgba(251,191,36,0.15)', color:C.warning, label:'리뷰중' }, draft:{ bg:'rgba(148,163,184,0.15)', color:C.textMuted, label:'초안' }, published:{ bg:'rgba(99,102,241,0.15)', color:C.primary, label:'발행완료' } };
+  const s = map[status] || map.draft;
+  return <span style={{ background:s.bg, color:s.color, padding:'2px 10px', borderRadius:99, fontSize:12, fontWeight:600 }}>{s.label}</span>;
+}
+
+/* ── 사이드바 ── */
+const NAV_ITEMS = [
+  { id:'dashboard', label:'작가 대시보드', icon:'⊞' },
+  { id:'webtoon', label:'웹툰 에디터', icon:'◧' },
+  { id:'novel', label:'소설 에디터', icon:'≡' },
+  { id:'viewer', label:'언어 뷰어', icon:'◉' },
+];
+
+function Sidebar({ active, onNav }) {
+  return (
+    <aside style={{ width:256, background:C.surface, borderRight:`1px solid ${C.border}`, display:'flex', flexDirection:'column', flexShrink:0, height:'100vh' }}>
+      <div style={{ padding:'24px 20px 20px', borderBottom:`1px solid ${C.border}` }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:C.gradient, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>⚡</div>
+          <div>
+            <div style={{ color:C.text, fontWeight:700, fontSize:14, lineHeight:1.2 }}>TranslateStudio</div>
+            <div style={{ color:C.textMuted, fontSize:11, marginTop:2 }}>번역 자동화 플랫폼</div>
+          </div>
+        </div>
+      </div>
+      <nav style={{ flex:1, padding:'16px 12px', display:'flex', flexDirection:'column', gap:4 }}>
+        {NAV_ITEMS.map(item => (
+          <button key={item.id}
+            title={item.label}
+            onClick={() => onNav(item.id)}
+            style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 14px', borderRadius:10, border:'none', cursor:'pointer', background: active===item.id ? C.primaryLight : 'transparent', color: active===item.id ? C.primary : C.textMuted, transition:'all 0.15s', fontSize:14, fontWeight: active===item.id ? 600 : 400, textAlign:'left' }}
+          >
+            <span style={{ fontSize:17, opacity:0.9 }}>{item.icon}</span>
+            <span>{item.label}</span>
+            {active===item.id && <span style={{ marginLeft:'auto', width:4, height:4, borderRadius:99, background:C.primary }} />}
+          </button>
+        ))}
+      </nav>
+      <div style={{ padding:'16px 20px', borderTop:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:10 }}>
+        <div style={{ width:32, height:32, borderRadius:99, background:'linear-gradient(135deg,#A78BFA,#6366F1)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, color:'#fff', fontWeight:700 }}>김</div>
+        <div>
+          <div style={{ color:C.text, fontSize:13, fontWeight:600 }}>김도준</div>
+          <div style={{ color:C.textMuted, fontSize:11 }}>작가 계정</div>
+        </div>
+        <button style={{ marginLeft:'auto', background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:16 }}>⚙</button>
+      </div>
+    </aside>
+  );
+}
+
+function TopBar({ title }) {
+  return (
+    <div style={{ height:56, background:C.surface, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', padding:'0 24px', gap:16, flexShrink:0 }}>
+      <span style={{ color:C.text, fontWeight:700, fontSize:16, flex:1 }}>{title}</span>
+      <div style={{ display:'flex', alignItems:'center', gap:8, background:C.surface2, border:`1px solid ${C.border}`, borderRadius:8, padding:'6px 12px' }}>
+        <span style={{ color:C.textMuted, fontSize:13 }}>🔍</span>
+        <input placeholder="작품, 언어 검색…" style={{ background:'none', border:'none', color:C.text, fontSize:13, outline:'none', width:160 }} />
+      </div>
+      <button style={{ position:'relative', background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:18, padding:'4px 8px' }}>
+        🔔
+        <span style={{ position:'absolute', top:4, right:4, width:8, height:8, borderRadius:99, background:C.error }} />
+      </button>
+      <div style={{ width:32, height:32, borderRadius:99, background:C.gradient, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, color:'#fff', fontWeight:700, cursor:'pointer' }}>김</div>
+    </div>
+  );
+}
+
+/* ── KPI 카드 (CountUp) ── */
+function KpiCard({ label, value, unit, icon, color, delay=0 }) {
+  const displayed = useCountUp(value, 1000);
+  return (
+    <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:14, padding:20, animation:`slideUp 0.4s ${delay}s both` }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+        <span style={{ color:C.textMuted, fontSize:13 }}>{label}</span>
+        <span style={{ fontSize:22 }}>{icon}</span>
+      </div>
+      <div style={{ display:'flex', alignItems:'baseline', gap:4 }}>
+        <span style={{ color, fontSize:32, fontWeight:800 }}>{displayed}</span>
+        <span style={{ color:C.textMuted, fontSize:14 }}>{unit}</span>
+      </div>
+    </div>
+  );
+}
+
+/* ── 대시보드 페이지 ── */
+function DashboardPage({ setModal, showToast }) {
+  const totalWorks = WORKS.length;
+  const activeWorks = WORKS.filter(w => w.status==='active').length;
+  const totalLangPairs = WORKS.reduce((a,w) => a+w.langs.length, 0);
+  const avgProgress = Math.round(WORKS.reduce((a,w) => {
+    const vals = Object.values(w.progress);
+    return a + vals.reduce((x,y)=>x+y,0)/vals.length;
+  }, 0) / WORKS.length);
+
+  return (
+    <div className="fade-in" style={{ padding:24, display:'flex', flexDirection:'column', gap:24 }}>
+      {/* KPI 카드 */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:16 }}>
+        {[
+          { label:'등록 작품', value:totalWorks, unit:'개', icon:'📚', color:C.primary },
+          { label:'진행 중 작품', value:activeWorks, unit:'개', icon:'⚡', color:C.success },
+          { label:'번역 언어 쌍', value:totalLangPairs, unit:'건', icon:'🌐', color:C.secondary },
+          { label:'평균 번역 진행률', value:avgProgress, unit:'%', icon:'📊', color:C.accent },
+        ].map((kpi, i) => (
+          <KpiCard key={kpi.label} {...kpi} delay={i * 0.08} />
+        ))}
+      </div>
+
+      {/* 차트 + 최근 작품 */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 380px', gap:16 }}>
+        <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:14, padding:20 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+            <span style={{ color:C.text, fontWeight:700, fontSize:15 }}>월별 번역 처리량</span>
+            <span style={{ color:C.textMuted, fontSize:12 }}>자동번역 vs 수동번역</span>
+          </div>
+          <div style={{ height:220 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={TRANSLATION_STATS} margin={{ top:5, right:10, left:0, bottom:0 }}>
+                <defs>
+                  <linearGradient id="autoGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.primary} stopOpacity={0.4} />
+                    <stop offset="95%" stopColor={C.primary} stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="manualGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.secondary} stopOpacity={0.4} />
+                    <stop offset="95%" stopColor={C.secondary} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis dataKey="month" stroke={C.textDim} tick={{ fill:C.textMuted, fontSize:12 }} />
+                <YAxis stroke={C.textDim} tick={{ fill:C.textMuted, fontSize:11 }} />
+                <Tooltip contentStyle={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, color:C.text }} />
+                <Area type="monotone" dataKey="auto" stroke={C.primary} fill="url(#autoGrad)" strokeWidth={2} name="자동번역" />
+                <Area type="monotone" dataKey="manual" stroke={C.secondary} fill="url(#manualGrad)" strokeWidth={2} name="수동편집" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:14, padding:20 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+            <span style={{ color:C.text, fontWeight:700, fontSize:15 }}>번역 언어 현황</span>
+            <span style={{ color:C.primary, fontSize:12, cursor:'pointer' }}>전체 보기</span>
+          </div>
+          {LANG_DATA.map(lang => (
+            <div key={lang.code} style={{ marginBottom:14 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:5 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <span>{lang.flag}</span>
+                  <span style={{ color:C.text, fontSize:13, fontWeight:600 }}>{lang.label}</span>
+                </div>
+                <span style={{ color:C.textMuted, fontSize:12 }}>{lang.approved}회차 승인 / {lang.pending}개 대기</span>
+              </div>
+              <div style={{ height:6, background:C.border, borderRadius:99 }}>
+                <div style={{ height:6, borderRadius:99, width:`${lang.progress}%`, background: lang.progress===100 ? C.success : lang.progress>60 ? C.primary : C.warning, transition:'width 1s ease' }} />
+              </div>
+              <span style={{ color:C.textMuted, fontSize:11 }}>{lang.progress}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 작품 목록 */}
+      <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:14, overflow:'hidden' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'16px 20px', borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ color:C.text, fontWeight:700, fontSize:15 }}>내 작품 목록</span>
+          <button onClick={() => setModal('newWork')} style={{ background:C.primaryLight, border:`1px solid ${C.primary}`, color:C.primary, borderRadius:8, padding:'6px 14px', fontSize:13, fontWeight:600, cursor:'pointer' }}>+ 새 작품</button>
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ background:C.surface3 }}>
+              {['작품명','유형','언어','번역 진행률','상태','최근 수정'].map(h => (
+                <th key={h} style={{ padding:'10px 16px', color:C.textMuted, fontSize:12, fontWeight:600, textAlign:'left' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {WORKS.map((w, i) => (
+              <tr key={w.id}
+                onClick={() => setModal({ type:'workDetail', work:w })}
+                style={{ borderTop:`1px solid ${C.border}`, cursor:'pointer', transition:'background 0.15s', animation:`slideUp ${0.05 + i * 0.06}s both` }}
+                onMouseEnter={e => e.currentTarget.style.background=C.surface3}
+                onMouseLeave={e => e.currentTarget.style.background='transparent'}
+              >
+                <td style={{ padding:'12px 16px', color:C.text, fontWeight:600, fontSize:14 }}>{w.title}</td>
+                <td style={{ padding:'12px 16px' }}>
+                  <span style={{ background: w.type==='webtoon' ? 'rgba(167,139,250,0.15)' : 'rgba(34,211,238,0.15)', color: w.type==='webtoon' ? C.accent : C.secondary, borderRadius:6, padding:'2px 8px', fontSize:12, fontWeight:600 }}>{w.type==='webtoon'?'웹툰':'소설'}</span>
+                </td>
+                <td style={{ padding:'12px 16px', color:C.textMuted, fontSize:13 }}>{w.langs.join(' · ')}</td>
+                <td style={{ padding:'12px 16px', minWidth:120 }}>
+                  <div style={{ display:'flex', gap:2 }}>
+                    {Object.values(w.progress).map((p,j) => (
+                      <div key={j} title={`${p}%`} style={{ flex:1, height:4, borderRadius:2, background: p===100 ? C.success : p>60 ? C.primary : C.warning, opacity: p===0 ? 0.2 : 1 }} />
+                    ))}
+                  </div>
+                  <span style={{ color:C.textMuted, fontSize:11, marginTop:3, display:'block' }}>
+                    {Math.round(Object.values(w.progress).reduce((a,b)=>a+b,0)/Object.values(w.progress).length)}% 평균
+                  </span>
+                </td>
+                <td style={{ padding:'12px 16px' }}><Badge status={w.status} /></td>
+                <td style={{ padding:'12px 16px', color:C.textMuted, fontSize:13 }}>{w.updated}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ── 웹툰 에디터 페이지 ── */
+function WebtoonEditorPage({ showToast }) {
+  const [selectedPanel, setSelectedPanel] = useState(null);
+  const [editText, setEditText] = useState('');
+  const [autoSaveState, setAutoSaveState] = useState('saved'); // saved | saving | modified
+  const [showAddPanel, setShowAddPanel] = useState(false);
+
+  const triggerSave = useCallback(() => {
+    setAutoSaveState('saving');
+    setTimeout(() => setAutoSaveState('saved'), 1200);
+  }, []);
+
+  const handleTextChange = (val) => {
+    setEditText(val);
+    setAutoSaveState('modified');
+    setTimeout(triggerSave, 800);
+  };
+
+  const panels = WEBTOON_PAGES[0].panels;
+
+  return (
+    <div className="fade-in" style={{ padding:'16px 24px', height:'calc(100vh - 56px)', display:'flex', flexDirection:'column', gap:12 }}>
+      {/* 툴바 */}
+      <div style={{ display:'flex', alignItems:'center', gap:12, background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, padding:'10px 16px' }}>
+        <select style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.text, borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>
+          <option>빛의 전사 — 시즌 2</option>
+          <option>강철 도시 연대기</option>
+        </select>
+        <select style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.text, borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>
+          <option>EP.01 — 각성의 밤</option>
+          <option>EP.02 — 만남</option>
+        </select>
+        <select style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.text, borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>
+          <option>🇺🇸 English</option>
+          <option>🇯🇵 Japanese</option>
+          <option>🇨🇳 Chinese</option>
+        </select>
+        <div style={{ flex:1 }} />
+        <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:13, color: autoSaveState==='saved' ? C.success : autoSaveState==='saving' ? C.warning : C.textMuted }}>
+          {autoSaveState==='saving' ? <span style={{ animation:'spin 1s linear infinite', display:'inline-block' }}>↻</span> : autoSaveState==='saved' ? '✓' : '●'}
+          <span>{autoSaveState==='saved' ? '저장됨' : autoSaveState==='saving' ? '저장 중…' : '수정됨'}</span>
+        </div>
+        <button onClick={() => { showToast('DeepL API 자동 번역 완료'); triggerSave(); }} style={{ background:'linear-gradient(135deg,#6366F1,#A78BFA)', border:'none', color:'#fff', borderRadius:8, padding:'6px 14px', fontSize:13, fontWeight:600, cursor:'pointer' }}>⚡ 자동 번역</button>
+      </div>
+
+      {/* 듀얼 에디터 영역 */}
+      <div style={{ flex:1, display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, minHeight:0 }}>
+        {/* 좌측: 원본 이미지 */}
+        <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:12, overflow:'hidden', display:'flex', flexDirection:'column' }}>
+          <div style={{ padding:'10px 16px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:8 }}>
+            <span style={{ color:C.textMuted, fontSize:12, fontWeight:600 }}>원본 이미지 (스크롤 동기화)</span>
+            <span style={{ background:'rgba(248,113,113,0.15)', color:C.error, borderRadius:4, padding:'1px 6px', fontSize:11 }}>READ ONLY</span>
+          </div>
+          <div style={{ flex:1, position:'relative', overflow:'auto', background:'#0A0A14' }}>
+            {/* 시뮬레이션: 웹툰 컷들 */}
+            <div style={{ padding:16, display:'flex', flexDirection:'column', gap:3 }}>
+              {[
+                { h:160, color:'#1A1A30', text:'[컷 1] 어두운 도시 전경 + 대사 박스' },
+                { h:120, color:'#12122A', text:'[컷 2] 캐릭터 클로즈업' },
+                { h:200, color:'#15152E', text:'[컷 3] 액션 씬 (배경 분리형)' },
+              ].map((cut, i) => (
+                <div key={i} style={{ height:cut.h, background:cut.color, borderRadius:4, display:'flex', alignItems:'center', justifyContent:'center', border:`1px solid ${C.border}`, position:'relative' }}>
+                  <span style={{ color:C.textDim, fontSize:12, textAlign:'center' }}>{cut.text}</span>
+                  {panels.filter((_,j) => j===i).map(p => (
+                    <div key={p.id} style={{ position:'absolute', left:`${p.x}%`, top:`${p.y}%`, width:`${p.w}%`, height:`${p.h}%`, border:'2px dashed rgba(99,102,241,0.4)', borderRadius:4, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                      <span style={{ color:'rgba(99,102,241,0.6)', fontSize:10 }}>{p.original}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* 우측: 번역 레이어 에디터 */}
+        <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:12, overflow:'hidden', display:'flex', flexDirection:'column' }}>
+          <div style={{ padding:'10px 16px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <span style={{ color:C.textMuted, fontSize:12, fontWeight:600 }}>번역 레이어 에디터</span>
+            <button onClick={() => setShowAddPanel(true)} style={{ background:C.primaryLight, border:`1px solid ${C.primary}`, color:C.primary, borderRadius:6, padding:'3px 10px', fontSize:12, cursor:'pointer' }}>+ 텍스트 박스</button>
+          </div>
+          <div style={{ flex:1, position:'relative', overflow:'auto', background:'#0A0A14' }}>
+            <div style={{ padding:16, display:'flex', flexDirection:'column', gap:3 }}>
+              {[
+                { h:160, color:'#14142A' },
+                { h:120, color:'#0E0E22' },
+                { h:200, color:'#111124' },
+              ].map((cut, i) => (
+                <div key={i} style={{ height:cut.h, background:cut.color, borderRadius:4, border:`1px solid ${C.border}`, position:'relative', cursor:'crosshair' }} title="클릭하여 텍스트 박스 추가">
+                  {panels.filter((_,j) => j===i).map(p => (
+                    <div key={p.id}
+                      onClick={() => { setSelectedPanel(p); setEditText(p.translation); }}
+                      style={{ position:'absolute', left:`${p.x}%`, top:`${p.y}%`, width:`${p.w}%`, height:`${p.h}%`, border: selectedPanel?.id===p.id ? `2px solid ${C.primary}` : '2px solid rgba(99,102,241,0.5)', borderRadius:4, background:'rgba(15,15,26,0.85)', cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', padding:4 }}
+                    >
+                      <span style={{ color:C.text, fontSize:9, textAlign:'center', lineHeight:1.3 }}>{p.translation || <span style={{ color:C.textDim }}>번역 입력…</span>}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 텍스트 편집 패널 */}
+          {selectedPanel && (
+            <div style={{ borderTop:`1px solid ${C.border}`, padding:14 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+                <span style={{ color:C.textMuted, fontSize:12 }}>원본: <em style={{ color:C.textDim }}>{selectedPanel.original}</em></span>
+                <span style={{ color:C.textDim, fontSize:11 }}>좌표: ({selectedPanel.x}%, {selectedPanel.y}%) | 크기: {selectedPanel.w}×{selectedPanel.h}%</span>
+              </div>
+              <textarea
+                value={editText}
+                onChange={e => handleTextChange(e.target.value)}
+                placeholder="번역 텍스트를 입력하세요…"
+                style={{ width:'100%', background:C.surface3, border:`1px solid ${selectedPanel ? C.primary : C.border}`, borderRadius:8, padding:'8px 12px', color:C.text, fontSize:13, resize:'none', height:56, outline:'none', fontFamily:'inherit' }}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 텍스트 박스 추가 모달 */}
+      {showAddPanel && (
+        <Modal title="텍스트 박스 추가" onClose={() => setShowAddPanel(false)} width={440}>
+          <div style={{ padding:24, display:'flex', flexDirection:'column', gap:16 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              {[['X 좌표 (%)','5'],['Y 좌표 (%)','10'],['너비 (%)','40'],['높이 (%)','12']].map(([label,def]) => (
+                <div key={label}>
+                  <label style={{ color:C.textMuted, fontSize:12, display:'block', marginBottom:4 }}>{label}</label>
+                  <input defaultValue={def} type="number" style={{ width:'100%', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:6, padding:'8px 10px', color:C.text, fontSize:14, outline:'none' }} />
+                </div>
+              ))}
+            </div>
+            <div>
+              <label style={{ color:C.textMuted, fontSize:12, display:'block', marginBottom:4 }}>원본 텍스트</label>
+              <input defaultValue="" placeholder="Original text…" style={{ width:'100%', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:6, padding:'8px 10px', color:C.text, fontSize:14, outline:'none' }} />
+            </div>
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end', paddingTop:4 }}>
+              <button onClick={() => setShowAddPanel(false)} style={{ background:'none', border:`1px solid ${C.border}`, color:C.textMuted, borderRadius:8, padding:'8px 20px', cursor:'pointer', fontSize:14 }}>취소</button>
+              <button onClick={() => { setShowAddPanel(false); showToast('텍스트 박스가 추가되었습니다'); }} style={{ background:C.gradient, border:'none', color:'#fff', borderRadius:8, padding:'8px 20px', cursor:'pointer', fontSize:14, fontWeight:600 }}>추가</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ── 소설 에디터 페이지 ── */
+function NovelEditorPage({ showToast }) {
+  const [paragraphs, setParagraphs] = useState(NOVEL_PARAGRAPHS);
+  const [translating, setTranslating] = useState(null);
+  const [autoSaveState, setAutoSaveState] = useState('saved');
+
+  const getStatusStyle = (status) => ({
+    approved: { bg:'rgba(52,211,153,0.12)', color:C.success, label:'✓ 승인' },
+    auto:     { bg:'rgba(251,191,36,0.12)', color:C.warning, label:'⚡ 자동번역' },
+    pending:  { bg:'rgba(148,163,184,0.1)', color:C.textMuted, label:'◯ 미번역' },
+  }[status] || { bg:'transparent', color:C.textMuted, label:'-' });
+
+  const handleAutoTranslate = (id) => {
+    setTranslating(id);
+    setTimeout(() => {
+      setParagraphs(prev => prev.map(p => p.id===id ? { ...p, translated: p.autoResult || p.original+' (번역됨)', status:'auto' } : p));
+      setTranslating(null);
+      setAutoSaveState('modified');
+      setTimeout(() => setAutoSaveState('saved'), 1000);
+    }, 1500);
+  };
+
+  const handleTranslationChange = (id, val) => {
+    setParagraphs(prev => prev.map(p => p.id===id ? { ...p, translated:val, status:'auto' } : p));
+    setAutoSaveState('modified');
+    setTimeout(() => setAutoSaveState('saved'), 800);
+  };
+
+  const handleApprove = (id) => {
+    setParagraphs(prev => prev.map(p => p.id===id ? { ...p, status:'approved' } : p));
+    showToast('단락 승인 완료');
+  };
+
+  return (
+    <div className="fade-in" style={{ padding:'16px 24px', height:'calc(100vh - 56px)', display:'flex', flexDirection:'column', gap:12 }}>
+      {/* 툴바 */}
+      <div style={{ display:'flex', alignItems:'center', gap:12, background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, padding:'10px 16px' }}>
+        <select style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.text, borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>
+          <option>달빛 소나타</option>
+          <option>벚꽃이 지는 날</option>
+        </select>
+        <select style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.text, borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>
+          <option>Chapter 01 — 도착</option>
+          <option>Chapter 02 — 첫 만남</option>
+        </select>
+        <select style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.text, borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>
+          <option>🇺🇸 → 🇰🇷 (한국어)</option>
+          <option>🇺🇸 → 🇯🇵 (日本語)</option>
+        </select>
+        <div style={{ flex:1 }} />
+        <div style={{ display:'flex', gap:4, fontSize:12 }}>
+          {[{label:'전체', n:paragraphs.length},{label:'승인', n:paragraphs.filter(p=>p.status==='approved').length},{label:'대기', n:paragraphs.filter(p=>p.status==='pending').length}].map(s => (
+            <span key={s.label} style={{ background:C.surface3, borderRadius:6, padding:'3px 8px', color:C.textMuted }}>{s.label} <strong style={{ color:C.text }}>{s.n}</strong></span>
+          ))}
+        </div>
+        <div style={{ color: autoSaveState==='saved' ? C.success : C.warning, fontSize:13, display:'flex', alignItems:'center', gap:4 }}>
+          {autoSaveState==='saving' ? <span style={{ animation:'spin 1s linear infinite', display:'inline-block' }}>↻</span> : '✓'}
+          {autoSaveState==='saved' ? '저장됨' : '저장 중…'}
+        </div>
+        <button onClick={() => { paragraphs.filter(p=>p.status==='pending').forEach(p => handleAutoTranslate(p.id)); showToast('모든 미번역 단락 자동 번역 요청'); }} style={{ background:'linear-gradient(135deg,#6366F1,#A78BFA)', border:'none', color:'#fff', borderRadius:8, padding:'6px 14px', fontSize:13, fontWeight:600, cursor:'pointer' }}>⚡ 전체 자동 번역</button>
+      </div>
+
+      {/* 헤더 */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+        {['원문 (English)','번역문 (한국어)'].map(label => (
+          <div key={label} style={{ background:C.surface3, border:`1px solid ${C.border}`, borderRadius:8, padding:'8px 16px', color:C.textMuted, fontSize:13, fontWeight:600, textAlign:'center' }}>{label}</div>
+        ))}
+      </div>
+
+      {/* 단락 목록 */}
+      <div style={{ flex:1, overflow:'auto', display:'flex', flexDirection:'column', gap:8 }}>
+        {paragraphs.map(para => {
+          const ss = getStatusStyle(para.status);
+          const isTranslating = translating===para.id;
+          return (
+            <div key={para.id} style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, padding:14, transition:'border-color 0.15s', borderColor: para.status==='approved' ? 'rgba(52,211,153,0.3)' : C.border }}>
+              {/* 원문 */}
+              <div>
+                <div style={{ color:C.text, fontSize:14, lineHeight:1.7, padding:'6px 0' }}>{para.original}</div>
+              </div>
+              {/* 번역문 */}
+              <div style={{ position:'relative' }}>
+                {isTranslating ? (
+                  <div style={{ display:'flex', alignItems:'center', gap:8, padding:'10px 0', color:C.primary }}>
+                    <span style={{ animation:'spin 1s linear infinite', display:'inline-block', fontSize:18 }}>↻</span>
+                    <span style={{ fontSize:13 }}>DeepL API 번역 중…</span>
+                  </div>
+                ) : para.status==='pending' && !para.translated ? (
+                  <div style={{ display:'flex', gap:8, padding:'6px 0', alignItems:'center' }}>
+                    <button onClick={() => handleAutoTranslate(para.id)} style={{ background:'rgba(99,102,241,0.15)', border:`1px solid ${C.primary}`, color:C.primary, borderRadius:6, padding:'5px 12px', fontSize:12, cursor:'pointer', fontWeight:600 }}>⚡ 자동 번역</button>
+                    <span style={{ color:C.textDim, fontSize:12 }}>또는 직접 입력</span>
+                  </div>
+                ) : (
+                  <textarea
+                    value={para.translated || para.autoResult || ''}
+                    onChange={e => handleTranslationChange(para.id, e.target.value)}
+                    style={{ width:'100%', background:'transparent', border:'none', borderBottom:`1px solid ${C.border}`, color:C.text, fontSize:14, lineHeight:1.7, resize:'none', outline:'none', fontFamily:'inherit', paddingBottom:4, minHeight:60 }}
+                  />
+                )}
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginTop:6 }}>
+                  <span style={{ background:ss.bg, color:ss.color, borderRadius:4, padding:'1px 8px', fontSize:11, fontWeight:600 }}>{ss.label}</span>
+                  {para.status!=='approved' && para.translated && (
+                    <button onClick={() => handleApprove(para.id)} style={{ background:'rgba(52,211,153,0.12)', border:`1px solid ${C.success}`, color:C.success, borderRadius:6, padding:'2px 10px', fontSize:11, cursor:'pointer' }}>✓ 승인</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── 언어 뷰어 페이지 ── */
+function ViewerPage({ showToast }) {
+  const [activeLang, setActiveLang] = useState('EN');
+  const [workType, setWorkType] = useState('webtoon');
+
+  const langTabs = [
+    { code:'EN', label:'🇺🇸 English', progress:92 },
+    { code:'JA', label:'🇯🇵 日本語', progress:78 },
+    { code:'ZH', label:'🇨🇳 中文', progress:65 },
+    { code:'ES', label:'🇪🇸 Español', progress:43 },
+  ];
+
+  const novelTexts = {
+    EN: ["The city of New Arcos stretched endlessly beneath the violet sky...", "Mira adjusted the collar of her translator's coat and stepped onto the crowded platform.", "The automated voice announced platform seven in six languages simultaneously.", "She had exactly fourteen minutes before the last train departed."],
+    JA: ["バイオレット色の空の下、ニューアルコス市が果てしなく広がっていた…", "ミラは翻訳士のコートの衿を正し、混雑したホームに足を踏み入れた。", "自動音声が6つの言語で同時に7番ホームを案内した。", "彼女には最終列車が出発するまで正確に14分しかなかった。"],
+    ZH: ["新阿科斯市在紫色天空下无尽延伸…", "米拉整了整翻译官外套的领口，踏上了拥挤的站台。", "自动广播同时用六种语言宣布了七号站台。", "她只有整整十四分钟，赶上开往外城区的最后一班列车。"],
+    ES: ["La ciudad de New Arcos se extendía infinitamente bajo el cielo violeta…", "Mira ajustó el cuello de su abrigo de traductora y subió al andén concurrido.", "[번역 대기 중…]", "[번역 대기 중…]"],
+  };
+
+  return (
+    <div className="fade-in" style={{ padding:'16px 24px', height:'calc(100vh - 56px)', display:'flex', flexDirection:'column', gap:12 }}>
+      {/* 컨트롤 바 */}
+      <div style={{ display:'flex', alignItems:'center', gap:12, background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, padding:'10px 16px' }}>
+        <select style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.text, borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>
+          <option>빛의 전사 — 시즌 2</option>
+          <option>달빛 소나타</option>
+        </select>
+        <div style={{ display:'flex', gap:4, background:C.surface3, borderRadius:8, padding:3 }}>
+          {[['webtoon','웹툰'],['novel','소설']].map(([v,l]) => (
+            <button key={v} onClick={() => setWorkType(v)} style={{ background: workType===v ? C.primaryLight : 'transparent', border: workType===v ? `1px solid ${C.primary}` : '1px solid transparent', color: workType===v ? C.primary : C.textMuted, borderRadius:6, padding:'4px 12px', fontSize:13, cursor:'pointer', fontWeight: workType===v ? 600 : 400 }}>{l}</button>
+          ))}
+        </div>
+        <div style={{ flex:1 }} />
+        <button onClick={() => showToast('번역 데이터 JSON 추출 완료 (0.8KB)')} style={{ background:C.surface3, border:`1px solid ${C.border}`, color:C.textMuted, borderRadius:8, padding:'6px 14px', fontSize:13, cursor:'pointer' }}>↓ JSON 추출</button>
+        <button onClick={() => showToast('미리보기 링크가 복사되었습니다')} style={{ background:C.primaryLight, border:`1px solid ${C.primary}`, color:C.primary, borderRadius:8, padding:'6px 14px', fontSize:13, fontWeight:600, cursor:'pointer' }}>🔗 공유 링크</button>
+      </div>
+
+      {/* 언어 탭 */}
+      <div style={{ display:'flex', gap:8 }}>
+        {langTabs.map(lang => (
+          <button key={lang.code}
+            onClick={() => setActiveLang(lang.code)}
+            style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:4, background: activeLang===lang.code ? C.primaryLight : C.surface2, border: activeLang===lang.code ? `2px solid ${C.primary}` : `1px solid ${C.border}`, borderRadius:10, padding:'8px 18px', cursor:'pointer', minWidth:100, transition:'all 0.15s' }}
+          >
+            <span style={{ fontSize:14 }}>{lang.label}</span>
+            <div style={{ width:'100%', height:4, background:C.border, borderRadius:99 }}>
+              <div style={{ height:4, borderRadius:99, width:`${lang.progress}%`, background: lang.progress===100 ? C.success : lang.progress>60 ? C.primary : C.warning, transition:'width 0.5s ease' }} />
+            </div>
+            <span style={{ color: activeLang===lang.code ? C.primary : C.textMuted, fontSize:11 }}>{lang.progress}%</span>
+          </button>
+        ))}
+        <div style={{ flex:1 }} />
+        <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, padding:'8px 16px', display:'flex', alignItems:'center', gap:8 }}>
+          <span style={{ color:C.textMuted, fontSize:12 }}>이미지 서빙:</span>
+          <span style={{ background:'rgba(52,211,153,0.15)', color:C.success, borderRadius:4, padding:'2px 8px', fontSize:11, fontWeight:600 }}>분리 완료</span>
+          <span style={{ color:C.textDim, fontSize:11 }}>이미지 재로드 없음</span>
+        </div>
+      </div>
+
+      {/* 뷰어 콘텐츠 */}
+      <div style={{ flex:1, overflow:'auto', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:12 }}>
+        {workType==='webtoon' ? (
+          <div style={{ padding:24, display:'flex', flexDirection:'column', gap:3, maxWidth:560, margin:'0 auto' }}>
+            <div style={{ textAlign:'center', marginBottom:16 }}>
+              <span style={{ color:C.primary, fontSize:14, fontWeight:700 }}>빛의 전사 S2 — EP.01</span>
+              <span style={{ color:C.textMuted, fontSize:12, marginLeft:8 }}>[{activeLang}] 렌더링 중</span>
+            </div>
+            {[
+              { h:180, label:'[컷 1] 도시 전경', panelText: { EN:'Darkness…', JA:'暗闇…', ZH:'黑暗…', ES:'Oscuridad…' }[activeLang] },
+              { h:140, label:'[컷 2] 캐릭터', panelText: { EN:'The signal!', JA:'信号だ！', ZH:'信号！', ES:'¡La señal!' }[activeLang] },
+              { h:220, label:'[컷 3] 액션', panelText: { EN:'We move at dawn.', JA:'夜明けに動く。', ZH:'黎明时行动。', ES:'Nos movemos al amanecer.' }[activeLang] },
+            ].map((cut,i) => (
+              <div key={i} style={{ height:cut.h, background:`#${['10101E','0D0D1A','121220'][i]}`, borderRadius:4, position:'relative', border:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <span style={{ color:C.textDim, fontSize:12 }}>{cut.label}</span>
+                <div style={{ position:'absolute', left:'8%', top:'15%', width:'45%', height:'18%', background:'rgba(0,0,0,0.75)', border:`1px solid ${C.primary}40`, borderRadius:3, display:'flex', alignItems:'center', justifyContent:'center', padding:4 }}>
+                  <span style={{ color:C.text, fontSize:10, textAlign:'center' }}>{cut.panelText}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ padding:32, maxWidth:680, margin:'0 auto' }}>
+            <div style={{ textAlign:'center', marginBottom:24 }}>
+              <div style={{ color:C.text, fontSize:20, fontWeight:700 }}>달빛 소나타</div>
+              <div style={{ color:C.textMuted, fontSize:14, marginTop:4 }}>Chapter 01 — 도착 · [{activeLang}]</div>
+            </div>
+            {(novelTexts[activeLang] || novelTexts.EN).map((text, i) => (
+              <p key={i} style={{ color: text.includes('[번역 대기')? C.textDim : C.text, fontSize:16, lineHeight:1.9, marginBottom:20, opacity: text.includes('[번역 대기')? 0.5 : 1, fontStyle: text.includes('[번역 대기')? 'italic' : 'normal' }}>{text}</p>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── 메인 앱 ── */
+function App() {
+  const [page, setPage] = useState('dashboard');
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const showToast = (msg) => setToast(msg);
+  const PAGE_TITLES = { dashboard:'작가 대시보드', webtoon:'웹툰 에디터', novel:'소설 에디터', viewer:'언어 뷰어' };
+
+  return (
+    <div style={{ display:'flex', width:'100%', height:'100vh', overflow:'hidden', background:C.bg }}>
+      <Sidebar active={page} onNav={setPage} />
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <TopBar title={PAGE_TITLES[page]} />
+        <div style={{ flex:1, overflow:'auto' }}>
+          {page==='dashboard' && <DashboardPage setModal={setModal} showToast={showToast} />}
+          {page==='webtoon'   && <WebtoonEditorPage showToast={showToast} />}
+          {page==='novel'     && <NovelEditorPage showToast={showToast} />}
+          {page==='viewer'    && <ViewerPage showToast={showToast} />}
+        </div>
+      </div>
+
+      {/* 작품 상세 모달 */}
+      {modal?.type==='workDetail' && (
+        <Modal title={modal.work.title} onClose={() => setModal(null)} width={560}>
+          <div style={{ padding:24, display:'flex', flexDirection:'column', gap:16 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              {[
+                ['유형', modal.work.type==='webtoon'?'웹툰':'소설'],
+                ['총 회차', `${modal.work.episodes}화`],
+                ['조회수', `${modal.work.views.toLocaleString()}회`],
+                ['최근 수정', modal.work.updated],
+              ].map(([k,v]) => (
+                <div key={k} style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:8, padding:'12px 14px' }}>
+                  <div style={{ color:C.textMuted, fontSize:12 }}>{k}</div>
+                  <div style={{ color:C.text, fontWeight:700, fontSize:16, marginTop:2 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <div style={{ color:C.textMuted, fontSize:13, marginBottom:10 }}>언어별 번역 진행률</div>
+              {modal.work.langs.map(lang => (
+                <div key={lang} style={{ display:'flex', alignItems:'center', gap:12, marginBottom:10 }}>
+                  <span style={{ color:C.text, fontSize:13, width:32 }}>{lang}</span>
+                  <div style={{ flex:1, height:6, background:C.border, borderRadius:99 }}>
+                    <div style={{ height:6, borderRadius:99, width:`${modal.work.progress[lang]||0}%`, background: (modal.work.progress[lang]||0)===100 ? C.success : C.primary, transition:'width 0.5s' }} />
+                  </div>
+                  <span style={{ color:C.textMuted, fontSize:13, width:36 }}>{modal.work.progress[lang]||0}%</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end', paddingTop:4 }}>
+              <button onClick={() => { setModal(null); setPage('webtoon'); }} style={{ background:C.primaryLight, border:`1px solid ${C.primary}`, color:C.primary, borderRadius:8, padding:'8px 20px', cursor:'pointer', fontSize:14, fontWeight:600 }}>에디터 열기</button>
+              <button onClick={() => setModal(null)} style={{ background:'none', border:`1px solid ${C.border}`, color:C.textMuted, borderRadius:8, padding:'8px 20px', cursor:'pointer', fontSize:14 }}>닫기</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* 새 작품 모달 */}
+      {modal==='newWork' && (
+        <Modal title="새 작품 등록" onClose={() => setModal(null)} width={480}>
+          <div style={{ padding:24, display:'flex', flexDirection:'column', gap:14 }}>
+            {[['작품명','text','예: 은하수 탐험대'],['유형','select',''],['번역 대상 언어','text','예: EN, JA, ZH']].map(([label, type, ph]) => (
+              <div key={label}>
+                <label style={{ color:C.textMuted, fontSize:12, display:'block', marginBottom:4 }}>{label}</label>
+                {type==='select' ? (
+                  <select style={{ width:'100%', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:6, padding:'8px 10px', color:C.text, fontSize:14 }}>
+                    <option value="webtoon">웹툰</option>
+                    <option value="novel">소설</option>
+                  </select>
+                ) : (
+                  <input placeholder={ph} style={{ width:'100%', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:6, padding:'8px 10px', color:C.text, fontSize:14, outline:'none' }} />
+                )}
+              </div>
+            ))}
+            <div>
+              <label style={{ color:C.textMuted, fontSize:12, display:'block', marginBottom:4 }}>작품 소개</label>
+              <textarea rows={3} placeholder="간략한 작품 소개를 입력하세요…" style={{ width:'100%', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:6, padding:'8px 10px', color:C.text, fontSize:14, outline:'none', resize:'none', fontFamily:'inherit' }} />
+            </div>
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end', paddingTop:4 }}>
+              <button onClick={() => setModal(null)} style={{ background:'none', border:`1px solid ${C.border}`, color:C.textMuted, borderRadius:8, padding:'8px 20px', cursor:'pointer', fontSize:14 }}>취소</button>
+              <button onClick={() => { setModal(null); showToast('새 작품이 등록되었습니다'); }} style={{ background:C.gradient, border:'none', color:'#fff', borderRadius:8, padding:'8px 20px', cursor:'pointer', fontSize:14, fontWeight:600 }}>등록</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

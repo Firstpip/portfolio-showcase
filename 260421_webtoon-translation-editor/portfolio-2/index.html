@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>웹툰·소설 글로벌 번역 협업 플랫폼 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net/npm/pretendard@latest/dist/web/static/pretendard.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@latest/dist/web/static/pretendard.css" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; background: #F8FAFC; color: #0F172A; }
+  #root { display: flex; flex-direction: column; width: 100%; min-height: 100vh; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  @keyframes fadeInScale { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
+  @keyframes slideInRight { from { opacity: 0; transform: translateX(100%); } to { opacity: 1; transform: none; } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }
+  @keyframes slideDown { from { opacity: 0; transform: translateY(-16px); } to { opacity: 1; transform: none; } }
+  @keyframes ripple { 0% { transform: scale(0); opacity: 0.5; } 100% { transform: scale(4); opacity: 0; } }
+  @keyframes barGrow { from { width: 0%; } to { width: 100%; } }
+  @keyframes countUp { from { opacity: 0; transform: scale(0.8); } to { opacity: 1; transform: scale(1); } }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes heroFade { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+  @keyframes toastSlide { from { opacity: 0; transform: translateX(120%); } to { opacity: 1; transform: none; } }
+  @keyframes badgePop { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+  .fade-in { animation: fadeIn 0.3s ease both; }
+  .hero-fade { animation: heroFade 0.4s ease both; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+const { AreaChart, Area, BarChart, Bar, RadialBarChart, RadialBar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } = Recharts;
+
+/* ── CountUp 훅 ── */
+function useCountUp(target, duration = 1200) {
+  const [value, setValue] = useState(0);
+  useEffect(() => {
+    if (typeof target !== 'number') return;
+    let start = 0;
+    const step = target / (duration / 16);
+    const timer = setInterval(() => {
+      start += step;
+      if (start >= target) { setValue(target); clearInterval(timer); }
+      else setValue(Math.floor(start));
+    }, 16);
+    return () => clearInterval(timer);
+  }, [target]);
+  return value;
+}
+
+/* ── 색상 토큰 ── */
+const C = {
+  primary: '#0EA5E9', primaryHover: '#0284C7', primaryLight: '#E0F2FE',
+  secondary: '#10B981', secondaryLight: '#DCFCE7',
+  accent: '#7C3AED', accentLight: '#EDE9FE',
+  bg: '#F8FAFC', surface: '#FFFFFF', surface2: '#F1F5F9', surface3: '#E2E8F0',
+  border: '#E2E8F0', borderMid: '#CBD5E1',
+  text: '#0F172A', textMuted: '#64748B', textDim: '#94A3B8',
+  success: '#10B981', warning: '#F59E0B', error: '#EF4444', info: '#3B82F6',
+  heroGrad1: 'linear-gradient(135deg, #0EA5E9 0%, #7C3AED 100%)',
+  heroGrad2: 'linear-gradient(135deg, #10B981 0%, #0EA5E9 100%)',
+  heroGrad3: 'linear-gradient(135deg, #7C3AED 0%, #EF4444 100%)',
+  heroGrad4: 'linear-gradient(135deg, #F59E0B 0%, #10B981 100%)',
+};
+
+/* ── 더미 데이터 ── */
+const TEAM_MEMBERS = [
+  { id:1, name:'김소연', role:'번역가', lang:'EN→KO', online:true, tasks:8, done:6, avatar:'소' },
+  { id:2, name:'Park Jake', role:'번역가', lang:'EN→JA', online:true, tasks:12, done:9, avatar:'P' },
+  { id:3, name:'陈晓明', role:'번역가', lang:'EN→ZH', online:false, tasks:7, done:5, avatar:'陈' },
+  { id:4, name:'마리아 G.', role:'리뷰어', lang:'ES 검수', online:true, tasks:4, done:4, avatar:'M' },
+  { id:5, name:'이준호', role:'편집장', lang:'전체 감수', online:true, tasks:3, done:2, avatar:'준' },
+];
+
+const COLLAB_TASKS = [
+  { id:1, work:'빛의 전사 S2', ep:'EP.12', lang:'EN', assignee:'김소연', status:'in_progress', dueDate:'4/22', type:'webtoon', paragraphs:24, done:18 },
+  { id:2, work:'달빛 소나타', ep:'CH.08', lang:'JA', assignee:'Park Jake', status:'review', dueDate:'4/21', type:'novel', paragraphs:42, done:42 },
+  { id:3, work:'강철 도시 연대기', ep:'EP.25', lang:'ZH', assignee:'陈晓明', status:'in_progress', dueDate:'4/23', type:'webtoon', paragraphs:30, done:19 },
+  { id:4, work:'미래 탐정단', ep:'EP.61', lang:'ES', assignee:'마리아 G.', status:'pending', dueDate:'4/25', type:'webtoon', paragraphs:20, done:0 },
+  { id:5, work:'벚꽃이 지는 날', ep:'CH.05', lang:'EN', assignee:'김소연', status:'completed', dueDate:'4/19', type:'novel', paragraphs:38, done:38 },
+  { id:6, work:'달빛 소나타', ep:'CH.09', lang:'ZH', assignee:'陈晓明', status:'in_progress', dueDate:'4/24', type:'novel', paragraphs:36, done:12 },
+];
+
+const REVIEW_ITEMS = [
+  { id:1, work:'달빛 소나타', ep:'CH.08', lang:'JA', reviewer:'이준호', paragraphs:42, approved:38, revision:3, rejected:1, submitted:'04/20 14:32', status:'in_review' },
+  { id:2, work:'빛의 전사 S2', ep:'EP.11', lang:'EN', reviewer:'이준호', paragraphs:26, approved:26, revision:0, rejected:0, submitted:'04/19 09:15', status:'approved' },
+  { id:3, work:'강철 도시 연대기', ep:'EP.24', lang:'ZH', reviewer:'이준호', paragraphs:28, approved:22, revision:6, rejected:0, submitted:'04/18 16:40', status:'revision' },
+  { id:4, work:'미래 탐정단', ep:'EP.60', lang:'ES', reviewer:'미배정', paragraphs:22, approved:0, revision:0, rejected:0, submitted:'-', status:'waiting' },
+];
+
+const PUBLISH_JOBS = [
+  { id:1, work:'미래 탐정단', ep:'EP.61', lang:'EN,JA,ZH', scheduledAt:'2026-04-22 09:00', status:'scheduled', completionGate:98 },
+  { id:2, work:'강철 도시 연대기', ep:'EP.25', lang:'EN,JA,ZH,ES', scheduledAt:'2026-04-24 09:00', status:'draft', completionGate:75 },
+  { id:3, work:'빛의 전사 S2', ep:'EP.12', lang:'EN', scheduledAt:'2026-04-21 18:00', status:'processing', completionGate:100 },
+  { id:4, work:'달빛 소나타', ep:'CH.08', lang:'JA', scheduledAt:'2026-04-20 14:00', status:'completed', completionGate:100 },
+  { id:5, work:'달빛 소나타', ep:'CH.07', lang:'EN,JA,ZH', scheduledAt:'2026-04-15 09:00', status:'completed', completionGate:100 },
+];
+
+const MONTHLY_STATS = [
+  { month:'11월', tasks:32, completed:28 },
+  { month:'12월', tasks:45, completed:40 },
+  { month:'1월', tasks:38, completed:35 },
+  { month:'2월', tasks:52, completed:47 },
+  { month:'3월', tasks:61, completed:55 },
+  { month:'4월', tasks:44, completed:38 },
+];
+
+/* ── 공통 컴포넌트 ── */
+function Drawer({ title, onClose, children, width = 480 }) {
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:1000, background:'rgba(15,23,42,0.35)', backdropFilter:'blur(3px)' }} onClick={e => e.target===e.currentTarget && onClose()}>
+      <div style={{ position:'absolute', right:0, top:0, bottom:0, width, background:C.surface, boxShadow:'-8px 0 32px rgba(0,0,0,0.12)', animation:'slideInRight 0.3s ease', display:'flex', flexDirection:'column' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px', borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ color:C.text, fontWeight:700, fontSize:16 }}>{title}</span>
+          <button onClick={onClose} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:20, width:32, height:32, borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center' }}>×</button>
+        </div>
+        <div style={{ flex:1, overflow:'auto' }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, width = 560 }) {
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:1000, background:'rgba(15,23,42,0.4)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center' }} onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className="fade-in" style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, width, maxWidth:'90vw', maxHeight:'85vh', overflow:'hidden', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.15)' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px', borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ color:C.text, fontWeight:700, fontSize:16 }}>{title}</span>
+          <button onClick={onClose} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:20, lineHeight:1 }}>×</button>
+        </div>
+        <div style={{ overflow:'auto', flex:1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Toast({ message, type='success', onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  const colors = { success: C.success, error: C.error, info: C.info };
+  const icons = { success: '✓', error: '✕', info: 'ℹ' };
+  return (
+    <div style={{ position:'fixed', bottom:24, right:24, zIndex:2000, background:C.surface, border:`1px solid ${colors[type]}`, borderRadius:12, padding:'12px 20px', color:C.text, animation:'toastSlide 0.3s ease', display:'flex', alignItems:'center', gap:10, boxShadow:'0 8px 24px rgba(0,0,0,0.1)', minWidth:260 }}>
+      <span style={{ color:colors[type], fontSize:18, fontWeight:700 }}>{icons[type]}</span>
+      <span style={{ fontSize:14 }}>{message}</span>
+      <button onClick={onClose} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', marginLeft:'auto' }}>×</button>
+    </div>
+  );
+}
+
+function Badge({ status }) {
+  const map = {
+    in_progress: { bg:'#EFF6FF', color:'#3B82F6', label:'진행 중' },
+    review:      { bg:C.accentLight, color:C.accent, label:'리뷰 중' },
+    pending:     { bg:C.surface2, color:C.textMuted, label:'대기' },
+    completed:   { bg:C.secondaryLight, color:C.success, label:'완료' },
+    scheduled:   { bg:'#FEF3C7', color:C.warning, label:'예약됨' },
+    processing:  { bg:'#EFF6FF', color:C.info, label:'처리 중' },
+    draft:       { bg:C.surface2, color:C.textMuted, label:'초안' },
+    in_review:   { bg:C.accentLight, color:C.accent, label:'검수 중' },
+    approved:    { bg:C.secondaryLight, color:C.success, label:'승인 완료' },
+    revision:    { bg:'#FEF3C7', color:C.warning, label:'수정 요청' },
+    waiting:     { bg:C.surface2, color:C.textMuted, label:'배정 대기' },
+  };
+  const s = map[status] || map.pending;
+  return <span style={{ background:s.bg, color:s.color, padding:'3px 10px', borderRadius:99, fontSize:12, fontWeight:600, animation:'badgePop 0.2s ease' }}>{s.label}</span>;
+}
+
+/* ── 상단 네비 ── */
+const TABS = [
+  { id:'home', label:'플랫폼 홈' },
+  { id:'collab', label:'협업 워크스페이스' },
+  { id:'review', label:'품질 리뷰' },
+  { id:'publish', label:'발행 관리' },
+];
+
+const PAGE_META = {
+  home:    { title:'플랫폼 홈', grad:C.heroGrad1, kpis:[{label:'활성 작품', val:'5개'},{label:'이번 주 완료', val:'12건'},{label:'팀원 수', val:'5명'},{label:'언어 쌍', val:'18개'}] },
+  collab:  { title:'협업 워크스페이스', grad:C.heroGrad2, kpis:[{label:'진행 중 태스크', val:'6개'},{label:'오늘 마감', val:'2건'},{label:'온라인 팀원', val:'4명'},{label:'대기 중', val:'1건'}] },
+  review:  { title:'품질 리뷰', grad:C.heroGrad3, kpis:[{label:'리뷰 대기', val:'2건'},{label:'이번 달 승인', val:'28건'},{label:'평균 수정', val:'1.2회'},{label:'승인률', val:'89%'}] },
+  publish: { title:'발행 관리', grad:C.heroGrad4, kpis:[{label:'예약된 발행', val:'2건'},{label:'이번 달 발행', val:'9회'},{label:'실패 없음', val:'✓'},{label:'지원 언어', val:'5개'}] },
+};
+
+function TopNav({ tab, setTab }) {
+  return (
+    <header style={{ position:'sticky', top:0, zIndex:100, background:C.surface, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', height:58, padding:'0 28px', gap:4, boxShadow:'0 1px 4px rgba(0,0,0,0.06)' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginRight:20 }}>
+        <div style={{ width:32, height:32, borderRadius:8, background:'linear-gradient(135deg,#0EA5E9,#7C3AED)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:16 }}>⚡</div>
+        <div style={{ color:C.text, fontWeight:800, fontSize:15 }}>TranslateHub</div>
+      </div>
+      {TABS.map(t => (
+        <button key={t.id}
+          title={t.label}
+          onClick={() => setTab(t.id)}
+          style={{ padding:'6px 16px', borderRadius:8, border:'none', cursor:'pointer', background: tab===t.id ? C.primaryLight : 'transparent', color: tab===t.id ? C.primary : C.textMuted, fontWeight: tab===t.id ? 700 : 400, fontSize:14, transition:'all 0.15s', position:'relative' }}
+        >
+          {t.label}
+          {tab===t.id && <span style={{ position:'absolute', bottom:-1, left:'50%', transform:'translateX(-50%)', width:20, height:2, borderRadius:1, background:C.primary }} />}
+        </button>
+      ))}
+      <div style={{ flex:1 }} />
+      <div style={{ display:'flex', alignItems:'center', gap:8, background:C.surface2, border:`1px solid ${C.border}`, borderRadius:8, padding:'6px 12px', marginRight:8 }}>
+        <span style={{ color:C.textDim, fontSize:13 }}>🔍</span>
+        <input placeholder="작품, 작업 검색…" style={{ background:'none', border:'none', color:C.text, fontSize:13, outline:'none', width:140 }} />
+      </div>
+      <button style={{ position:'relative', background:'none', border:`1px solid ${C.border}`, borderRadius:8, color:C.textMuted, cursor:'pointer', padding:'6px 10px', fontSize:16 }}>
+        🔔
+        <span style={{ position:'absolute', top:5, right:5, width:7, height:7, borderRadius:99, background:C.error }} />
+      </button>
+      <div style={{ width:34, height:34, borderRadius:99, background:'linear-gradient(135deg,#0EA5E9,#7C3AED)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, color:'#fff', fontWeight:700, cursor:'pointer', marginLeft:8 }}>준</div>
+    </header>
+  );
+}
+
+function HeroBanner({ tab }) {
+  const meta = PAGE_META[tab];
+  return (
+    <div className="hero-fade" style={{ background:meta.grad, padding:'28px 32px', color:'#fff' }}>
+      <h1 style={{ fontSize:22, fontWeight:800, marginBottom:12 }}>{meta.title}</h1>
+      <div style={{ display:'flex', gap:32, flexWrap:'wrap' }}>
+        {meta.kpis.map(k => (
+          <div key={k.label} style={{ display:'flex', flexDirection:'column', gap:2 }}>
+            <span style={{ fontSize:20, fontWeight:800 }}>{k.val}</span>
+            <span style={{ fontSize:12, opacity:0.8 }}>{k.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── 홈 페이지 ── */
+function HomePage({ setDrawer, setModal, showToast }) {
+  return (
+    <div className="fade-in" style={{ padding:'24px 32px', display:'flex', flexDirection:'column', gap:24 }}>
+      {/* 팀 현황 */}
+      <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:20 }}>
+        {/* 월별 작업 통계 차트 */}
+        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:24, boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+            <span style={{ color:C.text, fontWeight:700, fontSize:16 }}>월별 번역 작업 현황</span>
+            <span style={{ color:C.textMuted, fontSize:13 }}>완료 vs 전체</span>
+          </div>
+          <div style={{ height:200 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={MONTHLY_STATS} margin={{ top:0, right:8, left:0, bottom:0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis dataKey="month" tick={{ fill:C.textMuted, fontSize:12 }} stroke={C.border} />
+                <YAxis tick={{ fill:C.textMuted, fontSize:11 }} stroke={C.border} />
+                <Tooltip contentStyle={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:13 }} />
+                <Bar dataKey="tasks" fill="#E0F2FE" radius={[4,4,0,0]} name="전체" />
+                <Bar dataKey="completed" fill={C.primary} radius={[4,4,0,0]} name="완료" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* 팀원 현황 */}
+        <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:24, boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+            <span style={{ color:C.text, fontWeight:700, fontSize:16 }}>팀원 현황</span>
+            <span style={{ color:C.success, fontSize:12, fontWeight:600 }}>{TEAM_MEMBERS.filter(m=>m.online).length}명 온라인</span>
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {TEAM_MEMBERS.map(m => (
+              <div key={m.id} onClick={() => setDrawer({ type:'member', member:m })} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 10px', borderRadius:10, cursor:'pointer', transition:'background 0.15s' }} onMouseEnter={e=>e.currentTarget.style.background=C.surface2} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <div style={{ position:'relative', flexShrink:0 }}>
+                  <div style={{ width:34, height:34, borderRadius:99, background:`linear-gradient(135deg,${C.primary},${C.accent})`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, color:'#fff', fontWeight:700 }}>{m.avatar}</div>
+                  <span style={{ position:'absolute', bottom:0, right:0, width:10, height:10, borderRadius:99, background: m.online ? C.success : C.textDim, border:`2px solid ${C.surface}` }} />
+                </div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ color:C.text, fontWeight:600, fontSize:13, textOverflow:'ellipsis', overflow:'hidden', whiteSpace:'nowrap' }}>{m.name}</div>
+                  <div style={{ color:C.textMuted, fontSize:11 }}>{m.lang}</div>
+                </div>
+                <div style={{ textAlign:'right' }}>
+                  <div style={{ color:C.text, fontSize:12, fontWeight:600 }}>{m.done}/{m.tasks}</div>
+                  <div style={{ color:C.textDim, fontSize:11 }}>완료</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* 최근 활동 */}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:24, boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
+          <span style={{ color:C.text, fontWeight:700, fontSize:16 }}>진행 중인 작업</span>
+          <button onClick={() => showToast('전체 작업 목록으로 이동합니다')} style={{ background:'none', border:'none', color:C.primary, fontSize:13, cursor:'pointer', fontWeight:600 }}>전체 보기 →</button>
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14 }}>
+          {COLLAB_TASKS.filter(t=>t.status==='in_progress').slice(0,3).map((task, staggerIdx) => (
+            <div key={task.id} onClick={() => setDrawer({ type:'task', task })} style={{ border:`1px solid ${C.border}`, borderRadius:12, padding:16, cursor:'pointer', transition:'all 0.15s', background:C.surface, animation:`slideUp ${0.1 + staggerIdx * 0.08}s both` }} onMouseEnter={e=>{ e.currentTarget.style.borderColor=C.primary; e.currentTarget.style.boxShadow=`0 4px 16px rgba(14,165,233,0.12)`; }} onMouseLeave={e=>{ e.currentTarget.style.borderColor=C.border; e.currentTarget.style.boxShadow='none'; }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+                <span style={{ color:C.textMuted, fontSize:12 }}>{task.work}</span>
+                <Badge status={task.status} />
+              </div>
+              <div style={{ color:C.text, fontWeight:700, fontSize:14, marginBottom:4 }}>{task.ep} · {task.lang}</div>
+              <div style={{ color:C.textMuted, fontSize:12, marginBottom:10 }}>담당: {task.assignee}</div>
+              <div style={{ height:4, background:C.surface2, borderRadius:99 }}>
+                <div style={{ height:4, borderRadius:99, width:`${Math.round(task.done/task.paragraphs*100)}%`, background:C.primary, transition:'width 0.5s' }} />
+              </div>
+              <div style={{ color:C.textMuted, fontSize:11, marginTop:4 }}>{task.done}/{task.paragraphs} 단락 · 마감 {task.dueDate}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── 협업 워크스페이스 ── */
+function CollabPage({ setDrawer, showToast }) {
+  const [filter, setFilter] = useState('all');
+  const tasks = filter==='all' ? COLLAB_TASKS : COLLAB_TASKS.filter(t=>t.status===filter);
+
+  return (
+    <div className="fade-in" style={{ padding:'24px 32px', display:'flex', flexDirection:'column', gap:20 }}>
+      {/* 팀원 온라인 상태 */}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:14, padding:18, boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+          <span style={{ color:C.textMuted, fontSize:13, fontWeight:600 }}>실시간 접속:</span>
+          {TEAM_MEMBERS.map(m => (
+            <div key={m.id} style={{ display:'flex', alignItems:'center', gap:6, background: m.online ? C.primaryLight : C.surface2, borderRadius:99, padding:'4px 12px' }}>
+              <span style={{ width:8, height:8, borderRadius:99, background: m.online ? C.success : C.textDim, display:'inline-block', animation: m.online ? 'pulse 2s infinite' : 'none' }} />
+              <span style={{ fontSize:13, color: m.online ? C.primary : C.textMuted, fontWeight: m.online ? 600 : 400 }}>{m.name}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 필터 + 작업 목록 */}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, overflow:'hidden', boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'16px 20px', borderBottom:`1px solid ${C.border}` }}>
+          <div style={{ display:'flex', gap:8 }}>
+            {[['all','전체'],['in_progress','진행 중'],['review','리뷰 중'],['pending','대기'],['completed','완료']].map(([v,l]) => (
+              <button key={v} onClick={() => setFilter(v)} style={{ padding:'5px 12px', borderRadius:8, border: filter===v ? `1px solid ${C.primary}` : `1px solid ${C.border}`, background: filter===v ? C.primaryLight : 'transparent', color: filter===v ? C.primary : C.textMuted, fontSize:13, cursor:'pointer', fontWeight: filter===v ? 600 : 400 }}>{l}</button>
+            ))}
+          </div>
+          <button onClick={() => showToast('새 번역 작업이 생성되었습니다')} style={{ background:C.primary, border:'none', color:'#fff', borderRadius:8, padding:'7px 16px', fontSize:13, fontWeight:600, cursor:'pointer' }}>+ 작업 배정</button>
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ background:C.surface2 }}>
+              {['작품 / 회차','언어','담당자','진행률','마감일','상태',''].map(h => (
+                <th key={h} style={{ padding:'10px 16px', color:C.textMuted, fontSize:12, fontWeight:600, textAlign:'left' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.map(task => (
+              <tr key={task.id} style={{ borderTop:`1px solid ${C.border}`, cursor:'pointer', transition:'background 0.15s' }} onMouseEnter={e=>e.currentTarget.style.background=C.surface2} onMouseLeave={e=>e.currentTarget.style.background='transparent'} onClick={() => setDrawer({ type:'task', task })}>
+                <td style={{ padding:'13px 16px' }}>
+                  <div style={{ color:C.text, fontWeight:700, fontSize:14 }}>{task.work}</div>
+                  <div style={{ color:C.textMuted, fontSize:12 }}>{task.ep} · {task.type==='webtoon'?'웹툰':'소설'}</div>
+                </td>
+                <td style={{ padding:'13px 16px', color:C.text, fontWeight:600, fontSize:14 }}>{task.lang}</td>
+                <td style={{ padding:'13px 16px' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:7 }}>
+                    <div style={{ width:26, height:26, borderRadius:99, background:`linear-gradient(135deg,${C.primary},${C.accent})`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, color:'#fff', fontWeight:700 }}>{task.assignee[0]}</div>
+                    <span style={{ color:C.text, fontSize:13 }}>{task.assignee}</span>
+                  </div>
+                </td>
+                <td style={{ padding:'13px 16px', minWidth:130 }}>
+                  <div style={{ height:4, background:C.surface2, borderRadius:99, marginBottom:4 }}>
+                    <div style={{ height:4, borderRadius:99, width:`${Math.round(task.done/task.paragraphs*100)}%`, background: task.status==='completed' ? C.success : C.primary }} />
+                  </div>
+                  <span style={{ color:C.textMuted, fontSize:11 }}>{task.done}/{task.paragraphs}</span>
+                </td>
+                <td style={{ padding:'13px 16px', color: task.dueDate==='4/21'?C.error : C.textMuted, fontSize:13, fontWeight: task.dueDate==='4/21'?600:400 }}>{task.dueDate}</td>
+                <td style={{ padding:'13px 16px' }}><Badge status={task.status} /></td>
+                <td style={{ padding:'13px 16px' }}>
+                  <button onClick={e => { e.stopPropagation(); showToast(`${task.work} ${task.ep} 코멘트 추가`); }} style={{ background:'none', border:`1px solid ${C.border}`, color:C.textMuted, borderRadius:6, padding:'4px 10px', fontSize:12, cursor:'pointer' }}>코멘트</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ── 품질 리뷰 ── */
+function ReviewPage({ setDrawer, showToast }) {
+  const [selectedItem, setSelectedItem] = useState(null);
+
+  return (
+    <div className="fade-in" style={{ padding:'24px 32px', display:'flex', flexDirection:'column', gap:20 }}>
+      {/* 리뷰 카드 그리드 */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:16 }}>
+        {REVIEW_ITEMS.map((item, staggerIdx) => (
+          <div key={item.id}
+            onClick={() => setDrawer({ type:'review', item })}
+            style={{ background:C.surface, border:`1px solid ${selectedItem===item.id ? C.primary : C.border}`, borderRadius:16, padding:20, cursor:'pointer', transition:'all 0.15s', boxShadow:'0 2px 8px rgba(0,0,0,0.04)', animation:`slideUp ${0.05 + staggerIdx * 0.07}s both` }}
+            onMouseEnter={e=>{ e.currentTarget.style.borderColor=C.primary; e.currentTarget.style.boxShadow=`0 6px 20px rgba(14,165,233,0.12)`; }}
+            onMouseLeave={e=>{ e.currentTarget.style.borderColor=selectedItem===item.id?C.primary:C.border; e.currentTarget.style.boxShadow='0 2px 8px rgba(0,0,0,0.04)'; }}
+          >
+            <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:12 }}>
+              <div>
+                <div style={{ color:C.text, fontWeight:700, fontSize:15 }}>{item.work}</div>
+                <div style={{ color:C.textMuted, fontSize:13, marginTop:2 }}>{item.ep} · {item.lang} · 리뷰어: {item.reviewer}</div>
+              </div>
+              <Badge status={item.status} />
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:12 }}>
+              {[{label:'전체', val:item.paragraphs, color:C.textMuted},{label:'승인', val:item.approved, color:C.success},{label:'수정 요청', val:item.revision, color:C.warning}].map(s => (
+                <div key={s.label} style={{ background:C.surface2, borderRadius:8, padding:'10px 12px', textAlign:'center' }}>
+                  <div style={{ color:s.color, fontWeight:800, fontSize:18 }}>{s.val}</div>
+                  <div style={{ color:C.textMuted, fontSize:11 }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ height:6, background:C.surface2, borderRadius:99 }}>
+              <div style={{ height:6, borderRadius:99, width:`${item.paragraphs>0?Math.round(item.approved/item.paragraphs*100):0}%`, background: item.status==='approved' ? C.success : C.primary, transition:'width 0.6s ease' }} />
+            </div>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginTop:8 }}>
+              <span style={{ color:C.textMuted, fontSize:12 }}>제출일: {item.submitted}</span>
+              <span style={{ color: item.status==='approved' ? C.success : C.primary, fontSize:12, fontWeight:600 }}>
+                {item.paragraphs>0?Math.round(item.approved/item.paragraphs*100):0}% 승인
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 리뷰 통계 */}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, padding:24, boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
+        <span style={{ color:C.text, fontWeight:700, fontSize:16, display:'block', marginBottom:16 }}>이번 달 번역 품질 지표</span>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14 }}>
+          {[
+            { label:'총 리뷰 완료', val:'28건', icon:'📋', color:C.primary },
+            { label:'평균 승인률', val:'89%', icon:'✓', color:C.success },
+            { label:'평균 수정 횟수', val:'1.2회', icon:'✏️', color:C.warning },
+            { label:'목표 달성', val:'95%', icon:'🎯', color:C.accent },
+          ].map(s => (
+            <div key={s.label} style={{ background:C.surface2, borderRadius:12, padding:16, display:'flex', flexDirection:'column', gap:8 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                <span style={{ color:C.textMuted, fontSize:13 }}>{s.label}</span>
+                <span style={{ fontSize:20 }}>{s.icon}</span>
+              </div>
+              <span style={{ color:s.color, fontSize:26, fontWeight:800 }}>{s.val}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── 발행 관리 ── */
+function PublishPage({ setDrawer, showToast }) {
+  const [jobs, setJobs] = useState(PUBLISH_JOBS);
+
+  return (
+    <div className="fade-in" style={{ padding:'24px 32px', display:'flex', flexDirection:'column', gap:20 }}>
+      {/* 파이프라인 현황 */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14 }}>
+        {[
+          { label:'초안', count: jobs.filter(j=>j.status==='draft').length, color:C.textMuted, bg:C.surface2, icon:'📝' },
+          { label:'예약됨', count: jobs.filter(j=>j.status==='scheduled').length, color:C.warning, bg:'#FEF3C7', icon:'⏰' },
+          { label:'처리 중', count: jobs.filter(j=>j.status==='processing').length, color:C.info, bg:'#EFF6FF', icon:'⚙️' },
+          { label:'완료', count: jobs.filter(j=>j.status==='completed').length, color:C.success, bg:C.secondaryLight, icon:'✓' },
+        ].map(s => (
+          <div key={s.label} style={{ background:s.bg, border:`1px solid ${C.border}`, borderRadius:14, padding:18, display:'flex', alignItems:'center', gap:14 }}>
+            <span style={{ fontSize:26 }}>{s.icon}</span>
+            <div>
+              <div style={{ color:s.color, fontWeight:800, fontSize:28 }}>{s.count}</div>
+              <div style={{ color:C.textMuted, fontSize:13 }}>{s.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 발행 목록 */}
+      <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, overflow:'hidden', boxShadow:'0 2px 8px rgba(0,0,0,0.04)' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'16px 24px', borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ color:C.text, fontWeight:700, fontSize:16 }}>발행 스케줄</span>
+          <button onClick={() => showToast('새 발행 일정이 생성되었습니다')} style={{ background:C.primary, border:'none', color:'#fff', borderRadius:8, padding:'7px 16px', fontSize:13, fontWeight:600, cursor:'pointer' }}>+ 발행 예약</button>
+        </div>
+        <div style={{ display:'flex', flexDirection:'column' }}>
+          {jobs.map((job, i) => (
+            <div key={job.id}
+              onClick={() => setDrawer({ type:'job', job })}
+              style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1.5fr 1fr 1fr', gap:12, alignItems:'center', padding:'16px 24px', borderTop: i===0?'none':`1px solid ${C.border}`, cursor:'pointer', transition:'background 0.15s' }}
+              onMouseEnter={e=>e.currentTarget.style.background=C.surface2}
+              onMouseLeave={e=>e.currentTarget.style.background='transparent'}
+            >
+              <div>
+                <div style={{ color:C.text, fontWeight:700, fontSize:14 }}>{job.work}</div>
+                <div style={{ color:C.textMuted, fontSize:12 }}>{job.ep} · {job.lang}</div>
+              </div>
+              <div>
+                <div style={{ color:C.text, fontSize:13, fontWeight:600 }}>{job.scheduledAt.split(' ')[0]}</div>
+                <div style={{ color:C.textMuted, fontSize:12 }}>{job.scheduledAt.split(' ')[1]}</div>
+              </div>
+              <div>
+                <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:3 }}>
+                  <div style={{ flex:1, height:4, background:C.surface2, borderRadius:99 }}>
+                    <div style={{ height:4, borderRadius:99, width:`${job.completionGate}%`, background: job.completionGate===100 ? C.success : job.completionGate>=70 ? C.primary : C.warning }} />
+                  </div>
+                  <span style={{ color: job.completionGate===100 ? C.success : C.warning, fontSize:12, fontWeight:700 }}>{job.completionGate}%</span>
+                </div>
+                <div style={{ color:C.textDim, fontSize:11 }}>번역 완성도 게이트 {job.completionGate<100?'미충족':'통과'}</div>
+              </div>
+              <div><Badge status={job.status} /></div>
+              <div style={{ display:'flex', gap:6 }}>
+                {job.status==='scheduled' && (
+                  <button onClick={e => { e.stopPropagation(); showToast(`${job.work} ${job.ep} 발행이 취소되었습니다`); setJobs(prev=>prev.map(j=>j.id===job.id?{...j,status:'draft'}:j)); }} style={{ background:'none', border:`1px solid ${C.border}`, color:C.textMuted, borderRadius:6, padding:'4px 8px', fontSize:12, cursor:'pointer' }}>취소</button>
+                )}
+                {job.status==='draft' && job.completionGate>=100 && (
+                  <button onClick={e => { e.stopPropagation(); showToast('발행이 예약되었습니다'); setJobs(prev=>prev.map(j=>j.id===job.id?{...j,status:'scheduled'}:j)); }} style={{ background:C.primary, border:'none', color:'#fff', borderRadius:6, padding:'4px 10px', fontSize:12, cursor:'pointer', fontWeight:600 }}>예약</button>
+                )}
+                {(job.status==='completed'||job.status==='processing') && (
+                  <span style={{ color:C.textDim, fontSize:12 }}>상세 →</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── 드로어 내용 ── */
+function DrawerContent({ drawerItem, showToast }) {
+  if (!drawerItem) return null;
+
+  if (drawerItem.type==='task') {
+    const { task } = drawerItem;
+    return (
+      <div style={{ padding:24, display:'flex', flexDirection:'column', gap:16 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div>
+            <div style={{ color:C.text, fontWeight:800, fontSize:18 }}>{task.work}</div>
+            <div style={{ color:C.textMuted, fontSize:14 }}>{task.ep} · {task.type==='webtoon'?'웹툰':'소설'} · {task.lang}</div>
+          </div>
+          <Badge status={task.status} />
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          {[['담당자',task.assignee],['마감일',task.dueDate],['전체 단락',`${task.paragraphs}개`],['완료',`${task.done}개`]].map(([k,v])=>(
+            <div key={k} style={{ background:C.surface2, borderRadius:10, padding:14 }}>
+              <div style={{ color:C.textMuted, fontSize:12 }}>{k}</div>
+              <div style={{ color:C.text, fontWeight:700, fontSize:16, marginTop:2 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+        <div>
+          <div style={{ color:C.textMuted, fontSize:12, marginBottom:8 }}>번역 진행률</div>
+          <div style={{ height:10, background:C.surface2, borderRadius:99 }}>
+            <div style={{ height:10, borderRadius:99, width:`${Math.round(task.done/task.paragraphs*100)}%`, background:C.primary, transition:'width 0.5s' }} />
+          </div>
+          <div style={{ color:C.textMuted, fontSize:12, marginTop:4 }}>{Math.round(task.done/task.paragraphs*100)}% 완료</div>
+        </div>
+        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+          <div style={{ color:C.textMuted, fontSize:12, fontWeight:600 }}>편집장 코멘트</div>
+          <textarea placeholder="작업 관련 코멘트 또는 지시사항을 입력하세요…" rows={3} style={{ width:'100%', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:8, padding:'10px 12px', color:C.text, fontSize:13, resize:'none', outline:'none', fontFamily:'inherit' }} />
+          <button onClick={() => showToast('코멘트가 저장되었습니다')} style={{ background:C.primary, border:'none', color:'#fff', borderRadius:8, padding:'8px 0', fontSize:14, fontWeight:600, cursor:'pointer' }}>코멘트 저장</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (drawerItem.type==='review') {
+    const { item } = drawerItem;
+    return (
+      <div style={{ padding:24, display:'flex', flexDirection:'column', gap:16 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div>
+            <div style={{ color:C.text, fontWeight:800, fontSize:18 }}>{item.work} — {item.ep}</div>
+            <div style={{ color:C.textMuted, fontSize:14 }}>언어: {item.lang} · 리뷰어: {item.reviewer}</div>
+          </div>
+          <Badge status={item.status} />
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
+          {[{l:'전체',v:item.paragraphs,c:C.textMuted},{l:'승인',v:item.approved,c:C.success},{l:'수정',v:item.revision,c:C.warning}].map(s=>(
+            <div key={s.l} style={{ background:C.surface2, borderRadius:10, padding:'12px 14px', textAlign:'center' }}>
+              <div style={{ color:s.c, fontWeight:800, fontSize:22 }}>{s.v}</div>
+              <div style={{ color:C.textMuted, fontSize:12 }}>{s.l}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ background:'#EFF6FF', border:`1px solid #BFDBFE`, borderRadius:10, padding:14 }}>
+          <div style={{ color:C.info, fontSize:13, fontWeight:600, marginBottom:4 }}>번역 버전 이력</div>
+          {['v3 — 2026-04-20 (현재)', 'v2 — 2026-04-18', 'v1 — 2026-04-15 (최초)'].map(v => (
+            <div key={v} style={{ color:C.text, fontSize:13, padding:'4px 0', borderBottom:`1px solid #E0F0FF`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <span>{v}</span>
+              <button onClick={() => showToast(`${v} 버전 비교 미리보기`)} style={{ background:'none', border:'none', color:C.primary, fontSize:12, cursor:'pointer' }}>비교</button>
+            </div>
+          ))}
+        </div>
+        {item.status!=='approved' && (
+          <div style={{ display:'flex', gap:10 }}>
+            <button onClick={() => showToast('수정 요청이 전달되었습니다')} style={{ flex:1, background:'#FEF3C7', border:`1px solid #FDE68A`, color:C.warning, borderRadius:8, padding:'9px 0', fontWeight:600, cursor:'pointer', fontSize:14 }}>수정 요청</button>
+            <button onClick={() => showToast(`${item.work} ${item.ep} 최종 승인 완료`)} style={{ flex:1, background:C.success, border:'none', color:'#fff', borderRadius:8, padding:'9px 0', fontWeight:600, cursor:'pointer', fontSize:14 }}>최종 승인</button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (drawerItem.type==='job') {
+    const { job } = drawerItem;
+    return (
+      <div style={{ padding:24, display:'flex', flexDirection:'column', gap:16 }}>
+        <div>
+          <div style={{ color:C.text, fontWeight:800, fontSize:18 }}>{job.work} — {job.ep}</div>
+          <div style={{ color:C.textMuted, fontSize:14 }}>발행 언어: {job.lang}</div>
+        </div>
+        <div style={{ background:C.surface2, borderRadius:12, padding:16 }}>
+          <div style={{ color:C.textMuted, fontSize:12, marginBottom:6 }}>예약 발행 시각</div>
+          <div style={{ color:C.text, fontWeight:700, fontSize:18 }}>{job.scheduledAt}</div>
+        </div>
+        <div>
+          <div style={{ color:C.textMuted, fontSize:12, marginBottom:8 }}>번역 완성도 게이팅</div>
+          <div style={{ height:10, background:C.surface2, borderRadius:99, marginBottom:4 }}>
+            <div style={{ height:10, borderRadius:99, width:`${job.completionGate}%`, background: job.completionGate===100 ? C.success : C.warning }} />
+          </div>
+          <div style={{ display:'flex', justifyContent:'space-between', color:C.textMuted, fontSize:12 }}>
+            <span>{job.completionGate}% 완성</span>
+            <span style={{ color: job.completionGate>=100 ? C.success : C.warning }}>{job.completionGate>=100 ? '✓ 발행 가능' : '⚠ 100% 필요'}</span>
+          </div>
+        </div>
+        <div>
+          <div style={{ color:C.textMuted, fontSize:12, marginBottom:8 }}>언어별 패키지</div>
+          {job.lang.split(',').map(lang => (
+            <div key={lang} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'8px 0', borderBottom:`1px solid ${C.border}` }}>
+              <span style={{ color:C.text, fontSize:14 }}>{lang.trim()}</span>
+              <span style={{ background: job.status==='completed'?C.secondaryLight:'#EFF6FF', color: job.status==='completed'?C.success:C.primary, borderRadius:6, padding:'2px 10px', fontSize:12, fontWeight:600 }}>{job.status==='completed'?'발행 완료':'예약됨'}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (drawerItem.type==='member') {
+    const { member } = drawerItem;
+    return (
+      <div style={{ padding:24, display:'flex', flexDirection:'column', gap:16 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+          <div style={{ width:56, height:56, borderRadius:99, background:`linear-gradient(135deg,${C.primary},${C.accent})`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, color:'#fff', fontWeight:700 }}>{member.avatar}</div>
+          <div>
+            <div style={{ color:C.text, fontWeight:800, fontSize:18 }}>{member.name}</div>
+            <div style={{ color:C.textMuted, fontSize:14 }}>{member.role} · {member.lang}</div>
+            <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4 }}>
+              <span style={{ width:8, height:8, borderRadius:99, background: member.online?C.success:C.textDim, display:'inline-block' }} />
+              <span style={{ fontSize:12, color: member.online?C.success:C.textMuted }}>{member.online?'온라인':'오프라인'}</span>
+            </div>
+          </div>
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+          {[['할당 작업',`${member.tasks}개`],['완료',`${member.done}개`],['완료율',`${Math.round(member.done/member.tasks*100)}%`],['역할',member.role]].map(([k,v])=>(
+            <div key={k} style={{ background:C.surface2, borderRadius:10, padding:14 }}>
+              <div style={{ color:C.textMuted, fontSize:12 }}>{k}</div>
+              <div style={{ color:C.text, fontWeight:700, fontSize:16, marginTop:2 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return null;
+}
+
+/* ── 메인 앱 ── */
+function App() {
+  const [tab, setTab] = useState('home');
+  const [drawer, setDrawer] = useState(null);
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const showToast = useCallback((msg, type='success') => setToast({ msg, type }), []);
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', width:'100%', minHeight:'100vh', background:C.bg }}>
+      <TopNav tab={tab} setTab={setTab} />
+      <HeroBanner tab={tab} />
+      <main style={{ flex:1 }}>
+        {tab==='home'   && <HomePage setDrawer={setDrawer} setModal={setModal} showToast={showToast} />}
+        {tab==='collab' && <CollabPage setDrawer={setDrawer} showToast={showToast} />}
+        {tab==='review' && <ReviewPage setDrawer={setDrawer} showToast={showToast} />}
+        {tab==='publish'&& <PublishPage setDrawer={setDrawer} showToast={showToast} />}
+      </main>
+
+      {/* 슬라이드오버 드로어 */}
+      {drawer && (
+        <Drawer title={drawer.type==='task' ? `${drawer.task.work} — ${drawer.task.ep}` : drawer.type==='review' ? '리뷰 상세' : drawer.type==='job' ? '발행 상세' : '팀원 정보'} onClose={() => setDrawer(null)}>
+          <DrawerContent drawerItem={drawer} showToast={showToast} />
+        </Drawer>
+      )}
+
+      {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
