@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>크립토 아비트라지 실시간 시그널 대시보드 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Pretendard',sans-serif;background:#0B0E1A;color:#F1F5F9;min-height:100vh}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+@keyframes barGrow{from{width:0%}to{width:var(--target-width)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px);max-height:0}to{opacity:1;transform:translateY(0);max-height:500px}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
+@keyframes ticker{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+@keyframes glow{0%,100%{box-shadow:0 0 4px #00D4AA40}50%{box-shadow:0 0 12px #00D4AA80}}
+@keyframes rowSlideIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+const { LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } = Recharts;
+
+// ── Design Tokens ─────────────────────────────────────────────────────────────
+const C = {
+  primary:'#00D4AA', primaryHover:'#00BFA0',
+  secondary:'#7C3AED', accent:'#F59E0B',
+  bg:'#0B0E1A', surface:'#151929', surface2:'#1E2538',
+  border:'#2A3452', borderHover:'#3A4A72',
+  textPrimary:'#F1F5F9', textSecondary:'#94A3B8', textMuted:'#4A5678',
+  danger:'#EF4444', success:'#10B981', warning:'#F59E0B',
+  green:'#10B981', red:'#EF4444', yellow:'#F59E0B',
+};
+
+// ── Dummy Data ────────────────────────────────────────────────────────────────
+const EXCHANGES_KR = ['빗썸','업비트','코인원'];
+const EXCHANGES_GLOBAL = ['바이낸스','바이비트','비트겟','Gate.io','HTX'];
+const COINS = ['PEPE','FLOKI','WIF','BONK','NOT','NEIRO','1000X','LUNC','SHIB','DOGS'];
+const NETWORKS = ['TRC20','BEP20','SOL','ERC20'];
+const FEE_MAP = {TRC20:1.0, BEP20:0.5, SOL:0.1, ERC20:4.0};
+
+function rand(min,max){return Math.random()*(max-min)+min}
+function randInt(min,max){return Math.floor(rand(min,max+1))}
+
+function makeSignals(count=20){
+  return Array.from({length:count},(_,i)=>{
+    const coin = COINS[i%COINS.length];
+    const fromEx = i%3===0?EXCHANGES_KR[i%3]:EXCHANGES_KR[i%2];
+    const toEx = EXCHANGES_GLOBAL[i%5];
+    const spread = parseFloat(rand(0.3,4.5).toFixed(2));
+    const vol = randInt(5,500)*10000000;
+    const surgeRatio = rand(100,450).toFixed(0);
+    const network = NETWORKS[i%4];
+    const netFee = FEE_MAP[network];
+    const netSpread = parseFloat((spread - netFee/vol*1000).toFixed(2));
+    return {
+      id:i+1, coin, fromEx, toEx,
+      krPrice: randInt(18,800)*1000,
+      usdPrice: parseFloat(rand(0.015,0.85).toFixed(4)),
+      spread, netSpread,
+      network, netFee,
+      vol, surgeRatio: parseInt(surgeRatio),
+      direction: i%4===0?'국내→해외':i%4===1?'해외→국내':i%4===2?'국내→국내':'해외→해외',
+      updatedAt: new Date(Date.now()-randInt(0,10)*1000).toLocaleTimeString('ko-KR'),
+    };
+  });
+}
+
+const INIT_SIGNALS = makeSignals(20);
+
+const MEMBERS = [
+  {id:1,email:'trader01@alphacoin.kr',name:'김민준',status:'approved',role:'user',joinDate:'2026-03-10',expiry:'2026-09-10'},
+  {id:2,email:'signal99@bitlab.co',name:'이수빈',status:'pending',role:'user',joinDate:'2026-04-18',expiry:'-'},
+  {id:3,email:'arbi_pro@gmail.com',name:'박서현',status:'approved',role:'premium',joinDate:'2026-02-01',expiry:'2026-08-01'},
+  {id:4,email:'quant01@coinlab.io',name:'최지훈',status:'banned',role:'user',joinDate:'2026-01-15',expiry:'-'},
+  {id:5,email:'admin@firstpip.co.kr',name:'관리자',status:'approved',role:'admin',joinDate:'2025-12-01',expiry:'-'},
+];
+
+const FEE_TABLE = [
+  {network:'TRC20',asset:'USDT',fee:1.0,desc:'트론 네트워크'},
+  {network:'BEP20',asset:'USDT',fee:0.5,desc:'BSC 네트워크'},
+  {network:'SOL',asset:'USDT',fee:0.1,desc:'솔라나 네트워크'},
+  {network:'ERC20',asset:'USDT',fee:4.0,desc:'이더리움 네트워크'},
+];
+
+const USDTKRW = 1378;
+
+// ── Utility Components ────────────────────────────────────────────────────────
+function CountUp({end,duration=1200,suffix='',prefix=''}){
+  const [val,setVal]=useState(0);
+  useEffect(()=>{
+    let s=0;const step=end/(duration/16);
+    const t=setInterval(()=>{
+      s+=step;if(s>=end){setVal(end);clearInterval(t);}else setVal(Math.floor(s));
+    },16);
+    return()=>clearInterval(t);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{prefix}{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({message,type='success',onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  const bg=type==='success'?C.success:type==='warn'?C.warning:C.danger;
+  return(
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:bg,color:'#fff',padding:'12px 20px',borderRadius:8,animation:'slideUp 300ms ease',boxShadow:'0 4px 20px rgba(0,0,0,0.4)',display:'flex',alignItems:'center',gap:8,fontSize:14,fontWeight:600}}>
+      {type==='success'?'✓':type==='warn'?'⚠':'✕'} {message}
+    </div>
+  );
+}
+
+function Modal({title,onClose,children,width=600}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.6)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:C.surface,borderRadius:8,zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.5)',border:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'18px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:700}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',color:C.textSecondary,fontSize:20,cursor:'pointer'}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Drawer({title,onClose,children}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',justifyContent:'flex-end'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.5)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width:480,height:'100%',background:C.surface,zIndex:501,animation:'slideInRight 250ms ease',display:'flex',flexDirection:'column',boxShadow:'-8px 0 40px rgba(0,0,0,0.4)',borderLeft:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'20px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:700}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',color:C.textSecondary,fontSize:20,cursor:'pointer'}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Badge({status}){
+  const map={approved:[C.success,'승인'],pending:[C.warning,'대기중'],banned:[C.danger,'차단'],premium:[C.secondary,'프리미엄'],admin:[C.primary,'관리자'],user:[C.textMuted,'일반']};
+  const [color,label]=map[status]||[C.textMuted,status];
+  return <span style={{padding:'3px 10px',borderRadius:4,fontSize:12,fontWeight:700,background:color+'22',color,border:`1px solid ${color}44`}}>{label}</span>;
+}
+
+function SpreadBadge({spread}){
+  const color=spread>=3?C.yellow:spread>=1.5?C.red:C.green;
+  return <span style={{fontWeight:700,color,fontSize:13}}>{spread>0?`+${spread}%`:spread+'%'}</span>;
+}
+
+// ── Live Ticker ───────────────────────────────────────────────────────────────
+function LiveTicker({signals}){
+  const items=[...signals,...signals].map((s,i)=>(
+    <span key={i} style={{marginRight:40,fontSize:12,color:C.textSecondary,whiteSpace:'nowrap'}}>
+      <span style={{color:C.primary,fontWeight:700}}>{s.coin}</span>
+      <span style={{marginLeft:6,color:C.textSecondary}}>{s.fromEx}→{s.toEx}</span>
+      <SpreadBadge spread={s.spread}/>
+    </span>
+  ));
+  return(
+    <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:'6px 0',overflow:'hidden'}}>
+      <div style={{display:'inline-flex',animation:'ticker 40s linear infinite',whiteSpace:'nowrap'}}>
+        {items}
+      </div>
+    </div>
+  );
+}
+
+// ── Loading Skeleton ──────────────────────────────────────────────────────────
+function SkeletonCard({h=100}){
+  return(
+    <div style={{height:h,borderRadius:8,background:`linear-gradient(90deg,${C.surface2} 25%,${C.surface} 50%,${C.surface2} 75%)`,backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>
+  );
+}
+
+function SkeletonLoader(){
+  return(
+    <div style={{padding:24,display:'flex',flexDirection:'column',gap:16}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16}}>
+        {[...Array(4)].map((_,i)=><SkeletonCard key={i} h={90}/>)}
+      </div>
+      <SkeletonCard h={300}/>
+    </div>
+  );
+}
+
+// ── Pages ──────────────────────────────────────────────────────────────────────
+
+// 실시간 시그널 대시보드
+function SignalDashboardPage({signals,onSelectSignal}){
+  const [dir,setDir]=useState('전체');
+  const [minSpread,setMinSpread]=useState(0.5);
+  const filtered=signals.filter(s=>{
+    if(dir!=='전체'&&s.direction!==dir)return false;
+    if(s.spread<minSpread)return false;
+    return true;
+  });
+
+  const kpis=[
+    {label:'활성 시그널',val:filtered.length,suffix:'건',color:C.primary},
+    {label:'최고 차익률',val:Math.max(...filtered.map(s=>s.spread)).toFixed(2)+'%',raw:null,color:C.yellow},
+    {label:'USDT/KRW',val:USDTKRW,suffix:'원',color:C.accent},
+    {label:'연결 거래소',val:8,suffix:'개',color:C.success},
+  ];
+
+  const dirOptions=['전체','국내→해외','해외→국내','국내→국내','해외→해외'];
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {/* KPI */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:20}}>
+        {kpis.map((k,i)=>(
+          <div key={i} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:'16px 20px',animation:`slideUp 400ms ease ${i*80}ms both`}}>
+            <div style={{fontSize:12,color:C.textSecondary,marginBottom:6}}>{k.label}</div>
+            <div style={{fontSize:22,fontWeight:800,color:k.color}}>
+              {k.raw===null?k.val:<CountUp end={typeof k.val==='number'?k.val:parseInt(k.val)} suffix={k.suffix}/>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filter Bar */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:'14px 20px',marginBottom:16,display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
+        <span style={{fontSize:13,color:C.textSecondary,fontWeight:600}}>방향 필터</span>
+        {dirOptions.map(d=>(
+          <button key={d} onClick={()=>setDir(d)} style={{padding:'6px 14px',borderRadius:6,border:`1px solid ${dir===d?C.primary:C.border}`,background:dir===d?C.primary+'22':'transparent',color:dir===d?C.primary:C.textSecondary,fontSize:13,cursor:'pointer',fontWeight:600,transition:'all 150ms'}}>
+            {d}
+          </button>
+        ))}
+        <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:10}}>
+          <span style={{fontSize:12,color:C.textSecondary}}>최소 차익률</span>
+          <select value={minSpread} onChange={e=>setMinSpread(parseFloat(e.target.value))} style={{background:C.surface2,border:`1px solid ${C.border}`,color:C.textPrimary,padding:'6px 10px',borderRadius:6,fontSize:13,cursor:'pointer'}}>
+            {[0.3,0.5,1.0,1.5,2.0,3.0].map(v=><option key={v} value={v}>{v}% 이상</option>)}
+          </select>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <div style={{width:8,height:8,borderRadius:'50%',background:C.success,animation:'blink 1.5s infinite'}}/>
+            <span style={{fontSize:12,color:C.success,fontWeight:700}}>LIVE</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Signal Table */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+        <div style={{display:'grid',gridTemplateColumns:'60px 1fr 1fr 1fr 80px 80px 80px 100px',padding:'10px 16px',borderBottom:`1px solid ${C.border}`,fontSize:12,color:C.textMuted,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.05em'}}>
+          <span>#</span><span>코인</span><span>경로</span><span>방향</span><span>차익률</span><span>실수익률</span><span>거래량</span><span>업데이트</span>
+        </div>
+        <div style={{maxHeight:480,overflowY:'auto'}}>
+          {filtered.slice(0,15).map((s,i)=>(
+            <div key={s.id} onClick={()=>onSelectSignal(s)} style={{display:'grid',gridTemplateColumns:'60px 1fr 1fr 1fr 80px 80px 80px 100px',padding:'12px 16px',borderBottom:`1px solid ${C.border}22`,cursor:'pointer',transition:'background 150ms',animation:`rowSlideIn 300ms ease ${i*40}ms both'`}}
+              onMouseEnter={e=>{e.currentTarget.style.background=C.surface2}}
+              onMouseLeave={e=>{e.currentTarget.style.background='transparent'}}>
+              <span style={{color:C.textMuted,fontSize:12}}>{s.id}</span>
+              <span style={{fontWeight:700,color:C.textPrimary}}>{s.coin}</span>
+              <span style={{color:C.textSecondary,fontSize:13}}>{s.fromEx} → {s.toEx}</span>
+              <span style={{fontSize:12}}>
+                <span style={{padding:'2px 8px',borderRadius:4,background:C.surface2,color:C.textSecondary,fontSize:11}}>{s.direction}</span>
+              </span>
+              <SpreadBadge spread={s.spread}/>
+              <SpreadBadge spread={s.netSpread}/>
+              <span style={{color:C.textSecondary,fontSize:12}}>{(s.vol/100000000).toFixed(1)}억</span>
+              <span style={{color:C.textMuted,fontSize:11}}>{s.updatedAt}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 차익률 분석
+function SpreadAnalysisPage({signals}){
+  const [activeDir,setActiveDir]=useState('국내→해외');
+  const dirs=['국내→해외','해외→국내','국내→국내','해외→해외'];
+  const filtered=signals.filter(s=>s.direction===activeDir).slice(0,8);
+
+  const chartData=EXCHANGES_GLOBAL.map(ex=>({
+    name:ex,
+    spread:parseFloat(rand(0.5,3.5).toFixed(2)),
+    net:parseFloat(rand(0.3,3.0).toFixed(2)),
+  }));
+
+  return(
+    <div style={{animation:'slideInRight 250ms ease'}}>
+      <div style={{display:'flex',gap:8,marginBottom:20}}>
+        {dirs.map(d=>(
+          <button key={d} onClick={()=>setActiveDir(d)} style={{padding:'8px 18px',borderRadius:6,border:`1px solid ${activeDir===d?C.primary:C.border}`,background:activeDir===d?C.primary+'22':'transparent',color:activeDir===d?C.primary:C.textSecondary,fontSize:13,cursor:'pointer',fontWeight:600,transition:'all 150ms'}}>
+            {d}
+          </button>
+        ))}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:20}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:16,color:C.textSecondary}}>거래소별 평균 차익률</div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+              <XAxis dataKey="name" tick={{fill:C.textMuted,fontSize:11}}/>
+              <YAxis tick={{fill:C.textMuted,fontSize:11}} unit="%"/>
+              <Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,color:C.textPrimary,fontSize:12}}/>
+              <Bar dataKey="spread" name="총 차익률" fill={C.primary} radius={[4,4,0,0]}/>
+              <Bar dataKey="net" name="수수료 차감" fill={C.secondary} radius={[4,4,0,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:20}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:16,color:C.textSecondary}}>네트워크별 수수료 현황</div>
+          {FEE_TABLE.map((f,i)=>(
+            <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:i<FEE_TABLE.length-1?`1px solid ${C.border}22`:'none',animation:`slideUp 300ms ease ${i*60}ms both`}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:14}}>{f.network}</div>
+                <div style={{fontSize:12,color:C.textMuted}}>{f.desc}</div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontWeight:700,color:C.accent}}>{f.fee} USDT</div>
+                <div style={{fontSize:11,color:C.textMuted}}>{f.asset}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+        <div style={{padding:'14px 20px',borderBottom:`1px solid ${C.border}`,fontSize:13,fontWeight:700,color:C.textSecondary}}>
+          {activeDir} 시그널 상세 ({filtered.length}건)
+        </div>
+        <div>
+          {filtered.map((s,i)=>(
+            <div key={s.id} style={{display:'grid',gridTemplateColumns:'1fr 1fr 80px 80px 80px 80px',padding:'12px 20px',borderBottom:`1px solid ${C.border}22`,fontSize:13,animation:`rowSlideIn 300ms ease ${i*50}ms both`}}>
+              <span style={{fontWeight:700}}>{s.coin}</span>
+              <span style={{color:C.textSecondary}}>{s.fromEx} → {s.toEx}</span>
+              <SpreadBadge spread={s.spread}/>
+              <SpreadBadge spread={s.netSpread}/>
+              <span style={{color:C.textMuted,fontSize:12}}>{s.network}</span>
+              <span style={{color:C.textMuted,fontSize:12}}>{(s.vol/100000000).toFixed(1)}억</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 필터 설정
+function FilterSettingsPage({onToast}){
+  const [volFilter,setVolFilter]=useState(true);
+  const [surgeFilter,setSurgeFilter]=useState(true);
+  const [minSpread,setMinSpread]=useState(0.5);
+  const [tgEnabled,setTgEnabled]=useState(true);
+  const [tgChatId,setTgChatId]=useState('@arbi_signal_bot');
+  const [tgThreshold,setTgThreshold]=useState(2.0);
+  const [pushEnabled,setPushEnabled]=useState(false);
+  const [surgeThreshold,setSurgeThreshold]=useState(200);
+  const [saved,setSaved]=useState(false);
+
+  function handleSave(){setSaved(true);onToast('필터 설정이 저장되었습니다.');setTimeout(()=>setSaved(false),2000);}
+
+  return(
+    <div style={{animation:'slideInRight 250ms ease',maxWidth:800}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
+        {/* 거래량 필터 */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+            <div style={{fontWeight:700,fontSize:15}}>거래량 필터</div>
+            <div onClick={()=>setVolFilter(v=>!v)} style={{width:44,height:24,borderRadius:12,background:volFilter?C.primary:C.surface2,cursor:'pointer',transition:'background 200ms',position:'relative'}}>
+              <div style={{position:'absolute',top:2,left:volFilter?22:2,width:20,height:20,borderRadius:'50%',background:'#fff',transition:'left 200ms'}}/>
+            </div>
+          </div>
+          <div style={{fontSize:13,color:C.textSecondary,marginBottom:12}}>빗썸 기준 24시간 거래량이 설정 금액 이상인 코인만 표시합니다.</div>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <input type="range" min="100" max="1000" step="100" defaultValue="100" style={{flex:1,accentColor:C.primary}}/>
+            <span style={{fontWeight:700,color:C.primary,minWidth:60,textAlign:'right'}}>1억원 이상</span>
+          </div>
+        </div>
+
+        {/* 급등 감지 필터 */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:20}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+            <div style={{fontWeight:700,fontSize:15}}>급등 감지 필터</div>
+            <div onClick={()=>setSurgeFilter(v=>!v)} style={{width:44,height:24,borderRadius:12,background:surgeFilter?C.primary:C.surface2,cursor:'pointer',transition:'background 200ms',position:'relative'}}>
+              <div style={{position:'absolute',top:2,left:surgeFilter?22:2,width:20,height:20,borderRadius:'50%',background:'#fff',transition:'left 200ms'}}/>
+            </div>
+          </div>
+          <div style={{fontSize:13,color:C.textSecondary,marginBottom:12}}>최근 1시간 거래량이 직전 1시간 대비 설정 배율 이상 급증한 코인을 표시합니다.</div>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <input type="range" min="100" max="500" step="50" value={surgeThreshold} onChange={e=>setSurgeThreshold(parseInt(e.target.value))} style={{flex:1,accentColor:C.primary}}/>
+            <span style={{fontWeight:700,color:C.warning,minWidth:60,textAlign:'right'}}>{surgeThreshold}% 이상</span>
+          </div>
+        </div>
+
+        {/* 최소 차익률 */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:20}}>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:16}}>최소 차익률 필터</div>
+          <div style={{fontSize:13,color:C.textSecondary,marginBottom:12}}>설정 차익률 미만 시그널은 테이블에서 숨깁니다.</div>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            {[0.3,0.5,1.0,1.5,2.0,3.0].map(v=>(
+              <button key={v} onClick={()=>setMinSpread(v)} style={{padding:'8px 14px',borderRadius:6,border:`1px solid ${minSpread===v?C.primary:C.border}`,background:minSpread===v?C.primary+'22':'transparent',color:minSpread===v?C.primary:C.textSecondary,fontSize:13,cursor:'pointer',fontWeight:700,transition:'all 150ms'}}>
+                {v}%+
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 색상 구분 */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:20}}>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:16}}>차익률 색상 구분</div>
+          {[{label:'하위 구간',color:C.green,range:'0.5% ~ 1.5%'},{label:'중위 구간',color:C.red,range:'1.5% ~ 3.0%'},{label:'상위 구간',color:C.yellow,range:'3.0% 이상'}].map((item,i)=>(
+            <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:i<2?`1px solid ${C.border}22`:'none'}}>
+              <div style={{display:'flex',alignItems:'center',gap:10}}>
+                <div style={{width:12,height:12,borderRadius:2,background:item.color}}/>
+                <span style={{fontSize:13}}>{item.label}</span>
+              </div>
+              <span style={{color:item.color,fontWeight:700,fontSize:13}}>{item.range}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 알림 설정 */}
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:20,marginBottom:16}}>
+        <div style={{fontWeight:700,fontSize:15,marginBottom:16}}>알림 설정</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+          <div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <span style={{fontSize:14,fontWeight:600}}>텔레그램 봇 알림</span>
+              <div onClick={()=>setTgEnabled(v=>!v)} style={{width:44,height:24,borderRadius:12,background:tgEnabled?C.primary:C.surface2,cursor:'pointer',transition:'background 200ms',position:'relative'}}>
+                <div style={{position:'absolute',top:2,left:tgEnabled?22:2,width:20,height:20,borderRadius:'50%',background:'#fff',transition:'left 200ms'}}/>
+              </div>
+            </div>
+            <input value={tgChatId} onChange={e=>setTgChatId(e.target.value)} style={{width:'100%',background:C.surface2,border:`1px solid ${C.border}`,color:C.textPrimary,padding:'8px 12px',borderRadius:6,fontSize:13,marginBottom:8}} placeholder="텔레그램 Chat ID"/>
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <span style={{fontSize:12,color:C.textSecondary}}>임계값</span>
+              <select value={tgThreshold} onChange={e=>setTgThreshold(parseFloat(e.target.value))} style={{background:C.surface2,border:`1px solid ${C.border}`,color:C.textPrimary,padding:'6px 10px',borderRadius:6,fontSize:13}}>
+                {[1.0,1.5,2.0,2.5,3.0].map(v=><option key={v} value={v}>{v}% 이상</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <span style={{fontSize:14,fontWeight:600}}>브라우저 푸시 알림</span>
+              <div onClick={()=>setPushEnabled(v=>!v)} style={{width:44,height:24,borderRadius:12,background:pushEnabled?C.primary:C.surface2,cursor:'pointer',transition:'background 200ms',position:'relative'}}>
+                <div style={{position:'absolute',top:2,left:pushEnabled?22:2,width:20,height:20,borderRadius:'50%',background:'#fff',transition:'left 200ms'}}/>
+              </div>
+            </div>
+            <div style={{fontSize:12,color:C.textSecondary,lineHeight:1.6}}>
+              브라우저 알림 권한을 허용하면 탭이 비활성화된 상태에서도 차익 시그널 알림을 받을 수 있습니다.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button onClick={handleSave} style={{padding:'12px 32px',borderRadius:8,background:C.primary,border:'none',color:'#000',fontWeight:700,fontSize:14,cursor:'pointer',transition:'background 150ms'}}
+        onMouseEnter={e=>e.currentTarget.style.background=C.primaryHover}
+        onMouseLeave={e=>e.currentTarget.style.background=C.primary}>
+        {saved?'저장됨 ✓':'설정 저장'}
+      </button>
+    </div>
+  );
+}
+
+// 회원 관리
+function MemberManagePage({onToast}){
+  const [members,setMembers]=useState(MEMBERS);
+  const [showInviteModal,setShowInviteModal]=useState(false);
+  const [inviteEmail,setInviteEmail]=useState('');
+  const [inviteName,setInviteName]=useState('');
+  const [confirmDel,setConfirmDel]=useState(null);
+  const [editFees,setEditFees]=useState(false);
+  const [fees,setFees]=useState(FEE_TABLE);
+
+  function handleApprove(id){
+    setMembers(ms=>ms.map(m=>m.id===id?{...m,status:'approved',expiry:'2026-10-22'}:m));
+    onToast('회원이 승인되었습니다.');
+  }
+  function handleBan(id){
+    setMembers(ms=>ms.map(m=>m.id===id?{...m,status:'banned'}:m));
+    onToast('계정이 차단되었습니다.','warn');
+    setConfirmDel(null);
+  }
+  function handleInvite(){
+    if(!inviteEmail||!inviteName)return;
+    setMembers(ms=>[...ms,{id:ms.length+1,email:inviteEmail,name:inviteName,status:'approved',role:'user',joinDate:'2026-04-22',expiry:'2026-10-22'}]);
+    onToast('회원이 추가되었습니다.');
+    setShowInviteModal(false);setInviteEmail('');setInviteName('');
+  }
+
+  return(
+    <div style={{animation:'slideInRight 250ms ease'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <h3 style={{fontSize:16,fontWeight:700}}>회원 목록 ({members.length}명)</h3>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>setEditFees(true)} style={{padding:'8px 16px',borderRadius:6,border:`1px solid ${C.border}`,background:'transparent',color:C.textSecondary,cursor:'pointer',fontSize:13,fontWeight:600}}>
+            수수료 테이블 수정
+          </button>
+          <button onClick={()=>setShowInviteModal(true)} style={{padding:'8px 16px',borderRadius:6,background:C.primary,border:'none',color:'#000',cursor:'pointer',fontSize:13,fontWeight:700}}>
+            + 회원 추가
+          </button>
+        </div>
+      </div>
+
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,overflow:'hidden'}}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 80px 80px 100px 120px',padding:'10px 16px',borderBottom:`1px solid ${C.border}`,fontSize:12,color:C.textMuted,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.05em'}}>
+          <span>이름 / 이메일</span><span>역할</span><span>상태</span><span>가입일</span><span>만료일</span><span>액션</span>
+        </div>
+        {members.map((m,i)=>(
+          <div key={m.id} style={{display:'grid',gridTemplateColumns:'1fr 1fr 80px 80px 100px 120px',padding:'14px 16px',borderBottom:`1px solid ${C.border}22`,animation:`rowSlideIn 300ms ease ${i*40}ms both`,alignItems:'center'}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:14}}>{m.name}</div>
+              <div style={{fontSize:12,color:C.textMuted}}>{m.email}</div>
+            </div>
+            <Badge status={m.role}/>
+            <Badge status={m.status}/>
+            <span style={{fontSize:12,color:C.textSecondary}}>{m.joinDate}</span>
+            <span style={{fontSize:12,color:m.expiry==='-'?C.textMuted:C.textSecondary}}>{m.expiry}</span>
+            <div style={{display:'flex',gap:6}}>
+              {m.status==='pending'&&<button onClick={()=>handleApprove(m.id)} style={{padding:'4px 10px',borderRadius:4,background:C.success+'22',border:`1px solid ${C.success}44`,color:C.success,fontSize:11,cursor:'pointer',fontWeight:700}}>승인</button>}
+              {m.status!=='banned'&&m.role!=='admin'&&<button onClick={()=>setConfirmDel(m)} style={{padding:'4px 10px',borderRadius:4,background:C.danger+'22',border:`1px solid ${C.danger}44`,color:C.danger,fontSize:11,cursor:'pointer',fontWeight:700}}>차단</button>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 회원 추가 모달 */}
+      {showInviteModal&&(
+        <Modal title="회원 추가" onClose={()=>setShowInviteModal(false)} width={440}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div>
+              <label style={{fontSize:13,color:C.textSecondary,display:'block',marginBottom:6}}>이름</label>
+              <input value={inviteName} onChange={e=>setInviteName(e.target.value)} style={{width:'100%',background:C.surface2,border:`1px solid ${C.border}`,color:C.textPrimary,padding:'10px 14px',borderRadius:6,fontSize:14}} placeholder="홍길동"/>
+            </div>
+            <div>
+              <label style={{fontSize:13,color:C.textSecondary,display:'block',marginBottom:6}}>이메일</label>
+              <input value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)} type="email" style={{width:'100%',background:C.surface2,border:`1px solid ${C.border}`,color:C.textPrimary,padding:'10px 14px',borderRadius:6,fontSize:14}} placeholder="trader@example.com"/>
+            </div>
+            <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}>
+              <button onClick={()=>setShowInviteModal(false)} style={{padding:'10px 20px',borderRadius:6,border:`1px solid ${C.border}`,background:'transparent',color:C.textSecondary,cursor:'pointer'}}>취소</button>
+              <button onClick={handleInvite} style={{padding:'10px 20px',borderRadius:6,background:C.primary,border:'none',color:'#000',fontWeight:700,cursor:'pointer'}}>추가</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* 차단 확인 모달 */}
+      {confirmDel&&(
+        <Modal title="계정 차단 확인" onClose={()=>setConfirmDel(null)} width={400}>
+          <p style={{color:C.textSecondary,marginBottom:20,lineHeight:1.6}}>
+            <strong style={{color:C.textPrimary}}>{confirmDel.name}</strong> ({confirmDel.email}) 계정을 차단하시겠습니까? 차단된 사용자는 즉시 로그인이 차단됩니다.
+          </p>
+          <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+            <button onClick={()=>setConfirmDel(null)} style={{padding:'10px 20px',borderRadius:6,border:`1px solid ${C.border}`,background:'transparent',color:C.textSecondary,cursor:'pointer'}}>취소</button>
+            <button onClick={()=>handleBan(confirmDel.id)} style={{padding:'10px 20px',borderRadius:6,background:C.danger,border:'none',color:'#fff',fontWeight:700,cursor:'pointer'}}>차단 실행</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* 수수료 테이블 편집 Drawer */}
+      {editFees&&(
+        <Drawer title="네트워크별 수수료 테이블" onClose={()=>setEditFees(false)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {fees.map((f,i)=>(
+              <div key={i} style={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,padding:16,animation:`slideUp 300ms ease ${i*60}ms both`}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                  <div style={{fontWeight:700,fontSize:15}}>{f.network}</div>
+                  <span style={{fontSize:12,color:C.textMuted}}>{f.desc}</span>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <label style={{fontSize:12,color:C.textSecondary,minWidth:60}}>수수료 (USDT)</label>
+                  <input type="number" step="0.1" defaultValue={f.fee} style={{width:100,background:C.surface,border:`1px solid ${C.border}`,color:C.textPrimary,padding:'8px 12px',borderRadius:6,fontSize:14}}/>
+                </div>
+              </div>
+            ))}
+            <button onClick={()=>{onToast('수수료 테이블이 업데이트되었습니다. Redis 캐시가 즉시 무효화됩니다.');setEditFees(false);}} style={{padding:'12px',borderRadius:8,background:C.primary,border:'none',color:'#000',fontWeight:700,fontSize:14,cursor:'pointer',marginTop:8}}>
+              변경사항 저장 (즉시 적용)
+            </button>
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+// ── App Shell ─────────────────────────────────────────────────────────────────
+function App(){
+  const [page,setPage]=useState('실시간 시그널');
+  const [loading,setLoading]=useState(true);
+  const [signals,setSignals]=useState(INIT_SIGNALS);
+  const [selectedSignal,setSelectedSignal]=useState(null);
+  const [toast,setToast]=useState(null);
+
+  useEffect(()=>{const t=setTimeout(()=>setLoading(false),1500);return()=>clearTimeout(t);},[]);
+
+  // simulate live updates
+  useEffect(()=>{
+    const t=setInterval(()=>{
+      setSignals(prev=>{
+        const idx=Math.floor(Math.random()*prev.length);
+        const updated=[...prev];
+        updated[idx]={...updated[idx],
+          spread:parseFloat(rand(0.3,4.5).toFixed(2)),
+          updatedAt:new Date().toLocaleTimeString('ko-KR'),
+        };
+        return updated;
+      });
+    },2000);
+    return()=>clearInterval(t);
+  },[]);
+
+  function showToast(msg,type='success'){setToast({msg,type});}
+
+  const NAV_ITEMS=['실시간 시그널','차익률 분석','필터 설정','회원 관리'];
+
+  if(loading)return(
+    <div style={{background:C.bg,minHeight:'100vh'}}>
+      <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,height:56}}/>
+      <SkeletonLoader/>
+    </div>
+  );
+
+  return(
+    <div style={{background:C.bg,minHeight:'100vh',fontFamily:'Pretendard,sans-serif'}}>
+      {/* Topnav */}
+      <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,position:'sticky',top:0,zIndex:100}}>
+        <div style={{maxWidth:1400,margin:'0 auto',padding:'0 24px',display:'flex',alignItems:'center',height:56}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginRight:32}}>
+            <div style={{width:32,height:32,borderRadius:8,background:`linear-gradient(135deg,${C.primary},${C.secondary})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,fontWeight:900,color:'#000'}}>A</div>
+            <span style={{fontWeight:800,fontSize:16,letterSpacing:'-0.02em'}}>ArbiSignal</span>
+            <span style={{fontSize:10,padding:'2px 6px',borderRadius:4,background:C.success+'22',color:C.success,fontWeight:700}}>LIVE</span>
+          </div>
+          <nav style={{display:'flex',gap:2,flex:1}}>
+            {[
+              {label:'실시간 시그널',key:'실시간 시그널'},
+              {label:'차익률 분석',key:'차익률 분석'},
+              {label:'필터 설정',key:'필터 설정'},
+              {label:'회원 관리',key:'회원 관리'},
+            ].map(item=>(
+              <button key={item.key} onClick={()=>setPage(item.key)} style={{padding:'6px 16px',borderRadius:6,border:'none',background:page===item.key?C.primary+'22':'transparent',color:page===item.key?C.primary:C.textSecondary,fontSize:14,fontWeight:page===item.key?700:500,cursor:'pointer',transition:'all 150ms'}}>
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <div style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:C.textMuted}}>
+              <div style={{width:8,height:8,borderRadius:'50%',background:C.success,animation:'blink 1.5s infinite'}}/>
+              8개 거래소 연결됨
+            </div>
+            <div style={{width:32,height:32,borderRadius:'50%',background:`linear-gradient(135deg,${C.secondary},${C.primary})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:700,color:'#fff',cursor:'pointer'}}>
+              김
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Ticker */}
+      <LiveTicker signals={signals}/>
+
+      {/* Hero Banner */}
+      {page==='실시간 시그널'&&(
+        <div style={{background:`linear-gradient(135deg,${C.surface} 0%,${C.surface2} 100%)`,borderBottom:`1px solid ${C.border}`,padding:'20px 24px'}}>
+          <div style={{maxWidth:1400,margin:'0 auto',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <h1 style={{fontSize:22,fontWeight:800,marginBottom:4}}>실시간 아비트라지 시그널</h1>
+              <p style={{color:C.textSecondary,fontSize:13}}>8개 거래소 WebSocket 스트림 · 1초 미만 지연 · USDT/KRW 실시간 환산</p>
+            </div>
+            <div style={{display:'flex',gap:16}}>
+              {[{label:'오늘 총 시그널',val:247,suffix:'건'},{label:'최고 차익률',val:null,display:'4.32%'},{label:'평균 지연',val:null,display:'340ms'}].map((k,i)=>(
+                <div key={i} style={{textAlign:'right'}}>
+                  <div style={{fontSize:12,color:C.textMuted}}>{k.label}</div>
+                  <div style={{fontSize:20,fontWeight:800,color:C.primary}}>{k.val?<CountUp end={k.val} suffix={k.suffix}/>:k.display}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Main Content */}
+      <div style={{maxWidth:1400,margin:'0 auto',padding:24}}>
+        <div key={page} style={{animation:'fadeIn 300ms ease'}}>
+          {page==='실시간 시그널'&&<SignalDashboardPage signals={signals} onSelectSignal={setSelectedSignal}/>}
+          {page==='차익률 분석'&&<SpreadAnalysisPage signals={signals}/>}
+          {page==='필터 설정'&&<FilterSettingsPage onToast={showToast}/>}
+          {page==='회원 관리'&&<MemberManagePage onToast={showToast}/>}
+
+        </div>
+      </div>
+
+      {/* Signal Detail Drawer */}
+      {selectedSignal&&(
+        <Drawer title={`${selectedSignal.coin} 시그널 상세`} onClose={()=>setSelectedSignal(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <div style={{background:C.surface2,borderRadius:8,padding:20}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:12}}>
+                <span style={{fontWeight:800,fontSize:24,color:C.primary}}>{selectedSignal.coin}</span>
+                <SpreadBadge spread={selectedSignal.spread}/>
+              </div>
+              <div style={{fontSize:13,color:C.textSecondary}}>{selectedSignal.direction} 시그널</div>
+            </div>
+            {[
+              {label:'매수 거래소',val:selectedSignal.fromEx},
+              {label:'매도 거래소',val:selectedSignal.toEx},
+              {label:'총 차익률',val:`+${selectedSignal.spread}%`,color:C.green},
+              {label:'수수료 차감 실수익률',val:`+${selectedSignal.netSpread}%`,color:selectedSignal.netSpread>0?C.green:C.red},
+              {label:'네트워크',val:selectedSignal.network},
+              {label:'네트워크 수수료',val:`${FEE_MAP[selectedSignal.network]} USDT`},
+              {label:'24h 거래량',val:`${(selectedSignal.vol/100000000).toFixed(1)}억원`},
+              {label:'급등 비율',val:`${selectedSignal.surgeRatio}%`,color:selectedSignal.surgeRatio>=200?C.warning:C.textPrimary},
+              {label:'국내 가격 (원)',val:selectedSignal.krPrice.toLocaleString()+'원'},
+              {label:'해외 가격 (USD)',val:'$'+selectedSignal.usdPrice},
+              {label:'마지막 업데이트',val:selectedSignal.updatedAt},
+            ].map((row,i)=>(
+              <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}22`,animation:`rowSlideIn 200ms ease ${i*30}ms both`}}>
+                <span style={{fontSize:13,color:C.textSecondary}}>{row.label}</span>
+                <span style={{fontSize:13,fontWeight:700,color:row.color||C.textPrimary}}>{row.val}</span>
+              </div>
+            ))}
+            <button onClick={()=>{showToast(`${selectedSignal.coin} 알림 임계값 설정으로 이동합니다.`,'success');setSelectedSignal(null);setPage('필터 설정');}} style={{marginTop:8,padding:'12px',borderRadius:8,background:C.primary,border:'none',color:'#000',fontWeight:700,fontSize:14,cursor:'pointer'}}>
+              이 코인 알림 설정
+            </button>
+          </div>
+        </Drawer>
+      )}
+
+      {toast&&<Toast message={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
