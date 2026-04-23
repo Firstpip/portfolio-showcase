@@ -15,36 +15,7 @@ const ghFetch = (token: string, path: string, options: RequestInit = {}) =>
     },
   });
 
-// ─── P2/P3 삭제: GitHub Actions workflow로 위임 ──────────────────────────
-
-async function dispatchP2P3Cleanup(token: string, slugs: string[]): Promise<{ ok: boolean; status?: number; reason?: string; body?: string }> {
-  console.log("[dispatch] POST /dispatches", { slugs, event_type: "cleanup-p2p3" });
-  const res = await ghFetch(token, `/dispatches`, {
-    method: "POST",
-    body: JSON.stringify({
-      event_type: "cleanup-p2p3",
-      client_payload: { slugs },
-    }),
-  });
-  // repository_dispatch는 성공 시 204 No Content 반환
-  if (res.status === 204 || res.ok) {
-    console.log("[dispatch] OK", { status: res.status });
-    return { ok: true, status: res.status };
-  }
-  const body = await res.text();
-  const rateLimitRemaining = res.headers.get("x-ratelimit-remaining");
-  const rateLimitReset = res.headers.get("x-ratelimit-reset");
-  console.error("[dispatch] FAIL", {
-    status: res.status,
-    statusText: res.statusText,
-    body: body.slice(0, 500),
-    rateLimitRemaining,
-    rateLimitReset,
-  });
-  return { ok: false, status: res.status, reason: `dispatch 실패 (${res.status} ${res.statusText})`, body: body.slice(0, 500) };
-}
-
-// ─── 전체 삭제: Git Tree API (handleDelete / cleanup workflow 전용) ──────
+// ─── 전체 삭제: Git Tree API ─────────────────────────────────────────────
 
 type TreeEntry = { path: string; mode: string; type: string; sha: string };
 type CommitResult = { ok: boolean; reason?: string; conflict?: boolean };
@@ -149,7 +120,7 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "GITHUB_TOKEN not set", reqId }), { status: 500, headers });
   }
 
-  let body: { slug?: string; slugs?: string[]; all?: boolean; skip_db?: boolean };
+  let body: { slug?: string; skip_db?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -157,37 +128,22 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "Invalid JSON body", reqId }), { status: 400, headers });
   }
 
-  const { slug, slugs, all, skip_db } = body;
-  console.log(`[${reqId}] request`, { slug, slugs, all, skip_db });
+  const { slug, skip_db } = body;
+  console.log(`[${reqId}] request`, { slug, skip_db });
+
+  if (!slug) {
+    return new Response(JSON.stringify({ error: "slug is required", reqId }), { status: 400, headers });
+  }
 
   try {
-    // ── 전체 삭제 (handleDelete / cleanup workflow 전용) ──
-    if (all) {
-      const targetSlug = slug || (slugs?.[0]);
-      if (!targetSlug) return new Response(JSON.stringify({ error: "slug is required", reqId }), { status: 400, headers });
-      const fileResult = await deleteSlug(token, targetSlug);
-      if (!fileResult.ok) {
-        console.error(`[${reqId}] full-delete fail`, { slug: targetSlug, reason: fileResult.reason });
-        return new Response(JSON.stringify({ slug: targetSlug, deleted: false, db_updated: false, reason: fileResult.reason, reqId }), { headers });
-      }
-      const dbResult = skip_db ? { ok: true } : await deleteRow(targetSlug);
-      console.log(`[${reqId}] full-delete ok`, { slug: targetSlug, db_updated: dbResult.ok });
-      return new Response(JSON.stringify({ slug: targetSlug, deleted: true, db_updated: dbResult.ok, reason: dbResult.reason, reqId }), { headers });
+    const fileResult = await deleteSlug(token, slug);
+    if (!fileResult.ok) {
+      console.error(`[${reqId}] delete fail`, { slug, reason: fileResult.reason });
+      return new Response(JSON.stringify({ slug, deleted: false, db_updated: false, reason: fileResult.reason, reqId }), { headers });
     }
-
-    // ── P2/P3 삭제: GitHub Actions workflow dispatch ──
-    const targetSlugs: string[] = slugs || (slug ? [slug] : []);
-    if (targetSlugs.length === 0) {
-      console.error(`[${reqId}] no slugs provided`);
-      return new Response(JSON.stringify({ error: "slug or slugs is required", reqId }), { status: 400, headers });
-    }
-
-    const result = await dispatchP2P3Cleanup(token, targetSlugs);
-    if (!result.ok) {
-      return new Response(JSON.stringify({ dispatched: false, reason: result.reason, status: result.status, body: result.body, reqId }), { headers });
-    }
-    return new Response(JSON.stringify({ dispatched: true, slugs: targetSlugs, reqId }), { headers });
-
+    const dbResult = skip_db ? { ok: true } : await deleteRow(slug);
+    console.log(`[${reqId}] delete ok`, { slug, db_updated: dbResult.ok });
+    return new Response(JSON.stringify({ slug, deleted: true, db_updated: dbResult.ok, reason: dbResult.reason, reqId }), { headers });
   } catch (err) {
     console.error(`[${reqId}] unhandled exception`, err);
     return new Response(JSON.stringify({ error: String(err), reqId }), { status: 500, headers });

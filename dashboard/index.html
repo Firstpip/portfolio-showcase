@@ -99,9 +99,10 @@ const STATUS_META = {
   settled:      { label: '정산 완료',  emoji: '✅', color: '#00cec9' },
   lost:         { label: '미선정',     emoji: '❌', color: '#e17055' },
 };
-const STATUS_ORDER = ['generated','applied','interview','meeting_done','won','contracted','in_progress','delivered','settled','lost'];
+const STATUS_ORDER = ['generated','applied','interview','meeting_done','won','contracted','in_progress','delivered','settled'];
 const POST_WON = ['contracted','in_progress','delivered','settled']; // stats: 수주 후 진행 단계
 const HAS_MILESTONES = ['won','contracted','in_progress','delivered','settled']; // 마일스톤 트래커 노출 대상
+// 'lost' 선택 시 상태 변경이 아닌 프로젝트 즉시 삭제로 처리됨 (StatusModal 참조).
 const TRANSITION_TARGETS = {
   generated:   ['applied'],
   applied:     ['interview','lost'],
@@ -112,7 +113,6 @@ const TRANSITION_TARGETS = {
   in_progress: ['delivered'],
   delivered:   ['settled'],
   settled:     [],
-  lost:        ['applied','interview'],
 };
 const MEETING_TYPES = [
   { key: 'video',    label: '화상', emoji: '💻' },
@@ -346,84 +346,6 @@ function friendlyError(error) {
   if (/JWT|token|auth/i.test(msg)) return '인증이 만료되었습니다. 다시 로그인해주세요.';
   return msg || '요청을 처리할 수 없습니다.';
 }
-// ─── P2/P3 dispatch 진단 로그 (localStorage 기반, 최근 10건 유지) ───
-const DISPATCH_LOG_KEY = 'p2p3_dispatch_log';
-function appendDispatchLog(entry) {
-  try {
-    const arr = JSON.parse(localStorage.getItem(DISPATCH_LOG_KEY) || '[]');
-    arr.unshift({ ts: new Date().toISOString(), ...entry });
-    localStorage.setItem(DISPATCH_LOG_KEY, JSON.stringify(arr.slice(0, 10)));
-  } catch (e) { console.warn('[dispatch-log] localStorage 저장 실패', e); }
-}
-function recordDispatchAttempt(source, detail) {
-  console.log('[P2/P3 dispatch] attempt', source, detail);
-  appendDispatchLog({ kind: 'attempt', source, detail });
-}
-function recordDispatchSuccess(source, detail) {
-  console.log('[P2/P3 dispatch] success', source, detail);
-  appendDispatchLog({ kind: 'success', source, detail });
-}
-// 실패 원인을 최대한 많이 캡처해서 console + localStorage + toast 3곳 모두에 남김
-window.__p2p3Toast = null;
-function handleDispatchFailure(source, detail) {
-  const { error, data, exception, slug, slugs } = detail;
-  const summary = {
-    source,
-    slug, slugs,
-    reqId: data?.reqId,
-    errorName: error?.name,
-    errorMessage: error?.message,
-    errorContext: error?.context,
-    dispatched: data?.dispatched,
-    dispatchStatus: data?.status,
-    dispatchReason: data?.reason,
-    dispatchBody: data?.body,
-    exceptionName: exception?.name,
-    exceptionMessage: exception?.message,
-  };
-  console.error('[P2/P3 dispatch] FAIL', summary, { rawError: error, rawData: data, rawException: exception });
-  appendDispatchLog({ kind: 'fail', ...summary });
-  // toast에 짧게 표시 — 상세는 console + localStorage에서
-  const short = (summary.dispatchReason || summary.errorMessage || summary.exceptionMessage || source).toString().slice(0, 80);
-  const reqIdTag = summary.reqId ? ` [${summary.reqId}]` : '';
-  if (window.__p2p3Toast) window.__p2p3Toast(`⚠️ P2/P3 dispatch 실패: ${short}${reqIdTag}`, 'error');
-}
-// 브라우저 콘솔에서 window.p2p3Log() 치면 마지막 10건 출력
-window.p2p3Log = () => {
-  const arr = JSON.parse(localStorage.getItem(DISPATCH_LOG_KEY) || '[]');
-  console.table(arr);
-  return arr;
-};
-
-// verify_jwt=true edge function 호출 시 401 대응.
-// 선제 refresh(만료 120초 이내) → 401이면 강제 refresh 후 1회 재시도.
-// refresh 실패/재시도 후 401이어도 signOut 하지 않음 — DB 업데이트가 이미 완료된
-// 상태에서 강제 로그아웃하면 사용자가 작업 결과를 잃는 부작용이 있기 때문.
-// 세션이 진짜 만료된 경우 Supabase SDK의 onAuthStateChange가 SIGNED_OUT을 자연 처리함.
-async function invokeWithAuthRetry(name, options) {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.expires_at) {
-      const secondsLeft = session.expires_at - Math.floor(Date.now() / 1000);
-      if (secondsLeft < 120) await supabase.auth.refreshSession();
-    }
-  } catch (_) {}
-
-  let result = await supabase.functions.invoke(name, options);
-  if (result.error?.context?.status !== 401) return result;
-
-  const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
-  if (refreshErr || !refreshed?.session) {
-    if (window.__p2p3Toast) window.__p2p3Toast('세션이 만료되었습니다. 페이지를 새로고침하거나 다시 로그인해주세요.', 'error');
-    return result;
-  }
-  result = await supabase.functions.invoke(name, options);
-  if (result.error?.context?.status === 401) {
-    if (window.__p2p3Toast) window.__p2p3Toast('인증 오류가 발생했습니다. 다시 로그인해주세요.', 'error');
-  }
-  return result;
-}
-
 function daysBetween(d1, d2) {
   const a = new Date(d1), b = new Date(d2);
   if (isNaN(a) || isNaN(b)) return 0;
@@ -576,7 +498,6 @@ function useToast() {
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
   }, []);
-  useEffect(() => { window.__p2p3Toast = add; return () => { if (window.__p2p3Toast === add) window.__p2p3Toast = null; }; }, [add]);
   return { toasts, toast: add };
 }
 
@@ -617,15 +538,9 @@ function Funnel({ data }) {
   const counts = stages.map(s => {
     const idx = ORDER.indexOf(s.key);
     return { ...s, count: data.filter(d => {
-      const st = d.current_status;
       // post-won 단계도 수주 성공으로 카운트
-      const effectiveStatus = POST_WON.includes(st) ? 'won' : st;
-      const dIdx = ORDER.indexOf(effectiveStatus);
-      if (st === 'lost') {
-        const maxIdx = Math.max(...(d.history||[]).map(h => ORDER.indexOf(POST_WON.includes(h.status)?'won':h.status)).filter(i => i >= 0), -1);
-        return maxIdx >= idx;
-      }
-      return dIdx >= idx;
+      const effectiveStatus = POST_WON.includes(d.current_status) ? 'won' : d.current_status;
+      return ORDER.indexOf(effectiveStatus) >= idx;
     }).length };
   });
   const maxCount = Math.max(...counts.map(c => c.count), 1);
@@ -2995,18 +2910,30 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                     })}
                   </div>
                   {(() => {
-                    // 되돌리기 어려운 전환만 confirm: won(템플릿 자동 생성), lost(P2/P3 삭제)
+                    // 'lost'는 프로젝트 즉시 삭제 (상태 변경 아님). 'won'은 템플릿 자동 생성 confirm.
                     const triggerSave = () => {
                       if (!newStatus) return;
-                      if ((newStatus==='won' || newStatus==='lost') && onRequestConfirm) {
+                      if (newStatus==='lost') {
+                        if (onRequestConfirm) {
+                          onRequestConfirm({
+                            title: '❌ 프로젝트 삭제',
+                            message: `"${project.title}" 프로젝트가 완전히 삭제됩니다.\n(DB 레코드 + 포트폴리오 파일 전체)\n되돌릴 수 없습니다.`,
+                            confirmLabel: '삭제',
+                            destructive: true,
+                            onConfirm: () => onDelete(project),
+                          });
+                        } else {
+                          onDelete(project);
+                        }
+                        return;
+                      }
+                      if (newStatus==='won' && onRequestConfirm) {
                         const sm = STATUS_META[newStatus];
                         onRequestConfirm({
                           title: `${sm.emoji} ${sm.label}으로 전환`,
-                          message: newStatus==='won'
-                            ? '수주 성공으로 전환하면 마일스톤 템플릿이 자동 생성됩니다.\n계속할까요?'
-                            : '미선정으로 전환하면 P2/P3 포트폴리오 파일이 자동 삭제됩니다.\n되돌리기 어렵습니다.',
+                          message: '수주 성공으로 전환하면 마일스톤 템플릿이 자동 생성됩니다.\n계속할까요?',
                           confirmLabel: `${sm.label} 전환`,
-                          destructive: newStatus==='lost',
+                          destructive: false,
                           onConfirm: () => onSave(project, newStatus, note),
                         });
                       } else {
@@ -3038,7 +2965,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
 
 // ─── ProjectTable ───
 const PAGE_SIZE = 30;
-function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, sortOrder, onSort, onBatchLost, onMemoSave, memberFilter, teamMembers, milestones, milestonesSetupNeeded, onQuickApplyTemplate, onOpenProject }) {
+function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, sortOrder, onSort, onBatchDelete, onMemoSave, memberFilter, teamMembers, milestones, milestonesSetupNeeded, onQuickApplyTemplate, onOpenProject }) {
   const [selected, setSelected] = useState(new Set());
   const [page, setPage] = useState(1);
   const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s=new Set(prev); s.has(slug)?s.delete(slug):s.add(slug); return s; }); };
@@ -3128,7 +3055,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
           <span style={{ fontSize:'0.85rem', color:'var(--text)' }}>{selected.size}건 선택됨</span>
           <div style={{ display:'flex', gap:8 }}>
             <button onClick={() => setSelected(new Set())} style={{ padding:'0.35rem 0.7rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem' }}>선택 해제</button>
-            <button onClick={() => { onBatchLost([...selected]); setSelected(new Set()); }} style={{ padding:'0.35rem 0.7rem', borderRadius:6, border:'none', background:'#e17055', color:'#fff', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>일괄 미선정</button>
+            <button onClick={() => { onBatchDelete([...selected]); setSelected(new Set()); }} style={{ padding:'0.35rem 0.7rem', borderRadius:6, border:'none', background:'#e17055', color:'#fff', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>일괄 삭제</button>
           </div>
         </div>
       )}
@@ -3458,7 +3385,6 @@ function App({ session }) {
         localStorage.setItem('last_portfolio_migrate', String(nowTs));
       }
     }
-    // 30일+ 미선정 프로젝트 정리는 cleanup-lost-projects.yml 워크플로우가 주 1회 처리
     let finalRows = rows;
     // 미팅 시각 경과 시 interview → meeting_done 자동 전환
     // 단일 atomic SQL (서버 RPC) — race / 시계 / history append 모두 서버에서 안전 처리
@@ -3881,48 +3807,47 @@ function App({ session }) {
     toast('메모 저장','success');
   }, [toast]);
 
-  const handleBatchLost = useCallback(async (slugs) => {
-    if (!confirm(`${slugs.length}건을 미선정 처리하시겠습니까?`)) return;
-    const today = new Date().toISOString().split('T')[0];
-    let success = 0;
-    for (const slug of slugs) {
-      const project = data.find(d => d.slug===slug);
-      if (!project || project.current_status==='lost' || project.current_status==='won') continue;
-      const newHistory = [...(project.history||[]),{ status:'lost', date:today, note:'일괄 미선정 처리' }];
-      const batchPayload = { current_status:'lost', history:newHistory, updated_at:today };
-      // portfolio_links는 workflow가 파일 삭제 성공 후 트림 (단일 진실 원천화).
-      // 사전 트림 시 workflow 실패하면 DB-파일 desync가 되어 복구 경로가 막힘.
-      const { error } = await supabase.from(TABLE).update(batchPayload).eq('slug',slug);
-      if (!error) success++;
-    }
-    setData(prev => prev.map(d => {
-      if (!slugs.includes(d.slug) || d.current_status==='won') return d;
-      const newHistory = [...(d.history||[]),{status:'lost',date:today,note:'일괄 미선정 처리'}];
-      return {...d, current_status:'lost', history:newHistory, updated_at:today};
-    }));
-    toast(`${success}건 미선정 처리 완료`,'success');
-    // P2/P3 정리: GitHub Actions workflow로 비동기 처리
-    const toDelete = slugs.filter(slug => {
-      const p = data.find(d => d.slug===slug);
-      return p && p.current_status!=='won' && (p.portfolio_links||[]).length > 1;
+  const handleBatchDelete = useCallback(async (slugs) => {
+    // won 상태는 보호 — 수주된 프로젝트는 일괄 삭제에서 제외
+    const targets = slugs.filter(s => {
+      const p = data.find(d => d.slug===s);
+      return p && p.current_status!=='won';
     });
-    if (toDelete.length > 0) {
-      recordDispatchAttempt('handleBatchLost', { slugs: toDelete });
-      invokeWithAuthRetry('delete-portfolios', { body:{ slugs:toDelete } })
-        .then(({ data, error }) => {
-          if (error) handleDispatchFailure('handleBatchLost-error', { slugs: toDelete, error, data });
-          else if (data && data.dispatched === false) handleDispatchFailure('handleBatchLost-rejected', { slugs: toDelete, data });
-          else recordDispatchSuccess('handleBatchLost', { slugs: toDelete, reqId: data?.reqId });
-        })
-        .catch(err => handleDispatchFailure('handleBatchLost-exception', { slugs: toDelete, exception: err }));
+    if (targets.length === 0) { toast('삭제할 프로젝트가 없습니다','info'); return; }
+    if (!confirm(`${targets.length}건 프로젝트를 완전히 삭제합니다.\nDB 레코드 + 포트폴리오 파일이 전부 제거되며 되돌릴 수 없습니다.\n계속하시겠습니까?`)) return;
+    setSaving(true);
+    let success = 0, failSlugs = [];
+    for (const slug of targets) {
+      try {
+        const { data:fnData, error:fnErr } = await supabase.functions.invoke('delete-portfolios', { body:{ slug } });
+        if (fnErr) throw new Error(fnErr.message);
+        if (!fnData?.deleted) throw new Error(fnData?.reason || 'GitHub 파일 삭제 실패');
+        if (!fnData?.db_updated) {
+          const { error } = await supabase.from(TABLE).delete().eq('slug',slug);
+          if (error) throw error;
+        }
+        success++;
+      } catch (err) {
+        failSlugs.push(slug);
+        console.error(`[batchDelete] ${slug} 실패:`, err);
+      }
     }
+    setData(prev => prev.filter(d => !targets.includes(d.slug) || failSlugs.includes(d.slug)));
+    setMilestones(prev => {
+      const next = { ...prev };
+      targets.forEach(s => { if (!failSlugs.includes(s)) delete next[s]; });
+      return next;
+    });
+    setSaving(false);
+    if (failSlugs.length === 0) toast(`${success}건 삭제 완료`,'success');
+    else toast(`${success}건 삭제, ${failSlugs.length}건 실패`, failSlugs.length===targets.length?'error':'info');
   }, [data, toast]);
 
   const handleDelete = useCallback(async (project) => {
     setSaving(true);
     try {
       // 파일 → DB 순으로 함수가 책임짐. 실패 시 row 보존되어 재시도 가능.
-      const { data:fnData, error:fnErr } = await invokeWithAuthRetry('delete-portfolios', { body:{ slug:project.slug, all:true } });
+      const { data:fnData, error:fnErr } = await supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug } });
       if (fnErr) throw new Error(fnErr.message);
       if (!fnData?.deleted) throw new Error(fnData?.reason || 'GitHub 파일 삭제 실패');
       if (!fnData?.db_updated) {
@@ -3945,13 +3870,11 @@ function App({ session }) {
       if (newStatus==='meeting_done' && project.meeting_at) { historyEntry.meeting_at=project.meeting_at; historyEntry.meeting_type=project.meeting_type||null; }
       const newHistory = [...(project.history||[]),historyEntry];
       const updatePayload = { current_status:newStatus, history:newHistory, updated_at:today };
-      // 상태 변경만 먼저 (portfolio_links는 GitHub Actions workflow가 파일 삭제 후 트림 → Realtime 반영)
       const { error } = await supabase.from(TABLE).update(updatePayload).eq('slug',project.slug);
       if (error) throw error;
       setData(prev => prev.map(d => d.slug===project.slug?{...d,...updatePayload}:d));
       const sm = STATUS_META[newStatus];
       toast(`${sm.emoji} ${project.slug} → ${sm.label}`,'success');
-      // Auto-create milestone template on first entry into 'won' — keep modal open and switch to 'tasks' tab
       const enteredWon = newStatus === 'won' && project.current_status !== 'won';
       if (enteredWon) {
         setSelectedProject(prev => prev ? { ...prev, ...updatePayload } : prev);
@@ -3965,18 +3888,6 @@ function App({ session }) {
         }
       } else {
         setSelectedProject(null);
-      }
-      // P2/P3 정리: GitHub Actions workflow로 비동기 처리 (dispatch 후 즉시 반환).
-      // workflow가 파일 삭제 + DB 트림 → Realtime으로 UI 자동 반영. 매일 자정 fallback도 동작.
-      if (newStatus==='lost' && (project.portfolio_links||[]).length > 1) {
-        recordDispatchAttempt('handleSave', { slug: project.slug });
-        invokeWithAuthRetry('delete-portfolios', { body:{ slug:project.slug } })
-          .then(({ data, error }) => {
-            if (error) handleDispatchFailure('handleSave-error', { slug: project.slug, error, data });
-            else if (data && data.dispatched === false) handleDispatchFailure('handleSave-rejected', { slug: project.slug, data });
-            else recordDispatchSuccess('handleSave', { slug: project.slug, reqId: data?.reqId });
-          })
-          .catch(err => handleDispatchFailure('handleSave-exception', { slug: project.slug, exception: err }));
       }
     } catch(err) { toast('저장 실패: '+friendlyError(err),'error'); } finally { setSaving(false); }
   }, [toast, milestones, milestonesSetupNeeded, handleCreateMilestonesFromTemplate]);
@@ -4079,15 +3990,9 @@ function App({ session }) {
   // 수주 = won 이후 모든 단계. 한 번 수주된 이상 진행 단계와 무관하게 카운트.
   const SECURED_STATUSES = ['won','contracted','in_progress','delivered','settled'];
   const POST_MEETING = ['interview','meeting_done', ...SECURED_STATUSES];
-  // 수주율 분모 = "미팅을 거친 모든 프로젝트". 미팅 후 미선정으로 끝난 케이스도 포함 (history에 interview/meeting_done 흔적 검사)
+  // 수주율 분모 = "미팅을 거친 모든 프로젝트" (interview, meeting_done, 또는 수주 후 단계)
   const wonCount = data.filter(d => SECURED_STATUSES.includes(d.current_status)).length;
-  const meetingReachedCount = data.filter(d => {
-    if (POST_MEETING.includes(d.current_status)) return true;
-    if (d.current_status === 'lost') {
-      return (d.history||[]).some(h => h.status === 'interview' || h.status === 'meeting_done');
-    }
-    return false;
-  }).length;
+  const meetingReachedCount = data.filter(d => POST_MEETING.includes(d.current_status)).length;
   const winRate = meetingReachedCount > 0 ? ((wonCount/meetingReachedCount)*100).toFixed(1) : '0.0';
 
   const now = new Date();
@@ -4340,7 +4245,7 @@ function App({ session }) {
         <ProjectTable
           data={data} filter={filter} search={search} dateRange={dateRange}
           onRowClick={handleRowClick} sortKey={sortKey} sortOrder={sortOrder} onSort={handleSort}
-          onBatchLost={handleBatchLost} onMemoSave={handleMemoSave}
+          onBatchDelete={handleBatchDelete} onMemoSave={handleMemoSave}
           memberFilter={memberFilter} teamMembers={teamMembers}
           milestones={milestones}
           milestonesSetupNeeded={milestonesSetupNeeded}
@@ -4357,7 +4262,7 @@ function App({ session }) {
         const numStyle = (color) => ({ fontWeight:700, fontSize:'0.95rem', color });
         return (
           <div className="fade-in delay-2" style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:'1rem' }}>
-            <div style={kpiStyle} title="미팅을 거친 모든 프로젝트(미팅 후 미선정 포함) 대비 수주 성공 비율">
+            <div style={kpiStyle} title="미팅을 거친 모든 프로젝트 대비 수주 성공 비율">
               <span style={{ color:'var(--text2)' }}>미팅 → 수주 전환율</span>
               <span style={numStyle('var(--green)')}>{winRate}%</span>
               <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>({wonCount}/{meetingReachedCount})</span>
