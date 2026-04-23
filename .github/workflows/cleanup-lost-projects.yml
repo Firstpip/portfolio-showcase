@@ -2,50 +2,40 @@ name: 미선정 프로젝트 정리
 
 on:
   schedule:
-    - cron: '0 2 * * 1'   # 매주 월요일 새벽 2시 (UTC) = 오전 11시 KST — 보고만 함
+    - cron: '0 2 * * 1'   # 매주 월요일 새벽 2시 (UTC) = 오전 11시 KST
   workflow_dispatch:
-    inputs:
-      confirm_delete:
-        description: '실제 삭제 실행 (true 입력 시에만 삭제, 기본값은 보고만)'
-        required: false
-        default: 'false'
 
 jobs:
   cleanup:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 한 달 지난 미선정 프로젝트 조회
+      - name: 미선정 후 30일 지난 프로젝트 조회
         id: query
         run: |
+          # updated_at 기준: '미선정'으로 바꾼 시점에서 30일 경과한 프로젝트 대상
           CUTOFF=$(date -u -d '30 days ago' '+%Y-%m-%d')
           echo "기준 날짜: $CUTOFF"
 
           PROJECTS=$(curl -s \
-            "$SUPABASE_URL/rest/v1/wishket_projects?current_status=eq.lost&created_at=lt.$CUTOFF&select=slug,title,updated_at" \
+            "$SUPABASE_URL/rest/v1/wishket_projects?current_status=eq.lost&updated_at=lt.$CUTOFF&select=slug,title,updated_at" \
             -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY")
 
           COUNT=$(echo "$PROJECTS" | jq length)
-          echo "삭제 대상 후보: $COUNT 건"
+          echo "삭제 대상: $COUNT 건"
           echo "projects=$PROJECTS" >> $GITHUB_OUTPUT
           echo "count=$COUNT" >> $GITHUB_OUTPUT
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-      - name: 보고 (삭제 없음 — 자동 실행 또는 confirm_delete != true)
-        if: steps.query.outputs.count != '0' && github.event.inputs.confirm_delete != 'true'
-        run: |
-          echo "📋 삭제 대상 후보 ${{ steps.query.outputs.count }}건 (실제 삭제 안 함)"
-          echo '${{ steps.query.outputs.projects }}' | jq -r '.[] | "  - \(.slug)  [\(.title)]  (최종수정: \(.updated_at[:10]))"'
-          echo ""
-          echo "👉 실제 삭제하려면:"
-          echo "   GitHub Actions → 이 워크플로우 → Run workflow"
-          echo "   confirm_delete 에 true 입력 후 실행"
+      - name: 대상 없음
+        if: steps.query.outputs.count == '0'
+        run: echo "삭제 대상 없음"
 
-      - name: 삭제 실행 (confirm_delete = true 일 때만)
-        if: steps.query.outputs.count != '0' && github.event.inputs.confirm_delete == 'true'
+      - name: 삭제 실행
+        if: steps.query.outputs.count != '0'
         run: |
           echo "🗑️ 삭제 시작 — ${{ steps.query.outputs.count }}건"
           PROJECTS='${{ steps.query.outputs.projects }}'
@@ -92,6 +82,3 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-      - name: 대상 없음
-        if: steps.query.outputs.count == '0'
-        run: echo "한 달 이상 된 미선정 프로젝트가 없습니다."
