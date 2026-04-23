@@ -1,0 +1,1822 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>웹툰·소설 번역 자동화 에디터 MVP — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net/npm/pretendard@latest/dist/web/static/pretendard.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@latest/dist/web/static/pretendard.css" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fabric@5.3.0/dist/fabric.min.js"></script>
+<script src="https://unpkg.com/i18next@23.11.5/dist/umd/i18next.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; background: #0F0F1A; }
+  #root { display: flex; width: 100%; height: 100vh; overflow: hidden; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2D2D4E; border-radius: 3px; }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes fadeInScale { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
+  @keyframes slideInRight { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: none; } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }
+  @keyframes slideDown { from { opacity: 0; transform: translateY(-16px); } to { opacity: 1; transform: none; } }
+  @keyframes ripple { 0% { transform: scale(0); opacity: 0.6; } 100% { transform: scale(4); opacity: 0; } }
+  @keyframes barGrow { from { width: 0%; } to { width: 100%; } }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+  @keyframes glowPulse { 0%,100% { box-shadow: 0 0 8px rgba(99,102,241,0.3); } 50% { box-shadow: 0 0 20px rgba(99,102,241,0.6); } }
+  @keyframes countUp { from { opacity: 0; transform: scale(0.8); } to { opacity: 1; transform: scale(1); } }
+  @keyframes dotBlink { 0%,80%,100% { opacity: 0; } 40% { opacity: 1; } }
+  @keyframes toastSlide { from { opacity: 0; transform: translateX(120%); } to { opacity: 1; transform: none; } }
+
+  .fade-in { animation: fadeIn 0.3s ease both; }
+  .slide-in { animation: slideIn 0.3s ease both; }
+  .glow-pulse { animation: glowPulse 2s ease-in-out infinite; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useSyncExternalStore } = React;
+const { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } = Recharts;
+
+/* ── i18n: i18next 초기화 + 경량 React 훅 (react-i18next 없이) ── */
+const I18N_STORAGE_KEY = 'webtoon-demo:lang';
+const I18N_DEFAULT = 'ko';
+const I18N_LANGS = ['ko', 'en'];
+
+// i18next가 CDN에서 늦게 도착할 수 있으므로 즉시 init — resources는 fetch로 비동기 주입
+const savedLang = (() => {
+  try { const v = localStorage.getItem(I18N_STORAGE_KEY); return I18N_LANGS.includes(v) ? v : I18N_DEFAULT; }
+  catch { return I18N_DEFAULT; }
+})();
+
+const i18nReady = (async () => {
+  const [ko, en] = await Promise.all([
+    fetch('./locales/ko.json').then(r => r.json()),
+    fetch('./locales/en.json').then(r => r.json()),
+  ]);
+  await i18next.init({
+    lng: savedLang,
+    fallbackLng: 'ko',
+    supportedLngs: I18N_LANGS,
+    resources: { ko: { translation: ko }, en: { translation: en } },
+    interpolation: { escapeValue: false },
+    returnEmptyString: true,  // 빈 문자열도 유효한 번역으로 취급 (unit 필드 등)
+  });
+  window.__i18n = i18next;
+})();
+
+// useSyncExternalStore로 i18next.languageChanged 구독 — 전체 트리 자동 리렌더
+function useI18n() {
+  const subscribe = (cb) => {
+    i18next.on('languageChanged', cb);
+    i18next.on('initialized', cb);
+    return () => {
+      i18next.off('languageChanged', cb);
+      i18next.off('initialized', cb);
+    };
+  };
+  const getSnapshot = () => i18next.language || I18N_DEFAULT;
+  const lang = useSyncExternalStore(subscribe, getSnapshot, () => I18N_DEFAULT);
+  const t = useCallback((key, vars) => {
+    if (!i18next.isInitialized) return key;
+    return i18next.t(key, vars);
+  }, [lang]);
+  return { t, lang, changeLanguage: (l) => {
+    i18next.changeLanguage(l);
+    try { localStorage.setItem(I18N_STORAGE_KEY, l); } catch {}
+  }};
+}
+
+/* ── CountUp 훅 ── */
+function useCountUp(target, duration = 1200) {
+  const [value, setValue] = useState(0);
+  useEffect(() => {
+    let start = 0;
+    const step = target / (duration / 16);
+    const timer = setInterval(() => {
+      start += step;
+      if (start >= target) { setValue(target); clearInterval(timer); }
+      else setValue(Math.floor(start));
+    }, 16);
+    return () => clearInterval(timer);
+  }, [target]);
+  return value;
+}
+
+/* ── 색상 토큰 ── */
+const C = {
+  primary: '#6366F1', primaryHover: '#4F52CC', primaryLight: 'rgba(99,102,241,0.15)',
+  secondary: '#22D3EE', accent: '#A78BFA',
+  bg: '#0F0F1A', surface: '#1A1A2E', surface2: '#16213E', surface3: '#1E1E30',
+  border: '#2D2D4E', borderLight: '#3A3A5C',
+  text: '#F1F5F9', textMuted: '#94A3B8', textDim: '#64748B',
+  success: '#34D399', warning: '#FBBF24', error: '#F87171', info: '#60A5FA',
+  gradient: 'linear-gradient(135deg, #6366F1, #A78BFA)',
+};
+
+/* ── 더미 데이터 ── */
+const WORKS = [
+  { id: 1, title: '빛의 전사 — 시즌 2', type: 'webtoon', episodes: 48, langs: ['EN','JA','ZH','ES'], status: 'active', progress: { EN:92, JA:78, ZH:65, ES:43 }, views: 12840, updated: '2026-04-20' },
+  { id: 2, title: '달빛 소나타', type: 'novel', episodes: 32, langs: ['EN','JA','FR'], status: 'active', progress: { EN:100, JA:88, FR:61 }, views: 8320, updated: '2026-04-19' },
+  { id: 3, title: '강철 도시 연대기', type: 'webtoon', episodes: 24, langs: ['EN','JA','ZH','DE','ES'], status: 'review', progress: { EN:100, JA:100, ZH:95, DE:72, ES:58 }, views: 21550, updated: '2026-04-18' },
+  { id: 4, title: '벚꽃이 지는 날', type: 'novel', episodes: 18, langs: ['EN','ZH'], status: 'draft', progress: { EN:34, ZH:12 }, views: 3210, updated: '2026-04-17' },
+  { id: 5, title: '미래 탐정단', type: 'webtoon', episodes: 60, langs: ['EN','JA','ZH','KO_REVIEW'], status: 'published', progress: { EN:100, JA:100, ZH:100, KO_REVIEW:100 }, views: 45900, updated: '2026-04-15' },
+];
+
+const TRANSLATION_STATS = [
+  { monthNum: 11, total: 8420, auto: 6100, manual: 2320 },
+  { monthNum: 12, total: 11200, auto: 8300, manual: 2900 },
+  { monthNum: 1,  total: 9800,  auto: 7200,  manual: 2600 },
+  { monthNum: 2,  total: 14500, auto: 11000, manual: 3500 },
+  { monthNum: 3,  total: 16800, auto: 13200, manual: 3600 },
+  { monthNum: 4,  total: 13400, auto: 10800, manual: 2600 },
+];
+
+const WEBTOON_PAGES = [
+  { page: 1, panels: [
+    { id:'p1-1', x: 5, y: 8, w: 42, h: 12, original: "Darkness…", translation: "어둠이 깊어지는 밤…" },
+    { id:'p1-2', x: 55, y: 5, w: 40, h: 10, original: "The signal!", translation: "신호다!" },
+    { id:'p1-3', x: 15, y: 55, w: 70, h: 14, original: "We move at dawn.", translation: "새벽에 출발한다." },
+  ]},
+];
+
+const NOVEL_PARAGRAPHS = [
+  { id: 1, original: "The city of New Arcos stretched endlessly beneath the violet sky, its towers piercing the low-hanging clouds like silver needles.", translated: "보라빛 하늘 아래 뉴아르코스 시가 끝없이 펼쳐졌고, 그 탑들은 낮게 드리운 구름을 은빛 바늘처럼 꿰뚫었다.", status: 'approved' },
+  { id: 2, original: "Mira adjusted the collar of her translator's coat and stepped onto the crowded platform.", translated: "미라는 번역가 코트의 깃을 여미고 북적이는 플랫폼으로 발을 내디뎠다.", status: 'approved' },
+  { id: 3, original: "The automated voice announced platform seven in six languages simultaneously.", translated: "", status: 'pending', autoResult: "자동화된 목소리가 6개 언어로 7번 플랫폼을 동시에 안내했다." },
+  { id: 4, original: "She had exactly fourteen minutes before the last train departed for the outer districts.", translated: "", status: 'auto', autoResult: "그녀에게는 외곽 구역으로 향하는 마지막 열차가 출발하기까지 정확히 14분이 남아 있었다." },
+  { id: 5, original: "Fourteen minutes to find the artifact and disappear without a trace.", translated: "유물을 찾아 흔적 없이 사라질 14분.", status: 'approved' },
+  { id: 6, original: "But the city had other plans.", translated: "", status: 'pending', autoResult: "" },
+];
+
+const LANG_DATA = [
+  { code: 'EN', label: 'English', flag: '🇺🇸', progress: 92, approved: 44, pending: 4 },
+  { code: 'JA', label: '日本語', flag: '🇯🇵', progress: 78, approved: 37, pending: 11 },
+  { code: 'ZH', label: '中文', flag: '🇨🇳', progress: 65, approved: 31, pending: 17 },
+  { code: 'ES', label: 'Español', flag: '🇪🇸', progress: 43, approved: 20, pending: 28 },
+];
+
+/* ── 공통 컴포넌트 ── */
+function Modal({ title, onClose, children, width = 600 }) {
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:1000, background:'rgba(0,0,0,0.7)', display:'flex', alignItems:'center', justifyContent:'center', backdropFilter:'blur(4px)' }} onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className="fade-in" style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:16, width, maxWidth:'90vw', maxHeight:'85vh', overflow:'hidden', display:'flex', flexDirection:'column' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 24px', borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ color:C.text, fontWeight:700, fontSize:16 }}>{title}</span>
+          <button onClick={onClose} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:20, lineHeight:1 }}>×</button>
+        </div>
+        <div style={{ overflow:'auto', flex:1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Toast({ message, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  return (
+    <div style={{ position:'fixed', bottom:24, right:24, zIndex:2000, background:C.surface, border:`1px solid ${C.success}`, borderRadius:10, padding:'12px 20px', color:C.text, animation:'toastSlide 0.3s ease', display:'flex', alignItems:'center', gap:10, boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
+      <span style={{ color:C.success, fontSize:18 }}>✓</span>
+      <span style={{ fontSize:14 }}>{message}</span>
+      <button onClick={onClose} style={{ background:'none', border:'none', color:C.textMuted, cursor:'pointer', marginLeft:8 }}>×</button>
+    </div>
+  );
+}
+
+function Badge({ status }) {
+  const { t } = useI18n();
+  const map = { active:{ bg:'rgba(52,211,153,0.15)', color:C.success }, review:{ bg:'rgba(251,191,36,0.15)', color:C.warning }, draft:{ bg:'rgba(148,163,184,0.15)', color:C.textMuted }, published:{ bg:'rgba(99,102,241,0.15)', color:C.primary } };
+  const s = map[status] || map.draft;
+  return <span style={{ background:s.bg, color:s.color, padding:'2px 10px', borderRadius:99, fontSize:12, fontWeight:600, whiteSpace:'nowrap' }}>{t(`status.${status}`)}</span>;
+}
+
+/* ── 사이드바 ── */
+const NAV_ITEMS = [
+  { id:'dashboard', i18nKey:'nav.dashboard', icon:'⊞' },
+  { id:'webtoon', i18nKey:'nav.webtoon-editor', icon:'◧' },
+  { id:'novel', i18nKey:'nav.novel-editor', icon:'≡' },
+  { id:'viewer', i18nKey:'nav.viewer', icon:'◉' },
+];
+
+function Sidebar({ active, onNav }) {
+  const { t } = useI18n();
+  const authorName = t('nav.author-name');
+  const authorInitial = authorName.charAt(0);
+  return (
+    <aside style={{ width:256, background:C.surface, borderRight:`1px solid ${C.border}`, display:'flex', flexDirection:'column', flexShrink:0, height:'100vh' }}>
+      <div style={{ padding:'24px 20px 20px', borderBottom:`1px solid ${C.border}` }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:36, height:36, borderRadius:10, background:C.gradient, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, flexShrink:0 }}>⚡</div>
+          <div style={{ minWidth:0 }}>
+            <div style={{ color:C.text, fontWeight:700, fontSize:14, lineHeight:1.2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t('nav.brand-title')}</div>
+            <div style={{ color:C.textMuted, fontSize:11, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t('nav.brand-subtitle')}</div>
+          </div>
+        </div>
+      </div>
+      <nav style={{ flex:1, padding:'16px 12px', display:'flex', flexDirection:'column', gap:4 }}>
+        {NAV_ITEMS.map(item => {
+          const label = t(item.i18nKey);
+          return (
+            <button key={item.id}
+              title={label}
+              onClick={() => onNav(item.id)}
+              style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 14px', borderRadius:10, border:'none', cursor:'pointer', background: active===item.id ? C.primaryLight : 'transparent', color: active===item.id ? C.primary : C.textMuted, transition:'all 0.15s', fontSize:14, fontWeight: active===item.id ? 600 : 400, textAlign:'left' }}
+            >
+              <span style={{ fontSize:17, opacity:0.9, flexShrink:0 }}>{item.icon}</span>
+              <span style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label}</span>
+              {active===item.id && <span style={{ marginLeft:'auto', width:4, height:4, borderRadius:99, background:C.primary, flexShrink:0 }} />}
+            </button>
+          );
+        })}
+      </nav>
+      <div style={{ padding:'16px 20px', borderTop:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:10 }}>
+        <div style={{ width:32, height:32, borderRadius:99, background:'linear-gradient(135deg,#A78BFA,#6366F1)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, color:'#fff', fontWeight:700, flexShrink:0 }}>{authorInitial}</div>
+        <div style={{ minWidth:0, flex:1 }}>
+          <div style={{ color:C.text, fontSize:13, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{authorName}</div>
+          <div style={{ color:C.textMuted, fontSize:11, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t('nav.author-role')}</div>
+        </div>
+        <button style={{ marginLeft:'auto', background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:16, flexShrink:0 }}>⚙</button>
+      </div>
+    </aside>
+  );
+}
+
+function LangToggle() {
+  const { t, lang, changeLanguage } = useI18n();
+  const next = lang === 'ko' ? 'en' : 'ko';
+  const currentFlag = lang === 'ko' ? '🇰🇷' : '🇺🇸';
+  const nextFlag = next === 'ko' ? '🇰🇷' : '🇺🇸';
+  const label = lang === 'ko' ? t('topbar.lang-korean') : t('topbar.lang-english');
+  return (
+    <button
+      onClick={() => changeLanguage(next)}
+      title={`${t('topbar.lang-toggle-title')} (→ ${next.toUpperCase()})`}
+      aria-label={t('topbar.lang-toggle-title')}
+      style={{
+        display:'flex', alignItems:'center', gap:8,
+        background:C.surface2, border:`1px solid ${C.border}`, borderRadius:8,
+        padding:'6px 12px', cursor:'pointer', color:C.text, fontSize:13, fontWeight:600,
+        transition:'all 0.15s',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.borderColor = C.primary; e.currentTarget.style.color = C.primary; }}
+      onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.text; }}
+    >
+      <span style={{ fontSize:15 }}>{currentFlag}</span>
+      <span style={{ whiteSpace:'nowrap' }}>{label}</span>
+      <span style={{ color:C.textDim, fontSize:11 }}>↔</span>
+      <span style={{ fontSize:13, opacity:0.6 }}>{nextFlag}</span>
+    </button>
+  );
+}
+
+function TopBar({ title }) {
+  const { t } = useI18n();
+  const authorInitial = t('nav.author-name').charAt(0);
+  return (
+    <div style={{ height:56, background:C.surface, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', padding:'0 24px', gap:16, flexShrink:0 }}>
+      <span style={{ color:C.text, fontWeight:700, fontSize:16, flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', minWidth:0 }}>{title}</span>
+      <div style={{ display:'flex', alignItems:'center', gap:8, background:C.surface2, border:`1px solid ${C.border}`, borderRadius:8, padding:'6px 12px' }}>
+        <span style={{ color:C.textMuted, fontSize:13 }}>🔍</span>
+        <input placeholder={t('topbar.search-placeholder')} style={{ background:'none', border:'none', color:C.text, fontSize:13, outline:'none', width:180 }} />
+      </div>
+      <LangToggle />
+      <button style={{ position:'relative', background:'none', border:'none', color:C.textMuted, cursor:'pointer', fontSize:18, padding:'4px 8px' }}>
+        🔔
+        <span style={{ position:'absolute', top:4, right:4, width:8, height:8, borderRadius:99, background:C.error }} />
+      </button>
+      <div style={{ width:32, height:32, borderRadius:99, background:C.gradient, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, color:'#fff', fontWeight:700, cursor:'pointer', flexShrink:0 }}>{authorInitial}</div>
+    </div>
+  );
+}
+
+/* ── KPI 카드 (CountUp) ── */
+function KpiCard({ label, value, unit, icon, color, delay=0 }) {
+  const displayed = useCountUp(value, 1000);
+  return (
+    <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:14, padding:20, animation:`slideUp 0.4s ${delay}s both`, minWidth:0 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12, gap:8 }}>
+        <span style={{ color:C.textMuted, fontSize:13, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', flex:1 }} title={label}>{label}</span>
+        <span style={{ fontSize:22, flexShrink:0 }}>{icon}</span>
+      </div>
+      <div style={{ display:'flex', alignItems:'baseline', gap:4 }}>
+        <span style={{ color, fontSize:32, fontWeight:800 }}>{displayed}</span>
+        {unit && <span style={{ color:C.textMuted, fontSize:14 }}>{unit}</span>}
+      </div>
+    </div>
+  );
+}
+
+/* ── 대시보드 페이지 ── */
+function DashboardPage({ setModal, showToast }) {
+  const { t } = useI18n();
+  const totalWorks = WORKS.length;
+  const activeWorks = WORKS.filter(w => w.status==='active').length;
+  const totalLangPairs = WORKS.reduce((a,w) => a+w.langs.length, 0);
+  const avgProgress = Math.round(WORKS.reduce((a,w) => {
+    const vals = Object.values(w.progress);
+    return a + vals.reduce((x,y)=>x+y,0)/vals.length;
+  }, 0) / WORKS.length);
+
+  // 차트 데이터에 현재 언어 기준 월 라벨 주입
+  const chartData = TRANSLATION_STATS.map(row => ({
+    ...row,
+    month: t(`dashboard.month-labels.${row.monthNum}`),
+  }));
+
+  return (
+    <div className="fade-in" style={{ padding:24, display:'flex', flexDirection:'column', gap:24 }}>
+      {/* KPI 카드 */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:16 }}>
+        {[
+          { label:t('dashboard.kpi-registered-works'), value:totalWorks, unit:t('dashboard.unit-count'), icon:'📚', color:C.primary },
+          { label:t('dashboard.kpi-active-works'), value:activeWorks, unit:t('dashboard.unit-count'), icon:'⚡', color:C.success },
+          { label:t('dashboard.kpi-language-pairs'), value:totalLangPairs, unit:t('dashboard.unit-pair'), icon:'🌐', color:C.secondary },
+          { label:t('dashboard.kpi-avg-progress'), value:avgProgress, unit:t('dashboard.unit-percent'), icon:'📊', color:C.accent },
+        ].map((kpi, i) => (
+          <KpiCard key={kpi.label} {...kpi} delay={i * 0.08} />
+        ))}
+      </div>
+
+      {/* 차트 + 최근 작품 */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 380px', gap:16 }}>
+        <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:14, padding:20 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16, gap:12 }}>
+            <span style={{ color:C.text, fontWeight:700, fontSize:15, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t('dashboard.chart-title')}</span>
+            <span style={{ color:C.textMuted, fontSize:12, whiteSpace:'nowrap' }}>{t('dashboard.chart-subtitle')}</span>
+          </div>
+          <div style={{ height:220 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData} margin={{ top:5, right:10, left:0, bottom:0 }}>
+                <defs>
+                  <linearGradient id="autoGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.primary} stopOpacity={0.4} />
+                    <stop offset="95%" stopColor={C.primary} stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="manualGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.secondary} stopOpacity={0.4} />
+                    <stop offset="95%" stopColor={C.secondary} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis dataKey="month" stroke={C.textDim} tick={{ fill:C.textMuted, fontSize:12 }} />
+                <YAxis stroke={C.textDim} tick={{ fill:C.textMuted, fontSize:11 }} />
+                <Tooltip contentStyle={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, color:C.text }} />
+                <Area type="monotone" dataKey="auto" stroke={C.primary} fill="url(#autoGrad)" strokeWidth={2} name={t('dashboard.chart-auto')} />
+                <Area type="monotone" dataKey="manual" stroke={C.secondary} fill="url(#manualGrad)" strokeWidth={2} name={t('dashboard.chart-manual')} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:14, padding:20 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+            <span style={{ color:C.text, fontWeight:700, fontSize:15 }}>{t('dashboard.langs-title')}</span>
+            <span style={{ color:C.primary, fontSize:12, cursor:'pointer', whiteSpace:'nowrap' }}>{t('common.view-all')}</span>
+          </div>
+          {LANG_DATA.map(lang => (
+            <div key={lang.code} style={{ marginBottom:14 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:5, gap:8 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8, minWidth:0 }}>
+                  <span>{lang.flag}</span>
+                  <span style={{ color:C.text, fontSize:13, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{lang.label}</span>
+                </div>
+                <span style={{ color:C.textMuted, fontSize:12, whiteSpace:'nowrap', textAlign:'right' }}>{lang.approved} {t('dashboard.langs-approved-suffix')} / {lang.pending} {t('dashboard.langs-pending-suffix')}</span>
+              </div>
+              <div style={{ height:6, background:C.border, borderRadius:99 }}>
+                <div style={{ height:6, borderRadius:99, width:`${lang.progress}%`, background: lang.progress===100 ? C.success : lang.progress>60 ? C.primary : C.warning, transition:'width 1s ease' }} />
+              </div>
+              <span style={{ color:C.textMuted, fontSize:11 }}>{lang.progress}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 작품 목록 */}
+      <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:14, overflow:'hidden' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'16px 20px', borderBottom:`1px solid ${C.border}`, gap:12 }}>
+          <span style={{ color:C.text, fontWeight:700, fontSize:15, whiteSpace:'nowrap' }}>{t('dashboard.works-title')}</span>
+          <button onClick={() => setModal('newWork')} style={{ background:C.primaryLight, border:`1px solid ${C.primary}`, color:C.primary, borderRadius:8, padding:'6px 14px', fontSize:13, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>{t('dashboard.new-work')}</button>
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ background:C.surface3 }}>
+              {[
+                t('dashboard.col-title'),
+                t('dashboard.col-type'),
+                t('dashboard.col-languages'),
+                t('dashboard.col-progress'),
+                t('dashboard.col-status'),
+                t('dashboard.col-updated'),
+              ].map(h => (
+                <th key={h} style={{ padding:'10px 16px', color:C.textMuted, fontSize:12, fontWeight:600, textAlign:'left', whiteSpace:'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {WORKS.map((w, i) => (
+              <tr key={w.id}
+                onClick={() => setModal({ type:'workDetail', work:w })}
+                style={{ borderTop:`1px solid ${C.border}`, cursor:'pointer', transition:'background 0.15s', animation:`slideUp ${0.05 + i * 0.06}s both` }}
+                onMouseEnter={e => e.currentTarget.style.background=C.surface3}
+                onMouseLeave={e => e.currentTarget.style.background='transparent'}
+              >
+                <td style={{ padding:'12px 16px', color:C.text, fontWeight:600, fontSize:14, maxWidth:260, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} title={w.title}>{w.title}</td>
+                <td style={{ padding:'12px 16px' }}>
+                  <span style={{ background: w.type==='webtoon' ? 'rgba(167,139,250,0.15)' : 'rgba(34,211,238,0.15)', color: w.type==='webtoon' ? C.accent : C.secondary, borderRadius:6, padding:'2px 8px', fontSize:12, fontWeight:600, whiteSpace:'nowrap' }}>{w.type==='webtoon'?t('common.webtoon'):t('common.novel')}</span>
+                </td>
+                <td style={{ padding:'12px 16px', color:C.textMuted, fontSize:13, whiteSpace:'nowrap' }}>{w.langs.join(' · ')}</td>
+                <td style={{ padding:'12px 16px', minWidth:120 }}>
+                  <div style={{ display:'flex', gap:2 }}>
+                    {Object.values(w.progress).map((p,j) => (
+                      <div key={j} title={`${p}%`} style={{ flex:1, height:4, borderRadius:2, background: p===100 ? C.success : p>60 ? C.primary : C.warning, opacity: p===0 ? 0.2 : 1 }} />
+                    ))}
+                  </div>
+                  <span style={{ color:C.textMuted, fontSize:11, marginTop:3, display:'block' }}>
+                    {Math.round(Object.values(w.progress).reduce((a,b)=>a+b,0)/Object.values(w.progress).length)}% {t('dashboard.avg-suffix')}
+                  </span>
+                </td>
+                <td style={{ padding:'12px 16px' }}><Badge status={w.status} /></td>
+                <td style={{ padding:'12px 16px', color:C.textMuted, fontSize:13, whiteSpace:'nowrap' }}>{w.updated}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ── 웹툰 듀얼 캔버스 에디터 (Fabric.js) ── */
+function WebtoonCanvasEditor({ imageSrc, initialLayers, onLayersChange, onSelectionChange, registerAPI }) {
+  const { t } = useI18n();
+  const leftCanvasEl = useRef(null);
+  const rightCanvasEl = useRef(null);
+  const leftScrollEl = useRef(null);
+  const rightScrollEl = useRef(null);
+  const leftFab = useRef(null);
+  const rightFab = useRef(null);
+  const isSyncingScroll = useRef(false);
+  const layerCounter = useRef(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
+  const [loadError, setLoadError] = useState(false);
+
+  const onLayersChangeRef = useRef(onLayersChange);
+  useEffect(() => { onLayersChangeRef.current = onLayersChange; }, [onLayersChange]);
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  useEffect(() => { onSelectionChangeRef.current = onSelectionChange; }, [onSelectionChange]);
+  const initialLayersRef = useRef(initialLayers);
+  useEffect(() => { initialLayersRef.current = initialLayers; }, [initialLayers]);
+
+  useEffect(() => {
+    let disposed = false;
+    const host = leftScrollEl.current;
+    if (!host) return;
+
+    // Fabric may not be ready yet if CDN is slow — poll briefly
+    const start = () => {
+      if (disposed) return;
+      if (!window.fabric) { setTimeout(start, 50); return; }
+
+      const containerWidth = host.clientWidth - 32; // subtract horizontal padding
+      const img = new Image();
+      img.onload = () => {
+        if (disposed) return;
+        const scale = Math.min(1, containerWidth / img.width);
+        const W = Math.round(img.width * scale);
+        const H = Math.round(img.height * scale);
+        sizeRef.current = { w: W, h: H };
+
+        // Left canvas — read-only original image + dashed guide overlays
+        const lc = new fabric.Canvas(leftCanvasEl.current, {
+          width: W, height: H, selection: false, skipTargetFind: true,
+          hoverCursor: 'default', backgroundColor: '#fff',
+        });
+        const lImg = new fabric.Image(img, {
+          left: 0, top: 0, scaleX: scale, scaleY: scale,
+          selectable: false, evented: false,
+        });
+        lc.add(lImg); lc.renderAll();
+        leftFab.current = lc;
+
+        // Right canvas — editable translation layer (image dimmed as reference)
+        const rc = new fabric.Canvas(rightCanvasEl.current, {
+          width: W, height: H, preserveObjectStacking: true, backgroundColor: '#1E2335',
+        });
+        const rImg = new fabric.Image(img, {
+          left: 0, top: 0, scaleX: scale, scaleY: scale,
+          selectable: false, evented: false, opacity: 0.35,
+        });
+        rc.add(rImg); rc.renderAll();
+        rightFab.current = rc;
+
+        const computeLayers = () => {
+          const { w, h } = sizeRef.current;
+          return rc.getObjects().filter(o => o.isLayer).map((o, idx) => ({
+            id: o.layerId,
+            layerIndex: idx,
+            xPct: +((o.left / w) * 100).toFixed(2),
+            yPct: +((o.top / h) * 100).toFixed(2),
+            wPct: +(((o.width * o.scaleX) / w) * 100).toFixed(2),
+            hPct: +(((o.height * o.scaleY) / h) * 100).toFixed(2),
+            text: o.text || '',
+          }));
+        };
+
+        const syncGuides = () => {
+          if (!leftFab.current) return;
+          leftFab.current.getObjects().filter(o => o.isGuide).forEach(o => leftFab.current.remove(o));
+          rc.getObjects().filter(o => o.isLayer).forEach(o => {
+            const guide = new fabric.Rect({
+              left: o.left, top: o.top,
+              width: o.width * o.scaleX, height: o.height * o.scaleY,
+              fill: 'rgba(99,102,241,0.08)',
+              stroke: '#6366F1',
+              strokeDashArray: [6, 4],
+              strokeWidth: 1.5,
+              selectable: false, evented: false,
+            });
+            guide.isGuide = true;
+            leftFab.current.add(guide);
+          });
+          leftFab.current.renderAll();
+        };
+
+        const emit = () => {
+          syncGuides();
+          onLayersChangeRef.current?.(computeLayers());
+        };
+
+        rc.on('object:moving', syncGuides);
+        rc.on('object:scaling', syncGuides);
+        rc.on('object:rotating', syncGuides);
+        rc.on('object:modified', emit);
+        rc.on('object:added', (e) => { if (e.target?.isLayer) emit(); });
+        rc.on('object:removed', (e) => { if (e.target?.isLayer) emit(); });
+        rc.on('text:changed', emit);
+        rc.on('selection:created', (e) => onSelectionChangeRef.current?.(e.selected?.[0]?.layerId ?? null));
+        rc.on('selection:updated', (e) => onSelectionChangeRef.current?.(e.selected?.[0]?.layerId ?? null));
+        rc.on('selection:cleared', () => onSelectionChangeRef.current?.(null));
+
+        const makeTextbox = (opts, text) => {
+          const { w: cw } = sizeRef.current;
+          const tb = new fabric.Textbox(text || '번역 텍스트를 입력하세요', {
+            fontSize: Math.max(14, Math.round(cw * 0.028)),
+            fontFamily: 'Pretendard, sans-serif',
+            fill: '#111827',
+            backgroundColor: 'rgba(255,255,255,0.95)',
+            padding: 6,
+            textAlign: 'center',
+            cornerColor: '#6366F1',
+            cornerStrokeColor: '#4F52CC',
+            borderColor: '#6366F1',
+            transparentCorners: false,
+            editable: true,
+            splitByGrapheme: true,
+            lockRotation: true,
+            ...opts,
+          });
+          tb.setControlsVisibility({ mtr: false });
+          tb.isLayer = true;
+          return tb;
+        };
+
+        registerAPI?.({
+          addTextBox: (initialText) => {
+            const { w: cw, h: ch } = sizeRef.current;
+            layerCounter.current += 1;
+            const tb = makeTextbox({
+              left: cw * 0.1 + (layerCounter.current % 5) * 12,
+              top: ch * 0.05 + (layerCounter.current % 5) * 12,
+              width: Math.max(120, cw * 0.4),
+            }, initialText);
+            tb.layerId = `L-${Date.now()}-${layerCounter.current}`;
+            rc.add(tb).setActiveObject(tb);
+            rc.renderAll();
+          },
+          deleteSelected: () => {
+            const obj = rc.getActiveObject();
+            if (obj?.isLayer) {
+              rc.remove(obj);
+              rc.discardActiveObject();
+              rc.renderAll();
+            }
+          },
+          setLayerText: (layerId, nextText) => {
+            const obj = rc.getObjects().find(o => o.isLayer && o.layerId === layerId);
+            if (!obj) return false;
+            obj.set('text', nextText);
+            rc.renderAll();
+            emit();
+            return true;
+          },
+          getLayers: computeLayers,
+          getSize: () => ({ ...sizeRef.current }),
+        });
+
+        // localStorage 복원: 저장된 레이어가 있으면 시딩
+        const seed = initialLayersRef.current;
+        if (Array.isArray(seed) && seed.length > 0) {
+          const { w: cw, h: ch } = sizeRef.current;
+          seed.forEach((layer, i) => {
+            const tb = makeTextbox({
+              left: ((layer.xPct ?? 10) / 100) * cw,
+              top: ((layer.yPct ?? 5) / 100) * ch,
+              width: Math.max(40, ((layer.wPct ?? 30) / 100) * cw),
+            }, layer.text);
+            tb.layerId = layer.id || `L-${Date.now()}-restore-${i}`;
+            rc.add(tb);
+          });
+          layerCounter.current = Math.max(layerCounter.current, seed.length);
+          rc.renderAll();
+          // 가이드 동기화 + 부모 state 세팅 (canvas add 이벤트는 이미 발화됨)
+          emit();
+        }
+      };
+      img.onerror = () => { if (!disposed) setLoadError(true); };
+      img.src = imageSrc;
+    };
+    start();
+
+    return () => {
+      disposed = true;
+      leftFab.current?.dispose(); leftFab.current = null;
+      rightFab.current?.dispose(); rightFab.current = null;
+    };
+  }, [imageSrc, registerAPI]);
+
+  const makeScrollHandler = (fromRef, toRef) => (e) => {
+    if (isSyncingScroll.current) return;
+    isSyncingScroll.current = true;
+    const from = fromRef.current, to = toRef.current;
+    if (!from || !to) { isSyncingScroll.current = false; return; }
+    const fromMax = from.scrollHeight - from.clientHeight;
+    const toMax = to.scrollHeight - to.clientHeight;
+    if (fromMax > 0 && toMax > 0) {
+      to.scrollTop = (from.scrollTop / fromMax) * toMax;
+    }
+    requestAnimationFrame(() => { isSyncingScroll.current = false; });
+  };
+
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, flex:1, minHeight:0 }}>
+      {/* 좌측: 원본 이미지 (read-only + guide overlay) */}
+      <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:12, overflow:'hidden', display:'flex', flexDirection:'column' }}>
+        <div style={{ padding:'10px 16px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:8 }}>
+          <span style={{ color:C.textMuted, fontSize:12, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t('webtoon-editor.original-panel-title')}</span>
+          <span style={{ background:'rgba(248,113,113,0.15)', color:C.error, borderRadius:4, padding:'1px 6px', fontSize:11, flexShrink:0 }}>READ ONLY</span>
+        </div>
+        <div ref={leftScrollEl} onScroll={makeScrollHandler(leftScrollEl, rightScrollEl)}
+          style={{ flex:1, overflow:'auto', background:'#0A0A14', padding:16, display:'flex', justifyContent:'center' }}>
+          {loadError
+            ? <div style={{ color:C.error, fontSize:13, alignSelf:'center' }}>{t('webtoon-editor.image-load-error')}: {imageSrc}</div>
+            : <canvas ref={leftCanvasEl} />}
+        </div>
+      </div>
+      {/* 우측: 번역 레이어 에디터 */}
+      <div style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:12, overflow:'hidden', display:'flex', flexDirection:'column' }}>
+        <div style={{ padding:'10px 16px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:8 }}>
+          <span style={{ color:C.textMuted, fontSize:12, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t('webtoon-editor.translation-panel-title')}</span>
+          <span style={{ background:'rgba(99,102,241,0.15)', color:C.primary, borderRadius:4, padding:'1px 6px', fontSize:11, flexShrink:0 }}>EDITABLE</span>
+          <span style={{ color:C.textDim, fontSize:11, marginLeft:'auto', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t('webtoon-editor.translation-panel-hint')}</span>
+        </div>
+        <div ref={rightScrollEl} onScroll={makeScrollHandler(rightScrollEl, leftScrollEl)}
+          style={{ flex:1, overflow:'auto', background:'#0A0A14', padding:16, display:'flex', justifyContent:'center' }}>
+          {loadError
+            ? <div style={{ color:C.error, fontSize:13, alignSelf:'center' }}>{t('webtoon-editor.image-load-error')}: {imageSrc}</div>
+            : <canvas ref={rightCanvasEl} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── 웹툰 에디터 페이지 ── */
+const WEBTOON_SAMPLE_IMAGES = [
+  { id: 'sample-1', label: '빛의 전사 — EP.01', src: './assets/webtoon/sample-1.png' },
+  { id: 'sample-2', label: '빛의 전사 — EP.02', src: './assets/webtoon/sample-2.png' },
+];
+
+const WEBTOON_STORAGE_KEY = (imageId) => `webtoon:${imageId}`;
+const WEBTOON_BOX_PLACEHOLDER = '번역 텍스트를 입력하세요';
+
+async function callTranslateAPI(text, targetLang, sourceLang = 'KO') {
+  try {
+    const resp = await fetch('/api/translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, sourceLang, targetLang }),
+    });
+    if (!resp.ok) {
+      return { translation: `[MOCK ${targetLang}] ${text}`, provider: 'mock', reason: `HTTP ${resp.status}` };
+    }
+    const data = await resp.json();
+    if (!data?.translation) {
+      return { translation: `[MOCK ${targetLang}] ${text}`, provider: 'mock', reason: 'empty response' };
+    }
+    return data;
+  } catch (err) {
+    return { translation: `[MOCK ${targetLang}] ${text}`, provider: 'mock', reason: err?.message || 'fetch failed' };
+  }
+}
+
+function loadSavedLayers(imageId) {
+  try {
+    const raw = localStorage.getItem(WEBTOON_STORAGE_KEY(imageId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.layers) ? parsed.layers : [];
+  } catch { return []; }
+}
+
+function buildExportJson(imageId, targetLang, layers) {
+  return {
+    page_id: imageId,
+    language: targetLang,
+    saved_at: new Date().toISOString(),
+    layers: layers.map((l, i) => ({
+      layerIndex: l.layerIndex ?? i,
+      position: { x: l.xPct, y: l.yPct, w: l.wPct, h: l.hPct },
+      text: l.text || '',
+    })),
+  };
+}
+
+function WebtoonEditorPage({ showToast }) {
+  const { t } = useI18n();
+  const [imageId, setImageId] = useState(WEBTOON_SAMPLE_IMAGES[0].id);
+  const [targetLang, setTargetLang] = useState('EN');
+  const [layers, setLayers] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [autoSaveState, setAutoSaveState] = useState('saved');
+  const [initialLayers, setInitialLayers] = useState(() => loadSavedLayers(WEBTOON_SAMPLE_IMAGES[0].id));
+  const [showJsonPanel, setShowJsonPanel] = useState(false);
+  const [provider, setProvider] = useState('unknown'); // 'deepl' | 'mock' | 'unknown'
+  const [translating, setTranslating] = useState(false);
+  const canvasAPI = useRef(null);
+  const saveTimerRef = useRef(null);
+
+  const registerAPI = useCallback((api) => { canvasAPI.current = api; }, []);
+
+  // 초기 provider 상태 — /api/health로 DeepL 키 구성 여부 확인
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/health')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (!cancelled) setProvider(data?.deeplConfigured ? 'deepl' : 'mock'); })
+      .catch(() => { if (!cancelled) setProvider('mock'); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleAutoTranslate = async () => {
+    if (translating) return;
+    const current = canvasAPI.current?.getLayers?.() || [];
+    const hasUsableText = (l) => l.text && l.text.trim() && l.text.trim() !== WEBTOON_BOX_PLACEHOLDER;
+
+    const selectedLayer = selectedId ? current.find(l => l.id === selectedId) : null;
+    let targets;
+    if (selectedLayer) {
+      if (!hasUsableText(selectedLayer)) {
+        showToast?.(t('webtoon-editor.error-no-source'));
+        return;
+      }
+      targets = [selectedLayer];
+    } else {
+      targets = current.filter(hasUsableText);
+      if (targets.length === 0) {
+        showToast?.(t('webtoon-editor.error-add-box'));
+        return;
+      }
+    }
+
+    setTranslating(true);
+    let okCount = 0;
+    let liveCount = 0;
+    let lastReason = '';
+    for (const layer of targets) {
+      const result = await callTranslateAPI(layer.text, targetLang);
+      if (result?.translation) {
+        const applied = canvasAPI.current?.setLayerText?.(layer.id, result.translation);
+        if (applied) {
+          okCount += 1;
+          if (result.provider === 'deepl') liveCount += 1;
+          else if (result.provider === 'mock' && result.reason) lastReason = result.reason;
+        }
+      }
+    }
+    setTranslating(false);
+
+    if (okCount === 0) {
+      showToast?.(t('webtoon-editor.error-translation-failed'));
+      return;
+    }
+    if (liveCount === okCount) {
+      setProvider('deepl');
+      showToast?.(t('webtoon-editor.toast-deepl-complete', { count: okCount, lang: targetLang }));
+    } else if (liveCount === 0) {
+      setProvider('mock');
+      const base = t('webtoon-editor.toast-mock-complete', { count: okCount });
+      showToast?.(lastReason ? `${base} (${lastReason})` : base);
+    } else {
+      setProvider('mock');
+      showToast?.(t('webtoon-editor.toast-mixed-complete', { live: liveCount, mock: okCount - liveCount }));
+    }
+  };
+
+  const handleLayersChange = useCallback((next) => {
+    setLayers(next);
+    setAutoSaveState('modified');
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      try {
+        localStorage.setItem(WEBTOON_STORAGE_KEY(imageId), JSON.stringify({
+          savedAt: new Date().toISOString(),
+          layers: next,
+        }));
+      } catch (e) { /* quota / private mode — silent */ }
+      setAutoSaveState('saved');
+    }, 500);
+  }, [imageId]);
+
+  const handleImageChange = useCallback((newId) => {
+    // 진행 중 저장 타이머는 현재 imageId로 flush
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      try {
+        localStorage.setItem(WEBTOON_STORAGE_KEY(imageId), JSON.stringify({
+          savedAt: new Date().toISOString(),
+          layers,
+        }));
+      } catch (e) {}
+    }
+    setInitialLayers(loadSavedLayers(newId));
+    setLayers([]);
+    setSelectedId(null);
+    setImageId(newId);
+    setAutoSaveState('saved');
+  }, [imageId, layers]);
+
+  const addBox = () => canvasAPI.current?.addTextBox();
+  const deleteBox = () => canvasAPI.current?.deleteSelected();
+
+  const exportJson = buildExportJson(imageId, targetLang, layers);
+  const downloadJson = () => {
+    const blob = new Blob([JSON.stringify(exportJson, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${imageId}-${targetLang}-${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast?.(t('webtoon-editor.toast-json-downloaded', { count: layers.length }));
+  };
+
+  const imageSrc = WEBTOON_SAMPLE_IMAGES.find(s => s.id === imageId)?.src || WEBTOON_SAMPLE_IMAGES[0].src;
+  const selected = layers.find(l => l.id === selectedId);
+
+  return (
+    <div className="fade-in" style={{ padding:'16px 24px', height:'calc(100vh - 56px)', display:'flex', flexDirection:'column', gap:12 }}>
+      {/* 툴바 */}
+      <div style={{ display:'flex', alignItems:'center', gap:12, background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, padding:'10px 16px', flexWrap:'wrap' }}>
+        <select value={imageId} onChange={e => handleImageChange(e.target.value)}
+          style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.text, borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>
+          {WEBTOON_SAMPLE_IMAGES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+        </select>
+        <select value={targetLang} onChange={e => setTargetLang(e.target.value)}
+          style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.text, borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>
+          <option value="EN">🇺🇸 English</option>
+          <option value="JA">🇯🇵 日本語</option>
+          <option value="ZH">🇨🇳 中文</option>
+        </select>
+        <button onClick={addBox}
+          style={{ background:C.primaryLight, border:`1px solid ${C.primary}`, color:C.primary, borderRadius:6, padding:'6px 14px', fontSize:13, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+          {t('webtoon-editor.btn-add-textbox')}
+        </button>
+        <button onClick={deleteBox} disabled={!selectedId}
+          style={{ background: selectedId ? 'rgba(248,113,113,0.15)' : 'transparent', border:`1px solid ${selectedId ? C.error : C.border}`, color: selectedId ? C.error : C.textDim, borderRadius:6, padding:'6px 14px', fontSize:13, fontWeight:600, cursor: selectedId ? 'pointer' : 'not-allowed', whiteSpace:'nowrap' }}>
+          {t('webtoon-editor.btn-delete-selected')}
+        </button>
+        <div style={{ flex:1 }} />
+        <span style={{ color:C.textMuted, fontSize:12, whiteSpace:'nowrap' }}>{t('webtoon-editor.layers-count', { count: layers.length })}</span>
+        <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:13, color: autoSaveState==='saved' ? C.success : autoSaveState==='saving' ? C.warning : C.textMuted, whiteSpace:'nowrap' }}>
+          <span>{autoSaveState==='saved' ? t('webtoon-editor.save-saved') : autoSaveState==='saving' ? t('webtoon-editor.save-saving') : t('webtoon-editor.save-modified')}</span>
+        </div>
+        <button onClick={() => setShowJsonPanel(v => !v)}
+          style={{ background: showJsonPanel ? C.primaryLight : 'transparent', border:`1px solid ${showJsonPanel ? C.primary : C.border}`, color: showJsonPanel ? C.primary : C.textMuted, borderRadius:6, padding:'6px 12px', fontSize:13, fontWeight:600, cursor:'pointer', fontFamily:'monospace', whiteSpace:'nowrap' }}>
+          {'{ } JSON'}
+        </button>
+        <span title={provider === 'deepl' ? 'DeepL API live' : provider === 'mock' ? 'Mock fallback (no key / call failed)' : t('webtoon-editor.api-status-checking')}
+          style={{
+            display:'inline-flex', alignItems:'center', gap:4,
+            fontSize:11, fontWeight:700, padding:'3px 9px', borderRadius:999, whiteSpace:'nowrap',
+            background: provider === 'deepl' ? 'rgba(34,197,94,0.15)' : provider === 'mock' ? 'rgba(96,165,250,0.15)' : C.surface,
+            color: provider === 'deepl' ? '#22C55E' : provider === 'mock' ? '#60A5FA' : C.textDim,
+            border: `1px solid ${provider === 'deepl' ? '#22C55E' : provider === 'mock' ? '#60A5FA' : C.border}`,
+          }}>
+          {provider === 'deepl' ? `🟢 ${t('common.live')}` : provider === 'mock' ? `🔵 ${t('common.mock')}` : '⋯'}
+        </span>
+        <button onClick={handleAutoTranslate} disabled={translating}
+          style={{
+            background: translating ? C.surface3 : 'linear-gradient(135deg,#6366F1,#A78BFA)',
+            border: translating ? `1px solid ${C.border}` : 'none',
+            color: translating ? C.textDim : '#fff',
+            borderRadius:8, padding:'6px 14px', fontSize:13, fontWeight:600,
+            cursor: translating ? 'wait' : 'pointer',
+            display:'inline-flex', alignItems:'center', gap:6, whiteSpace:'nowrap',
+          }}>
+          {translating
+            ? <><span style={{ animation:'spin 1s linear infinite', display:'inline-block' }}>↻</span> {t('webtoon-editor.btn-translating').replace('↻ ', '')}</>
+            : <>{t('webtoon-editor.btn-auto-translate')}</>}
+        </button>
+      </div>
+
+      <WebtoonCanvasEditor
+        imageSrc={imageSrc}
+        initialLayers={initialLayers}
+        onLayersChange={handleLayersChange}
+        onSelectionChange={setSelectedId}
+        registerAPI={registerAPI}
+      />
+
+      {/* 선택된 레이어 좌표 디버그 */}
+      <div style={{ background:C.surface2, border:`1px solid ${selected ? C.primary : C.border}`, borderRadius:10, padding:'10px 14px', display:'flex', alignItems:'center', gap:12, fontSize:12, color:C.textMuted, minHeight:38, flexWrap:'wrap' }}>
+        {selected ? (
+          <>
+            <span style={{ color:C.primary, fontWeight:600, whiteSpace:'nowrap' }}>● {t('webtoon-editor.selected-label')}</span>
+            <span style={{ whiteSpace:'nowrap' }}>{t('webtoon-editor.label-position')}: <code style={{ color:C.text }}>({selected.xPct}%, {selected.yPct}%)</code></span>
+            <span style={{ whiteSpace:'nowrap' }}>{t('webtoon-editor.label-size')}: <code style={{ color:C.text }}>{selected.wPct}% × {selected.hPct}%</code></span>
+            <span style={{ color:C.textDim, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0, flex:1 }}>{t('webtoon-editor.label-text')}: "{(selected.text || '').slice(0, 40)}{(selected.text || '').length > 40 ? '…' : ''}"</span>
+            <span style={{ color:C.textDim, fontFamily:'monospace', fontSize:11, whiteSpace:'nowrap' }}>{selected.id}</span>
+          </>
+        ) : (
+          <span style={{ color:C.textDim }}>{t('webtoon-editor.help-coordinates')}</span>
+        )}
+      </div>
+
+      {/* JSON 추출 패널 (우측 슬라이드인) */}
+      {showJsonPanel && (
+        <div style={{
+          position:'fixed', top:56, right:0, bottom:0, width:440,
+          background:C.surface2, borderLeft:`1px solid ${C.border}`,
+          boxShadow:'-12px 0 32px rgba(0,0,0,0.5)',
+          display:'flex', flexDirection:'column', zIndex:90,
+          animation:'slideInRight 0.22s ease-out',
+        }}>
+          <div style={{ padding:'14px 18px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:10 }}>
+            <span style={{ fontFamily:'monospace', color:C.primary, fontSize:18, fontWeight:700 }}>{'{ }'}</span>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ color:C.text, fontSize:14, fontWeight:600 }}>{t('webtoon-editor.json-panel-title')}</div>
+              <div style={{ color:C.textDim, fontSize:11 }}>{t('webtoon-editor.json-panel-subtitle')}</div>
+            </div>
+            <button onClick={() => setShowJsonPanel(false)}
+              style={{ background:'transparent', border:`1px solid ${C.border}`, color:C.textMuted, borderRadius:6, width:28, height:28, cursor:'pointer', fontSize:14, lineHeight:1 }}>✕</button>
+          </div>
+
+          <div style={{ display:'flex', gap:16, padding:'10px 18px', borderBottom:`1px solid ${C.border}`, fontSize:11, color:C.textMuted, flexWrap:'wrap' }}>
+            <span>{t('webtoon-editor.json-meta-page')} <code style={{ color:C.text, marginLeft:4 }}>{imageId}</code></span>
+            <span>{t('webtoon-editor.json-meta-language')} <code style={{ color:C.text, marginLeft:4 }}>{targetLang}</code></span>
+            <span>{t('webtoon-editor.json-meta-layers')} <code style={{ color:C.primary, marginLeft:4 }}>{layers.length}</code></span>
+          </div>
+
+          <pre style={{
+            flex:1, overflow:'auto', margin:0, padding:'14px 18px',
+            background:'#0A0A14', color:'#D4D4D8',
+            fontFamily:'ui-monospace, SFMono-Regular, Menlo, monospace',
+            fontSize:12, lineHeight:1.55, whiteSpace:'pre-wrap', wordBreak:'break-word',
+          }}>{JSON.stringify(exportJson, null, 2)}</pre>
+
+          <div style={{ padding:'12px 18px', borderTop:`1px solid ${C.border}`, display:'flex', gap:8 }}>
+            <button onClick={downloadJson} disabled={layers.length === 0}
+              style={{ flex:1, background: layers.length ? 'linear-gradient(135deg,#6366F1,#A78BFA)' : C.surface, border: layers.length ? 'none' : `1px solid ${C.border}`, color: layers.length ? '#fff' : C.textDim, borderRadius:8, padding:'10px 14px', fontSize:13, fontWeight:600, cursor: layers.length ? 'pointer' : 'not-allowed', whiteSpace:'nowrap' }}>
+              {t('webtoon-editor.btn-json-download')}
+            </button>
+            <button onClick={() => { navigator.clipboard?.writeText(JSON.stringify(exportJson, null, 2)); showToast?.(t('common.json-copied')); }} disabled={layers.length === 0}
+              style={{ background:'transparent', border:`1px solid ${layers.length ? C.primary : C.border}`, color: layers.length ? C.primary : C.textDim, borderRadius:8, padding:'10px 14px', fontSize:13, fontWeight:600, cursor: layers.length ? 'pointer' : 'not-allowed', whiteSpace:'nowrap' }}>
+              {t('webtoon-editor.btn-copy')}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── 소설 에디터 페이지 ── */
+const NOVEL_DEFAULT_NOVEL = 'moonlight-sonata';
+const NOVEL_DEFAULT_CHAPTER = 'ch01';
+const NOVEL_STORAGE_KEY = (novelId, chapterId) => `novel:${novelId}:${chapterId}`;
+
+function loadSavedParagraphs(novelId, chapterId, fallback) {
+  try {
+    const raw = localStorage.getItem(NOVEL_STORAGE_KEY(novelId, chapterId));
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.paragraphs) && parsed.paragraphs.length ? parsed.paragraphs : fallback;
+  } catch { return fallback; }
+}
+
+function buildNovelExportJson(novelId, chapterId, sourceLang, targetLang, paragraphs) {
+  return {
+    novel_id: novelId,
+    chapter_id: chapterId,
+    source_lang: sourceLang,
+    target_lang: targetLang,
+    saved_at: new Date().toISOString(),
+    paragraphs: paragraphs.map(p => ({
+      id: p.id,
+      original: p.original,
+      translated: p.translated || '',
+      status: p.status,
+    })),
+  };
+}
+
+function NovelEditorPage({ showToast }) {
+  const { t } = useI18n();
+  const [novelId] = useState(NOVEL_DEFAULT_NOVEL);
+  const [chapterId] = useState(NOVEL_DEFAULT_CHAPTER);
+  const [sourceLang] = useState('EN');
+  const [targetLang] = useState('KO');
+  const [paragraphs, setParagraphs] = useState(() => loadSavedParagraphs(NOVEL_DEFAULT_NOVEL, NOVEL_DEFAULT_CHAPTER, NOVEL_PARAGRAPHS));
+  const [translating, setTranslating] = useState(null);
+  const [autoSaveState, setAutoSaveState] = useState('saved');
+  const [provider, setProvider] = useState('unknown'); // 'deepl' | 'mock' | 'unknown'
+  const [bulkProgress, setBulkProgress] = useState(null); // null | {current, total}
+  const [showJsonPanel, setShowJsonPanel] = useState(false);
+  const saveTimerRef = useRef(null);
+  const bulkRunningRef = useRef(false);
+
+  const getStatusStyle = (status) => ({
+    approved: { bg:'rgba(52,211,153,0.12)', color:C.success, label:`✓ ${t('status.approved')}` },
+    auto:     { bg:'rgba(251,191,36,0.12)', color:C.warning, label:`⚡ ${t('status.auto')}` },
+    pending:  { bg:'rgba(148,163,184,0.1)', color:C.textMuted, label:`◯ ${t('status.pending')}` },
+  }[status] || { bg:'transparent', color:C.textMuted, label:'-' });
+
+  // 마운트 시 백엔드 가용성 1회 확인
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/health')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (!cancelled) setProvider(data?.deeplConfigured ? 'deepl' : 'mock'); })
+      .catch(() => { if (!cancelled) setProvider('mock'); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // paragraphs 변경 시 500ms debounce 자동 저장 + saving/saved 표시
+  const scheduleSave = useCallback((nextParagraphs) => {
+    setAutoSaveState('saving');
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      try {
+        localStorage.setItem(NOVEL_STORAGE_KEY(novelId, chapterId), JSON.stringify({
+          novel_id: novelId,
+          chapter_id: chapterId,
+          source_lang: sourceLang,
+          target_lang: targetLang,
+          saved_at: new Date().toISOString(),
+          paragraphs: nextParagraphs,
+        }));
+      } catch { /* quota exceeded — ignore */ }
+      setAutoSaveState('saved');
+    }, 500);
+  }, [novelId, chapterId, sourceLang, targetLang]);
+
+  const updateParagraphs = useCallback((updater) => {
+    setParagraphs(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      scheduleSave(next);
+      return next;
+    });
+  }, [scheduleSave]);
+
+  // 단일 단락 자동 번역 — DeepL 실호출
+  const handleAutoTranslate = async (id) => {
+    if (translating) return;
+    const target = paragraphs.find(p => p.id === id);
+    if (!target || !target.original?.trim()) return;
+    setTranslating(id);
+    const result = await callTranslateAPI(target.original, targetLang, sourceLang);
+    if (result?.provider) setProvider(result.provider);
+    updateParagraphs(prev => prev.map(p => p.id === id ? { ...p, translated: result.translation, status:'auto' } : p));
+    setTranslating(null);
+    if (result.provider === 'mock' && result.reason) {
+      showToast?.(`${t('common.mock')} (${result.reason})`);
+    }
+  };
+
+  // 전체 미번역 단락 순차 번역 + 진행률
+  const handleTranslateAll = async () => {
+    if (bulkRunningRef.current) return;
+    const targets = paragraphs.filter(p => p.original?.trim() && !p.translated?.trim());
+    if (!targets.length) {
+      showToast?.(t('novel-editor.no-untranslated'));
+      return;
+    }
+    bulkRunningRef.current = true;
+    setBulkProgress({ current: 0, total: targets.length });
+    let deeplCount = 0;
+    let mockCount = 0;
+    let lastProvider = provider;
+    for (let i = 0; i < targets.length; i++) {
+      const para = targets[i];
+      setTranslating(para.id);
+      const result = await callTranslateAPI(para.original, targetLang, sourceLang);
+      if (result.provider === 'deepl') deeplCount++; else mockCount++;
+      lastProvider = result.provider || lastProvider;
+      updateParagraphs(prev => prev.map(p => p.id === para.id ? { ...p, translated: result.translation, status:'auto' } : p));
+      setBulkProgress({ current: i + 1, total: targets.length });
+    }
+    setTranslating(null);
+    setProvider(lastProvider);
+    setBulkProgress(null);
+    bulkRunningRef.current = false;
+    const summary = mockCount > 0
+      ? t('webtoon-editor.toast-mixed-complete', { live: deeplCount, mock: mockCount })
+      : t('webtoon-editor.toast-deepl-complete', { count: deeplCount, lang: targetLang });
+    showToast?.(summary);
+  };
+
+  const handleTranslationChange = (id, val) => {
+    updateParagraphs(prev => prev.map(p => p.id===id ? { ...p, translated:val, status:'auto' } : p));
+  };
+
+  const handleApprove = (id) => {
+    updateParagraphs(prev => prev.map(p => p.id===id ? { ...p, status:'approved' } : p));
+    showToast(t('novel-editor.paragraph-approved'));
+  };
+
+  const exportJson = buildNovelExportJson(novelId, chapterId, sourceLang, targetLang, paragraphs);
+  const exportJsonStr = JSON.stringify(exportJson, null, 2);
+
+  const handleDownload = () => {
+    const blob = new Blob([exportJsonStr], { type:'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${novelId}-${chapterId}-${targetLang}-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast?.(t('novel-editor.json-download-started'));
+  };
+
+  return (
+    <div className="fade-in" style={{ padding:'16px 24px', height:'calc(100vh - 56px)', display:'flex', flexDirection:'column', gap:12 }}>
+      {/* 툴바 */}
+      <div style={{ display:'flex', alignItems:'center', gap:12, background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, padding:'10px 16px', flexWrap:'wrap' }}>
+        <select style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.text, borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>
+          <option>달빛 소나타</option>
+          <option>벚꽃이 지는 날</option>
+        </select>
+        <select style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.text, borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>
+          <option>Chapter 01 — 도착</option>
+          <option>Chapter 02 — 첫 만남</option>
+        </select>
+        <select style={{ background:C.surface, border:`1px solid ${C.border}`, color:C.text, borderRadius:6, padding:'4px 10px', fontSize:13, cursor:'pointer' }}>
+          <option>🇺🇸 → 🇰🇷 (한국어)</option>
+          <option>🇺🇸 → 🇯🇵 (日本語)</option>
+        </select>
+        <div style={{ flex:1 }} />
+        <div style={{ display:'flex', gap:4, fontSize:12 }}>
+          {[
+            { label:t('novel-editor.filter-all'), n:paragraphs.length },
+            { label:t('novel-editor.filter-approved'), n:paragraphs.filter(p=>p.status==='approved').length },
+            { label:t('novel-editor.filter-pending'), n:paragraphs.filter(p=>p.status==='pending').length },
+          ].map(s => (
+            <span key={s.label} style={{ background:C.surface3, borderRadius:6, padding:'3px 8px', color:C.textMuted, whiteSpace:'nowrap' }}>{s.label} <strong style={{ color:C.text }}>{s.n}</strong></span>
+          ))}
+        </div>
+        <span title={provider==='deepl' ? 'DeepL API live' : provider==='mock' ? 'Mock fallback (no key / call failed)' : t('novel-editor.backend-checking')}
+          style={{ background: provider==='deepl' ? 'rgba(52,211,153,0.15)' : provider==='mock' ? 'rgba(96,165,250,0.15)' : C.surface3,
+                   color: provider==='deepl' ? C.success : provider==='mock' ? '#60A5FA' : C.textMuted,
+                   border:`1px solid ${provider==='deepl' ? C.success : provider==='mock' ? '#60A5FA' : C.border}`,
+                   borderRadius:6, padding:'3px 10px', fontSize:12, fontWeight:600, whiteSpace:'nowrap' }}>
+          {provider==='deepl' ? `🟢 ${t('common.live')}` : provider==='mock' ? `🔵 ${t('common.mock')}` : '⚪ …'}
+        </span>
+        <div style={{ color: autoSaveState==='saved' ? C.success : C.warning, fontSize:13, display:'flex', alignItems:'center', gap:4, whiteSpace:'nowrap' }}>
+          {autoSaveState==='saving' ? <span style={{ animation:'spin 1s linear infinite', display:'inline-block' }}>↻</span> : '✓'}
+          {autoSaveState==='saved' ? t('webtoon-editor.save-saved').replace('✓ ','') : t('webtoon-editor.save-saving')}
+        </div>
+        <button onClick={() => setShowJsonPanel(s => !s)}
+          style={{ background: showJsonPanel ? C.primaryLight : C.surface3, border:`1px solid ${showJsonPanel ? C.primary : C.border}`, color: showJsonPanel ? C.primary : C.textMuted, borderRadius:8, padding:'6px 12px', fontSize:13, cursor:'pointer', fontWeight:600, whiteSpace:'nowrap' }}>
+          {'{ } JSON'}
+        </button>
+        <button onClick={handleTranslateAll} disabled={!!bulkProgress}
+          style={{ background: bulkProgress ? C.surface3 : 'linear-gradient(135deg,#6366F1,#A78BFA)', border: bulkProgress ? `1px solid ${C.border}` : 'none', color: bulkProgress ? C.textMuted : '#fff', borderRadius:8, padding:'6px 14px', fontSize:13, fontWeight:600, cursor: bulkProgress ? 'wait' : 'pointer', display:'flex', alignItems:'center', gap:6, whiteSpace:'nowrap' }}>
+          {bulkProgress
+            ? <><span style={{ animation:'spin 1s linear infinite', display:'inline-block' }}>↻</span>{t('novel-editor.bulk-progress', { current: bulkProgress.current, total: bulkProgress.total }).replace('↻ ','')}</>
+            : t('novel-editor.btn-translate-all')}
+        </button>
+      </div>
+
+      {/* 헤더 */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+        {[t('novel-editor.original-label'), t('novel-editor.translated-label')].map(label => (
+          <div key={label} style={{ background:C.surface3, border:`1px solid ${C.border}`, borderRadius:8, padding:'8px 16px', color:C.textMuted, fontSize:13, fontWeight:600, textAlign:'center' }}>{label}</div>
+        ))}
+      </div>
+
+      {/* 단락 목록 */}
+      <div style={{ flex:1, overflow:'auto', display:'flex', flexDirection:'column', gap:8 }}>
+        {paragraphs.map(para => {
+          const ss = getStatusStyle(para.status);
+          const isTranslating = translating===para.id;
+          return (
+            <div key={para.id} style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, padding:14, transition:'border-color 0.15s', borderColor: para.status==='approved' ? 'rgba(52,211,153,0.3)' : C.border }}>
+              {/* 원문 */}
+              <div>
+                <div style={{ color:C.text, fontSize:14, lineHeight:1.7, padding:'6px 0' }}>{para.original}</div>
+              </div>
+              {/* 번역문 */}
+              <div style={{ position:'relative' }}>
+                {isTranslating ? (
+                  <div style={{ display:'flex', alignItems:'center', gap:8, padding:'10px 0', color:C.primary }}>
+                    <span style={{ animation:'spin 1s linear infinite', display:'inline-block', fontSize:18 }}>↻</span>
+                    <span style={{ fontSize:13 }}>{t('novel-editor.deepl-translating')}</span>
+                  </div>
+                ) : para.status==='pending' && !para.translated ? (
+                  <div style={{ display:'flex', gap:8, padding:'6px 0', alignItems:'center' }}>
+                    <button onClick={() => handleAutoTranslate(para.id)} style={{ background:'rgba(99,102,241,0.15)', border:`1px solid ${C.primary}`, color:C.primary, borderRadius:6, padding:'5px 12px', fontSize:12, cursor:'pointer', fontWeight:600, whiteSpace:'nowrap' }}>{t('novel-editor.btn-auto-translate')}</button>
+                    <span style={{ color:C.textDim, fontSize:12 }}>{t('novel-editor.or-enter-manual')}</span>
+                  </div>
+                ) : (
+                  <textarea
+                    value={para.translated || para.autoResult || ''}
+                    onChange={e => handleTranslationChange(para.id, e.target.value)}
+                    style={{ width:'100%', background:'transparent', border:'none', borderBottom:`1px solid ${C.border}`, color:C.text, fontSize:14, lineHeight:1.7, resize:'none', outline:'none', fontFamily:'inherit', paddingBottom:4, minHeight:60 }}
+                  />
+                )}
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginTop:6 }}>
+                  <span style={{ background:ss.bg, color:ss.color, borderRadius:4, padding:'1px 8px', fontSize:11, fontWeight:600 }}>{ss.label}</span>
+                  {para.status!=='approved' && para.translated && (
+                    <button onClick={() => handleApprove(para.id)} style={{ background:'rgba(52,211,153,0.12)', border:`1px solid ${C.success}`, color:C.success, borderRadius:6, padding:'2px 10px', fontSize:11, cursor:'pointer', whiteSpace:'nowrap' }}>{t('novel-editor.btn-approve')}</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* JSON 패널 — 우측 슬라이드인 */}
+      {showJsonPanel && (
+        <div style={{ position:'fixed', top:56, right:0, bottom:0, width:440, background:C.surface2, borderLeft:`1px solid ${C.border}`, padding:'16px 18px', overflow:'auto', display:'flex', flexDirection:'column', gap:12, zIndex:50, boxShadow:'-8px 0 24px rgba(0,0,0,0.35)', animation:'slideInRight 0.18s ease-out' }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <div style={{ color:C.text, fontSize:14, fontWeight:700 }}>{`{ } ${t('novel-editor.json-panel-title')}`}</div>
+            <button onClick={() => setShowJsonPanel(false)} style={{ background:'transparent', border:'none', color:C.textMuted, fontSize:18, cursor:'pointer', padding:'2px 6px' }}>✕</button>
+          </div>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', fontSize:11 }}>
+            <span style={{ background:C.surface3, color:C.textMuted, borderRadius:4, padding:'2px 8px' }}>{t('novel-editor.json-meta-novel')} <strong style={{ color:C.text }}>{novelId}</strong></span>
+            <span style={{ background:C.surface3, color:C.textMuted, borderRadius:4, padding:'2px 8px' }}>{t('novel-editor.json-meta-chapter')} <strong style={{ color:C.text }}>{chapterId}</strong></span>
+            <span style={{ background:C.surface3, color:C.textMuted, borderRadius:4, padding:'2px 8px' }}>{sourceLang} → {targetLang}</span>
+            <span style={{ background:C.surface3, color:C.textMuted, borderRadius:4, padding:'2px 8px' }}>{t('novel-editor.json-meta-pairs')} <strong style={{ color:C.text }}>{paragraphs.length}</strong></span>
+          </div>
+          <pre style={{ flex:1, background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:'12px 14px', color:C.textMuted, fontSize:11, lineHeight:1.55, overflow:'auto', margin:0, fontFamily:'ui-monospace,SFMono-Regular,Menlo,monospace' }}>{exportJsonStr}</pre>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={handleDownload} disabled={!paragraphs.length}
+              style={{ flex:1, background: paragraphs.length ? 'linear-gradient(135deg,#6366F1,#A78BFA)' : C.surface3, border:'none', color: paragraphs.length ? '#fff' : C.textDim, borderRadius:8, padding:'10px 14px', fontSize:13, fontWeight:600, cursor: paragraphs.length ? 'pointer' : 'not-allowed', whiteSpace:'nowrap' }}>
+              {t('novel-editor.btn-json-download')}
+            </button>
+            <button onClick={() => { navigator.clipboard?.writeText(exportJsonStr); showToast?.(t('common.json-copied')); }} disabled={!paragraphs.length}
+              style={{ background:'transparent', border:`1px solid ${paragraphs.length ? C.primary : C.border}`, color: paragraphs.length ? C.primary : C.textDim, borderRadius:8, padding:'10px 14px', fontSize:13, fontWeight:600, cursor: paragraphs.length ? 'pointer' : 'not-allowed', whiteSpace:'nowrap' }}>
+              📋 {t('common.copy')}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── 언어 뷰어 페이지 (Phase 6) ── */
+// SAVED 탭은 i18n 라벨로 동적 생성, 나머지는 언어 네이티브 표기 고정
+const VIEWER_LANG_TABS = [
+  { code:'SAVED', flag:'💾', i18nKey:'viewer.tab-saved' },
+  { code:'EN',    flag:'🇺🇸', nativeLabel:'English' },
+  { code:'JA',    flag:'🇯🇵', nativeLabel:'日本語' },
+  { code:'ZH',    flag:'🇨🇳', nativeLabel:'中文' },
+];
+
+function langTabLabel(code, tFn) {
+  const tab = VIEWER_LANG_TABS.find(x => x.code === code);
+  if (!tab) return code;
+  const label = tab.i18nKey && tFn ? tFn(tab.i18nKey) : tab.nativeLabel || code;
+  return `${tab.flag} ${label}`.trim();
+}
+
+function downloadJsonFile(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* 읽기 전용 Fabric.js 웹툰 패널 — IntersectionObserver 지연 로딩 */
+function WebtoonViewerPanel({ page, displayLayers, title }) {
+  const { t } = useI18n();
+  const wrapRef = useRef(null);
+  const canvasEl = useRef(null);
+  const fabRef = useRef(null);
+  const sizeRef = useRef({ w:0, h:0 });
+  const [mounted, setMounted] = useState(false);
+  const [canvasReady, setCanvasReady] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+
+  // IO로 뷰포트 진입 시에만 마운트
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    if (mounted) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some(e => e.isIntersecting)) {
+        setMounted(true); io.disconnect();
+      }
+    }, { rootMargin:'200px' });
+    io.observe(wrapRef.current);
+    return () => io.disconnect();
+  }, [mounted]);
+
+  // Fabric 초기화 (마운트 후 1회)
+  useEffect(() => {
+    if (!mounted) return;
+    let disposed = false;
+    const start = () => {
+      if (disposed) return;
+      if (!window.fabric || !canvasEl.current || !wrapRef.current) {
+        setTimeout(start, 50); return;
+      }
+      const containerW = Math.max(280, wrapRef.current.clientWidth - 32);
+      const img = new Image();
+      img.onload = () => {
+        if (disposed) return;
+        const scale = Math.min(1, containerW / img.width);
+        const W = Math.round(img.width * scale);
+        const H = Math.round(img.height * scale);
+        sizeRef.current = { w: W, h: H };
+        const c = new fabric.Canvas(canvasEl.current, {
+          width: W, height: H,
+          selection: false, skipTargetFind: true,
+          hoverCursor: 'default', backgroundColor: '#fff',
+        });
+        const bg = new fabric.Image(img, {
+          left: 0, top: 0, scaleX: scale, scaleY: scale,
+          selectable: false, evented: false,
+        });
+        c.add(bg); c.renderAll();
+        fabRef.current = c;
+        setCanvasReady(true);
+      };
+      img.onerror = () => { if (!disposed) setLoadError(true); };
+      img.src = page.src;
+    };
+    start();
+    return () => {
+      disposed = true;
+      if (fabRef.current) {
+        try { fabRef.current.dispose(); } catch {}
+        fabRef.current = null;
+      }
+    };
+  }, [mounted, page.src]);
+
+  // displayLayers 변경 시 텍스트 레이어 재렌더
+  useEffect(() => {
+    if (!canvasReady || !fabRef.current) return;
+    const c = fabRef.current;
+    const { w, h } = sizeRef.current;
+    c.getObjects().filter(o => o.isViewerLayer).forEach(o => c.remove(o));
+    (displayLayers || []).forEach((l) => {
+      const left = (l.xPct / 100) * w;
+      const top = (l.yPct / 100) * h;
+      const width = Math.max(60, (l.wPct / 100) * w);
+      const fontSize = Math.max(12, Math.round(w * 0.024));
+      const tb = new fabric.Textbox(l.text || ' ', {
+        left, top, width,
+        fontSize, fontFamily: 'Pretendard, sans-serif',
+        fill: '#111827',
+        backgroundColor: 'rgba(255,255,255,0.95)',
+        padding: 6, textAlign: 'center',
+        selectable: false, evented: false, editable: false,
+        hasControls: false, hasBorders: false,
+        lockMovementX: true, lockMovementY: true,
+        lockScalingX: true, lockScalingY: true,
+      });
+      tb.isViewerLayer = true;
+      c.add(tb);
+    });
+    c.renderAll();
+  }, [canvasReady, displayLayers]);
+
+  const layerCount = (displayLayers || []).length;
+  return (
+    <div ref={wrapRef} style={{ background:'#fff', border:`1px solid ${C.border}`, borderRadius:10, padding:16, marginBottom:20, boxShadow:'0 2px 12px rgba(0,0,0,0.2)' }}>
+      <div style={{ color:C.textDim, fontSize:11, marginBottom:10, display:'flex', justifyContent:'space-between', gap:8 }}>
+        <span style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{title}</span>
+        <span style={{ whiteSpace:'nowrap', flexShrink:0 }}>{layerCount} {t('viewer.panel-layers')}</span>
+      </div>
+      {loadError && <div style={{ color:C.error, padding:40, textAlign:'center', fontSize:13, background:'#fff5f5', borderRadius:6 }}>{t('viewer.image-load-failed', { src: page.src })}</div>}
+      {!mounted && !loadError && <div style={{ color:C.textDim, padding:80, textAlign:'center', fontSize:12, fontStyle:'italic' }}>{t('viewer.panel-scroll-hint')}</div>}
+      {mounted && !canvasReady && !loadError && <div style={{ color:C.textDim, padding:80, textAlign:'center', fontSize:12 }}>{t('viewer.panel-canvas-init')}</div>}
+      <div style={{ display: canvasReady && !loadError ? 'flex' : 'none', justifyContent:'center' }}>
+        <canvas ref={canvasEl} />
+      </div>
+    </div>
+  );
+}
+
+/* E-book 스타일 소설 뷰어 — 좌측 원본 EN / 우측 번역 */
+function NovelEbookView({ paragraphs, renderTranslation, rightLangLabel }) {
+  const { t } = useI18n();
+  const pageStyle = {
+    background:'#fdfaf3', borderRadius:10,
+    padding:'40px 36px',
+    boxShadow:'0 6px 24px rgba(0,0,0,0.4)',
+    minHeight:620,
+    position:'relative',
+  };
+  const paraStyle = { color:'#2d1b0e', fontSize:14, lineHeight:1.9, marginBottom:16, fontFamily:'Georgia, serif' };
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, maxWidth:1040, margin:'0 auto' }}>
+      <div style={pageStyle}>
+        <div style={{ color:'#8b7355', fontSize:11, fontWeight:700, marginBottom:20, letterSpacing:1, textAlign:'right' }}>🇺🇸 EN · {t('viewer.page-original').toUpperCase()}</div>
+        {paragraphs.map(p => <p key={p.id} style={paraStyle}>{p.original}</p>)}
+        <div style={{ position:'absolute', bottom:12, left:0, right:0, textAlign:'center', color:'#bba37c', fontSize:11 }}>— 1 —</div>
+      </div>
+      <div style={pageStyle}>
+        <div style={{ color:'#8b7355', fontSize:11, fontWeight:700, marginBottom:20, letterSpacing:1, textAlign:'right' }}>{rightLangLabel}</div>
+        {paragraphs.map(p => {
+          const text = renderTranslation(p);
+          const placeholder = text === null || text === '';
+          return (
+            <p key={p.id} style={{ ...paraStyle, color: placeholder ? '#bba37c' : '#2d1b0e', fontStyle: placeholder ? 'italic' : 'normal' }}>
+              {placeholder ? t('viewer.translation-pending') : text}
+            </p>
+          );
+        })}
+        <div style={{ position:'absolute', bottom:12, left:0, right:0, textAlign:'center', color:'#bba37c', fontSize:11 }}>— 2 —</div>
+      </div>
+    </div>
+  );
+}
+
+function ViewerPage({ showToast }) {
+  const { t } = useI18n();
+  const [workType, setWorkType] = useState('webtoon');
+  const [lang, setLang] = useState('SAVED');
+  // translations[pageId][lang][layerIndex] = translatedText
+  const [translations, setTranslations] = useState({});
+  const [translatingLang, setTranslatingLang] = useState(null);
+  // novelTranslations[lang][paraId] = translatedText
+  const [novelTranslations, setNovelTranslations] = useState({});
+  const [translatingNovelLang, setTranslatingNovelLang] = useState(null);
+  const runningRef = useRef(false);
+
+  // 저장된 웹툰 페이지/레이어 (마운트 시 스냅샷)
+  const webtoonPages = React.useMemo(() => WEBTOON_SAMPLE_IMAGES.map(img => ({
+    ...img,
+    layers: loadSavedLayers(img.id),
+  })), []);
+  const webtoonLayersCount = webtoonPages.reduce((s,p) => s + p.layers.length, 0);
+
+  // 저장된 소설 단락
+  const novelParagraphs = React.useMemo(
+    () => loadSavedParagraphs(NOVEL_DEFAULT_NOVEL, NOVEL_DEFAULT_CHAPTER, NOVEL_PARAGRAPHS),
+    []
+  );
+
+  const isTextUsable = (t) => !!(t && t.trim() && t.trim() !== WEBTOON_BOX_PLACEHOLDER);
+
+  const handleWebtoonLangClick = async (targetLang) => {
+    setLang(targetLang);
+    if (targetLang === 'SAVED' || runningRef.current) return;
+    // 캐시 확인
+    const needTrans = webtoonPages.some(p =>
+      p.layers.some(l => isTextUsable(l.text) && !translations[p.id]?.[targetLang]?.[l.layerIndex])
+    );
+    if (!needTrans) return;
+    runningRef.current = true;
+    setTranslatingLang(targetLang);
+    try {
+      const next = { ...translations };
+      let deeplCount = 0, mockCount = 0;
+      for (const page of webtoonPages) {
+        next[page.id] = next[page.id] ? { ...next[page.id] } : {};
+        next[page.id][targetLang] = next[page.id][targetLang] ? { ...next[page.id][targetLang] } : {};
+        for (const l of page.layers) {
+          if (!isTextUsable(l.text)) continue;
+          if (next[page.id][targetLang][l.layerIndex]) continue;
+          const r = await callTranslateAPI(l.text, targetLang, 'KO');
+          next[page.id][targetLang][l.layerIndex] = r.translation;
+          if (r.provider === 'deepl') deeplCount++; else mockCount++;
+        }
+      }
+      setTranslations(next);
+      const parts = [];
+      if (deeplCount) parts.push(t('viewer.parts-deepl', { count: deeplCount }));
+      if (mockCount) parts.push(t('viewer.parts-mock', { count: mockCount }));
+      showToast?.(t('viewer.toast-translation-complete', {
+        lang: langTabLabel(targetLang, t),
+        parts: parts.join(' / ') || '0',
+      }));
+    } finally {
+      setTranslatingLang(null);
+      runningRef.current = false;
+    }
+  };
+
+  const handleNovelLangClick = async (targetLang) => {
+    setLang(targetLang);
+    // 소설 원본이 EN이므로 EN 탭은 원본 그대로 표시 (번역 skip)
+    if (targetLang === 'SAVED' || targetLang === 'EN' || runningRef.current) return;
+    const needTrans = novelParagraphs.some(p => p.original && !novelTranslations[targetLang]?.[p.id]);
+    if (!needTrans) return;
+    runningRef.current = true;
+    setTranslatingNovelLang(targetLang);
+    try {
+      const next = { ...novelTranslations, [targetLang]: { ...(novelTranslations[targetLang] || {}) } };
+      let deeplCount = 0, mockCount = 0;
+      for (const p of novelParagraphs) {
+        if (!p.original) continue;
+        if (next[targetLang][p.id]) continue;
+        const r = await callTranslateAPI(p.original, targetLang, 'EN');
+        next[targetLang][p.id] = r.translation;
+        if (r.provider === 'deepl') deeplCount++; else mockCount++;
+      }
+      setNovelTranslations(next);
+      const parts = [];
+      if (deeplCount) parts.push(t('viewer.parts-deepl', { count: deeplCount }));
+      if (mockCount) parts.push(t('viewer.parts-mock', { count: mockCount }));
+      showToast?.(t('viewer.toast-translation-complete', {
+        lang: langTabLabel(targetLang, t),
+        parts: parts.join(' / ') || '0',
+      }));
+    } finally {
+      setTranslatingNovelLang(null);
+      runningRef.current = false;
+    }
+  };
+
+  const handleLangClick = (code) => {
+    if (workType === 'webtoon') handleWebtoonLangClick(code);
+    else handleNovelLangClick(code);
+  };
+  const isTranslating = workType === 'webtoon' ? translatingLang : translatingNovelLang;
+
+  const getWebtoonDisplayLayers = (page) => {
+    if (lang === 'SAVED') return page.layers;
+    const tmap = translations[page.id]?.[lang];
+    return page.layers.map(l => {
+      if (!isTextUsable(l.text)) return l;
+      const cached = tmap?.[l.layerIndex];
+      return { ...l, text: cached ?? t('viewer.translation-pending') };
+    });
+  };
+
+  const getNovelTranslation = (p) => {
+    if (lang === 'SAVED') return p.translated || '';
+    if (lang === 'EN') return p.original || '';
+    const cached = novelTranslations[lang]?.[p.id];
+    return cached === undefined ? null : cached;
+  };
+
+  const handleExport = () => {
+    if (workType === 'webtoon') {
+      const payload = {
+        exported_at: new Date().toISOString(),
+        language: lang,
+        pages: webtoonPages.map(p => buildExportJson(p.id, lang, getWebtoonDisplayLayers(p))),
+      };
+      downloadJsonFile(payload, `viewer-webtoon-${lang}-${Date.now()}.json`);
+    } else {
+      const target = lang === 'SAVED' ? 'KO' : lang;
+      const paras = novelParagraphs.map(p => ({
+        ...p,
+        translated: (lang === 'SAVED' ? p.translated : novelTranslations[lang]?.[p.id]) || '',
+      }));
+      const payload = buildNovelExportJson(NOVEL_DEFAULT_NOVEL, NOVEL_DEFAULT_CHAPTER, 'EN', target, paras);
+      downloadJsonFile(payload, `viewer-novel-${NOVEL_DEFAULT_NOVEL}-${NOVEL_DEFAULT_CHAPTER}-${target}-${Date.now()}.json`);
+    }
+    showToast?.(t('viewer.toast-json-downloaded'));
+  };
+
+  const rightLangLabel =
+    lang === 'SAVED' ? `🇰🇷 KO · ${t('viewer.tab-saved')}`
+    : lang === 'EN'  ? t('viewer.en-original-label')
+    : `${(VIEWER_LANG_TABS.find(x=>x.code===lang)||{}).flag||''} ${lang} · ${t('viewer.tab-realtime')}`;
+
+  return (
+    <div className="fade-in" style={{ padding:'16px 24px', height:'calc(100vh - 56px)', display:'flex', flexDirection:'column', gap:12 }}>
+      {/* 컨트롤 바 */}
+      <div style={{ display:'flex', alignItems:'center', gap:12, background:C.surface2, border:`1px solid ${C.border}`, borderRadius:10, padding:'10px 16px', flexWrap:'wrap' }}>
+        <div style={{ display:'flex', gap:4, background:C.surface3, borderRadius:8, padding:3 }}>
+          {[['webtoon', t('viewer.workType-webtoon')], ['novel', t('viewer.workType-novel')]].map(([v,l]) => (
+            <button key={v} onClick={() => setWorkType(v)} disabled={!!isTranslating}
+              style={{ background: workType===v ? C.primaryLight : 'transparent', border: workType===v ? `1px solid ${C.primary}` : '1px solid transparent', color: workType===v ? C.primary : C.textMuted, borderRadius:6, padding:'4px 14px', fontSize:13, cursor: isTranslating ? 'wait' : 'pointer', fontWeight: workType===v ? 600 : 400, whiteSpace:'nowrap' }}>{l}</button>
+          ))}
+        </div>
+        <div style={{ color:C.textMuted, fontSize:12, whiteSpace:'nowrap' }}>
+          {workType === 'webtoon'
+            ? t('viewer.pages-layers-summary', { pages: webtoonPages.length, layers: webtoonLayersCount })
+            : t('viewer.paragraphs-summary', { count: novelParagraphs.length })}
+        </div>
+        <div style={{ flex:1 }} />
+        <span style={{ background:'rgba(52,211,153,0.12)', color:C.success, borderRadius:6, padding:'4px 10px', fontSize:11, fontWeight:700, whiteSpace:'nowrap' }}>
+          {t('viewer.no-reload-badge')}
+        </span>
+        <button onClick={handleExport}
+          style={{ background:C.primaryLight, border:`1px solid ${C.primary}`, color:C.primary, borderRadius:8, padding:'6px 14px', fontSize:13, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap' }}>
+          {t('viewer.btn-json-extract')}
+        </button>
+      </div>
+
+      {/* 언어 탭 */}
+      <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+        {VIEWER_LANG_TABS.map(tab => {
+          const active = lang === tab.code;
+          const busy = isTranslating === tab.code;
+          const label = tab.i18nKey ? t(tab.i18nKey) : tab.nativeLabel;
+          return (
+            <button key={tab.code} onClick={() => handleLangClick(tab.code)} disabled={!!isTranslating}
+              style={{ background: active ? C.primaryLight : C.surface2, border: active ? `2px solid ${C.primary}` : `1px solid ${C.border}`, color: active ? C.primary : C.textMuted, borderRadius:10, padding:'8px 18px', cursor: isTranslating ? 'wait' : 'pointer', fontSize:13, fontWeight: active ? 600 : 400, minWidth:110, transition:'all 0.15s', whiteSpace:'nowrap' }}>
+              {busy ? '↻ ' : ''}{tab.flag} {label}
+            </button>
+          );
+        })}
+        <div style={{ flex:1 }} />
+        {isTranslating && (
+          <span style={{ color:C.primary, fontSize:12, whiteSpace:'nowrap' }}>
+            {t('viewer.deepl-calling', { lang: langTabLabel(isTranslating, t) })}
+          </span>
+        )}
+      </div>
+
+      {/* 뷰어 콘텐츠 */}
+      <div style={{ flex:1, overflow:'auto', background:C.bg, border:`1px solid ${C.border}`, borderRadius:12, padding:24 }}>
+        {workType==='webtoon' ? (
+          <div style={{ maxWidth:580, margin:'0 auto' }}>
+            <div style={{ textAlign:'center', marginBottom:20 }}>
+              <div style={{ color:C.primary, fontSize:15, fontWeight:700 }}>빛의 전사</div>
+              <div style={{ color:C.textMuted, fontSize:12, marginTop:4 }}>
+                {langTabLabel(lang, t)} · {webtoonPages.length} {t('viewer.vertical-scroll-hint')}
+              </div>
+            </div>
+            {webtoonPages.length === 0 && (
+              <div style={{ color:C.textMuted, padding:60, textAlign:'center', fontSize:13 }}>
+                {t('viewer.no-pages')}
+              </div>
+            )}
+            {webtoonPages.map(page => (
+              <WebtoonViewerPanel
+                key={page.id}
+                page={page}
+                displayLayers={getWebtoonDisplayLayers(page)}
+                title={page.label}
+              />
+            ))}
+            {webtoonLayersCount === 0 && webtoonPages.length > 0 && (
+              <div style={{ color:C.textDim, padding:20, textAlign:'center', fontSize:12, fontStyle:'italic' }}>
+                {t('viewer.no-saved-layers')}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div>
+            <div style={{ textAlign:'center', marginBottom:20 }}>
+              <div style={{ color:C.text, fontSize:22, fontWeight:700 }}>달빛 소나타</div>
+              <div style={{ color:C.textMuted, fontSize:13, marginTop:4 }}>Chapter 01 · {t('viewer.ebook-spread')}</div>
+            </div>
+            <NovelEbookView
+              paragraphs={novelParagraphs}
+              renderTranslation={getNovelTranslation}
+              rightLangLabel={rightLangLabel}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── 메인 앱 ── */
+function App() {
+  const { t } = useI18n();
+  const [page, setPage] = useState('dashboard');
+  const [modal, setModal] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const showToast = (msg) => setToast(msg);
+  const PAGE_TITLES = {
+    dashboard: t('page-title.dashboard'),
+    webtoon:   t('page-title.webtoon-editor'),
+    novel:     t('page-title.novel-editor'),
+    viewer:    t('page-title.viewer'),
+  };
+
+  return (
+    <div style={{ display:'flex', width:'100%', height:'100vh', overflow:'hidden', background:C.bg }}>
+      <Sidebar active={page} onNav={setPage} />
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
+        <TopBar title={PAGE_TITLES[page]} />
+        <div style={{ flex:1, overflow:'auto' }}>
+          {page==='dashboard' && <DashboardPage setModal={setModal} showToast={showToast} />}
+          {page==='webtoon'   && <WebtoonEditorPage showToast={showToast} />}
+          {page==='novel'     && <NovelEditorPage showToast={showToast} />}
+          {page==='viewer'    && <ViewerPage showToast={showToast} />}
+        </div>
+      </div>
+
+      {/* 작품 상세 모달 */}
+      {modal?.type==='workDetail' && (
+        <Modal title={modal.work.title} onClose={() => setModal(null)} width={560}>
+          <div style={{ padding:24, display:'flex', flexDirection:'column', gap:16 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              {[
+                [t('modal.work-type'), modal.work.type==='webtoon'?t('common.webtoon'):t('common.novel')],
+                [t('modal.total-episodes'), `${modal.work.episodes}`],
+                [t('modal.views'), `${modal.work.views.toLocaleString()}`],
+                [t('modal.last-modified'), modal.work.updated],
+              ].map(([k,v]) => (
+                <div key={k} style={{ background:C.surface2, border:`1px solid ${C.border}`, borderRadius:8, padding:'12px 14px' }}>
+                  <div style={{ color:C.textMuted, fontSize:12 }}>{k}</div>
+                  <div style={{ color:C.text, fontWeight:700, fontSize:16, marginTop:2 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <div style={{ color:C.textMuted, fontSize:13, marginBottom:10 }}>{t('modal.progress-by-language')}</div>
+              {modal.work.langs.map(lang => (
+                <div key={lang} style={{ display:'flex', alignItems:'center', gap:12, marginBottom:10 }}>
+                  <span style={{ color:C.text, fontSize:13, width:32 }}>{lang}</span>
+                  <div style={{ flex:1, height:6, background:C.border, borderRadius:99 }}>
+                    <div style={{ height:6, borderRadius:99, width:`${modal.work.progress[lang]||0}%`, background: (modal.work.progress[lang]||0)===100 ? C.success : C.primary, transition:'width 0.5s' }} />
+                  </div>
+                  <span style={{ color:C.textMuted, fontSize:13, width:36 }}>{modal.work.progress[lang]||0}%</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end', paddingTop:4 }}>
+              <button onClick={() => { setModal(null); setPage('webtoon'); }} style={{ background:C.primaryLight, border:`1px solid ${C.primary}`, color:C.primary, borderRadius:8, padding:'8px 20px', cursor:'pointer', fontSize:14, fontWeight:600, whiteSpace:'nowrap' }}>{t('modal.btn-open-editor')}</button>
+              <button onClick={() => setModal(null)} style={{ background:'none', border:`1px solid ${C.border}`, color:C.textMuted, borderRadius:8, padding:'8px 20px', cursor:'pointer', fontSize:14, whiteSpace:'nowrap' }}>{t('modal.btn-close')}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* 새 작품 모달 */}
+      {modal==='newWork' && (
+        <Modal title={t('modal.new-work-title')} onClose={() => setModal(null)} width={480}>
+          <div style={{ padding:24, display:'flex', flexDirection:'column', gap:14 }}>
+            {[
+              [t('modal.label-work-title'),'text','예: 은하수 탐험대 / e.g., Galaxy Explorers'],
+              [t('modal.label-work-type'),'select',''],
+              [t('modal.label-target-langs'),'text','예: EN, JA, ZH'],
+            ].map(([label, type, ph]) => (
+              <div key={label}>
+                <label style={{ color:C.textMuted, fontSize:12, display:'block', marginBottom:4 }}>{label}</label>
+                {type==='select' ? (
+                  <select style={{ width:'100%', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:6, padding:'8px 10px', color:C.text, fontSize:14 }}>
+                    <option value="webtoon">{t('modal.option-webtoon')}</option>
+                    <option value="novel">{t('modal.option-novel')}</option>
+                  </select>
+                ) : (
+                  <input placeholder={ph} style={{ width:'100%', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:6, padding:'8px 10px', color:C.text, fontSize:14, outline:'none' }} />
+                )}
+              </div>
+            ))}
+            <div>
+              <label style={{ color:C.textMuted, fontSize:12, display:'block', marginBottom:4 }}>{t('modal.label-description')}</label>
+              <textarea rows={3} placeholder={t('modal.description-placeholder')} style={{ width:'100%', background:C.surface2, border:`1px solid ${C.border}`, borderRadius:6, padding:'8px 10px', color:C.text, fontSize:14, outline:'none', resize:'none', fontFamily:'inherit' }} />
+            </div>
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end', paddingTop:4 }}>
+              <button onClick={() => setModal(null)} style={{ background:'none', border:`1px solid ${C.border}`, color:C.textMuted, borderRadius:8, padding:'8px 20px', cursor:'pointer', fontSize:14, whiteSpace:'nowrap' }}>{t('modal.btn-cancel')}</button>
+              <button onClick={() => { setModal(null); showToast(t('modal.toast-registered')); }} style={{ background:C.gradient, border:'none', color:'#fff', borderRadius:8, padding:'8px 20px', cursor:'pointer', fontSize:14, fontWeight:600, whiteSpace:'nowrap' }}>{t('modal.btn-register')}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+// i18next 초기화 완료 후 앱 마운트 — 키 값이 화면에 노출되는 "flash of keys" 방지
+i18nReady.then(() => {
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+}).catch(err => {
+  console.error('[i18n] init failed — falling back to KO-only:', err);
+  // 최소한 KO 리소스만 inline으로 주입해 렌더
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+});
+</script>
+</body>
+</html>
