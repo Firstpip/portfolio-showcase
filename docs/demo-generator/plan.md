@@ -240,7 +240,7 @@ Phase 6 (E2E)
 - **last_failure**: —
 
 #### T0.3 디자인 토큰 추출 유틸
-- **상태**: `TODO`
+- **상태**: `NEEDS_TEST`
 - **depends_on**: (없음)
 - **requires_test**: manual-review
 - **파일**: `worker/shared/extract-tokens.ts`
@@ -254,7 +254,7 @@ Phase 6 (E2E)
 ### Phase 1 — Spec Intake
 
 #### T1.1 공고 붙여넣기 모달 (대시보드 UI)
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T0.1
 - **requires_test**: yes
 - **파일**: `dashboard/index.html` (또는 리빌드 스크립트)
@@ -479,9 +479,9 @@ Phase 6 (E2E)
 ## 8. 현재 상태 스냅샷
 
 - **마지막 업데이트**: 2026-04-24
-- **완료된 task**: T0.1, T0.2
-- **진행 중 task**: (없음)
-- **다음에 착수 가능**: T0.3, T1.1 (T0.1 의존), T4.3 (문서, 선행 의존성 없음)
+- **완료된 task**: T0.1, T0.2, T1.1
+- **진행 중 task**: T0.3 (manual-review 대기)
+- **다음에 착수 가능**: T1.2 (T1.1 의존), T2.1 (T0.2 의존), T4.3 (문서, 선행 의존성 없음)
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
@@ -508,3 +508,4 @@ Phase 6 (E2E)
 | 2026-04-24 | T0.1 완료 | wishket_projects에 데모 생성 6개 컬럼 + demo_status CHECK 제약 추가 |
 | 2026-04-24 | 스코프 재설계 | Edge Function + API 키 → 로컬 워커 + Claude Max 구독 OAuth로 전환 (비용 모델: per-token → 정액제) |
 | 2026-04-24 | T0.2 완료 | worker/ 스캐폴드 + Claude Agent SDK 래퍼 + GitHub Tree API + Supabase 클라이언트 구축, 4개 테스트 통과 (Claude 응답·캐시 적중·실패 시 actionable 에러·Supabase 연결) |
+| 2026-04-24 | T1.1 완료 | 대시보드 행에 "📋 공고" 버튼 + SpecModal 추가 (spec_raw 저장/프리필, 10K자 지원, demo_status 불변 보장), 4개 수동 검증 통과 |
