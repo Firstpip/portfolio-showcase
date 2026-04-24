@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>파이어체크 — CAD 소방 법규 자동 검토 서비스</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;font-family:'Pretendard',sans-serif;background:#F0F4FA}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes barGrow{from{width:0%}to{width:var(--target-width)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px);max-height:0}to{opacity:1;transform:translateY(0);max-height:500px}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes progressBar{from{width:0}to{width:var(--pw)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const C = {
+  primary: '#1B4F9B',
+  secondary: '#1E6FBF',
+  accent: '#E84855',
+  bg: '#F0F4FA',
+  surface: '#FFFFFF',
+  border: '#DDE3ED',
+  text: '#0D1F3C',
+  textSub: '#5A6A7E',
+  success: '#10B981',
+  warning: '#F59E0B',
+  danger: '#EF4444',
+  info: '#3B82F6',
+};
+
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, ReferenceLine } = Recharts;
+
+function CountUp({ end, duration = 1200, suffix = '' }) {
+  const [val, setVal] = React.useState(0);
+  React.useEffect(() => {
+    let start = 0; const step = end / (duration / 16);
+    const timer = setInterval(() => {
+      start += step;
+      if (start >= end) { setVal(end); clearInterval(timer); }
+      else setVal(Math.floor(start));
+    }, 16);
+    return () => clearInterval(timer);
+  }, [end]);
+  return <span style={{ animation: 'countUp 400ms ease' }}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({ message, type = 'success', onClose }) {
+  React.useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  const bg = type === 'success' ? C.success : type === 'error' ? C.danger : C.primary;
+  return (
+    <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999, background: bg, color: '#fff', padding: '12px 20px', borderRadius: 10, animation: 'slideUp 300ms ease', boxShadow: '0 4px 16px rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, fontWeight: 600 }}>
+      <span>{type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ'}</span>
+      {message}
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, width = 560 }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)', animation: 'fadeIn 200ms ease' }} />
+      <div style={{ position: 'relative', width, maxHeight: '85vh', background: C.surface, borderRadius: 14, zIndex: 501, animation: 'fadeInScale 200ms ease', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.15)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 24px', borderBottom: `1px solid ${C.border}` }}>
+          <h3 style={{ fontSize: 17, fontWeight: 700, color: C.text }}>{title}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.textSub, lineHeight: 1 }}>✕</button>
+        </div>
+        <div style={{ padding: 24, overflowY: 'auto', flex: 1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Drawer({ item, onClose, children, title }) {
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 200, animation: 'fadeIn 200ms ease' }} />
+      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 460, background: C.surface, boxShadow: '-8px 0 40px rgba(0,0,0,0.12)', zIndex: 201, overflowY: 'auto', padding: 28, animation: 'slideInRight 200ms ease' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          <h3 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>{title}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.textSub }}>✕</button>
+        </div>
+        {children}
+      </div>
+    </>
+  );
+}
+
+const ANALYSES = [
+  { id: 1, name: '구로 물류센터 B동 소방 배관도.dwg', status: '완료', compliance: 98, markings: 34, date: '2026-04-24 14:30', project: '구로 물류센터 신축', pipes: 12, duration: '2분 18초' },
+  { id: 2, name: '인천 공장 동관 배관 설계도.dxf', status: '완료', compliance: 92, markings: 28, date: '2026-04-23 10:15', project: '인천 제조공장 증축', pipes: 9, duration: '1분 54초' },
+  { id: 3, name: '서초 오피스 8층 소방 평면도.dwg', status: '분석중', compliance: null, markings: null, date: '2026-04-24 15:02', project: '서초 오피스타워 인테리어', pipes: null, duration: null },
+  { id: 4, name: '성남 의료원 지하 배관 종합도.dwg', status: '완료', compliance: 85, markings: 47, date: '2026-04-22 16:40', project: '성남 의료원 설비 공사', pipes: 18, duration: '3분 42초' },
+  { id: 5, name: '부산 창고 단층 배관 도면.dxf', status: '오류', compliance: null, markings: null, date: '2026-04-21 09:20', project: '부산 물류창고 증설', pipes: null, duration: null },
+];
+
+const MARKINGS = [
+  { id: 1, pos: '배관 A-3 (X:1240, Y:620)', type: '종방향', rule: 'NFPA 13 §12.2.1', status: '적정', distance: 11.8 },
+  { id: 2, pos: '배관 B-1 (X:2380, Y:840)', type: '횡방향', rule: 'NFPA 13 §12.2.2', status: '경고', distance: 6.2 },
+  { id: 3, pos: '배관 C-5 (X:3100, Y:410)', type: '말단', rule: 'NFPA 13 §12.3.1', status: '적정', distance: 2.4 },
+  { id: 4, pos: '배관 A-7 (X:4200, Y:920)', type: '종방향', rule: 'NFPA 13 §12.2.1', status: '적정', distance: 10.5 },
+  { id: 5, pos: '배관 D-2 (X:1800, Y:1200)', type: '횡방향', rule: 'NFPA 13 §12.2.2', status: '부적정', distance: 7.1 },
+  { id: 6, pos: '배관 E-4 (X:2900, Y:650)', type: '말단', rule: 'NFPA 13 §12.3.1', status: '적정', distance: 1.9 },
+];
+
+const PIPES = [
+  { id: 1, label: '배관 A', dia: 100, mat: '강관 (STPG)', len: 24.5, load: 412, allowed: 520, ok: true },
+  { id: 2, label: '배관 B', dia: 65, mat: '강관 (STPG)', len: 18.2, load: 248, allowed: 380, ok: true },
+  { id: 3, label: '배관 C', dia: 125, mat: '강관 (STPG)', len: 31.6, load: 680, allowed: 640, ok: false },
+  { id: 4, label: '배관 D', dia: 50, mat: '동관 (C1220T)', len: 12.4, load: 148, allowed: 220, ok: true },
+  { id: 5, label: '배관 E', dia: 150, mat: '강관 (STPG)', len: 28.8, load: 890, allowed: 960, ok: true },
+];
+
+const REPORTS = [
+  { id: 1, name: '구로 물류센터 B동 소방법규 검토 보고서', date: '2026-04-24', status: '준수', size: '2.4 MB', pages: 8 },
+  { id: 2, name: '인천 공장 동관 배관 검토 보고서', date: '2026-04-23', status: '조건부 준수', size: '1.8 MB', pages: 6 },
+  { id: 3, name: '성남 의료원 지하 배관 검토 보고서', date: '2026-04-22', status: '미준수 항목 포함', size: '3.1 MB', pages: 12 },
+];
+
+const HISTORY = [
+  { id: 1, name: '구로 물류센터 B동 소방 배관도.dwg', project: '구로 물류센터 신축', date: '2026-04-24', compliance: 98, markings: 34, reports: 1, status: '완료' },
+  { id: 2, name: '인천 공장 동관 배관 설계도.dxf', project: '인천 제조공장 증축', date: '2026-04-23', compliance: 92, markings: 28, reports: 1, status: '완료' },
+  { id: 3, name: '성남 의료원 지하 배관 종합도.dwg', project: '성남 의료원 설비 공사', date: '2026-04-22', compliance: 85, markings: 47, reports: 1, status: '완료' },
+  { id: 4, name: '부산 창고 단층 배관 도면.dxf', project: '부산 물류창고 증설', date: '2026-04-21', compliance: null, markings: null, reports: 0, status: '오류' },
+  { id: 5, name: '광명 소방서 배관 종합 도면.dwg', project: '광명 소방서 설비 개선', date: '2026-04-20', compliance: 96, markings: 22, reports: 1, status: '완료' },
+  { id: 6, name: '수원 백화점 지하 배관 도면.dxf', project: '수원 백화점 리모델링', date: '2026-04-19', compliance: 88, markings: 39, reports: 1, status: '완료' },
+];
+
+const PAGE_META = {
+  main: {
+    title: '도면 분석',
+    icon: '📐',
+    kpis: [
+      { label: '이번 달 분석', value: 24, suffix: '건' },
+      { label: '평균 법규 준수율', value: 93, suffix: '%' },
+      { label: '처리 중', value: 1, suffix: '건' },
+    ]
+  },
+  marking: {
+    title: '버팀대 마킹',
+    icon: '📍',
+    kpis: [
+      { label: '총 마킹 수', value: 34, suffix: '개' },
+      { label: '적정 마킹', value: 30, suffix: '개' },
+      { label: '검토 필요', value: 4, suffix: '개' },
+    ]
+  },
+  'load-check': {
+    title: '하중 검토',
+    icon: '⚖️',
+    kpis: [
+      { label: '검토 배관 수', value: 5, suffix: '개' },
+      { label: '적정 배관', value: 4, suffix: '개' },
+      { label: '하중 초과', value: 1, suffix: '개' },
+    ]
+  },
+  report: {
+    title: '리포트',
+    icon: '📋',
+    kpis: [
+      { label: '생성 보고서', value: 18, suffix: '건' },
+      { label: '이번 주 신규', value: 3, suffix: '건' },
+      { label: '평균 페이지', value: 8, suffix: '장' },
+    ]
+  },
+  history: {
+    title: '검토 이력',
+    icon: '🗂️',
+    kpis: [
+      { label: '전체 이력', value: 64, suffix: '건' },
+      { label: '완료 건수', value: 61, suffix: '건' },
+      { label: '오류 건수', value: 3, suffix: '건' },
+    ]
+  },
+};
+
+const TABS = [
+  { id: 'main', label: '도면 분석' },
+  { id: 'marking', label: '버팀대 마킹' },
+  { id: 'load-check', label: '하중 검토' },
+  { id: 'report', label: '리포트' },
+  { id: 'history', label: '검토 이력' },
+];
+
+function StatusBadge({ status }) {
+  const map = {
+    '완료': { bg: '#D1FAE5', color: '#065F46' },
+    '분석중': { bg: '#DBEAFE', color: '#1E40AF' },
+    '오류': { bg: '#FEE2E2', color: '#991B1B' },
+    '적정': { bg: '#D1FAE5', color: '#065F46' },
+    '경고': { bg: '#FEF3C7', color: '#92400E' },
+    '부적정': { bg: '#FEE2E2', color: '#991B1B' },
+    '준수': { bg: '#D1FAE5', color: '#065F46' },
+    '조건부 준수': { bg: '#FEF3C7', color: '#92400E' },
+    '미준수 항목 포함': { bg: '#FEE2E2', color: '#991B1B' },
+  };
+  const s = map[status] || { bg: '#F1F5F9', color: '#475569' };
+  return <span style={{ background: s.bg, color: s.color, padding: '3px 10px', borderRadius: 99, fontSize: 12, fontWeight: 600 }}>{status}</span>;
+}
+
+function MainPage({ setDrawer, setModal, toast }) {
+  const [uploading, setUploading] = React.useState(false);
+  const [uploadProgress, setUploadProgress] = React.useState(0);
+  const [analyzing, setAnalyzing] = React.useState(false);
+  const [analyzeStep, setAnalyzeStep] = React.useState(0);
+  const [drag, setDrag] = React.useState(false);
+
+  const handleUpload = () => {
+    setUploading(true);
+    setUploadProgress(0);
+    const interval = setInterval(() => {
+      setUploadProgress(p => {
+        if (p >= 100) { clearInterval(interval); setUploading(false); setAnalyzing(true); startAnalysis(); return 100; }
+        return p + 12;
+      });
+    }, 150);
+  };
+
+  const analyzeSteps = ['CAD 파일 파싱 중...', '배관 구조 인식 중 (OpenAI Vision)...', '소방법규 규칙 적용 중...', '버팀대 위치 산출 중...', '분석 완료!'];
+
+  const startAnalysis = () => {
+    let step = 0;
+    const iv = setInterval(() => {
+      step++;
+      setAnalyzeStep(step);
+      if (step >= 4) { clearInterval(iv); setTimeout(() => { setAnalyzing(false); setAnalyzeStep(0); toast('서초 오피스 8층 도면 분석 완료!'); }, 800); }
+    }, 900);
+  };
+
+  return (
+    <div key="main" style={{ animation: 'fadeIn 300ms ease' }}>
+      {/* 업로드 영역 */}
+      <div style={{ background: C.surface, borderRadius: 14, border: `2px dashed ${drag ? C.primary : C.border}`, padding: 40, textAlign: 'center', marginBottom: 24, transition: 'all 200ms', cursor: 'pointer', boxShadow: '0 4px 16px rgba(0,0,0,0.06)' }}
+        onDragEnter={() => setDrag(true)} onDragLeave={() => setDrag(false)} onDrop={() => { setDrag(false); handleUpload(); }}>
+        <div style={{ fontSize: 48, marginBottom: 12 }}>📂</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 8 }}>CAD 도면 파일을 드래그하거나 클릭하여 업로드</div>
+        <div style={{ fontSize: 13, color: C.textSub, marginBottom: 20 }}>지원 형식: .dwg, .dxf, .png, .jpg, .pdf | 최대 500MB</div>
+        <button onClick={handleUpload} style={{ background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '11px 28px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+          파일 선택 또는 드래그 업로드
+        </button>
+      </div>
+
+      {/* 업로드 진행 */}
+      {uploading && (
+        <div style={{ background: C.surface, borderRadius: 14, padding: 24, marginBottom: 24, boxShadow: '0 4px 16px rgba(0,0,0,0.06)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>서초 오피스 8층 소방 평면도.dwg 업로드 중...</span>
+            <span style={{ fontSize: 14, color: C.primary, fontWeight: 700 }}>{uploadProgress}%</span>
+          </div>
+          <div style={{ background: '#E8F0FE', borderRadius: 99, height: 8, overflow: 'hidden' }}>
+            <div style={{ background: C.primary, height: '100%', width: `${uploadProgress}%`, borderRadius: 99, transition: 'width 150ms' }} />
+          </div>
+        </div>
+      )}
+
+      {/* AI 분석 진행 */}
+      {analyzing && (
+        <div style={{ background: '#EEF2FF', border: `1px solid #C7D2FE`, borderRadius: 14, padding: 24, marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ width: 36, height: 36, border: `3px solid ${C.primary}`, borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.primary, marginBottom: 4 }}>AI 도면 분석 진행 중</div>
+              <div style={{ fontSize: 13, color: C.secondary }}>{analyzeSteps[analyzeStep]}</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+            {analyzeSteps.slice(0, 4).map((s, i) => (
+              <div key={i} style={{ flex: 1, height: 4, borderRadius: 99, background: i <= analyzeStep ? C.primary : C.border, transition: 'background 400ms' }} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 최근 분석 목록 */}
+      <div style={{ background: C.surface, borderRadius: 14, boxShadow: '0 4px 16px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+        <div style={{ padding: '18px 24px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: C.text }}>최근 분석 목록</span>
+          <span style={{ fontSize: 13, color: C.textSub }}>{ANALYSES.length}건</span>
+        </div>
+        <div>
+          {ANALYSES.map((a, i) => (
+            <div key={a.id} onClick={() => setDrawer(a)} style={{ display: 'flex', alignItems: 'center', padding: '16px 24px', borderBottom: i < ANALYSES.length - 1 ? `1px solid ${C.border}` : 'none', cursor: 'pointer', transition: 'background 150ms', animation: `slideUp 400ms ease ${i * 60}ms both' }` }}
+              onMouseEnter={e => e.currentTarget.style.background = '#F8FAFF'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+              <div style={{ width: 40, height: 40, background: a.status === '완료' ? '#D1FAE5' : a.status === '분석중' ? '#DBEAFE' : '#FEE2E2', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>
+                {a.status === '완료' ? '✓' : a.status === '분석중' ? '⏳' : '⚠'}
+              </div>
+              <div style={{ flex: 1, marginLeft: 14 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 3 }}>{a.name}</div>
+                <div style={{ fontSize: 12, color: C.textSub }}>{a.project} · {a.date}</div>
+              </div>
+              <div style={{ textAlign: 'right', marginRight: 16 }}>
+                {a.compliance !== null && <div style={{ fontSize: 15, fontWeight: 700, color: a.compliance >= 90 ? C.success : a.compliance >= 80 ? C.warning : C.danger }}>{a.compliance}%</div>}
+                {a.markings !== null && <div style={{ fontSize: 12, color: C.textSub }}>마킹 {a.markings}개</div>}
+              </div>
+              <StatusBadge status={a.status} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MarkingPage({ setDrawer }) {
+  const [selected, setSelected] = React.useState(null);
+  const [filter, setFilter] = React.useState('전체');
+
+  const filtered = filter === '전체' ? MARKINGS : MARKINGS.filter(m => m.status === filter);
+
+  return (
+    <div key="marking" style={{ animation: 'fadeIn 300ms ease' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 20 }}>
+        {/* CAD 뷰어 시뮬레이션 */}
+        <div style={{ background: '#0F1720', borderRadius: 14, overflow: 'hidden', boxShadow: '0 4px 20px rgba(0,0,0,0.15)' }}>
+          <div style={{ padding: '12px 18px', background: '#1A2535', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ color: '#64B5F6', fontSize: 13, fontWeight: 600 }}>📐 구로 물류센터 B동 소방 배관도.dwg</span>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              {['확대', '축소', '맞춤', '레이어'].map(t => (
+                <button key={t} style={{ background: '#2A3A4E', color: '#9DB8D2', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}>{t}</button>
+              ))}
+            </div>
+          </div>
+          {/* 도면 뷰어 SVG */}
+          <div style={{ position: 'relative', height: 420, background: '#F8F8F0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg width="100%" height="100%" viewBox="0 0 800 400" style={{ position: 'absolute', inset: 0 }}>
+              {/* 배관 라인들 */}
+              <line x1="80" y1="80" x2="720" y2="80" stroke="#2B4B8C" strokeWidth="4" />
+              <line x1="80" y1="160" x2="520" y2="160" stroke="#2B4B8C" strokeWidth="3" />
+              <line x1="200" y1="80" x2="200" y2="320" stroke="#2B4B8C" strokeWidth="3" />
+              <line x1="400" y1="80" x2="400" y2="280" stroke="#2B4B8C" strokeWidth="3" />
+              <line x1="600" y1="80" x2="600" y2="240" stroke="#2B4B8C" strokeWidth="2" />
+              <line x1="200" y1="240" x2="600" y2="240" stroke="#2B4B8C" strokeWidth="2" />
+              <line x1="80" y1="320" x2="400" y2="320" stroke="#4B6B9C" strokeWidth="2" strokeDasharray="8,4" />
+              {/* 배관 규격 레이블 */}
+              <text x="390" y="74" fill="#4B6B9C" fontSize="10" textAnchor="middle">DN100</text>
+              <text x="196" y="200" fill="#4B6B9C" fontSize="10" textAnchor="end">DN65</text>
+              <text x="604" y="160" fill="#4B6B9C" fontSize="10">DN50</text>
+              {/* 버팀대 마킹 */}
+              {[
+                { x: 200, y: 80, status: '적정', id: 1 },
+                { x: 400, y: 80, status: '경고', id: 2 },
+                { x: 600, y: 80, status: '적정', id: 3 },
+                { x: 200, y: 240, status: '적정', id: 4 },
+                { x: 400, y: 240, status: '부적정', id: 5 },
+                { x: 200, y: 320, status: '적정', id: 6 },
+              ].map(m => (
+                <g key={m.id} onClick={() => setSelected(m.id)} style={{ cursor: 'pointer' }}>
+                  <circle cx={m.x} cy={m.y} r={selected === m.id ? 14 : 10}
+                    fill={m.status === '적정' ? '#10B981' : m.status === '경고' ? '#F59E0B' : '#EF4444'}
+                    opacity={selected === m.id ? 1 : 0.85}
+                    stroke="#fff" strokeWidth={2}
+                    style={{ transition: 'all 200ms' }} />
+                  <text x={m.x} y={m.y + 4} textAnchor="middle" fill="#fff" fontSize="8" fontWeight="bold">B{m.id}</text>
+                </g>
+              ))}
+              {/* 범례 */}
+              <rect x="620" y="350" width="160" height="40" fill="rgba(255,255,255,0.9)" rx="6" />
+              <circle cx="632" cy="364" r="5" fill="#10B981" />
+              <text x="642" y="368" fontSize="9" fill="#374151">적정</text>
+              <circle cx="660" cy="364" r="5" fill="#F59E0B" />
+              <text x="670" y="368" fontSize="9" fill="#374151">경고</text>
+              <circle cx="695" cy="364" r="5" fill="#EF4444" />
+              <text x="705" y="368" fontSize="9" fill="#374151">부적정</text>
+            </svg>
+          </div>
+        </div>
+
+        {/* 마킹 목록 */}
+        <div style={{ background: C.surface, borderRadius: 14, boxShadow: '0 4px 16px rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '14px 18px', borderBottom: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 10 }}>버팀대 마킹 목록</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {['전체', '적정', '경고', '부적정'].map(f => (
+                <button key={f} onClick={() => setFilter(f)} style={{ background: filter === f ? C.primary : '#F1F5F9', color: filter === f ? '#fff' : C.textSub, border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', fontWeight: 500 }}>{f}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {filtered.map((m, i) => (
+              <div key={m.id} onClick={() => setDrawer({ ...m, drawerType: 'marking' })} style={{ padding: '14px 18px', borderBottom: `1px solid ${C.border}`, cursor: 'pointer', background: selected === m.id ? '#F0F4FF' : 'transparent', transition: 'background 150ms' }}
+                onMouseEnter={e => { if (selected !== m.id) e.currentTarget.style.background = '#F8FAFF'; }}
+                onMouseLeave={e => { if (selected !== m.id) e.currentTarget.style.background = 'transparent'; }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>B{m.id} — {m.type}</span>
+                  <StatusBadge status={m.status} />
+                </div>
+                <div style={{ fontSize: 11, color: C.textSub, marginBottom: 4 }}>{m.pos}</div>
+                <div style={{ fontSize: 11, color: C.primary }}>{m.rule}</div>
+                <div style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>설치 간격: {m.distance}m</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ padding: '14px 18px', borderTop: `1px solid ${C.border}`, display: 'flex', gap: 8 }}>
+            <button style={{ flex: 1, background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>마킹 결과 저장</button>
+            <button style={{ flex: 1, background: '#F1F5F9', color: C.text, border: 'none', borderRadius: 8, padding: '10px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>초기화</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoadCheckPage({ toast }) {
+  const chartData = PIPES.map(p => ({ name: p.label, 계산하중: p.load, 허용하중: p.allowed }));
+  const [showModal, setShowModal] = React.useState(false);
+  const [formData, setFormData] = React.useState({ dia: '100', mat: '강관 (STPG)', len: '', fluid: '물 (1.0)' });
+
+  return (
+    <div key="load-check" style={{ animation: 'fadeIn 300ms ease' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
+        {/* 하중 비교 차트 */}
+        <div style={{ background: C.surface, borderRadius: 14, padding: 24, boxShadow: '0 4px 16px rgba(0,0,0,0.06)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <span style={{ fontSize: 16, fontWeight: 700, color: C.text }}>배관별 하중 비교</span>
+            <span style={{ fontSize: 12, color: C.textSub }}>단위: kg</span>
+          </div>
+          <div style={{ height: 240 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 4, right: 16, bottom: 4, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F0F4FA" />
+                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Bar dataKey="계산하중" fill={C.primary} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="허용하중" fill="#CBD5E0" radius={[4, 4, 0, 0]} />
+                <ReferenceLine y={0} stroke="#E2E8F0" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display: 'flex', gap: 16, marginTop: 12, justifyContent: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.textSub }}>
+              <div style={{ width: 10, height: 10, background: C.primary, borderRadius: 2 }} /> 계산 하중
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.textSub }}>
+              <div style={{ width: 10, height: 10, background: '#CBD5E0', borderRadius: 2 }} /> 허용 하중
+            </div>
+          </div>
+        </div>
+
+        {/* 배관 입력 폼 */}
+        <div style={{ background: C.surface, borderRadius: 14, padding: 24, boxShadow: '0 4px 16px rgba(0,0,0,0.06)' }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 16 }}>배관 물성 입력</div>
+          {[
+            { label: '배관 직경 (mm)', key: 'dia', type: 'select', options: ['50', '65', '100', '125', '150'] },
+            { label: '배관 재질', key: 'mat', type: 'select', options: ['강관 (STPG)', '동관 (C1220T)', 'PVC 관'] },
+            { label: '배관 길이 (m)', key: 'len', type: 'number', placeholder: '예: 24.5' },
+            { label: '내용물 비중', key: 'fluid', type: 'select', options: ['물 (1.0)', '에탄올 (0.79)', '경유 (0.84)'] },
+          ].map(f => (
+            <div key={f.key} style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: C.textSub, marginBottom: 6 }}>{f.label}</label>
+              {f.type === 'select' ? (
+                <select value={formData[f.key]} onChange={e => setFormData(d => ({ ...d, [f.key]: e.target.value }))}
+                  style={{ width: '100%', padding: '8px 12px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, color: C.text, background: C.bg, outline: 'none' }}>
+                  {f.options.map(o => <option key={o}>{o}</option>)}
+                </select>
+              ) : (
+                <input type={f.type} placeholder={f.placeholder} value={formData[f.key]} onChange={e => setFormData(d => ({ ...d, [f.key]: e.target.value }))}
+                  style={{ width: '100%', padding: '8px 12px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, color: C.text, outline: 'none' }} />
+              )}
+            </div>
+          ))}
+          <button onClick={() => { setShowModal(true); }} style={{ width: '100%', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '11px', fontSize: 14, fontWeight: 600, cursor: 'pointer', marginTop: 4 }}>하중 계산 실행</button>
+        </div>
+      </div>
+
+      {/* 검토 결과 테이블 */}
+      <div style={{ background: C.surface, borderRadius: 14, boxShadow: '0 4px 16px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 24px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: C.text }}>적정성 검토 결과</span>
+          <span style={{ fontSize: 13, color: PIPES.some(p => !p.ok) ? C.danger : C.success, fontWeight: 600 }}>
+            {PIPES.filter(p => p.ok).length}/{PIPES.length}개 적정
+          </span>
+        </div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: '#F8FAFF' }}>
+              {['배관', '직경(mm)', '재질', '길이(m)', '계산하중(kg)', '허용하중(kg)', '판정'].map(h => (
+                <th key={h} style={{ padding: '12px 16px', fontSize: 12, fontWeight: 600, color: C.textSub, textAlign: 'left', borderBottom: `1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {PIPES.map((p, i) => (
+              <tr key={p.id} style={{ borderBottom: `1px solid ${C.border}`, animation: `slideUp 300ms ease ${i * 60}ms both` }}
+                onMouseEnter={e => e.currentTarget.style.background = '#F8FAFF'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <td style={{ padding: '13px 16px', fontSize: 13, fontWeight: 600, color: C.text }}>{p.label}</td>
+                <td style={{ padding: '13px 16px', fontSize: 13, color: C.text }}>{p.dia}</td>
+                <td style={{ padding: '13px 16px', fontSize: 13, color: C.text }}>{p.mat}</td>
+                <td style={{ padding: '13px 16px', fontSize: 13, color: C.text }}>{p.len}</td>
+                <td style={{ padding: '13px 16px', fontSize: 13, fontWeight: 600, color: p.ok ? C.text : C.danger }}>{p.load.toLocaleString()}</td>
+                <td style={{ padding: '13px 16px', fontSize: 13, color: C.textSub }}>{p.allowed.toLocaleString()}</td>
+                <td style={{ padding: '13px 16px' }}>
+                  <StatusBadge status={p.ok ? '적정' : '부적정'} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {showModal && (
+        <Modal title="하중 계산 결과" onClose={() => setShowModal(false)}>
+          <div style={{ background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 10, padding: 16, marginBottom: 20 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#92400E' }}>⚠ 검토 필요: 배관 C에서 허용 하중을 초과합니다.</div>
+            <div style={{ fontSize: 12, color: '#92400E', marginTop: 4 }}>계산 하중 680 kg &gt; 허용 하중 640 kg (초과: +40 kg)</div>
+          </div>
+          <div style={{ fontSize: 14, color: C.textSub, marginBottom: 16 }}>직경 125mm 강관, 길이 31.6m, 내용물 비중 1.0 기준으로 계산한 결과입니다. 버팀대 간격을 줄이거나 허용하중이 높은 제품으로 교체를 검토하세요.</div>
+          <button onClick={() => { setShowModal(false); toast('계산 결과가 저장되었습니다.'); }} style={{ width: '100%', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '11px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>결과 저장</button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function ReportPage({ toast }) {
+  const [generating, setGenerating] = React.useState(false);
+  const [generated, setGenerated] = React.useState(false);
+  const [previewModal, setPreviewModal] = React.useState(null);
+
+  const handleGenerate = () => {
+    setGenerating(true);
+    setTimeout(() => { setGenerating(false); setGenerated(true); toast('리포트 생성 완료! 다운로드 가능합니다.'); }, 2500);
+  };
+
+  return (
+    <div key="report" style={{ animation: 'fadeIn 300ms ease' }}>
+      {/* 리포트 생성 패널 */}
+      <div style={{ background: C.surface, borderRadius: 14, padding: 24, marginBottom: 20, boxShadow: '0 4px 16px rgba(0,0,0,0.06)' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 16 }}>새 리포트 생성</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, marginBottom: 20 }}>
+          {[
+            { label: '대상 도면', value: '구로 물류센터 B동 소방 배관도.dwg' },
+            { label: '검토 기준', value: 'NFPA 13 (소방 법규 2024)' },
+            { label: '리포트 형식', value: 'PDF (A4, 한국어)' },
+          ].map(f => (
+            <div key={f.label}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.textSub, marginBottom: 6 }}>{f.label}</div>
+              <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 12px', fontSize: 13, color: C.text }}>{f.value}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button onClick={handleGenerate} disabled={generating} style={{ background: generating ? C.border : C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '11px 28px', fontSize: 14, fontWeight: 600, cursor: generating ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+            {generating && <div style={{ width: 16, height: 16, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />}
+            {generating ? 'PDF 생성 중...' : 'PDF 리포트 생성'}
+          </button>
+          {generated && <span style={{ fontSize: 13, color: C.success, fontWeight: 600 }}>✓ 리포트가 생성되었습니다</span>}
+        </div>
+      </div>
+
+      {/* 리포트 목록 */}
+      <div style={{ background: C.surface, borderRadius: 14, boxShadow: '0 4px 16px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 24px', borderBottom: `1px solid ${C.border}` }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: C.text }}>생성된 리포트 목록</span>
+        </div>
+        {REPORTS.map((r, i) => (
+          <div key={r.id} style={{ display: 'flex', alignItems: 'center', padding: '18px 24px', borderBottom: i < REPORTS.length - 1 ? `1px solid ${C.border}` : 'none', animation: `slideUp 300ms ease ${i * 80}ms both` }}>
+            <div style={{ width: 44, height: 44, background: '#FEF3C7', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flexShrink: 0 }}>📋</div>
+            <div style={{ flex: 1, marginLeft: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 4 }}>{r.name}</div>
+              <div style={{ fontSize: 12, color: C.textSub }}>{r.date} · {r.size} · {r.pages}페이지</div>
+            </div>
+            <StatusBadge status={r.status} />
+            <div style={{ display: 'flex', gap: 8, marginLeft: 16 }}>
+              <button onClick={() => setPreviewModal(r)} style={{ background: '#EEF2FF', color: C.primary, border: 'none', borderRadius: 7, padding: '7px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>미리보기</button>
+              <button onClick={() => toast('리포트 다운로드 시작')} style={{ background: C.primary, color: '#fff', border: 'none', borderRadius: 7, padding: '7px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>다운로드</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {previewModal && (
+        <Modal title={previewModal.name} onClose={() => setPreviewModal(null)} width={680}>
+          <div style={{ background: C.bg, borderRadius: 10, padding: 24, marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, borderBottom: `1px solid ${C.border}`, paddingBottom: 12 }}>
+              <div><div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>소방 법규 준수 검토 보고서</div><div style={{ fontSize: 12, color: C.textSub, marginTop: 4 }}>기준: NFPA 13 · 검토일: {previewModal.date}</div></div>
+              <StatusBadge status={previewModal.status} />
+            </div>
+            {[{ label: '버팀대 마킹', value: '34개 (적정 30, 경고 3, 부적정 1)' }, { label: '하중 검토', value: '5개 배관 (적정 4, 부적정 1)' }, { label: '법규 준수율', value: '98%' }].map(s => (
+              <div key={s.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ fontSize: 13, color: C.textSub }}>{s.label}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{s.value}</span>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => { setPreviewModal(null); toast('리포트 다운로드 시작'); }} style={{ width: '100%', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '11px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>PDF 다운로드</button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function HistoryPage({ setDrawer }) {
+  const [search, setSearch] = React.useState('');
+  const [statusFilter, setStatusFilter] = React.useState('전체');
+  const filtered = HISTORY.filter(h => (statusFilter === '전체' || h.status === statusFilter) && (h.name.includes(search) || h.project.includes(search)));
+
+  return (
+    <div key="history" style={{ animation: 'fadeIn 300ms ease' }}>
+      <div style={{ background: C.surface, borderRadius: 14, boxShadow: '0 4px 16px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 24px', borderBottom: `1px solid ${C.border}`, display: 'flex', gap: 12, alignItems: 'center' }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="도면명 또는 프로젝트명 검색..." style={{ flex: 1, padding: '8px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, outline: 'none' }} />
+          <div style={{ display: 'flex', gap: 6 }}>
+            {['전체', '완료', '오류'].map(f => (
+              <button key={f} onClick={() => setStatusFilter(f)} style={{ background: statusFilter === f ? C.primary : '#F1F5F9', color: statusFilter === f ? '#fff' : C.textSub, border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer' }}>{f}</button>
+            ))}
+          </div>
+        </div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: '#F8FAFF' }}>
+              {['도면명', '프로젝트', '분석일', '준수율', '마킹수', '리포트', '상태'].map(h => (
+                <th key={h} style={{ padding: '12px 16px', fontSize: 12, fontWeight: 600, color: C.textSub, textAlign: 'left', borderBottom: `1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((h, i) => (
+              <tr key={h.id} onClick={() => setDrawer({ ...h, drawerType: 'history' })} style={{ borderBottom: `1px solid ${C.border}`, cursor: 'pointer', animation: `slideUp 300ms ease ${i * 50}ms both` }}
+                onMouseEnter={e => e.currentTarget.style.background = '#F8FAFF'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <td style={{ padding: '13px 16px', fontSize: 13, color: C.text, maxWidth: 220 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.name}</div>
+                </td>
+                <td style={{ padding: '13px 16px', fontSize: 12, color: C.textSub }}>{h.project}</td>
+                <td style={{ padding: '13px 16px', fontSize: 12, color: C.textSub }}>{h.date}</td>
+                <td style={{ padding: '13px 16px', fontSize: 13, fontWeight: 700, color: h.compliance >= 90 ? C.success : h.compliance >= 80 ? C.warning : C.textSub }}>{h.compliance !== null ? `${h.compliance}%` : '-'}</td>
+                <td style={{ padding: '13px 16px', fontSize: 13, color: C.text }}>{h.markings !== null ? `${h.markings}개` : '-'}</td>
+                <td style={{ padding: '13px 16px', fontSize: 13, color: C.text }}>{h.reports}건</td>
+                <td style={{ padding: '13px 16px' }}><StatusBadge status={h.status} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ padding: '14px 24px', borderTop: `1px solid ${C.border}`, fontSize: 13, color: C.textSub }}>{filtered.length}건 표시</div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [tab, setTab] = React.useState('main');
+  const [drawer, setDrawer] = React.useState(null);
+  const [modal, setModal] = React.useState(null);
+  const [toasts, setToasts] = React.useState([]);
+
+  const toast = (message, type = 'success') => {
+    const id = Date.now();
+    setToasts(t => [...t, { id, message, type }]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3500);
+  };
+
+  const meta = PAGE_META[tab];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', minHeight: '100vh', background: C.bg }}>
+      {/* 상단 네비게이션 */}
+      <header style={{ position: 'sticky', top: 0, zIndex: 100, background: C.surface, borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', height: 56, padding: '0 24px', gap: 6, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginRight: 20 }}>
+          <div style={{ width: 30, height: 30, background: C.primary, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>🔥</div>
+          <span style={{ fontSize: 16, fontWeight: 800, color: C.text, letterSpacing: '-0.02em' }}>파이어체크</span>
+        </div>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} title={t.label} style={{ background: tab === t.id ? '#EEF2FF' : 'none', color: tab === t.id ? C.primary : C.textSub, border: 'none', borderRadius: 8, padding: '6px 14px', fontSize: 14, fontWeight: tab === t.id ? 700 : 500, cursor: 'pointer', transition: 'all 150ms', whiteSpace: 'nowrap' }}>
+            {t.label}
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ position: 'relative' }}>
+            <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 18, color: C.textSub }}>🔔</button>
+            <div style={{ position: 'absolute', top: 0, right: 0, width: 8, height: 8, background: C.accent, borderRadius: '50%' }} />
+          </div>
+          <div style={{ width: 32, height: 32, background: C.primary, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#fff' }}>김</div>
+        </div>
+      </header>
+
+      {/* 히어로 배너 */}
+      <div style={{ background: `linear-gradient(135deg, ${C.primary} 0%, ${C.secondary} 100%)`, padding: '24px 32px', color: '#fff' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+          <span style={{ fontSize: 24 }}>{meta.icon}</span>
+          <h1 style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.02em' }}>{meta.title}</h1>
+        </div>
+        <div style={{ display: 'flex', gap: 32 }}>
+          {meta.kpis.map((k, i) => (
+            <div key={k.label} style={{ animation: `slideUp 400ms ease ${i * 100}ms both` }}>
+              <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1 }}><CountUp end={k.value} suffix={k.suffix} /></div>
+              <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>{k.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 메인 콘텐츠 */}
+      <main style={{ flex: 1, padding: '24px 32px' }}>
+        {tab === 'main' && <MainPage setDrawer={setDrawer} setModal={setModal} toast={toast} />}
+        {tab === 'marking' && <MarkingPage setDrawer={setDrawer} />}
+        {tab === 'load-check' && <LoadCheckPage toast={toast} />}
+        {tab === 'report' && <ReportPage toast={toast} />}
+        {tab === 'history' && <HistoryPage setDrawer={setDrawer} />}
+      </main>
+
+      {/* Drawer */}
+      {drawer && (
+        <Drawer title={drawer.drawerType === 'marking' ? `마킹 상세 — B${drawer.id}` : drawer.drawerType === 'history' ? '검토 이력 상세' : '분석 결과 상세'} onClose={() => setDrawer(null)}>
+          {drawer.drawerType === 'marking' ? (
+            <div>
+              <div style={{ background: C.bg, borderRadius: 10, padding: 18, marginBottom: 16 }}>
+                <div style={{ fontSize: 12, color: C.textSub, marginBottom: 4 }}>위치</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 12 }}>{drawer.pos}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  {[{ label: '마킹 유형', val: drawer.type }, { label: '적용 법규', val: drawer.rule }, { label: '설치 간격', val: `${drawer.distance}m` }, { label: '판정', val: drawer.status }].map(f => (
+                    <div key={f.label}>
+                      <div style={{ fontSize: 11, color: C.textSub, marginBottom: 3 }}>{f.label}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{f.label === '판정' ? <StatusBadge status={f.val} /> : f.val}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {drawer.status !== '적정' && (
+                <div style={{ background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 10, padding: 14, marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#92400E' }}>개선 권고</div>
+                  <div style={{ fontSize: 12, color: '#92400E', marginTop: 6 }}>설치 간격이 법규 기준({drawer.type === '종방향' ? '12m' : drawer.type === '횡방향' ? '6m' : '2.8m'})을 초과합니다. 버팀대 위치를 조정하거나 추가 설치를 검토하세요.</div>
+                </div>
+              )}
+              <button onClick={() => { setDrawer(null); toast('마킹 수정 사항이 저장되었습니다.'); }} style={{ width: '100%', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '11px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>마킹 수정 저장</button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ background: C.bg, borderRadius: 10, padding: 18, marginBottom: 16 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>{drawer.name}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  {[
+                    { label: '프로젝트', val: drawer.project || '-' },
+                    { label: '분석일', val: drawer.date || '-' },
+                    { label: '법규 준수율', val: drawer.compliance ? `${drawer.compliance}%` : '-' },
+                    { label: '마킹 수', val: drawer.markings ? `${drawer.markings}개` : '-' },
+                    { label: '리포트', val: `${drawer.reports || 0}건` },
+                    { label: '상태', val: drawer.status },
+                  ].map(f => (
+                    <div key={f.label}>
+                      <div style={{ fontSize: 11, color: C.textSub, marginBottom: 3 }}>{f.label}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{f.label === '상태' ? <StatusBadge status={f.val} /> : f.val}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <button onClick={() => { setDrawer(null); toast('리포트 다운로드 시작'); }} style={{ width: '100%', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, padding: '11px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>리포트 다운로드</button>
+            </div>
+          )}
+        </Drawer>
+      )}
+
+      {/* 토스트 */}
+      {toasts.map(t => <Toast key={t.id} message={t.message} type={t.type} onClose={() => setToasts(ts => ts.filter(x => x.id !== t.id))} />)}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
