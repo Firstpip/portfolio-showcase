@@ -24,6 +24,9 @@
   - **티어 3 (구현 보류)**: 데모 홈 체크리스트에 "본 계약 시 구현" 표기만.
 - **타협 트리거**: 공고당 사람 보정 공수가 4시간 초과 예상 시 티어 1 플로우를 3개로 강제 축소.
 - **UI/UX 기반**: 생성하는 데모는 해당 프로젝트의 `portfolio-1/index.html`에서 추출한 디자인 토큰(컬러·폰트·스페이싱·컴포넌트 스타일)을 승계.
+- **실행 환경**: LLM 호출은 **사용자 PC의 로컬 Node 워커**에서 수행. `@anthropic-ai/claude-agent-sdk` + Claude Code Max 구독 OAuth 인증 사용 (`claude login` 필수). Supabase Edge Function은 기존 `delete-portfolios`만 유지; 신규 기능(extract/generate/deploy)은 모두 워커 모듈로 구현.
+- **비용 모델**: Claude API per-token 과금 **금지**. Max 구독 정액제로 커버. 사용량 리밋(5시간 롤링) 초과 시 자연 대기 후 재시도.
+- **운영 제약**: 데모 생성은 워커 실행 중일 때만 가능. 대시보드는 워커 오프라인 상태를 노출해야 하고, `demo_status`는 큐 상태(`queued`)와 처리 상태(`generating`)를 구분해 표시.
 
 ---
 
@@ -31,41 +34,43 @@
 
 ```
 [대시보드: 공고 붙여넣기]
+         │  (Supabase REST 직접 호출)
+         ▼
+[Supabase DB: spec_raw 저장, demo_status='none']
          │
+         │  (대시보드 "추출" 버튼 → demo_status='extract_queued')
          ▼
-[Supabase DB: spec_raw 저장]
-         │
-         ▼
-[Edge Fn: extract-spec (Claude Sonnet 4.6)]
-         │  → spec_structured(JSONB) 반환
-         ▼
-[대시보드: spec 편집 & 승인 UI]
-         │  (사용자 승인 시)
-         ▼
-[Edge Fn: generate-demo (Claude Opus 4.7 1M, 3-pass)]
-  Pass A  스켈레톤 (layout + routing + design token 적용)
-  Pass B  섹션/플로우별 컴포넌트
-  Pass C  통합 → single HTML
-         │
-         ▼
-[대시보드: 프리뷰 + 재생성/수동수정]
-         │
-         ▼
-[Edge Fn: deploy-portfolio (GitHub Tree API, 기존 패턴 재사용)]
+┌────────────────────────────────────────────┐
+│  로컬 Node 워커 (사용자 PC 상주)          │
+│  @anthropic-ai/claude-agent-sdk 사용      │
+│  Max 구독 OAuth 인증 (claude login)       │
+│                                            │
+│  Supabase Realtime 구독으로 상태 변경 감지│
+│                                            │
+│  extract: Claude Sonnet 4.6               │
+│    → spec_structured JSONB 저장           │
+│  generate (3-pass): Claude Opus 4.7       │
+│    Pass A 스켈레톤 / B 섹션 / C 통합      │
+│    → {slug}/portfolio-demo/index.html     │
+│  deploy: GitHub Tree API (github.ts)      │
+│    → portfolio_links 자동 갱신            │
+└────────────────────────────────────────────┘
          │
          ▼
 [GitHub Pages: {project}/portfolio-demo/index.html]
          │
          ▼
-[DB: portfolio_links 업데이트]
+[대시보드: 프리뷰 + 재생성 (DB 상태 변경 트리거)]
 ```
 
-- **실행 위치**: Supabase Edge Function (Deno). 기존 `delete-portfolios` 함수와 동일 패턴.
-- **비밀키**: `ANTHROPIC_API_KEY`는 Supabase secrets. 로컬 테스트는 `.env.local`(gitignore).
+- **실행 위치**: 로컬 Node.js 워커 (`worker/` 디렉터리). Edge Function은 기존 `delete-portfolios`만 유지.
+- **LLM 인증**: Claude Code CLI (`claude login` Max 구독) — Agent SDK가 로컬 credential 파일을 자동 로드. `ANTHROPIC_API_KEY` 사용 금지.
+- **비밀키**: `SUPABASE_SERVICE_ROLE_KEY`, `GITHUB_TOKEN`은 워커의 `.env.local`(gitignore). API 키 아님 주의.
 - **모델 배정**:
-  - `extract-spec`: `claude-sonnet-4-6` (저비용·빠름·구조화 태스크 충분)
-  - `generate-demo`: `claude-opus-4-7` (복잡·장문 생성·1M context로 공고 원문+포트폴리오1 원문 동시 투입)
-- **Prompt caching**: 포트폴리오1 원문과 시스템 프롬프트는 cache_control로 캐시. 공고당 재사용.
+  - extract: `claude-sonnet-4-6` (저비용·빠름·구조화 태스크 충분)
+  - generate: `claude-opus-4-7` (복잡·장문 생성·1M context로 공고 원문+포트폴리오1 원문 동시 투입)
+- **Prompt caching**: Agent SDK도 cache_control 지원. 포트폴리오1 원문과 시스템 프롬프트는 캐시해 공고당 재사용.
+- **트리거**: Supabase Realtime의 `wishket_projects` UPDATE 이벤트를 워커가 구독. 폴링 대비 지연 ≤1초.
 
 ---
 
@@ -123,9 +128,12 @@
 
 - **생성 결과물**: `{project_slug}/portfolio-demo/index.html` (단일 HTML)
 - **디자인 토큰**: `{project_slug}/portfolio-demo/tokens.css` (선택적 분리, 포트폴리오1에서 추출)
-- **Edge Function 코드**: `supabase/functions/extract-spec/`, `supabase/functions/generate-demo/`, `supabase/functions/deploy-demo/`
-- **프롬프트 원본**: `supabase/functions/_shared/prompts/*.md` (버전관리 대상, 수정 시 변경 이유 커밋 메시지에 명시)
-- **공용 유틸**: `supabase/functions/_shared/anthropic.ts`, `_shared/github.ts`
+- **워커 코드**: `worker/` (Node.js + TypeScript, `tsx` 런타임)
+  - `worker/index.ts` 엔트리 (Supabase Realtime 구독 + 라우터)
+  - `worker/extract-spec.ts`, `worker/generate-demo/{skeleton,sections,assemble}.ts`, `worker/deploy-demo.ts`
+  - `worker/shared/claude.ts` (Agent SDK 래퍼), `worker/shared/github.ts`, `worker/shared/supabase.ts`
+- **프롬프트 원본**: `worker/prompts/*.md` (버전관리 대상, 수정 시 변경 이유 커밋 메시지에 명시)
+- **기존 Edge Function**: `supabase/functions/delete-portfolios/`는 그대로 유지 (영향 없음)
 - **마이그레이션**: `supabase/migrations/YYYYMMDDHHMMSS_demo_generator_columns.sql` 단일 파일
 
 ---
@@ -212,26 +220,30 @@ Phase 6 (E2E)
   - [ ] 기존 레코드 대상 SELECT 시 NULL 기본값으로 조회됨
 - **last_failure**: —
 
-#### T0.2 Anthropic API 키 & Edge Function 공용 모듈
-- **상태**: `TODO`
+#### T0.2 로컬 워커 스캐폴드 & Claude Agent SDK 인증
+- **상태**: `DONE`
 - **depends_on**: (없음)
 - **requires_test**: yes
-- **파일**: `supabase/functions/_shared/anthropic.ts`, `.env.example` 갱신
+- **파일**: `worker/package.json`, `worker/tsconfig.json`, `worker/index.ts`, `worker/shared/{claude,github,supabase}.ts`, `worker/.env.example`
 - **해야 할 일**: 
-  - Supabase secrets에 `ANTHROPIC_API_KEY` 등록 방법 문서화
-  - Anthropic SDK 호출 래퍼(prompt caching 지원·재시도·토큰 로깅) 작성
-  - `_shared/github.ts`는 기존 `delete-portfolios/index.ts`에서 분리해 재사용 가능화
+  - Node.js + TypeScript (`tsx`) 워커 프로젝트 스캐폴드
+  - Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`) 호출 래퍼 작성 (prompt caching 지원·토큰 로깅)
+  - Max 구독 인증 검증 로직 (Claude Code CLI 설치 + `claude login` 필수 — 문서화)
+  - Supabase 클라이언트 + Realtime 구독 스켈레톤 (상태 변경 감지 로깅만; 라우팅 로직은 T2.1/T3.x)
+  - `github.ts`는 기존 `delete-portfolios/index.ts` 패턴을 확장 (blob 생성 + writeFiles 추가)
+  - 환경 변수 셋업 가이드 (`.env.example` + README 섹션을 `worker/index.ts` JSDoc으로)
 - **test_spec**:
-  - [ ] 더미 프롬프트 호출 스크립트(`deno run`)가 실제 응답 수신
-  - [ ] `cache_control` 사용 시 첫 호출/두번째 호출 사용량 차이 로그 확인
-  - [ ] 네트워크 에러 시 지수백오프 3회 재시도 후 에러 전파
+  - [ ] `npx tsx worker/test-claude.ts`가 Agent SDK로 실제 Claude 호출에 성공하고 응답 텍스트 수신
+  - [ ] 인증되지 않은 상태(`~/.claude/.credentials.json` 없음)에서 명확한 에러 메시지 출력
+  - [ ] 같은 prefix로 두 번 호출 시 로그에 `cache_read_input_tokens > 0` 확인
+  - [ ] Supabase 연결 성공 (`SELECT count(*) FROM wishket_projects`가 에러 없이 수행)
 - **last_failure**: —
 
 #### T0.3 디자인 토큰 추출 유틸
 - **상태**: `TODO`
 - **depends_on**: (없음)
 - **requires_test**: manual-review
-- **파일**: `supabase/functions/_shared/extract-tokens.ts`
+- **파일**: `worker/shared/extract-tokens.ts`
 - **해야 할 일**: portfolio-1 HTML을 받아 `{ primary, secondary, surface, text, radius, fontFamily, spacingScale }` 를 추출하는 함수. 1차는 정규식 + tailwind 클래스 휴리스틱으로 시도, 실패 시 Sonnet에 위임(fallback).
 - **review_checklist**:
   - [ ] 기존 4~5개 프로젝트 portfolio-1에 적용 시 컬러값이 실제 사용색과 ≥ 80% 일치
@@ -269,22 +281,22 @@ Phase 6 (E2E)
 
 ### Phase 2 — Spec Structuring
 
-#### T2.1 `extract-spec` Edge Function 스캐폴드
+#### T2.1 extract-spec 워커 모듈 스캐폴드
 - **상태**: `TODO`
 - **depends_on**: T0.2
 - **requires_test**: yes
-- **파일**: `supabase/functions/extract-spec/index.ts`
-- **해야 할 일**: POST `{project_id}` → DB에서 `spec_raw` 조회 → Claude 호출 → `spec_structured` 저장 → 응답
+- **파일**: `worker/extract-spec.ts`
+- **해야 할 일**: Realtime 라우터가 `demo_status='extract_queued'` 감지 시 호출 → DB에서 `spec_raw` 조회 → Claude Sonnet 4.6 호출 → `spec_structured` 저장 → `demo_status='extract_ready'` 세팅. 실패 시 `demo_status='extract_failed'`.
 - **test_spec**:
-  - [ ] 로컬 `supabase functions serve`로 더미 프로젝트 대상 호출 성공
-  - [ ] spec_raw NULL이면 400
+  - [ ] 테스트 스크립트로 특정 project_id 수동 트리거 시 정상 수행
+  - [ ] spec_raw NULL이면 상태만 `extract_failed`로 전이 (예외 전파 아님)
   - [ ] DB에 spec_structured JSONB 저장됨
 
 #### T2.2 `extract-spec` 프롬프트 및 JSON 스키마 검증
 - **상태**: `TODO`
 - **depends_on**: T2.1
 - **requires_test**: manual-review + yes (혼합)
-- **파일**: `supabase/functions/_shared/prompts/extract-spec.md`
+- **파일**: `worker/prompts/extract-spec.md`
 - **해야 할 일**: 공고 원문 → `§2.2` 스키마로 추출하는 프롬프트. tool use(JSON schema) 또는 `response_format` 사용해 스키마 강제. 티어 분류 기준도 프롬프트에 포함.
 - **test_spec**:
   - [ ] 응답이 JSON schema validate 통과
@@ -324,7 +336,7 @@ Phase 6 (E2E)
 - **상태**: `TODO`
 - **depends_on**: T2.4
 - **requires_test**: manual-review
-- **파일**: `supabase/functions/_shared/prompts/seed-data.md`, 생성 함수 내 호출부
+- **파일**: `worker/prompts/seed-data.md`, `worker/generate-demo/seed.ts`
 - **해야 할 일**: `data_entities`마다 `sample_count`개의 리얼한 한국어 샘플 생성. 이름·전화·주소 등 실제감 있게. (이게 "진짜 같음"의 핵심)
 - **review_checklist**:
   - [ ] 이름이 "홍길동1" 같지 않고 자연스러움
@@ -335,7 +347,7 @@ Phase 6 (E2E)
 - **상태**: `TODO`
 - **depends_on**: T3.1, T0.3
 - **requires_test**: yes
-- **파일**: `supabase/functions/generate-demo/passes/skeleton.ts` + `prompts/pass-a-skeleton.md`
+- **파일**: `worker/generate-demo/skeleton.ts` + `worker/prompts/pass-a-skeleton.md`
 - **해야 할 일**: `spec_structured` + 디자인 토큰 + portfolio-1 HTML → 단일 HTML의 **뼈대**(Shell, 사이드바/탑바, 라우팅 스위치, 전역 상태 컨텍스트, LocalStorage 초기화 스크립트)만 생성. 각 플로우 자리는 placeholder 주석.
 - **test_spec**:
   - [ ] 생성된 HTML을 브라우저에서 열었을 때 콘솔 에러 0
@@ -347,7 +359,7 @@ Phase 6 (E2E)
 - **상태**: `TODO`
 - **depends_on**: T3.2
 - **requires_test**: yes
-- **파일**: `passes/sections.ts` + `prompts/pass-b-section.md`
+- **파일**: `worker/generate-demo/sections.ts` + `worker/prompts/pass-b-section.md`
 - **해야 할 일**: 플로우별로 **개별 호출** (병렬 가능). 티어 1은 full interactive + LocalStorage 쓰기, 티어 2는 UI+mock toast, 티어 3은 "준비 중" placeholder 카드. Pass A의 placeholder 자리를 교체하는 patch 포맷으로 반환.
 - **test_spec**:
   - [ ] 티어 1 플로우에서 CRUD 왕복 시 LocalStorage 값 변경 확인
@@ -359,7 +371,7 @@ Phase 6 (E2E)
 - **상태**: `TODO`
 - **depends_on**: T3.3
 - **requires_test**: yes
-- **파일**: `passes/assemble.ts`
+- **파일**: `worker/generate-demo/assemble.ts`
 - **해야 할 일**: Pass A 스켈레톤 + Pass B patches → 단일 HTML. 시드 데이터 LocalStorage 초기화 스크립트 inline. 공고 전체 업무요소 체크리스트 섹션을 홈 화면에 렌더(티어 표시 포함). 렌더링 최적화(Babel presets-env preset만 로드).
 - **test_spec**:
   - [ ] 최종 HTML 단일 파일로 동작 (외부 파일 의존 0, CDN만 허용)
@@ -396,8 +408,8 @@ Phase 6 (E2E)
 - **상태**: `TODO`
 - **depends_on**: T4.1
 - **requires_test**: yes
-- **파일**: 대시보드 + Edge Function에 `regenerate={pass|flow_id}` 파라미터
-- **해야 할 일**: 대시보드에서 "전체 재생성" / "특정 플로우만 재생성" 버튼. 비용/시간이 다르다는 걸 UI에서 명시.
+- **파일**: 대시보드 + 워커 라우터에 `regenerate_scope={pass|flow_id}` 컬럼/필드
+- **해야 할 일**: 대시보드에서 "전체 재생성" / "특정 플로우만 재생성" 버튼 → DB에 `regenerate_scope` 쓰고 `demo_status='gen_queued'` 세팅. 워커가 scope에 따라 3-pass 전체 또는 Pass B 특정 플로우만 재실행. 사용량 리밋 도달 가능성 UI에 명시.
 - **test_spec**:
   - [ ] 특정 플로우만 재생성 시 다른 플로우 코드는 불변
   - [ ] 재생성 중 `demo_status = generating` 반영
@@ -414,12 +426,12 @@ Phase 6 (E2E)
 
 ### Phase 5 — Deploy
 
-#### T5.1 `deploy-demo` Edge Function
+#### T5.1 deploy-demo 워커 모듈
 - **상태**: `TODO`
 - **depends_on**: T4.2
 - **requires_test**: yes
-- **파일**: `supabase/functions/deploy-demo/index.ts`
-- **해야 할 일**: `delete-portfolios`의 GitHub Tree API 패턴 재사용. `{project_slug}/portfolio-demo/index.html` 커밋·push. 커밋 메시지 자동 생성.
+- **파일**: `worker/deploy-demo.ts` (`worker/shared/github.ts`의 `writeFiles` 사용)
+- **해야 할 일**: Pass C 통합 직후 같은 워커 프로세스 안에서 호출. `{project_slug}/portfolio-demo/index.html` 단일 커밋. 커밋 메시지 자동 생성.
 - **test_spec**:
   - [ ] 푸시 후 GitHub Pages URL에서 200 응답 (전파 시간 감안 60초 대기)
   - [ ] 기존 portfolio-1/2/3 건들지 않음
@@ -429,7 +441,7 @@ Phase 6 (E2E)
 - **상태**: `TODO`
 - **depends_on**: T5.1
 - **requires_test**: yes
-- **파일**: T5.1 함수 내 DB 업데이트 블록
+- **파일**: `worker/deploy-demo.ts` 내 DB 업데이트 블록
 - **해야 할 일**: 배포 성공 시 `portfolio_links`에 `{url, label: "Demo"}` append (중복 방지), `portfolio_count` 증가, `demo_status = ready`, `demo_generated_at = now()`.
 - **test_spec**:
   - [ ] 최초 배포 후 대시보드 "Demo" 링크 노출
@@ -455,23 +467,30 @@ Phase 6 (E2E)
 
 ## 7. 비기능 요건 & 가드레일
 
-- **토큰 예산**: 1회 전체 생성 < $10 목표. 초과 시 Edge Function이 사용자 확인 요구.
-- **시크릿 노출 금지**: `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`을 브라우저로 보내지 않음. 모든 LLM 호출은 Edge Function 경유.
-- **RLS**: `spec_raw`에 클라이언트 비밀 정보가 들어갈 수 있으므로 service role만 접근.
+- **비용 모델**: Max 구독 정액제. per-token API 과금 없음. 사용량 리밋(5시간 롤링) 도달 시 워커가 자동 대기 후 재시도.
+- **시크릿 노출 금지**: `GITHUB_TOKEN`, `SUPABASE_SERVICE_ROLE_KEY`는 워커 `.env.local`에만(브라우저/리포에 노출 금지). Claude 인증은 Agent SDK가 `~/.claude/.credentials.json`에서 자동 로드 — 별도 키 관리 불요.
+- **RLS**: `spec_raw`에 클라이언트 비밀 정보가 들어갈 수 있으므로 service role만 접근 (워커는 service role 사용).
 - **롤백**: 배포 실패 시 이전 `portfolio-demo/index.html` 유지. Git Tree API는 force-push 사용 금지.
-- **prompt caching 활성화 확인**: portfolio-1 원문 + 공통 지시문은 캐시 대상. Edge Function 로그에서 `cache_read_input_tokens` 모니터링.
+- **prompt caching 활성화 확인**: portfolio-1 원문 + 공통 지시문은 캐시 대상. 워커 로그에서 `cache_read_input_tokens` 모니터링.
+- **워커 단일 인스턴스**: 동일 project_id에 대해 중복 처리 방지를 위해 상태 전이(`extract_queued → extracting`)를 atomic update로 처리. 여러 인스턴스가 동시에 돌더라도 선점한 쪽만 진행.
 
 ---
 
 ## 8. 현재 상태 스냅샷
 
 - **마지막 업데이트**: 2026-04-24
-- **완료된 task**: T0.1
+- **완료된 task**: T0.1, T0.2
 - **진행 중 task**: (없음)
-- **다음에 착수 가능**: T0.2, T0.3 (병렬 가능), T4.3 (문서, 선행 의존성 없음)
+- **다음에 착수 가능**: T0.3, T1.1 (T0.1 의존), T4.3 (문서, 선행 의존성 없음)
 - **블로커**: 없음
-- **미결정 사항**: 
-  - GitHub Tree API 재사용을 위한 `_shared/github.ts` 리팩터링 시 기존 `delete-portfolios`도 같이 수정할지 → T0.2에서 결정
+- **결정된 사항 (2026-04-24)**:
+  - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
+  - LLM 호출 전부(extract/generate) + 배포(deploy)도 워커에서 수행; Edge Function은 `delete-portfolios`만 유지
+  - 기존 `delete-portfolios/index.ts`의 GitHub Tree API 로직은 리팩터링하지 않고 그대로 둠 (워커용 `worker/shared/github.ts`는 신규 모듈로 분리, 중복 허용)
+  - Agent SDK의 에러는 subprocess exit code만 표면화하므로 `verifyAuth()`는 인증/리밋/네트워크를 분기하지 않고 점검 리스트를 통째로 출력
+- **미결정 사항**:
+  - 워커가 오프라인일 때 대시보드의 UX 처리 (워커 heartbeat 컬럼? 마지막 응답 시각 표시?) → 대시보드 UI 태스크에서 결정
+  - Realtime 연결성 검증은 T2.1로 이연 (wishket_projects에 replication 활성화 필요; T0.2 범위 밖)
 
 ---
 
@@ -487,3 +506,5 @@ Phase 6 (E2E)
 |---|---|---|
 | 2026-04-24 | 최초 작성 | 초기 설계 확정 |
 | 2026-04-24 | T0.1 완료 | wishket_projects에 데모 생성 6개 컬럼 + demo_status CHECK 제약 추가 |
+| 2026-04-24 | 스코프 재설계 | Edge Function + API 키 → 로컬 워커 + Claude Max 구독 OAuth로 전환 (비용 모델: per-token → 정액제) |
+| 2026-04-24 | T0.2 완료 | worker/ 스캐폴드 + Claude Agent SDK 래퍼 + GitHub Tree API + Supabase 클라이언트 구축, 4개 테스트 통과 (Claude 응답·캐시 적중·실패 시 actionable 에러·Supabase 연결) |
