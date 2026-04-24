@@ -10,7 +10,7 @@
 // 통해 호출되므로 CLI 쪽에서 재시도가 일어난다. 별도 테스트는 생략 —
 // CLI 자체 검증 범위.
 
-import "dotenv/config";
+import "./shared/env.ts";
 import { runClaude, SONNET, verifyAuth } from "./shared/claude.ts";
 
 async function test1_dummyPrompt(): Promise<void> {

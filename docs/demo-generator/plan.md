@@ -282,7 +282,7 @@ Phase 6 (E2E)
 ### Phase 2 — Spec Structuring
 
 #### T2.1 extract-spec 워커 모듈 스캐폴드
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T0.2
 - **requires_test**: yes
 - **파일**: `worker/extract-spec.ts`
@@ -479,9 +479,9 @@ Phase 6 (E2E)
 ## 8. 현재 상태 스냅샷
 
 - **마지막 업데이트**: 2026-04-24
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2
+- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1
 - **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: T2.1 (T0.2 의존), T4.3 (문서, 선행 의존성 없음)
+- **다음에 착수 가능**: T2.2 (T2.1 의존), T4.3 (문서, 선행 의존성 없음)
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
@@ -510,3 +510,4 @@ Phase 6 (E2E)
 | 2026-04-24 | T0.2 완료 | worker/ 스캐폴드 + Claude Agent SDK 래퍼 + GitHub Tree API + Supabase 클라이언트 구축, 4개 테스트 통과 (Claude 응답·캐시 적중·실패 시 actionable 에러·Supabase 연결) |
 | 2026-04-24 | T1.1 완료 | 대시보드 행에 "📋 공고" 버튼 + SpecModal 추가 (spec_raw 저장/프리필, 10K자 지원, demo_status 불변 보장), 4개 수동 검증 통과 |
 | 2026-04-24 | T1.2 완료 | 대시보드에 spec 전용 저장 핸들러 `handleSaveSpec` 추가 (`.select()`로 반환값 검사 → 빈 배열 시 not-found 에러, updated_at 갱신). worker/test-save-spec.ts 추가. anon-key 검증으로 Supabase의 no-match update가 `data: []`임을 실증 |
+| 2026-04-24 | T2.1 완료 | extract-spec 워커 모듈 스캐폴드 (atomic claim → Sonnet 호출 → spec_structured 저장 → extract_ready). demo_status CHECK 제약을 9개 상태로 확장하는 마이그레이션 추가. shared/env.ts로 .env.local 로딩 표준화. test-extract-spec.ts 3개 케이스(happy/null/no-claim) 모두 통과 |

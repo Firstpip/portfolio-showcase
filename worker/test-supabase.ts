@@ -4,7 +4,7 @@
 //
 // 실행: cd worker && npm install && npm run test:supabase
 
-import "dotenv/config";
+import "./shared/env.ts";
 import { supabaseClient } from "./shared/supabase.ts";
 
 async function test1_connect(): Promise<void> {

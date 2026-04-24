@@ -13,9 +13,10 @@
 // 실행: cd worker && npm install && npm start
 // 개발: npm run dev  (tsx watch 자동 재시작)
 
-import "dotenv/config";
+import "./shared/env.ts";
 import { supabaseClient } from "./shared/supabase.ts";
 import { verifyAuth } from "./shared/claude.ts";
+import { handleExtractQueued } from "./extract-spec.ts";
 
 async function main() {
   console.log("[worker] 시작 — 전제 조건 확인 중...");
@@ -57,7 +58,12 @@ async function main() {
           `[worker] status 변경: ${newRow.slug ?? newRow.id} ` +
             `${oldRow?.demo_status ?? "?"} → ${newRow.demo_status}`,
         );
-        // TODO(T2.1, T3.x, T5.1): 상태별 핸들러 분기
+        if (!newRow.id) return;
+        // 상태별 핸들러 라우팅. 핸들러는 자체적으로 예외를 catch (워커 안정성 우선).
+        if (newRow.demo_status === "extract_queued") {
+          void handleExtractQueued(supabase, newRow.id);
+        }
+        // TODO(T3.x, T5.1): gen_queued 등 추가 분기
       },
     )
     .subscribe((status) => {

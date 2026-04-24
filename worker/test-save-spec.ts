@@ -4,7 +4,7 @@
 //
 // 실행: cd worker && npm run test:save-spec
 
-import "dotenv/config";
+import "./shared/env.ts";
 import { supabaseClient } from "./shared/supabase.ts";
 
 const TEST_PROBE = "__T1.2_SAVE_SPEC_PROBE__";
