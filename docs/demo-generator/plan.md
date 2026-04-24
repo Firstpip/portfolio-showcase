@@ -318,15 +318,18 @@ Phase 6 (E2E)
   - [ ] 빈 core_flows 저장 시 경고
 
 #### T2.4 승인 플로우
-- **상태**: `TODO`
+- **상태**: `NEEDS_TEST`
 - **depends_on**: T2.3
 - **requires_test**: yes
 - **파일**: 대시보드 + DB
 - **해야 할 일**: "데모 생성 시작" 버튼은 `spec_approved_at` 세팅 후에만 활성. 승인 시 `demo_status = generating`으로 자동 전이.
+- **구현 메모**: 설계 문서의 `generating` 표현은 §1 상태 머신 확장(`gen_queued`) 이전 텍스트. 실제 구현은 승인 후 `demo_status = 'gen_queued'` 전이 (워커가 atomic 선점 후 `generating`).
 - **test_spec**:
-  - [ ] 승인 전 "데모 생성" 버튼 비활성
-  - [ ] 승인 후 활성 + timestamp 기록
-  - [ ] spec 재편집 시 `spec_approved_at` 초기화 (재승인 강제)
+  - [x] 승인 전 "데모 생성" 버튼 비활성 (handler 가드 검증; UI `disabled={!canStartGen}`는 `!!approvedAt`에 직접 결속)
+  - [x] 승인 후 활성 + timestamp 기록 (DB 검증: `spec_approved_at` ISO-8601, now ±60s 내)
+  - [x] spec 재편집 시 `spec_approved_at` 초기화 (재승인 강제) — `spec_raw`/`spec_structured` 어느 쪽 저장도 리셋
+  - [ ] UI 시각 확인 (사용자 수동): 모달 → 승인 전 회색 버튼 → 승인 클릭 → 초록 버튼 활성 → 편집 시 회색 복귀
+- **last_failure**: —
 
 ---
 
@@ -480,8 +483,8 @@ Phase 6 (E2E)
 
 - **마지막 업데이트**: 2026-04-24
 - **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3
-- **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: T2.4 (T2.3 DONE), T4.3 (문서, 선행 의존성 없음)
+- **진행 중 task**: T0.3 (manual-review 대기), T2.4 (구현 중)
+- **다음에 착수 가능**: T4.3 (문서, 선행 의존성 없음)
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환

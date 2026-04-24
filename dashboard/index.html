@@ -86,6 +86,21 @@ const TABLE = 'wishket_projects';
 const TEAM_TABLE = 'team_members';
 const MILESTONES_TABLE = 'project_milestones';
 
+// Feature flag — 데모 생성기 기능이 T6.1(E2E)까지 완성되기 전에는 GitHub Pages prod 노출을 막는다.
+// 로컬(file:/localhost)에서는 자동 enable, prod에서는 `?demoGen=1` 쿼리스트링이나
+// `localStorage.setItem('demoGen','1')`로 수동 enable.
+// T6.1 완료 후 이 const와 아래 DEMO_GEN_ENABLED 체크들을 함께 제거.
+const DEMO_GEN_ENABLED = (() => {
+  try {
+    if (typeof window === 'undefined') return false;
+    const loc = window.location;
+    const isLocal = loc.protocol === 'file:' || loc.hostname === 'localhost' || loc.hostname === '127.0.0.1';
+    if (isLocal) return true;
+    if (new URLSearchParams(loc.search).get('demoGen') === '1') return true;
+    return window.localStorage?.getItem('demoGen') === '1';
+  } catch { return false; }
+})();
+
 // ─── Constants ───
 const STATUS_META = {
   generated:    { label: '생성완료',     emoji: '📦', color: '#636e72' },
@@ -3162,7 +3177,88 @@ function StructuredSpecEditor({ spec, setSpec }) {
   );
 }
 
-function SpecModal({ project, onClose, onSave, saving }) {
+// T2.4 승인·생성 패널.
+// 2단계 UX: 1) 저장된 스펙을 "승인"해 spec_approved_at 기록 → 2) "데모 생성 시작"으로 demo_status='gen_queued' 전이.
+// 스펙 재편집(structuredChanged) 또는 저장 핸들러가 spec_approved_at을 null로 리셋하면 자동으로 1단계로 복귀한다.
+function ApprovalPanel({ project, structuredChanged, flowCount, onApprove, onStartGen, saving }) {
+  const approvedAt = project?.spec_approved_at || null;
+  const demoStatus = project?.demo_status || 'none';
+  const hasSpec = !!project?.spec_structured;
+  const preconditionOk = hasSpec && !structuredChanged && flowCount > 0;
+
+  // 생성 중/완료된 상태에서는 승인/시작 버튼을 노출하지 않는다.
+  if (demoStatus === 'gen_queued' || demoStatus === 'generating') {
+    return (
+      <div style={{ marginTop:14, padding:'0.75rem 0.9rem', borderRadius:8, border:'1px solid var(--accent)44', background:'var(--accent)12', fontSize:'0.8rem', color:'var(--accent)' }}>
+        ⏳ {demoStatus === 'gen_queued' ? '데모 생성 대기열에 등록됨 (워커 픽업 대기)' : '데모 생성 중...'}
+        {approvedAt && <span style={{ marginLeft:8, color:'var(--text2)', fontSize:'0.72rem' }}>승인 {new Date(approvedAt).toLocaleString('ko-KR', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span>}
+      </div>
+    );
+  }
+  if (demoStatus === 'ready') {
+    return (
+      <div style={{ marginTop:14, padding:'0.75rem 0.9rem', borderRadius:8, border:'1px solid #00b89444', background:'#00b89412', fontSize:'0.8rem', color:'var(--green)' }}>
+        ✅ 데모 배포 완료. 재생성은 별도 (T4.2).
+      </div>
+    );
+  }
+
+  const canApprove = preconditionOk && !approvedAt && !saving;
+  const canStartGen = preconditionOk && !!approvedAt && !saving;
+
+  const btnBase = {
+    padding:'0.5rem 0.9rem', borderRadius:8, border:'none',
+    fontSize:'0.82rem', fontWeight:600, cursor:'pointer',
+  };
+  const approveStyle = {
+    ...btnBase,
+    background: canApprove ? 'var(--accent)' : 'var(--surface2)',
+    color: canApprove ? '#fff' : 'var(--text2)',
+    cursor: canApprove ? 'pointer' : 'not-allowed',
+    opacity: saving ? 0.7 : 1,
+  };
+  const genStyle = {
+    ...btnBase,
+    background: canStartGen ? '#00b894' : 'var(--surface2)',
+    color: canStartGen ? '#fff' : 'var(--text2)',
+    cursor: canStartGen ? 'pointer' : 'not-allowed',
+    opacity: saving ? 0.7 : 1,
+  };
+
+  const hintParts = [];
+  if (!hasSpec) hintParts.push('구조화 스펙이 저장되지 않음');
+  else if (flowCount === 0) hintParts.push('core_flows가 비어있음');
+  if (structuredChanged) hintParts.push('저장되지 않은 변경사항');
+  if (!approvedAt && preconditionOk) hintParts.push('승인 필요');
+  const hint = hintParts.join(' · ');
+
+  return (
+    <div style={{ marginTop:14, padding:'0.85rem 0.95rem', borderRadius:10, border:'1px solid var(--border)', background:'var(--surface2)' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+        <div style={{ fontSize:'0.78rem', fontWeight:700, color:'var(--text)' }}>데모 생성</div>
+        <div style={{ fontSize:'0.72rem', color:'var(--text2)' }}>
+          {approvedAt
+            ? <>승인됨 <span style={{ color:'var(--green)' }}>✓</span> <span style={{ marginLeft:4 }}>{new Date(approvedAt).toLocaleString('ko-KR', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span></>
+            : '승인 전'}
+        </div>
+      </div>
+      {hint && (
+        <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:8 }}>{hint}</div>
+      )}
+      <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+        <button disabled={!canApprove} onClick={() => canApprove && onApprove(project)} style={approveStyle}>
+          {approvedAt ? '✓ 승인됨' : '✓ 승인'}
+        </button>
+        <button disabled={!canStartGen} onClick={() => canStartGen && onStartGen(project)} style={genStyle}
+          title={!approvedAt ? '승인 후 활성화됩니다' : '워커 대기열에 등록'}>
+          ▶ 데모 생성 시작
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SpecModal({ project, onClose, onSave, onApprove, onStartGen, saving }) {
   const [tab, setTab] = useState('raw');
   const [draft, setDraft] = useState(project?.spec_raw || '');
   const [specDraft, setSpecDraft] = useState(() => cloneSpec(project?.spec_structured));
@@ -3287,6 +3383,8 @@ function SpecModal({ project, onClose, onSave, saving }) {
                 ⚠ {warn}
               </div>
             )}
+            <ApprovalPanel project={project} structuredChanged={structuredChanged} flowCount={flowCount}
+              onApprove={onApprove} onStartGen={onStartGen} saving={saving} />
           </div>
         )}
 
@@ -3471,14 +3569,16 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                     <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                       <span style={{ fontSize:'0.8rem', color:'var(--text2)', fontFamily:'monospace' }}>{r.slug}</span>
                       {(r.portfolio_links||[]).length > 0 && <span style={{ fontSize:'0.7rem', color:'var(--green)', fontWeight:500 }} title={`포트폴리오 링크 ${r.portfolio_links.length}개`}>🔗{r.portfolio_links.length}</span>}
-                      <button onClick={e => { e.stopPropagation(); onOpenSpec(r); }}
-                        title={r.spec_raw ? `공고 저장됨 (${r.spec_raw.length.toLocaleString()}자)` : '공고 원문 붙여넣기'}
-                        style={{
-                          padding:'0.1rem 0.45rem', borderRadius:5, border:'1px solid '+(r.spec_raw?'#00b89455':'var(--border)'),
-                          background: r.spec_raw?'#00b89422':'transparent',
-                          color: r.spec_raw?'var(--green)':'var(--text2)',
-                          cursor:'pointer', fontSize:'0.7rem', fontWeight:600, lineHeight:1.3,
-                        }}>📋 공고</button>
+                      {onOpenSpec && (
+                        <button onClick={e => { e.stopPropagation(); onOpenSpec(r); }}
+                          title={r.spec_raw ? `공고 저장됨 (${r.spec_raw.length.toLocaleString()}자)` : '공고 원문 붙여넣기'}
+                          style={{
+                            padding:'0.1rem 0.45rem', borderRadius:5, border:'1px solid '+(r.spec_raw?'#00b89455':'var(--border)'),
+                            background: r.spec_raw?'#00b89422':'transparent',
+                            color: r.spec_raw?'var(--green)':'var(--text2)',
+                            cursor:'pointer', fontSize:'0.7rem', fontWeight:600, lineHeight:1.3,
+                          }}>📋 공고</button>
+                      )}
                     </div>
                     {HAS_MILESTONES.includes(r.current_status) && (() => {
                       const ms = (milestones?.[r.slug])||[];
@@ -4174,23 +4274,82 @@ function App({ session }) {
     setSaving(true);
     try {
       const today = new Date().toISOString().split('T')[0];
+      // spec 편집 시 이전 승인(spec_approved_at)은 초기화 (T2.4: 재승인 강제)
+      const payload = { ...fields, updated_at: today, spec_approved_at: null };
       const { data:updated, error } = await supabase
         .from(TABLE)
-        .update({ ...fields, updated_at: today })
+        .update(payload)
         .eq('slug', project.slug)
-        .select('slug, spec_raw, spec_structured, updated_at');
+        .select('slug, spec_raw, spec_structured, spec_approved_at, demo_status, updated_at');
       if (error) throw error;
       if (!updated || updated.length === 0) {
         throw new Error(`프로젝트를 찾을 수 없습니다: ${project.slug}`);
       }
       const row = updated[0];
-      const merge = { spec_raw: row.spec_raw, spec_structured: row.spec_structured, updated_at: row.updated_at };
+      const merge = {
+        spec_raw: row.spec_raw,
+        spec_structured: row.spec_structured,
+        spec_approved_at: row.spec_approved_at,
+        demo_status: row.demo_status,
+        updated_at: row.updated_at,
+      };
       setData(prev => prev.map(d => d.slug===project.slug?{...d,...merge}:d));
       setSelectedProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
+      setSpecProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
       const savedKey = Object.keys(fields)[0] === 'spec_structured' ? '구조화 스펙' : '공고';
       toast(`${savedKey} 저장 완료`,'success');
     } catch(err) {
       toast('공고 저장 실패: '+err.message,'error');
+      throw err;
+    } finally { setSaving(false); }
+  }, [toast]);
+
+  // T2.4 승인: spec_approved_at 세팅 (demo_status 전이 없음)
+  const handleApproveSpec = useCallback(async (project) => {
+    setSaving(true);
+    try {
+      const now = new Date().toISOString();
+      const today = now.split('T')[0];
+      const { data:updated, error } = await supabase
+        .from(TABLE)
+        .update({ spec_approved_at: now, updated_at: today })
+        .eq('slug', project.slug)
+        .select('slug, spec_approved_at, demo_status, updated_at');
+      if (error) throw error;
+      if (!updated || updated.length === 0) throw new Error(`프로젝트를 찾을 수 없습니다: ${project.slug}`);
+      const row = updated[0];
+      const merge = { spec_approved_at: row.spec_approved_at, demo_status: row.demo_status, updated_at: row.updated_at };
+      setData(prev => prev.map(d => d.slug===project.slug?{...d,...merge}:d));
+      setSelectedProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
+      setSpecProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
+      toast('spec 승인 완료','success');
+    } catch(err) {
+      toast('승인 실패: '+err.message,'error');
+      throw err;
+    } finally { setSaving(false); }
+  }, [toast]);
+
+  // T2.4 데모 생성 시작: demo_status='gen_queued'. 워커가 atomic 전이로 선점해 3-pass 실행.
+  const handleStartDemoGen = useCallback(async (project) => {
+    setSaving(true);
+    try {
+      if (!project.spec_approved_at) throw new Error('승인되지 않은 spec');
+      const today = new Date().toISOString().split('T')[0];
+      const { data:updated, error } = await supabase
+        .from(TABLE)
+        .update({ demo_status: 'gen_queued', updated_at: today })
+        .eq('slug', project.slug)
+        .select('slug, spec_approved_at, demo_status, updated_at');
+      if (error) throw error;
+      if (!updated || updated.length === 0) throw new Error(`프로젝트를 찾을 수 없습니다: ${project.slug}`);
+      const row = updated[0];
+      const merge = { spec_approved_at: row.spec_approved_at, demo_status: row.demo_status, updated_at: row.updated_at };
+      setData(prev => prev.map(d => d.slug===project.slug?{...d,...merge}:d));
+      setSelectedProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
+      setSpecProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
+      toast('데모 생성 대기열에 등록됨','success');
+    } catch(err) {
+      toast('생성 시작 실패: '+err.message,'error');
       throw err;
     } finally { setSaving(false); }
   }, [toast]);
@@ -4426,12 +4585,14 @@ function App({ session }) {
           onBackfillAssignees={handleBackfillAssignees}
         />
       )}
-      {specProject && (
+      {DEMO_GEN_ENABLED && specProject && (
         <SpecModal
           key={'spec-'+specProject.slug}
           project={specProject}
           onClose={() => setSpecProject(null)}
           onSave={handleSaveSpec}
+          onApprove={handleApproveSpec}
+          onStartGen={handleStartDemoGen}
           saving={saving}
         />
       )}
@@ -4655,7 +4816,7 @@ function App({ session }) {
           milestonesSetupNeeded={milestonesSetupNeeded}
           onQuickApplyTemplate={handleCreateMilestonesFromTemplate}
           onOpenProject={(slug) => navigate({ name:'project', slug })}
-          onOpenSpec={handleOpenSpec}
+          onOpenSpec={DEMO_GEN_ENABLED ? handleOpenSpec : undefined}
         />
       </div>
 
