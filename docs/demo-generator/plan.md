@@ -307,7 +307,7 @@ Phase 6 (E2E)
   - [ ] `out_of_scope`가 비어있지 않음 (외부 의존성 명시)
 
 #### T2.3 spec 편집기 UI (대시보드)
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T2.2, T1.2
 - **requires_test**: yes
 - **파일**: `dashboard/index.html`
@@ -479,9 +479,9 @@ Phase 6 (E2E)
 ## 8. 현재 상태 스냅샷
 
 - **마지막 업데이트**: 2026-04-24
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2
+- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3
 - **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: T2.3 (T2.2, T1.2 모두 DONE), T4.3 (문서, 선행 의존성 없음)
+- **다음에 착수 가능**: T2.4 (T2.3 DONE), T4.3 (문서, 선행 의존성 없음)
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
@@ -512,3 +512,4 @@ Phase 6 (E2E)
 | 2026-04-24 | T1.2 완료 | 대시보드에 spec 전용 저장 핸들러 `handleSaveSpec` 추가 (`.select()`로 반환값 검사 → 빈 배열 시 not-found 에러, updated_at 갱신). worker/test-save-spec.ts 추가. anon-key 검증으로 Supabase의 no-match update가 `data: []`임을 실증 |
 | 2026-04-24 | T2.1 완료 | extract-spec 워커 모듈 스캐폴드 (atomic claim → Sonnet 호출 → spec_structured 저장 → extract_ready). demo_status CHECK 제약을 9개 상태로 확장하는 마이그레이션 추가. shared/env.ts로 .env.local 로딩 표준화. test-extract-spec.ts 3개 케이스(happy/null/no-claim) 모두 통과 |
 | 2026-04-24 | T2.2 완료 | extract-spec 프롬프트(worker/prompts/extract-spec.md) + validate-spec.ts 스키마 검증 연결. 5개 도메인(치과/카페/과외/법률/공장) 합성 공고로 handleExtractQueued 호출 → 전부 스키마 통과. tier_1은 모두 3~5개, out_of_scope 4~6개씩 유효. stripJsonFence를 양쪽 독립 strip + `{…}` slice fallback으로 robust화 (law_firm 케이스의 펜스 응답 1회 실패 → 수정 후 재통과) |
+| 2026-04-24 | T2.3 완료 | SpecModal에 원문/구조화 탭 + StructuredSpecEditor(persona·domain·core_flows·data_entities·out_of_scope·design_brief 편집, 플로우/엔티티 추가·삭제, 티어 드롭다운 1/2/3 색상 구분, 빈 core_flows 저장 시 confirm-gate). handleSaveSpec을 spec_structured 경로까지 확장(.select에 spec_structured 포함). test-save-spec-structured.ts 4개 케이스(JSONB 라운드트립·티어 변경·공존성·빈 저장) 전부 통과. UI 시각 확인은 사용자 승인 완료 |

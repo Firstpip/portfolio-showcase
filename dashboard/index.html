@@ -2951,10 +2951,229 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
   );
 }
 
-// ─── SpecModal (공고 원문 붙여넣기/편집) ───
+// ─── SpecModal (공고 원문 붙여넣기/편집 + 구조화 스펙 편집) ───
+const EMPTY_SPEC_STRUCTURED = {
+  persona: { role:'', primary_goal:'' },
+  domain: '',
+  core_flows: [],
+  data_entities: [],
+  out_of_scope: [],
+  design_brief: { primary_color_hint:'', reference_portfolio_path:'' },
+};
+
+function cloneSpec(spec) {
+  return spec ? JSON.parse(JSON.stringify(spec)) : JSON.parse(JSON.stringify(EMPTY_SPEC_STRUCTURED));
+}
+function deepEqualJson(a, b) {
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
+}
+
+function StructuredSpecEditor({ spec, setSpec }) {
+  const update = (patch) => setSpec({ ...spec, ...patch });
+  const coreFlows = spec.core_flows || [];
+  const dataEntities = spec.data_entities || [];
+  const outOfScope = spec.out_of_scope || [];
+
+  const addFlow = () => update({
+    core_flows: [...coreFlows, {
+      id: `flow_${Date.now().toString(36)}`,
+      title: '', tier: 2, steps: [], data_entities: [],
+    }],
+  });
+  const removeFlow = (idx) => update({ core_flows: coreFlows.filter((_,i) => i!==idx) });
+  const updateFlow = (idx, patch) => update({
+    core_flows: coreFlows.map((f,i) => i===idx ? {...f, ...patch} : f),
+  });
+
+  const addEntity = () => update({
+    data_entities: [...dataEntities, { name:'', fields:[], sample_count:10 }],
+  });
+  const removeEntity = (idx) => update({ data_entities: dataEntities.filter((_,i) => i!==idx) });
+  const updateEntity = (idx, patch) => update({
+    data_entities: dataEntities.map((e,i) => i===idx ? {...e, ...patch} : e),
+  });
+
+  const fieldLabel = { fontSize:'0.7rem', color:'var(--text2)', fontWeight:600, marginBottom:3, letterSpacing:'0.02em', textTransform:'uppercase' };
+  const inputStyle = {
+    width:'100%', padding:'0.4rem 0.55rem', borderRadius:6, border:'1px solid var(--border)',
+    background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', fontFamily:'inherit',
+    outline:'none', boxSizing:'border-box',
+  };
+  const sectionStyle = { padding:'0.85rem', border:'1px solid var(--border)', borderRadius:8, background:'var(--surface2)', marginBottom:10 };
+  const sectionHead = { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 };
+  const sectionTitle = { fontSize:'0.75rem', fontWeight:700, color:'var(--text)', letterSpacing:'0.02em' };
+  const smallBtn = { padding:'0.25rem 0.6rem', borderRadius:5, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.7rem', fontWeight:600 };
+  const dangerBtn = { padding:'0.2rem 0.5rem', borderRadius:5, border:'1px solid #e1705544', background:'transparent', color:'#e17055', cursor:'pointer', fontSize:'0.7rem', fontWeight:600 };
+
+  const tierColor = (t) => t===1 ? '#00b894' : t===2 ? '#fdcb6e' : '#b2bec3';
+
+  return (
+    <div>
+      {/* Persona + Domain */}
+      <div style={sectionStyle}>
+        <div style={sectionHead}><div style={sectionTitle}>페르소나 / 도메인</div></div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:8 }}>
+          <div>
+            <div style={fieldLabel}>역할 (role)</div>
+            <input style={inputStyle} value={spec.persona?.role || ''}
+              onChange={e => update({ persona: { ...(spec.persona||{}), role: e.target.value } })}
+              placeholder="예: 재활 치료센터 원장" />
+          </div>
+          <div>
+            <div style={fieldLabel}>도메인</div>
+            <input style={inputStyle} value={spec.domain || ''}
+              onChange={e => update({ domain: e.target.value })}
+              placeholder="예: physical-therapy-clinic" />
+          </div>
+        </div>
+        <div>
+          <div style={fieldLabel}>주요 목표 (primary_goal)</div>
+          <input style={inputStyle} value={spec.persona?.primary_goal || ''}
+            onChange={e => update({ persona: { ...(spec.persona||{}), primary_goal: e.target.value } })}
+            placeholder="예: 예약 관리 자동화로 일일 통화 응대 감소" />
+        </div>
+      </div>
+
+      {/* Core Flows */}
+      <div style={sectionStyle}>
+        <div style={sectionHead}>
+          <div style={sectionTitle}>핵심 플로우 ({coreFlows.length}개)</div>
+          <button onClick={addFlow} style={smallBtn}>＋ 플로우 추가</button>
+        </div>
+        {coreFlows.length === 0 && (
+          <div style={{ padding:'1rem', textAlign:'center', color:'var(--text2)', fontSize:'0.8rem', border:'1px dashed var(--border)', borderRadius:6 }}>
+            플로우가 없습니다. "＋ 플로우 추가"로 시작하거나, 추출 결과를 불러오세요.
+          </div>
+        )}
+        {coreFlows.map((flow, idx) => {
+          const stepsText = (flow.steps || []).join('\n');
+          const entsText = (flow.data_entities || []).join(', ');
+          return (
+            <div key={flow.id || idx} style={{ padding:'0.7rem', marginBottom:8, border:'1px solid var(--border)', borderRadius:6, background:'var(--surface)' }}>
+              <div style={{ display:'flex', gap:8, alignItems:'flex-start', marginBottom:8 }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={fieldLabel}>타이틀</div>
+                  <input style={inputStyle} value={flow.title || ''}
+                    onChange={e => updateFlow(idx, { title: e.target.value })}
+                    placeholder="예: 회원 예약 관리" />
+                </div>
+                <div style={{ width:110, flexShrink:0 }}>
+                  <div style={fieldLabel}>티어</div>
+                  <select style={{ ...inputStyle, borderLeft:`3px solid ${tierColor(flow.tier)}` }}
+                    value={flow.tier || 2}
+                    onChange={e => updateFlow(idx, { tier: Number(e.target.value) })}>
+                    <option value={1}>티어 1 (핵심)</option>
+                    <option value={2}>티어 2 (UI)</option>
+                    <option value={3}>티어 3 (보류)</option>
+                  </select>
+                </div>
+                <button onClick={() => removeFlow(idx)} style={{ ...dangerBtn, marginTop:18 }} title="플로우 삭제">✕</button>
+              </div>
+              <div style={{ marginBottom:8 }}>
+                <div style={fieldLabel}>단계 (한 줄에 하나)</div>
+                <textarea value={stepsText}
+                  onChange={e => updateFlow(idx, { steps: e.target.value.split('\n').map(s=>s.trimEnd()).filter(s=>s.length>0) })}
+                  placeholder="로그인&#10;캘린더에서 슬롯 선택&#10;예약 확정"
+                  style={{ ...inputStyle, minHeight:66, resize:'vertical', lineHeight:1.5, fontFamily:'inherit' }} />
+              </div>
+              <div>
+                <div style={fieldLabel}>관련 데이터 엔티티 (쉼표로 구분)</div>
+                <input style={inputStyle} value={entsText}
+                  onChange={e => updateFlow(idx, { data_entities: e.target.value.split(',').map(s=>s.trim()).filter(s=>s.length>0) })}
+                  placeholder="member, appointment, therapist" />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Data Entities */}
+      <div style={sectionStyle}>
+        <div style={sectionHead}>
+          <div style={sectionTitle}>데이터 엔티티 ({dataEntities.length}개)</div>
+          <button onClick={addEntity} style={smallBtn}>＋ 엔티티 추가</button>
+        </div>
+        {dataEntities.length === 0 && (
+          <div style={{ padding:'0.75rem', textAlign:'center', color:'var(--text2)', fontSize:'0.75rem', border:'1px dashed var(--border)', borderRadius:6 }}>
+            엔티티가 없습니다.
+          </div>
+        )}
+        {dataEntities.map((ent, idx) => {
+          const fieldsText = (ent.fields || []).map(f => `${f.name}:${f.type}`).join(', ');
+          return (
+            <div key={idx} style={{ padding:'0.6rem', marginBottom:8, border:'1px solid var(--border)', borderRadius:6, background:'var(--surface)' }}>
+              <div style={{ display:'flex', gap:8, alignItems:'flex-start', marginBottom:6 }}>
+                <div style={{ flex:1 }}>
+                  <div style={fieldLabel}>이름</div>
+                  <input style={inputStyle} value={ent.name || ''}
+                    onChange={e => updateEntity(idx, { name: e.target.value })} placeholder="member" />
+                </div>
+                <div style={{ width:110, flexShrink:0 }}>
+                  <div style={fieldLabel}>샘플 개수</div>
+                  <input type="number" min={0} style={inputStyle} value={ent.sample_count ?? 0}
+                    onChange={e => updateEntity(idx, { sample_count: Math.max(0, Number(e.target.value)||0) })} />
+                </div>
+                <button onClick={() => removeEntity(idx)} style={{ ...dangerBtn, marginTop:18 }} title="엔티티 삭제">✕</button>
+              </div>
+              <div>
+                <div style={fieldLabel}>필드 (name:type, 쉼표로 구분)</div>
+                <input style={inputStyle} value={fieldsText}
+                  onChange={e => {
+                    const fields = e.target.value.split(',').map(s => {
+                      const [name, type] = s.split(':').map(x => (x||'').trim());
+                      return name ? { name, type: type || 'string' } : null;
+                    }).filter(Boolean);
+                    updateEntity(idx, { fields });
+                  }}
+                  placeholder="name:string, phone:string, age:number" />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Out of scope */}
+      <div style={sectionStyle}>
+        <div style={sectionHead}><div style={sectionTitle}>범위 외 (out_of_scope)</div></div>
+        <textarea
+          value={outOfScope.join('\n')}
+          onChange={e => update({ out_of_scope: e.target.value.split('\n').map(s=>s.trimEnd()).filter(s=>s.length>0) })}
+          placeholder="한 줄에 하나씩.&#10;예: 실제 결제 PG 연동&#10;예: SMS 게이트웨이 실발송"
+          style={{ ...inputStyle, minHeight:72, resize:'vertical', lineHeight:1.5, fontFamily:'inherit' }} />
+      </div>
+
+      {/* Design Brief */}
+      <div style={sectionStyle}>
+        <div style={sectionHead}><div style={sectionTitle}>디자인 브리프</div></div>
+        <div style={{ marginBottom:8 }}>
+          <div style={fieldLabel}>주조색 힌트 (primary_color_hint)</div>
+          <input style={inputStyle} value={spec.design_brief?.primary_color_hint || ''}
+            onChange={e => update({ design_brief: { ...(spec.design_brief||{}), primary_color_hint: e.target.value } })}
+            placeholder="예: 따뜻한 톤 (재활/돌봄 분야)" />
+        </div>
+        <div>
+          <div style={fieldLabel}>참조 포트폴리오 경로</div>
+          <input style={inputStyle} value={spec.design_brief?.reference_portfolio_path || ''}
+            onChange={e => update({ design_brief: { ...(spec.design_brief||{}), reference_portfolio_path: e.target.value } })}
+            placeholder="예: 260423_therapy-center-app/portfolio-1/index.html" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SpecModal({ project, onClose, onSave, saving }) {
+  const [tab, setTab] = useState('raw');
   const [draft, setDraft] = useState(project?.spec_raw || '');
-  useEffect(() => { setDraft(project?.spec_raw || ''); }, [project?.slug]);
+  const [specDraft, setSpecDraft] = useState(() => cloneSpec(project?.spec_structured));
+  const [warn, setWarn] = useState('');
+
+  useEffect(() => {
+    setDraft(project?.spec_raw || '');
+    setSpecDraft(cloneSpec(project?.spec_structured));
+    setWarn('');
+    setTab(project?.spec_structured ? 'structured' : 'raw');
+  }, [project?.slug]);
   useEffect(() => {
     const handler = e => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
@@ -2964,53 +3183,112 @@ function SpecModal({ project, onClose, onSave, saving }) {
 
   const trimmed = draft.trim();
   const original = project.spec_raw || '';
-  const changed = draft !== original;
-  const canSave = trimmed.length > 0 && changed && !saving;
+  const rawChanged = draft !== original;
+  const canSaveRaw = trimmed.length > 0 && rawChanged && !saving;
   const charCount = draft.length;
 
-  const handleSave = async () => {
-    if (!canSave) return;
+  const originalSpec = project.spec_structured || null;
+  const structuredChanged = !deepEqualJson(originalSpec, specDraft);
+  const flowCount = (specDraft.core_flows || []).length;
+  const canSaveStructured = structuredChanged && !saving;
+
+  const handleSaveRaw = async () => {
+    if (!canSaveRaw) return;
     await onSave(project, { spec_raw: draft });
     onClose();
   };
+  const handleSaveStructured = async () => {
+    if (!canSaveStructured) return;
+    if (flowCount === 0) {
+      setWarn('core_flows 가 비어있습니다. 빈 상태로 저장할까요? 한 번 더 "저장"을 누르면 진행합니다.');
+      return;
+    }
+    setWarn('');
+    await onSave(project, { spec_structured: specDraft });
+    onClose();
+  };
+  const handleSaveStructuredForce = async () => {
+    setWarn('');
+    await onSave(project, { spec_structured: specDraft });
+    onClose();
+  };
+
+  const tabBtn = (key, label, badge) => (
+    <button onClick={() => { setTab(key); setWarn(''); }}
+      style={{
+        padding:'0.45rem 0.85rem', borderRadius:8, border:'1px solid '+(tab===key?'var(--accent)':'var(--border)'),
+        background: tab===key?'var(--accent)22':'transparent',
+        color: tab===key?'var(--accent)':'var(--text2)',
+        cursor:'pointer', fontSize:'0.8rem', fontWeight:600,
+        display:'inline-flex', alignItems:'center', gap:6,
+      }}>
+      {label}
+      {badge != null && <span style={{ fontSize:'0.7rem', padding:'0.05rem 0.35rem', borderRadius:4, background: tab===key?'var(--accent)44':'var(--surface2)', color:'var(--text)' }}>{badge}</span>}
+    </button>
+  );
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
       <div onClick={e => e.stopPropagation()} style={{
-        background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:720,
+        background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:780,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
-        boxShadow:'0 20px 60px var(--shadow)', maxHeight:'88vh', display:'flex', flexDirection:'column',
+        boxShadow:'0 20px 60px var(--shadow)', maxHeight:'90vh', display:'flex', flexDirection:'column',
       }}>
-        <div style={{ padding:'1.25rem 1.5rem 0.75rem', flexShrink:0, borderBottom:'1px solid var(--border)' }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
+        <div style={{ padding:'1.15rem 1.5rem 0.75rem', flexShrink:0, borderBottom:'1px solid var(--border)' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, marginBottom:10 }}>
             <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginBottom:2 }}>공고 원문</div>
+              <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:2 }}>공고 스펙</div>
               <div style={{ fontWeight:600, fontSize:'1rem', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{project.title||project.slug}</div>
-              <div style={{ fontSize:'0.8rem', color:'var(--text2)', fontFamily:'monospace', marginTop:2 }}>{project.slug}</div>
+              <div style={{ fontSize:'0.78rem', color:'var(--text2)', fontFamily:'monospace', marginTop:2 }}>{project.slug}</div>
             </div>
             <button onClick={onClose} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem', padding:'2px 4px', flexShrink:0 }}>&#x2715;</button>
           </div>
-        </div>
-
-        <div style={{ padding:'1rem 1.5rem', overflowY:'auto', flex:1, display:'flex', flexDirection:'column' }}>
-          <textarea
-            value={draft}
-            onChange={e => setDraft(e.target.value)}
-            placeholder="위시켓 공고 페이지에서 프로젝트 내용을 복사해 붙여넣으세요.&#10;&#10;데모 생성기는 이 원문에서 요구사항을 추출합니다."
-            autoFocus
-            style={{
-              flex:1, minHeight:360, width:'100%', padding:'0.85rem 1rem',
-              borderRadius:10, border:'1px solid var(--border)',
-              background:'var(--surface2)', color:'var(--text)',
-              fontSize:'0.85rem', lineHeight:1.6, fontFamily:'inherit',
-              resize:'vertical', outline:'none', boxSizing:'border-box',
-            }}
-          />
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:8, fontSize:'0.75rem', color:'var(--text2)' }}>
-            <span>{charCount.toLocaleString()}자{original && !changed && <span style={{ marginLeft:8, color:'var(--green)' }}>· 저장된 상태</span>}{changed && <span style={{ marginLeft:8, color:'var(--yellow)' }}>· 변경됨</span>}</span>
-            <span>Esc로 닫기</span>
+          <div style={{ display:'flex', gap:6 }}>
+            {tabBtn('raw', '원문', original ? '저장됨' : null)}
+            {tabBtn('structured', '구조화', originalSpec ? flowCount : null)}
           </div>
         </div>
+
+        {tab === 'raw' && (
+          <div style={{ padding:'1rem 1.5rem', overflowY:'auto', flex:1, display:'flex', flexDirection:'column' }}>
+            <textarea
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              placeholder="위시켓 공고 페이지에서 프로젝트 내용을 복사해 붙여넣으세요.&#10;&#10;데모 생성기는 이 원문에서 요구사항을 추출합니다."
+              autoFocus
+              style={{
+                flex:1, minHeight:360, width:'100%', padding:'0.85rem 1rem',
+                borderRadius:10, border:'1px solid var(--border)',
+                background:'var(--surface2)', color:'var(--text)',
+                fontSize:'0.85rem', lineHeight:1.6, fontFamily:'inherit',
+                resize:'vertical', outline:'none', boxSizing:'border-box',
+              }}
+            />
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:8, fontSize:'0.75rem', color:'var(--text2)' }}>
+              <span>{charCount.toLocaleString()}자{original && !rawChanged && <span style={{ marginLeft:8, color:'var(--green)' }}>· 저장된 상태</span>}{rawChanged && <span style={{ marginLeft:8, color:'var(--yellow)' }}>· 변경됨</span>}</span>
+              <span>Esc로 닫기</span>
+            </div>
+          </div>
+        )}
+
+        {tab === 'structured' && (
+          <div style={{ padding:'1rem 1.5rem', overflowY:'auto', flex:1 }}>
+            <StructuredSpecEditor spec={specDraft} setSpec={setSpecDraft} />
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:4, fontSize:'0.75rem', color:'var(--text2)' }}>
+              <span>
+                플로우 {flowCount}개
+                {originalSpec && !structuredChanged && <span style={{ marginLeft:8, color:'var(--green)' }}>· 저장된 상태</span>}
+                {structuredChanged && <span style={{ marginLeft:8, color:'var(--yellow)' }}>· 변경됨</span>}
+              </span>
+              <span>Esc로 닫기</span>
+            </div>
+            {warn && (
+              <div style={{ marginTop:8, padding:'0.55rem 0.7rem', borderRadius:6, background:'#fdcb6e22', border:'1px solid #fdcb6e55', color:'#b8860b', fontSize:'0.78rem' }}>
+                ⚠ {warn}
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={{ padding:'0.85rem 1.5rem', borderTop:'1px solid var(--border)', display:'flex', gap:8, justifyContent:'flex-end', flexShrink:0 }}>
           <button onClick={onClose} disabled={saving} style={{
@@ -3018,13 +3296,27 @@ function SpecModal({ project, onClose, onSave, saving }) {
             background:'transparent', color:'var(--text2)', cursor:saving?'default':'pointer',
             fontSize:'0.85rem', fontWeight:500,
           }}>취소</button>
-          <button onClick={handleSave} disabled={!canSave} style={{
-            padding:'0.5rem 0.95rem', borderRadius:8, border:'none',
-            background: canSave ? 'var(--accent)' : 'var(--surface2)',
-            color: canSave ? '#fff' : 'var(--text2)',
-            cursor: canSave ? 'pointer' : 'not-allowed',
-            fontSize:'0.85rem', fontWeight:600, opacity:saving?0.7:1,
-          }}>{saving ? '저장 중...' : '저장'}</button>
+          {tab === 'raw' && (
+            <button onClick={handleSaveRaw} disabled={!canSaveRaw} style={{
+              padding:'0.5rem 0.95rem', borderRadius:8, border:'none',
+              background: canSaveRaw ? 'var(--accent)' : 'var(--surface2)',
+              color: canSaveRaw ? '#fff' : 'var(--text2)',
+              cursor: canSaveRaw ? 'pointer' : 'not-allowed',
+              fontSize:'0.85rem', fontWeight:600, opacity:saving?0.7:1,
+            }}>{saving ? '저장 중...' : '원문 저장'}</button>
+          )}
+          {tab === 'structured' && (
+            <button
+              onClick={warn ? handleSaveStructuredForce : handleSaveStructured}
+              disabled={!canSaveStructured}
+              style={{
+                padding:'0.5rem 0.95rem', borderRadius:8, border:'none',
+                background: canSaveStructured ? (warn ? '#fdcb6e' : 'var(--accent)') : 'var(--surface2)',
+                color: canSaveStructured ? '#fff' : 'var(--text2)',
+                cursor: canSaveStructured ? 'pointer' : 'not-allowed',
+                fontSize:'0.85rem', fontWeight:600, opacity:saving?0.7:1,
+              }}>{saving ? '저장 중...' : (warn ? '비어있어도 저장' : '구조화 저장')}</button>
+          )}
         </div>
       </div>
     </div>
@@ -3886,15 +4178,17 @@ function App({ session }) {
         .from(TABLE)
         .update({ ...fields, updated_at: today })
         .eq('slug', project.slug)
-        .select('slug, spec_raw, updated_at');
+        .select('slug, spec_raw, spec_structured, updated_at');
       if (error) throw error;
       if (!updated || updated.length === 0) {
         throw new Error(`프로젝트를 찾을 수 없습니다: ${project.slug}`);
       }
       const row = updated[0];
-      setData(prev => prev.map(d => d.slug===project.slug?{...d,spec_raw:row.spec_raw,updated_at:row.updated_at}:d));
-      setSelectedProject(prev => prev && prev.slug===project.slug?{...prev,spec_raw:row.spec_raw,updated_at:row.updated_at}:prev);
-      toast('공고 저장 완료','success');
+      const merge = { spec_raw: row.spec_raw, spec_structured: row.spec_structured, updated_at: row.updated_at };
+      setData(prev => prev.map(d => d.slug===project.slug?{...d,...merge}:d));
+      setSelectedProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
+      const savedKey = Object.keys(fields)[0] === 'spec_structured' ? '구조화 스펙' : '공고';
+      toast(`${savedKey} 저장 완료`,'success');
     } catch(err) {
       toast('공고 저장 실패: '+err.message,'error');
       throw err;
