@@ -336,15 +336,24 @@ Phase 6 (E2E)
 ### Phase 3 — Demo Generation (3-pass)
 
 #### T3.1 티어 분류 & 샘플 데이터 시드 생성
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T2.4
 - **requires_test**: manual-review
-- **파일**: `worker/prompts/seed-data.md`, `worker/generate-demo/seed.ts`
+- **파일**: `worker/prompts/seed-data.md`, `worker/generate-demo/seed.ts`, `worker/test-seed-data.ts`
 - **해야 할 일**: `data_entities`마다 `sample_count`개의 리얼한 한국어 샘플 생성. 이름·전화·주소 등 실제감 있게. (이게 "진짜 같음"의 핵심)
-- **review_checklist**:
-  - [ ] 이름이 "홍길동1" 같지 않고 자연스러움
-  - [ ] 도메인에 맞는 데이터 (병원이면 진료과, 카페면 메뉴명)
-  - [ ] 관계형 정합성 (예약의 therapist_id가 실제 therapist 목록에 존재)
+- **구현 메모**:
+  - `generateSeed(spec)` = system prompt(seed-data.md) + user(spec_structured JSON) → Opus 4.7 호출 → `{ seed: { [entity]: [...] } }` 파싱 + 검증.
+  - 스키마 검증기 `validateSeed(seed, spec)`: 엔티티 누락·sample_count 미달·id 중복·ref 미매칭을 자동 탐지. 참조 대상은 `<name>_id` → `<name>` 규칙으로 `resolveRefTarget`에서 추론.
+  - 모든 레코드에 `ent_<entity>_<nnn>` 형식 id 강제 (프롬프트 계약).
+- **자동 검증 결과 (2개 도메인, 치과/카페)**:
+  - 치과: 모든 엔티티 sample_count 100% 충족 (patient 12/12, treatment 6/6, appointment 20/20, medical_note 15/15), ref 무결성 55/55
+  - 카페: 모든 엔티티 sample_count 100% 충족 (menu_item 12/12, table 8/8, customer 10/10, order 18/18, loyalty_punch 15/15), ref 무결성 51/51
+  - Opus prompt cache 2회차 호출에서 `cache_read_input_tokens=21029`로 system prompt 재사용 확인
+- **review_checklist** (사용자 승인 완료):
+  - [x] 이름이 "홍길동1" 같지 않고 자연스러움 (김민서·이준호·박서연·김지후·이서연·박민재 등 한국 성씨 분포·세대별 이름 패턴 자연)
+  - [x] 도메인에 맞는 데이터 (치과: 스케일링/임플란트/A3→A1 색조 수복; 카페: 아메리카노 4500원/카페라떼 5000원/카테고리 "커피")
+  - [x] 관계형 정합성 (두 도메인 모두 `ref` 필드 100% 매칭, id 중복 0)
+- **last_failure**: —
 
 #### T3.2 Pass A — 스켈레톤 생성
 - **상태**: `TODO`
@@ -481,10 +490,10 @@ Phase 6 (E2E)
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-24
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4
+- **마지막 업데이트**: 2026-04-24 (T3.1 DONE)
+- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1
 - **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: T3.1 (T2.4 DONE, T0.3 NEEDS_TEST는 독립), T4.3 (문서, 선행 의존성 없음)
+- **다음에 착수 가능**: T3.2 (T3.1 DONE, T0.3은 NEEDS_TEST지만 디자인 토큰 fallback 가능 → 병행 진행 가능), T4.3 (문서, 선행 의존성 없음)
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
@@ -517,3 +526,4 @@ Phase 6 (E2E)
 | 2026-04-24 | T2.2 완료 | extract-spec 프롬프트(worker/prompts/extract-spec.md) + validate-spec.ts 스키마 검증 연결. 5개 도메인(치과/카페/과외/법률/공장) 합성 공고로 handleExtractQueued 호출 → 전부 스키마 통과. tier_1은 모두 3~5개, out_of_scope 4~6개씩 유효. stripJsonFence를 양쪽 독립 strip + `{…}` slice fallback으로 robust화 (law_firm 케이스의 펜스 응답 1회 실패 → 수정 후 재통과) |
 | 2026-04-24 | T2.3 완료 | SpecModal에 원문/구조화 탭 + StructuredSpecEditor(persona·domain·core_flows·data_entities·out_of_scope·design_brief 편집, 플로우/엔티티 추가·삭제, 티어 드롭다운 1/2/3 색상 구분, 빈 core_flows 저장 시 confirm-gate). handleSaveSpec을 spec_structured 경로까지 확장(.select에 spec_structured 포함). test-save-spec-structured.ts 4개 케이스(JSONB 라운드트립·티어 변경·공존성·빈 저장) 전부 통과. UI 시각 확인은 사용자 승인 완료 |
 | 2026-04-24 | T2.4 완료 | spec 승인 플로우 (ApprovalPanel 2단계 UX: 승인→데모 생성 시작, handleApproveSpec/handleStartDemoGen). handleSaveSpec이 저장 시 spec_approved_at을 null로 리셋해 재승인 강제. 구현은 §1 상태 머신의 `gen_queued` 전이 (§6 T2.4 원문의 `generating`은 state machine 확장 이전 표기). test-approve-flow.ts 3개 케이스(승인 전 가드·승인→timestamp→생성 시작·재편집 리셋) 전부 통과, UI 시각 확인 사용자 승인 완료. 함께: DEMO_GEN_ENABLED flag 도입해 미완성 데모 생성기 UI가 GitHub Pages prod로 유출되지 않도록 default 숨김 처리 (localhost/file:에서는 자동 enable, prod은 ?demoGen=1 토글) |
+| 2026-04-24 | T3.1 완료 | 시드 데이터 생성기 (worker/prompts/seed-data.md + generate-demo/seed.ts). spec_structured → Opus 4.7 호출 → `{seed: {[entity]: [records]}}` + 자동 검증(sample_count 충족·id 유일·ref 무결성, `<name>_id`→`<name>` 규칙으로 대상 추론). 치과(4 엔티티)/카페(5 엔티티) 2개 도메인 테스트 통과 — 전 엔티티 sample_count 100% 충족, ref 매칭 106/106, 실제 한국 성씨·도메인 전문용어(스케일링/임플란트/A3 색조, 아메리카노/카페라떼) 생성 확인. Opus prompt caching 21K 토큰 재사용. 사용자 판단 위임으로 manual-review 승인 |
