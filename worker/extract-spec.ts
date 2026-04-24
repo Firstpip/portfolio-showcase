@@ -1,32 +1,34 @@
-// extract-spec 워커 모듈 (T2.1 스캐폴드).
+// extract-spec 워커 모듈.
 //
 // 역할:
 //   1) Realtime 라우터(worker/index.ts)가 demo_status='extract_queued' 전이를 감지하면
 //      handleExtractQueued(projectId)를 호출.
 //   2) 이 핸들러는 atomic 전이로 'extracting'을 선점(중복 처리 방지) → spec_raw 조회
-//      → Claude Sonnet 4.6 호출 → spec_structured JSONB 저장 → 'extract_ready'.
+//      → Claude Sonnet 4.6 호출 → JSON 파싱 + 스키마 검증 → spec_structured JSONB 저장
+//      → 'extract_ready'.
 //   3) 어떤 단계든 실패하면 'extract_failed'로 전이하고 demo_generation_log에 사유 기록.
 //      예외는 호출자로 전파하지 않음 (Realtime 핸들러가 죽지 않도록).
 //
-// 참고:
-//   - 프롬프트와 JSON 스키마 강제(tool use)는 T2.2 범위. 이 스캐폴드는 "JSON으로 응답"만
-//     지시하고 받은 텍스트를 JSON.parse 시도. 파싱 실패도 extract_failed로 처리.
-//   - 캐시는 Agent SDK가 system prompt를 자동 캐시. 본격 캐싱 튜닝은 T2.2.
+// 프롬프트: worker/prompts/extract-spec.md (system prompt로 로드).
+// 스키마 검증: worker/shared/validate-spec.ts.
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { runClaude, SONNET } from "./shared/claude.ts";
+import { validateSpecStructured } from "./shared/validate-spec.ts";
 
 type ExtractOutcome =
   | { ok: true; status: "extract_ready"; reqId: string; duration_ms: number }
   | { ok: false; status: "extract_failed"; reason: string; reqId?: string };
 
-const SCAFFOLD_SYSTEM_PROMPT = [
-  "당신은 한국어 IT 외주 공고를 읽고 데모 사이트 생성을 위한 요구사항을 추출합니다.",
-  "응답은 반드시 단일 JSON 객체. 코드 펜스(```)나 설명 문장 금지.",
-  "최소 키: persona(role, primary_goal), domain, core_flows[], data_entities[], tier_assignment, out_of_scope[].",
-  "core_flows[]의 각 항목은 id, title, tier(1|2|3), steps[], data_entities[]를 포함.",
-  "T2.2에서 본격 프롬프트로 교체될 스캐폴드 단계임 — 일단 합리적 추측으로 채우면 됨.",
-].join("\n");
+const __dirname = dirname(fileURLToPath(import.meta.url));
+// 프롬프트는 워커 프로세스 수명 동안 1회만 읽어 캐시. Agent SDK의 system prompt 자동 캐싱과 결합.
+const EXTRACT_SYSTEM_PROMPT = readFileSync(
+  join(__dirname, "prompts", "extract-spec.md"),
+  "utf-8",
+);
 
 /**
  * extract_queued 전이를 처리한다.
@@ -74,7 +76,7 @@ export async function handleExtractQueued(
   try {
     claudeResult = await runClaude(row.spec_raw, {
       model: SONNET,
-      systemPrompt: SCAFFOLD_SYSTEM_PROMPT,
+      systemPrompt: EXTRACT_SYSTEM_PROMPT,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -101,6 +103,28 @@ export async function handleExtractQueued(
       "응답이 JSON 객체가 아님",
       claudeResult.reqId,
     );
+  }
+
+  // 4.5) 스키마 검증. 실패 시 extract_failed (재시도는 사용자 판단).
+  const validation = validateSpecStructured(parsed);
+  if (!validation.ok) {
+    const summary = validation.errors.slice(0, 8).join("; ");
+    return await markFailed(
+      supabase,
+      projectId,
+      `스키마 검증 실패 (${validation.errors.length}건): ${summary}`,
+      claudeResult.reqId,
+    );
+  }
+
+  // 4.6) reference_portfolio_path는 워커가 slug 기반으로 채움(프롬프트는 빈 문자열 반환).
+  if (row.slug) {
+    const specObj = parsed as Record<string, unknown>;
+    const brief = specObj["design_brief"];
+    if (brief && typeof brief === "object" && !Array.isArray(brief)) {
+      (brief as Record<string, unknown>)["reference_portfolio_path"] =
+        `${row.slug}/portfolio-1/index.html`;
+    }
   }
 
   // 5) 저장 + 상태 전이. demo_generation_log에 이번 호출 사용량 append.
@@ -194,11 +218,24 @@ async function appendLog(
 }
 
 /**
- * 모델이 ```json ... ``` 펜스로 감싸 응답하는 경우 대비. 단순 휴리스틱.
+ * 모델이 ```json ... ``` 펜스로 감싸 응답하는 경우 대비.
+ * 양쪽을 독립적으로 벗긴다 — 한쪽만 있는 불완전한 경우도 복구.
+ * 그래도 실패하면 첫 `{`부터 마지막 `}`까지 slice해 최후 구제.
  */
 function stripJsonFence(text: string): string {
-  const trimmed = text.trim();
-  const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
-  if (fenceMatch) return fenceMatch[1].trim();
-  return trimmed;
+  let t = text.trim();
+  // 시작 펜스 제거 (언어 태그 선택적).
+  t = t.replace(/^```(?:json|JSON)?\s*\n?/, "");
+  // 끝 펜스 제거.
+  t = t.replace(/\n?\s*```\s*$/, "");
+  t = t.trim();
+  // `{`로 시작하지 않으면 "JSON 객체 구간"만 잘라낸다.
+  if (!t.startsWith("{")) {
+    const first = t.indexOf("{");
+    const last = t.lastIndexOf("}");
+    if (first !== -1 && last > first) {
+      t = t.slice(first, last + 1);
+    }
+  }
+  return t;
 }
