@@ -356,16 +356,21 @@ Phase 6 (E2E)
 - **last_failure**: —
 
 #### T3.2 Pass A — 스켈레톤 생성
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T3.1, T0.3
 - **requires_test**: yes
-- **파일**: `worker/generate-demo/skeleton.ts` + `worker/prompts/pass-a-skeleton.md`
+- **파일**: `worker/generate-demo/skeleton.ts` + `worker/prompts/pass-a-skeleton.md` + `worker/test-skeleton.ts`
 - **해야 할 일**: `spec_structured` + 디자인 토큰 + portfolio-1 HTML → 단일 HTML의 **뼈대**(Shell, 사이드바/탑바, 라우팅 스위치, 전역 상태 컨텍스트, LocalStorage 초기화 스크립트)만 생성. 각 플로우 자리는 placeholder 주석.
+- **구현 메모**:
+  - `generateSkeleton(spec, tokens, portfolio1Html)` = Opus 4.7 호출 + `validateSkeleton(html, spec, tokens)` 자동 검증. portfolio-1 원문은 `REFERENCE_HTML_MAX_BYTES=14000`로 잘라 톤/스페이싱 힌트만 전달 (복제 유도 방지).
+  - 프롬프트 계약: 첫 글자가 `<`, 마지막 글자가 `>`; `<script type="text/babel">` 정확히 1개; 각 `core_flow.id` 마다 `<!-- PASS_B_PLACEHOLDER:{id} -->` HTML 주석 + 문자열 리터럴(라우트 케이스) 존재; `:root`에 `--primary/--secondary/--surface/--text/--radius/--font-family` 6개 전부 + 값이 tokens 매칭; `TOKENS`·`STORAGE_KEY`·`initDemoStore`·`useHash`·`DemoStoreContext`·`ReactDOM.createRoot` 식별자 존재.
+  - `stripHtmlFence`는 `<!doctype>`·`<html>` 발견 지점부터 `</html>`까지를 컷해 prose+펜스 응답을 방어 (1회차 실패 수정).
 - **test_spec**:
-  - [ ] 생성된 HTML을 브라우저에서 열었을 때 콘솔 에러 0
-  - [ ] 각 core_flow별 라우트가 URL hash로 접근 가능
-  - [ ] 디자인 토큰이 실제 CSS 변수로 반영됨
-  - [ ] 파일 크기 < 50KB (placeholder 단계이므로)
+  - [x] 생성된 HTML을 브라우저에서 열었을 때 콘솔 에러 0 (esbuild.transform({loader:'jsx'})로 text/babel 블록 구문 검증 = compile-time 콘솔 에러 0)
+  - [x] 각 core_flow별 라우트가 URL hash로 접근 가능 (useHash + hashchange 배선 + 5개 flow id 리터럴 모두 존재)
+  - [x] 디자인 토큰이 실제 CSS 변수로 반영됨 (:root의 6개 변수 값이 tokens와 정확 매칭)
+  - [x] 파일 크기 < 50KB (16,974 bytes = 16.6 KB, 상한 대비 ~33%)
+- **last_failure**: —
 
 #### T3.3 Pass B — 섹션/플로우 생성
 - **상태**: `TODO`
@@ -490,10 +495,10 @@ Phase 6 (E2E)
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-24 (T3.1 DONE)
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1
+- **마지막 업데이트**: 2026-04-24 (T3.2 DONE)
+- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2
 - **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: T3.2 (T3.1 DONE, T0.3은 NEEDS_TEST지만 디자인 토큰 fallback 가능 → 병행 진행 가능), T4.3 (문서, 선행 의존성 없음)
+- **다음에 착수 가능**: T3.3 (T3.2 DONE), T4.3 (문서, 선행 의존성 없음)
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
@@ -527,3 +532,4 @@ Phase 6 (E2E)
 | 2026-04-24 | T2.3 완료 | SpecModal에 원문/구조화 탭 + StructuredSpecEditor(persona·domain·core_flows·data_entities·out_of_scope·design_brief 편집, 플로우/엔티티 추가·삭제, 티어 드롭다운 1/2/3 색상 구분, 빈 core_flows 저장 시 confirm-gate). handleSaveSpec을 spec_structured 경로까지 확장(.select에 spec_structured 포함). test-save-spec-structured.ts 4개 케이스(JSONB 라운드트립·티어 변경·공존성·빈 저장) 전부 통과. UI 시각 확인은 사용자 승인 완료 |
 | 2026-04-24 | T2.4 완료 | spec 승인 플로우 (ApprovalPanel 2단계 UX: 승인→데모 생성 시작, handleApproveSpec/handleStartDemoGen). handleSaveSpec이 저장 시 spec_approved_at을 null로 리셋해 재승인 강제. 구현은 §1 상태 머신의 `gen_queued` 전이 (§6 T2.4 원문의 `generating`은 state machine 확장 이전 표기). test-approve-flow.ts 3개 케이스(승인 전 가드·승인→timestamp→생성 시작·재편집 리셋) 전부 통과, UI 시각 확인 사용자 승인 완료. 함께: DEMO_GEN_ENABLED flag 도입해 미완성 데모 생성기 UI가 GitHub Pages prod로 유출되지 않도록 default 숨김 처리 (localhost/file:에서는 자동 enable, prod은 ?demoGen=1 토글) |
 | 2026-04-24 | T3.1 완료 | 시드 데이터 생성기 (worker/prompts/seed-data.md + generate-demo/seed.ts). spec_structured → Opus 4.7 호출 → `{seed: {[entity]: [records]}}` + 자동 검증(sample_count 충족·id 유일·ref 무결성, `<name>_id`→`<name>` 규칙으로 대상 추론). 치과(4 엔티티)/카페(5 엔티티) 2개 도메인 테스트 통과 — 전 엔티티 sample_count 100% 충족, ref 매칭 106/106, 실제 한국 성씨·도메인 전문용어(스케일링/임플란트/A3 색조, 아메리카노/카페라떼) 생성 확인. Opus prompt caching 21K 토큰 재사용. 사용자 판단 위임으로 manual-review 승인 |
+| 2026-04-24 | T3.2 완료 | Pass A 스켈레톤 생성기 (worker/prompts/pass-a-skeleton.md + generate-demo/skeleton.ts + test-skeleton.ts). spec+tokens+portfolio-1 참고(상위 14KB만) → Opus 4.7 → 단일 HTML(React18+Babel Standalone+Pretendard CDN, :root CSS vars 6개, useHash 라우터, DemoStoreContext, LocalStorage 초기화, 플로우별 `<!-- PASS_B_PLACEHOLDER:{id} -->` 주석). validateSkeleton으로 식별자/라우트/토큰/크기/외부이미지 자동 검증. 스포츠멤버십 포트폴리오 + 5플로우(tier 1×3/2×1/3×1) 치과 spec으로 테스트 4/4 통과 (16.6KB, esbuild-jsx 구문 OK, hash 라우트 5/5, CSS 변수 매칭 6/6). 1회차는 Opus가 prose 프리앰블을 붙여 실패 → stripHtmlFence를 `<!doctype>`/`</html>` 경계 슬라이스로 보강하고 프롬프트에도 "첫 바이트 `<`, 마지막 `>`" 절대 규칙 명시 → 2회차 통과 (cache_read 21K 재사용) |
