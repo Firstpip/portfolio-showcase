@@ -318,17 +318,17 @@ Phase 6 (E2E)
   - [ ] 빈 core_flows 저장 시 경고
 
 #### T2.4 승인 플로우
-- **상태**: `NEEDS_TEST`
+- **상태**: `DONE`
 - **depends_on**: T2.3
 - **requires_test**: yes
 - **파일**: 대시보드 + DB
 - **해야 할 일**: "데모 생성 시작" 버튼은 `spec_approved_at` 세팅 후에만 활성. 승인 시 `demo_status = generating`으로 자동 전이.
 - **구현 메모**: 설계 문서의 `generating` 표현은 §1 상태 머신 확장(`gen_queued`) 이전 텍스트. 실제 구현은 승인 후 `demo_status = 'gen_queued'` 전이 (워커가 atomic 선점 후 `generating`).
 - **test_spec**:
-  - [x] 승인 전 "데모 생성" 버튼 비활성 (handler 가드 검증; UI `disabled={!canStartGen}`는 `!!approvedAt`에 직접 결속)
-  - [x] 승인 후 활성 + timestamp 기록 (DB 검증: `spec_approved_at` ISO-8601, now ±60s 내)
+  - [x] 승인 전 "데모 생성" 버튼 비활성 (handler 가드 + UI `disabled={!canStartGen}`이 `!!approvedAt`에 결속)
+  - [x] 승인 후 활성 + timestamp 기록 (DB: `spec_approved_at` ISO-8601, now ±60s 내)
   - [x] spec 재편집 시 `spec_approved_at` 초기화 (재승인 강제) — `spec_raw`/`spec_structured` 어느 쪽 저장도 리셋
-  - [ ] UI 시각 확인 (사용자 수동): 모달 → 승인 전 회색 버튼 → 승인 클릭 → 초록 버튼 활성 → 편집 시 회색 복귀
+  - [x] UI 시각 확인 (사용자 승인 완료)
 - **last_failure**: —
 
 ---
@@ -482,9 +482,9 @@ Phase 6 (E2E)
 ## 8. 현재 상태 스냅샷
 
 - **마지막 업데이트**: 2026-04-24
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3
-- **진행 중 task**: T0.3 (manual-review 대기), T2.4 (구현 중)
-- **다음에 착수 가능**: T4.3 (문서, 선행 의존성 없음)
+- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4
+- **진행 중 task**: T0.3 (manual-review 대기)
+- **다음에 착수 가능**: T3.1 (T2.4 DONE, T0.3 NEEDS_TEST는 독립), T4.3 (문서, 선행 의존성 없음)
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
@@ -516,3 +516,4 @@ Phase 6 (E2E)
 | 2026-04-24 | T2.1 완료 | extract-spec 워커 모듈 스캐폴드 (atomic claim → Sonnet 호출 → spec_structured 저장 → extract_ready). demo_status CHECK 제약을 9개 상태로 확장하는 마이그레이션 추가. shared/env.ts로 .env.local 로딩 표준화. test-extract-spec.ts 3개 케이스(happy/null/no-claim) 모두 통과 |
 | 2026-04-24 | T2.2 완료 | extract-spec 프롬프트(worker/prompts/extract-spec.md) + validate-spec.ts 스키마 검증 연결. 5개 도메인(치과/카페/과외/법률/공장) 합성 공고로 handleExtractQueued 호출 → 전부 스키마 통과. tier_1은 모두 3~5개, out_of_scope 4~6개씩 유효. stripJsonFence를 양쪽 독립 strip + `{…}` slice fallback으로 robust화 (law_firm 케이스의 펜스 응답 1회 실패 → 수정 후 재통과) |
 | 2026-04-24 | T2.3 완료 | SpecModal에 원문/구조화 탭 + StructuredSpecEditor(persona·domain·core_flows·data_entities·out_of_scope·design_brief 편집, 플로우/엔티티 추가·삭제, 티어 드롭다운 1/2/3 색상 구분, 빈 core_flows 저장 시 confirm-gate). handleSaveSpec을 spec_structured 경로까지 확장(.select에 spec_structured 포함). test-save-spec-structured.ts 4개 케이스(JSONB 라운드트립·티어 변경·공존성·빈 저장) 전부 통과. UI 시각 확인은 사용자 승인 완료 |
+| 2026-04-24 | T2.4 완료 | spec 승인 플로우 (ApprovalPanel 2단계 UX: 승인→데모 생성 시작, handleApproveSpec/handleStartDemoGen). handleSaveSpec이 저장 시 spec_approved_at을 null로 리셋해 재승인 강제. 구현은 §1 상태 머신의 `gen_queued` 전이 (§6 T2.4 원문의 `generating`은 state machine 확장 이전 표기). test-approve-flow.ts 3개 케이스(승인 전 가드·승인→timestamp→생성 시작·재편집 리셋) 전부 통과, UI 시각 확인 사용자 승인 완료. 함께: DEMO_GEN_ENABLED flag 도입해 미완성 데모 생성기 UI가 GitHub Pages prod로 유출되지 않도록 default 숨김 처리 (localhost/file:에서는 자동 enable, prod은 ?demoGen=1 토글) |
