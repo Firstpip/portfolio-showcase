@@ -445,14 +445,20 @@ Phase 6 (E2E)
 ### Phase 4 — Preview & Iteration
 
 #### T4.1 로컬 프리뷰 명령
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T3.4
 - **requires_test**: yes
-- **파일**: `package.json`에 스크립트 추가 or 루트에 `preview-demo.sh`
+- **파일**: `preview-demo.sh` (루트)
 - **해야 할 일**: 생성된 파일을 로컬에서 바로 띄우는 단일 명령. `npx serve {project_slug}/portfolio-demo` 수준이면 충분.
+- **구현 메모**:
+  - 루트에 `preview-demo.sh` 단일 bash 스크립트. node/npm 의존 없이 macOS 기본 `python3 -m http.server` + `open` 사용 (즉시 실행 가능, 추가 설치 불필요).
+  - 인자 형태 4종: (1) 무인자/`latest` → `worker/.test-cache/t3.4-final.html` (T3.4 dev 산출물); (2) `<project_slug>` → `{slug}/portfolio-demo/index.html` (T5.x 배포 후 사용); (3) 디렉터리 경로 → `dir/index.html`; (4) HTML 파일 경로 → `dirname/basename`.
+  - 환경변수: `PREVIEW_PORT` (기본 4173), `PREVIEW_NO_OPEN=1` (CI/테스트용 — 브라우저 자동 오픈 비활성).
+  - 로컬 바인딩 `127.0.0.1`으로 외부 노출 차단. server 부팅 직후 0.7s 지연 후 `open "$URL"` (백그라운드 서브셸).
 - **test_spec**:
-  - [ ] 명령 1개로 브라우저 자동 오픈
-  - [ ] 핫 리로드 불필요 (정적이라)
+  - [x] 명령 1개로 브라우저 자동 오픈 — `./preview-demo.sh` 단일 호출로 서버 부팅 + `open` 호출 (stub 검증: `open` 가 `http://localhost:4180/t3.4-final.html` 인자로 정확히 1회 호출됨), HTTP 200 응답 + 첫 100바이트 `<!DOCTYPE html>` 확인
+  - [x] 핫 리로드 불필요 (정적이라) — python3 http.server는 정적 파일 서버 (no-cache 헤더 없음, 변경 시 브라우저 새로고침으로 충분), 데모는 self-contained 단일 HTML이라 watch 불필요
+- **last_failure**: —
 
 #### T4.2 재생성 UI (전체/부분)
 - **상태**: `TODO`
@@ -528,10 +534,10 @@ Phase 6 (E2E)
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-25 (T3.5 DONE — 사용자 판단 위임으로 코드 변경 없이 승인, 감사 결과 첨부)
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5
+- **마지막 업데이트**: 2026-04-25 (T4.1 DONE — 로컬 프리뷰 명령 `preview-demo.sh` 추가, 자동 검증 2/2 통과)
+- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1
 - **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: T4.1 (T3.4 DONE, 로컬 프리뷰 명령), T4.3 (문서, 선행 의존성 없음)
+- **다음에 착수 가능**: T4.2 (T4.1 DONE, 재생성 UI), T4.3 (문서, 선행 의존성 없음)
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
@@ -569,3 +575,4 @@ Phase 6 (E2E)
 | 2026-04-24 | T3.3 완료 | Pass B 섹션/플로우 생성기 (worker/prompts/pass-b-section.md + generate-demo/sections.ts + test-sections.ts). 플로우별 개별 Opus 4.7 호출 → `{component_name, component_code, tier}` JSON, Promise.all 병렬. 티어 1: `setStore(...store, entity: [..., new])`로 실제 CRUD + LocalStorage. 티어 2: `setToast`/헬퍼로 성공 메시지 토스트, 저장은 페이크(setStore/saveDemoStore/localStorage 0건 강제). 티어 3: "본 계약 시 구현 예정" 카드만. validateFlowComponent로 이름/중괄호 균형/재선언 금지/steps 텍스트 존재/티어별 규칙 정적 검증 + 컴포넌트명 전역 중복 검사. 치과 3플로우(tier 1/2/3) 테스트 5/5 통과, cache_read 25.9K 재사용. 1회차 실패(Opus가 tier 2에서 `showToast(msg, 'success')` 헬퍼 사용 → analyzer가 setter 직접 인수만 검사해 성공 문구 놓침) → analyzer를 "(setter 호출 ≥1)+(전역 한국어 성공 키워드 리터럴 ≥1)"로 완화해 2회차 통과. 프롬프트는 유지 (헬퍼 패턴은 자연스러운 React, 검증기가 유연해야 맞음) |
 | 2026-04-25 | T3.4 완료 | Pass C 통합 빌드 (worker/generate-demo/assemble.ts + test-assemble.ts + test-assemble-browser.ts). assembleDemo: text/babel 블록 경계 슬라이스 → FlowPlaceholder 본문 첫줄에 `__FLOW_COMPONENTS[flowId]` 디스패처 주입(파라미터 괄호는 문자열/주석 건너뛰며 수동 매칭) → createRoot 직전에 Pass B 컴포넌트 + flow_id→컴포넌트명 맵 인라인 → text/babel 직전에 `<script>window.__DEMO_SEED__=...;</script>` plain script 삽입(`</script>`·`<!--`·`-->`·U+2028/U+2029 이스케이프) → PASS_B_PLACEHOLDER 주석 청소 → babel 태그에 `data-presets="env,react"` 보강 → 400KB 상한. 캐시: `.test-cache/t3.4-{skeleton.html,patches.json,seed.json}`로 단계별 산출물 분리(`--fresh`/`--regen=…`). 자동 8/8 통과(46.2 KB, CDN 4개, 시드 33 records, 디스패처/맵/3 컴포넌트 인라인 OK). Playwright 헤드리스 Chromium으로 실측: FCP **816ms**(예산 2000ms), patient 배열에 마커 push → reload → 잔존, 페이지 콘솔 에러 0건. tsx(esbuild)가 evaluate 콜백을 변환하며 `__name` helper 주입해 ReferenceError → FCP 폴링을 Node 측 짧은 evaluate 반복으로 변경해 우회 |
 | 2026-04-25 | T3.5 완료 (코드 변경 없음) | T3.4 산출물 감사 결과 review_checklist 3/3 자동 충족: Lorem ipsum 0건, `<img>` 부재로 이미지 깨짐 불가, 가격·생년월일·전화번호 분포 현실적. T3.1 realistic seed + T3.3 domain-aware Pass B 단계에서 이미 리얼리티 확보. 별도 후처리 모듈은 YAGNI라 판단 — 사용자 위임으로 코드 변경 없이 승인. 향후 사진/리뷰 텍스트 도메인 등장 시 신규 task로 재개 |
+| 2026-04-25 | T4.1 완료 | 루트 `preview-demo.sh` 추가 — node/npm 의존 없이 python3 http.server + macOS `open`으로 단일 명령 프리뷰. 인자 형태 4종(latest/project_slug/dir/file), 환경변수 `PREVIEW_PORT`·`PREVIEW_NO_OPEN`. 자동 검증 2/2 통과: 단일 명령으로 서버 부팅+open 호출(stub으로 URL 인자 검증), HTTP 200+올바른 HTML 서빙, 정적 서버라 핵 리로드 불필요 |
