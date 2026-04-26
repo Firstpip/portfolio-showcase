@@ -483,11 +483,16 @@ Phase 6 (E2E)
 - **last_failure**: —
 
 #### T4.3 수동 수정 워크플로우 문서 (병행 가능)
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: (없음, T3.4 이후 아무 때나)
 - **requires_test**: no
 - **파일**: `docs/demo-generator/manual-edit-guide.md`
 - **해야 할 일**: 생성 결과를 직접 수정할 때의 규칙 — 어떤 섹션은 건드려도 되고 어떤 섹션은 regenerate가 덮어쓰니 피해야 하는지.
+- **구현 메모**:
+  - 7개 섹션 + 부록 A 구성: TL;DR 표 / 생성 HTML 구조 지도 / 안전 영역 / 금지 영역 / 결정 트리 / 재생성 시 어떻게 사라지는지 / 미팅 직전 비상 수정 / 안티패턴.
+  - 재생성 SSOT가 `demo_artifacts` (skeleton + patches + seed + tokens) 임을 명시. HTML은 `assembleDemo` 의 결정론적 산출물이므로 직접 편집은 100% 휘발됨을 강조.
+  - 부분 재생성도 `assembleDemo` 가 HTML을 처음부터 다시 만들어 직접 편집은 어디든 사라진다는 점을 명확히 (다른 플로우 코드는 캐시에서 byte-identical 복원).
+  - 결정 트리: 카피/토큰/시드/플로우/프롬프트 변경 → 어디로 가야 하는지 분기.
 
 ---
 
@@ -545,10 +550,10 @@ Phase 6 (E2E)
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (T4.2 DONE — 재생성 UI + 워커 gen_queued 오케스트레이터, 자동 검증 3/3 통과)
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2
+- **마지막 업데이트**: 2026-04-27 (T4.3 DONE — 수동 수정 워크플로우 문서)
+- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3
 - **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: T4.3 (문서, 선행 의존성 없음), T5.1 (T4.2 DONE, deploy-demo 워커 모듈)
+- **다음에 착수 가능**: T5.1 (T4.2 DONE, deploy-demo 워커 모듈)
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
@@ -588,3 +593,4 @@ Phase 6 (E2E)
 | 2026-04-25 | T3.5 완료 (코드 변경 없음) | T3.4 산출물 감사 결과 review_checklist 3/3 자동 충족: Lorem ipsum 0건, `<img>` 부재로 이미지 깨짐 불가, 가격·생년월일·전화번호 분포 현실적. T3.1 realistic seed + T3.3 domain-aware Pass B 단계에서 이미 리얼리티 확보. 별도 후처리 모듈은 YAGNI라 판단 — 사용자 위임으로 코드 변경 없이 승인. 향후 사진/리뷰 텍스트 도메인 등장 시 신규 task로 재개 |
 | 2026-04-25 | T4.1 완료 | 루트 `preview-demo.sh` 추가 — node/npm 의존 없이 python3 http.server + macOS `open`으로 단일 명령 프리뷰. 인자 형태 4종(latest/project_slug/dir/file), 환경변수 `PREVIEW_PORT`·`PREVIEW_NO_OPEN`. 자동 검증 2/2 통과: 단일 명령으로 서버 부팅+open 호출(stub으로 URL 인자 검증), HTTP 200+올바른 HTML 서빙, 정적 서버라 핵 리로드 불필요 |
 | 2026-04-27 | T4.2 완료 | 재생성 UI + 워커 gen_queued 오케스트레이터. 마이그레이션(regenerate_scope TEXT/CHECK + demo_artifacts JSONB), `worker/generate-demo/orchestrator.ts`(순수 `runGenerationPipeline` + DB래퍼 `handleGenQueued`: atomic claim→파이프라인→tempfile+rename atomic 교체→artifacts/ready/generated_at 갱신, 실패 시 HTML/artifacts 보존), 대시보드 `RegenerationPanel`(전체+flow별 버튼·confirm 단계·Max 5h 리밋 안내), 워커 라우터에 gen_queued 분기 추가. 자동 검증 3/3 통과: (1) partial=flow_patient_signup만 재호출 시 다른 2개 flow 코드 byte-identical(reqId 840aab08→962ab0d6, stages=sections+assemble만) (2) atomic gen_queued→generating 1행→0행으로 중복 선점 방지 (3) preflight 실패 시 사전 HTML 149B byte-identical 보존+demo_artifacts/generated_at NULL 유지 |
+| 2026-04-27 | T4.3 완료 | 수동 수정 워크플로우 문서 (`docs/demo-generator/manual-edit-guide.md`). 생성 HTML 구조 지도(CDN/CSS vars/TOKENS/initDemoStore/FlowPlaceholder 디스패처/Pass C 인라인 마커)와 안전·금지 영역, "어디 가서 고쳐야 하나" 결정 트리, 재생성 시 직접 편집이 휘발되는 메커니즘(부분 재생성도 assembleDemo가 HTML을 처음부터 재생성하므로 100% 사라짐 — `demo_artifacts`가 SSOT), 미팅 직전 비상 수정 체크리스트, 안티패턴 정리. requires_test=no라 자동 검증 없음 |
