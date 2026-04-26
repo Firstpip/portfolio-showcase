@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>e-KYC 통합 비대면 인증 플랫폼 — 구현 데모</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.2/umd/Recharts.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Pretendard', -apple-system, sans-serif; background: #F0FDF4; color: #064E3B; height: 100vh; overflow: hidden; }
+::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #dcfce7; } ::-webkit-scrollbar-thumb { background: #86efac; border-radius: 3px; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+@keyframes faceMatch { 0%,100%{box-shadow:0 0 0 0 rgba(52,211,153,.4)} 50%{box-shadow:0 0 0 12px rgba(52,211,153,0)} }
+@keyframes sigPulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+@keyframes scanStep { 0%{width:0%} 100%{width:100%} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, RadialBarChart, RadialBar, Legend } = Recharts;
+
+const C = {
+  primary: '#059669', secondary: '#064E3B', accent: '#34D399',
+  bg: '#F0FDF4', surface: '#FFFFFF', textP: '#064E3B', textS: '#6B7280',
+  success: '#059669', warning: '#D97706', danger: '#DC2626',
+  border: '#D1FAE5', sidebarBg: '#ECFDF5',
+};
+
+const NAV_ITEMS = [
+  { id: 'id-capture', label: '신분증 촬영 및 보정', icon: '🪪', step: 1 },
+  { id: 'face-verification', label: '얼굴 대조 검증', icon: '👤', step: 2 },
+  { id: 'signature-capture', label: '서명 캡처 및 검증', icon: '✍️', step: 3 },
+  { id: 'audit-dashboard', label: '인증 이력 및 컴플라이언스', icon: '📋', step: null },
+];
+
+// Progress wizard component
+const WizardProgress = ({ current }) => {
+  const steps = ['신분증 촬영', '얼굴 대조', '서명 검증', '인증 완료'];
+  const stepMap = { 'id-capture': 0, 'face-verification': 1, 'signature-capture': 2 };
+  const activeIdx = stepMap[current] ?? -1;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 0, marginBottom: 24 }}>
+      {steps.map((s, i) => (
+        <React.Fragment key={s}>
+          <div style={{ display: 'flex', flex: i < steps.length-1 ? 1 : 0, alignItems: 'center', gap: 0 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+              <div style={{ width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, background: i <= activeIdx ? C.primary : '#d1fae5', color: i <= activeIdx ? '#fff' : '#6b7280', border: i === activeIdx ? `3px solid ${C.accent}` : 'none', boxShadow: i === activeIdx ? `0 0 0 3px ${C.accent}40` : 'none' }}>
+                {i < activeIdx ? '✓' : i+1}
+              </div>
+              <div style={{ fontSize: 10, color: i <= activeIdx ? C.primary : C.textS, fontWeight: i === activeIdx ? 600 : 400, textAlign: 'center', whiteSpace: 'nowrap' }}>{s}</div>
+            </div>
+            {i < steps.length-1 && <div style={{ flex: 1, height: 2, background: i < activeIdx ? C.primary : '#d1fae5', margin: '0 4px', marginTop: -14 }} />}
+          </div>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+};
+
+// ===== SCREEN 1: 신분증 촬영 및 보정 =====
+function IDCaptureScreen() {
+  const [phase, setPhase] = useState('capture'); // capture | processing | done
+  const [progress, setProgress] = useState(0);
+
+  const handleCapture = () => {
+    setPhase('processing');
+    let p = 0;
+    const iv = setInterval(() => {
+      p += 3;
+      setProgress(p);
+      if (p >= 100) { clearInterval(iv); setPhase('done'); }
+    }, 80);
+  };
+
+  const pipelineSteps = [
+    { label: '빛반사 감지 및 인페인팅', done: progress >= 25 },
+    { label: '신분증 윤곽 추출 (Canny+Hough)', done: progress >= 50 },
+    { label: '투시 변환 (warpPerspective)', done: progress >= 75 },
+    { label: 'CLAHE 대비 향상', done: progress >= 100 },
+  ];
+
+  return (
+    <div style={{ animation: 'fadeIn .3s ease' }}>
+      <WizardProgress current="id-capture" />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20 }}>
+        {/* Camera / Processing / Done */}
+        <div style={{ background: C.surface, borderRadius: 16, overflow: 'hidden', boxShadow: '0 2px 12px rgba(5,150,105,.1)', border: `1px solid ${C.border}` }}>
+          {phase === 'capture' && (
+            <div>
+              <div style={{ background: '#111827', padding: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: '#e2e8f0', fontSize: 12 }}>📷 카메라 가이드 활성화</span>
+                <span style={{ color: C.accent, fontSize: 11 }}>Canvas API · WebRTC</span>
+              </div>
+              <div style={{ position: 'relative', height: 280, background: '#0d1a2e', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                <div style={{ backgroundImage: 'linear-gradient(rgba(52,211,153,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(52,211,153,.04) 1px, transparent 1px)', backgroundSize: '36px 36px', position: 'absolute', inset: 0 }} />
+                <div style={{ width: 280, height: 176, border: `2px solid ${C.accent}`, borderRadius: 8, position: 'relative', boxShadow: `0 0 0 1px ${C.accent}30, 0 0 24px ${C.accent}20` }}>
+                  {[[0,0,'top','left'],[0,'auto','top','right'],['auto',0,'bottom','left'],['auto','auto','bottom','right']].map(([t,r,v,h],i) => (
+                    <div key={i} style={{ position: 'absolute', [v]: -2, [h]: -2, width: 18, height: 18, borderColor: C.accent, borderStyle: 'solid', borderTopWidth: v==='top'?3:0, borderBottomWidth: v==='bottom'?3:0, borderLeftWidth: h==='left'?3:0, borderRightWidth: h==='right'?3:0 }} />
+                  ))}
+                  <div style={{ position: 'absolute', inset: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ textAlign: 'center', color: `rgba(52,211,153,.5)`, fontSize: 12, lineHeight: 1.7 }}>
+                      신분증을 프레임 내에<br/>위치시키세요<br/><span style={{ fontSize: 10, opacity: .7 }}>주민등록증 · 여권 지원</span>
+                    </div>
+                  </div>
+                </div>
+                {/* Status indicators */}
+                <div style={{ position: 'absolute', bottom: 12, left: 0, right: 0, display: 'flex', justifyContent: 'center', gap: 20 }}>
+                  {[['조도','최적','#22c55e'],['각도','좋음','#22c55e'],['초점','최적','#22c55e'],['반사','감지중','#fbbf24']].map(([l,v,c]) => (
+                    <div key={l} style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: 11, color: c, fontWeight: 600 }}>{v}</div>
+                      <div style={{ fontSize: 10, color: 'rgba(255,255,255,.5)' }}>{l}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ padding: '14px 20px', display: 'flex', gap: 10 }}>
+                <button onClick={handleCapture} style={{ flex: 1, padding: '11px', background: C.primary, color: '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>촬영 및 자동 보정 시작</button>
+              </div>
+            </div>
+          )}
+
+          {phase === 'processing' && (
+            <div style={{ padding: 24 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.textP, marginBottom: 16 }}>OpenCV 보정 파이프라인 처리 중...</div>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12, color: C.textS }}>
+                  <span>전체 진행</span><span>{progress}%</span>
+                </div>
+                <div style={{ height: 8, background: '#d1fae5', borderRadius: 4 }}>
+                  <div style={{ height: '100%', width: `${progress}%`, background: `linear-gradient(90deg, ${C.primary}, ${C.accent})`, borderRadius: 4, transition: 'width .1s' }} />
+                </div>
+              </div>
+              {pipelineSteps.map((s, i) => (
+                <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 0', borderBottom: i<3 ? `1px solid ${C.border}` : 'none' }}>
+                  <div style={{ width: 22, height: 22, borderRadius: '50%', background: s.done ? C.primary : '#d1fae5', color: s.done ? '#fff' : C.textS, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, flexShrink: 0, fontWeight: 700 }}>{s.done ? '✓' : i+1}</div>
+                  <div style={{ fontSize: 13, color: s.done ? C.textP : C.textS, fontWeight: s.done ? 500 : 400 }}>{s.label}</div>
+                  {s.done && <div style={{ marginLeft: 'auto', fontSize: 11, color: C.success }}>완료</div>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {phase === 'done' && (
+            <div style={{ padding: 24 }}>
+              <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                <div style={{ fontSize: 40, marginBottom: 10 }}>✅</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: C.success, marginBottom: 4 }}>신분증 보정 완료</div>
+                <div style={{ fontSize: 12, color: C.textS, marginBottom: 20 }}>4단계 OpenCV 파이프라인 처리 완료 · AES-256-GCM 암호화 전송</div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
+                {[['처리 결과','우수'],['반사 제거','완료'],['윤곽 감지','성공'],['암호화','AES-256']].map(([k,v]) => (
+                  <div key={k} style={{ padding: '10px 12px', background: '#f0fdf4', borderRadius: 8, border: `1px solid ${C.border}` }}>
+                    <div style={{ fontSize: 10, color: C.textS }}>{k}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.primary }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <button style={{ width: '100%', padding: '11px', background: C.primary, color: '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>다음 단계: 얼굴 대조 검증 →</button>
+            </div>
+          )}
+        </div>
+
+        {/* Info panel */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ background: C.surface, borderRadius: 14, padding: 18, border: `1px solid ${C.border}`, boxShadow: '0 1px 6px rgba(5,150,105,.08)' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.textP, marginBottom: 10 }}>e-KYC 파이프라인</div>
+            {NAV_ITEMS.filter(n => n.step).map(n => (
+              <div key={n.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 0', borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ width: 22, height: 22, borderRadius: '50%', background: n.id === 'id-capture' ? C.primary : '#d1fae5', color: n.id === 'id-capture' ? '#fff' : C.textS, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{n.step}</div>
+                <span style={{ fontSize: 12, color: n.id === 'id-capture' ? C.primary : C.textS, fontWeight: n.id === 'id-capture' ? 600 : 400 }}>{n.label}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: C.surface, borderRadius: 14, padding: 18, border: `1px solid ${C.border}`, boxShadow: '0 1px 6px rgba(5,150,105,.08)' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.textP, marginBottom: 10 }}>보안 처리 방식</div>
+            {['Canvas API 기반 실시간 가이드 프레임','FastAPI + OpenCV 4단계 파이프라인','Web Crypto API AES-256-GCM 암호화','전송 후 클라이언트 메모리 즉시 정리'].map((t,i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, padding: '6px 0', fontSize: 12, color: C.textS, borderBottom: i<3 ? `1px solid ${C.border}` : 'none' }}>
+                <span style={{ color: C.primary, flexShrink: 0 }}>✓</span>{t}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== SCREEN 2: 얼굴 대조 검증 =====
+function FaceVerificationScreen() {
+  const [selfiePhase, setSelfiePhase] = useState('ready'); // ready | liveness | comparing | result
+  const [similarity, setSimilarity] = useState(0);
+
+  const handleVerify = () => {
+    setSelfiePhase('liveness');
+    setTimeout(() => setSelfiePhase('comparing'), 1500);
+    setTimeout(() => {
+      let s = 0;
+      const iv = setInterval(() => {
+        s += 2;
+        setSimilarity(s);
+        if (s >= 94) { clearInterval(iv); setSelfiePhase('result'); }
+      }, 40);
+    }, 2500);
+  };
+
+  const FaceSimulation = ({ isId, label }) => (
+    <div style={{ flex: 1, background: isId ? '#f8f5f0' : '#1a2332', borderRadius: 12, overflow: 'hidden', position: 'relative', height: 200 }}>
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
+        {isId ? (
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ width: 60, height: 72, borderRadius: '50% 50% 40% 40%', background: 'linear-gradient(180deg, #c5a882 0%, #a88060 100%)', margin: '0 auto 8px' }} />
+            <div style={{ fontSize: 10, color: '#888' }}>신분증 사진</div>
+          </div>
+        ) : (
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ width: 64, height: 76, borderRadius: '50% 50% 40% 40%', background: 'linear-gradient(180deg, #c5a882 0%, #a88060 100%)', margin: '0 auto 8px', boxShadow: selfiePhase === 'result' ? `0 0 0 4px ${C.accent}` : 'none', animation: selfiePhase === 'result' ? 'faceMatch 1.5s ease infinite' : 'none' }} />
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,.6)' }}>실시간 셀피</div>
+          </div>
+        )}
+      </div>
+      <div style={{ position: 'absolute', bottom: 8, left: 8, right: 8, fontSize: 11, fontWeight: 600, color: isId ? '#666' : '#e2e8f0', textAlign: 'center' }}>{label}</div>
+      {!isId && selfiePhase === 'liveness' && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,.6)' }}>
+          <div style={{ color: '#fff', textAlign: 'center' }}>
+            <div style={{ fontSize: 20, animation: 'sigPulse 1s infinite' }}>👁️</div>
+            <div style={{ fontSize: 12, marginTop: 6 }}>눈 깜빡임 감지 중...</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{ animation: 'fadeIn .3s ease' }}>
+      <WizardProgress current="face-verification" />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20 }}>
+        <div style={{ background: C.surface, borderRadius: 16, padding: 24, boxShadow: '0 2px 12px rgba(5,150,105,.1)', border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.textP, marginBottom: 4 }}>신분증 사진 ↔ 셀피 대조</div>
+          <div style={{ fontSize: 12, color: C.textS, marginBottom: 18 }}>Azure Face API FaceDetect + FaceVerify · Canvas 기반 라이브니스 감지</div>
+
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+            <FaceSimulation isId={true} label="신분증 사진 (보정됨)" />
+            <div style={{ display: 'flex', alignItems: 'center', flexDirection: 'column', justifyContent: 'center', gap: 6 }}>
+              {selfiePhase === 'result' ? (
+                <div style={{ fontSize: 22, color: C.success }}>✓</div>
+              ) : (
+                <div style={{ fontSize: 22, color: C.textS }}>↔</div>
+              )}
+              {selfiePhase === 'result' && (
+                <div style={{ padding: '4px 10px', background: '#f0fdf4', border: `1px solid ${C.border}`, borderRadius: 20, fontSize: 11, color: C.success, fontWeight: 700 }}>{similarity}%</div>
+              )}
+            </div>
+            <FaceSimulation isId={false} label="라이브 셀피" />
+          </div>
+
+          {selfiePhase === 'result' && (
+            <div style={{ padding: 16, background: '#f0fdf4', borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 16, animation: 'fadeIn .3s ease' }}>
+              <div style={{ display: 'flex', justify: 'space-between', alignItems: 'center', gap: 16 }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.success }}>✅ 동일인 인증 완료</div>
+                  <div style={{ fontSize: 12, color: C.textS, marginTop: 2 }}>유사도 점수: {similarity}% · 라이브니스: 통과</div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: C.primary, lineHeight: 1 }}>{similarity}%</div>
+                  <div style={{ fontSize: 10, color: C.textS }}>Face API 유사도</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {selfiePhase !== 'result' && (
+            <button onClick={handleVerify} disabled={selfiePhase !== 'ready'} style={{ width: '100%', padding: '12px', background: selfiePhase === 'ready' ? C.primary : '#d1fae5', color: selfiePhase === 'ready' ? '#fff' : C.textS, border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: selfiePhase === 'ready' ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+              {selfiePhase === 'ready' ? '얼굴 대조 검증 시작' : selfiePhase === 'liveness' ? '라이브니스 감지 중... 👁️' : '얼굴 비교 분석 중... 🔍'}
+            </button>
+          )}
+          {selfiePhase === 'result' && (
+            <button style={{ width: '100%', padding: '12px', background: C.primary, color: '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>다음 단계: 서명 검증 →</button>
+          )}
+        </div>
+
+        {/* Info */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ background: C.surface, borderRadius: 14, padding: 18, border: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.textP, marginBottom: 10 }}>검증 방식</div>
+            {[
+              { icon: '☁️', label: 'Azure Face API', desc: 'FaceDetect + FaceVerify 호출' },
+              { icon: '👁️', label: '라이브니스 감지', desc: 'Canvas 픽셀 변화 기반 눈 깜빡임' },
+              { icon: '🔒', label: '배경 블러', desc: '셀피 전송 전 배경 처리' },
+              { icon: '📝', label: '이력 저장', desc: '결과+타임스탬프 DB 기록' },
+            ].map(item => (
+              <div key={item.label} style={{ display: 'flex', gap: 10, padding: '8px 0', borderBottom: `1px solid ${C.border}`, alignItems: 'flex-start' }}>
+                <span style={{ fontSize: 16, flexShrink: 0 }}>{item.icon}</span>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.textP }}>{item.label}</div>
+                  <div style={{ fontSize: 11, color: C.textS }}>{item.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: '#fffbeb', borderRadius: 14, padding: 14, border: '1px solid #fde68a' }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.warning, marginBottom: 6 }}>⚠️ 데이터 처리 방침</div>
+            <div style={{ fontSize: 11, color: '#92400e', lineHeight: 1.6 }}>셀피 이미지는 대조 완료 즉시 서버에서 삭제되며, 유사도 점수와 판정 결과만 보관됩니다.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== SCREEN 3: 서명 캡처 및 검증 =====
+function SignatureCaptureScreen() {
+  const canvasRef = useRef(null);
+  const [drawing, setDrawing] = useState(false);
+  const [hasSignature, setHasSignature] = useState(false);
+  const [verified, setVerified] = useState(false);
+  const [hash, setHash] = useState('');
+  const lastPos = useRef(null);
+
+  const getPos = (e, canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    const src = e.touches ? e.touches[0] : e;
+    return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+  };
+
+  const startDraw = (e) => {
+    setDrawing(true);
+    const canvas = canvasRef.current;
+    const pos = getPos(e, canvas);
+    lastPos.current = pos;
+    const ctx = canvas.getContext('2d');
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+  };
+
+  const draw = (e) => {
+    if (!drawing) return;
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const pos = getPos(e, canvas);
+    ctx.strokeStyle = '#059669';
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+    lastPos.current = pos;
+    setHasSignature(true);
+  };
+
+  const stopDraw = () => setDrawing(false);
+
+  const clearSig = () => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setHasSignature(false);
+    setVerified(false);
+    setHash('');
+  };
+
+  const verify = () => {
+    const mockHash = 'sha256:' + Array.from({length:32}, () => Math.floor(Math.random()*16).toString(16)).join('').match(/.{4}/g).join('');
+    setHash(mockHash);
+    setVerified(true);
+  };
+
+  return (
+    <div style={{ animation: 'fadeIn .3s ease' }}>
+      <WizardProgress current="signature-capture" />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20 }}>
+        <div style={{ background: C.surface, borderRadius: 16, padding: 24, boxShadow: '0 2px 12px rgba(5,150,105,.1)', border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.textP, marginBottom: 4 }}>서명 입력</div>
+          <div style={{ fontSize: 12, color: C.textS, marginBottom: 16 }}>Canvas Bézier Interpolation · SHA-256 무결성 해시</div>
+
+          {/* Signature pad */}
+          <div style={{ border: `1.5px solid ${verified ? C.primary : C.border}`, borderRadius: 12, overflow: 'hidden', marginBottom: 14, position: 'relative', background: '#fafff9' }}>
+            {!hasSignature && (
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+                <div style={{ fontSize: 13, color: '#9ca3af', textAlign: 'center' }}>
+                  <div style={{ fontSize: 24, marginBottom: 6, animation: 'sigPulse 2s infinite' }}>✍️</div>
+                  <div>이 영역에 서명하세요</div>
+                  <div style={{ fontSize: 11, marginTop: 3 }}>마우스 드래그 또는 터치</div>
+                </div>
+              </div>
+            )}
+            <canvas
+              ref={canvasRef}
+              width={500}
+              height={180}
+              style={{ display: 'block', width: '100%', height: 180, cursor: 'crosshair', touchAction: 'none' }}
+              onMouseDown={startDraw}
+              onMouseMove={draw}
+              onMouseUp={stopDraw}
+              onMouseLeave={stopDraw}
+              onTouchStart={startDraw}
+              onTouchMove={draw}
+              onTouchEnd={stopDraw}
+            />
+            {verified && (
+              <div style={{ position: 'absolute', bottom: 6, right: 8, fontSize: 11, color: C.success, fontWeight: 600 }}>✓ SHA-256 해시 생성됨</div>
+            )}
+          </div>
+
+          {/* Controls */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+            <button onClick={clearSig} style={{ padding: '9px 16px', background: 'transparent', color: C.textS, border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>지우기</button>
+            <button onClick={verify} disabled={!hasSignature || verified} style={{ flex: 1, padding: '9px', background: hasSignature && !verified ? C.primary : '#d1fae5', color: hasSignature && !verified ? '#fff' : C.textS, border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: hasSignature && !verified ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+              {verified ? '✓ 서명 검증 완료' : '서명 완료 및 해시 생성'}
+            </button>
+          </div>
+
+          {/* Hash display */}
+          {verified && hash && (
+            <div style={{ background: '#f0fdf4', borderRadius: 10, padding: 14, border: `1px solid ${C.border}`, animation: 'fadeIn .3s ease', marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: C.textS, marginBottom: 6, fontWeight: 600 }}>SHA-256 무결성 해시</div>
+              <div style={{ fontFamily: 'monospace', fontSize: 10, color: C.secondary, wordBreak: 'break-all', lineHeight: 1.6 }}>{hash}</div>
+              <div style={{ fontSize: 11, color: C.textS, marginTop: 8 }}>서명 이미지와 해시를 함께 저장하여 위변조 검증에 활용합니다</div>
+            </div>
+          )}
+
+          {verified && (
+            <button style={{ width: '100%', padding: '12px', background: C.primary, color: '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>e-KYC 파이프라인 완료 — 관리자 확인 대기</button>
+          )}
+        </div>
+
+        {/* Info */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ background: C.surface, borderRadius: 14, padding: 18, border: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.textP, marginBottom: 10 }}>구현 방식</div>
+            {[
+              { label: '입력 방식', value: 'Canvas + Bézier 보간' },
+              { label: '해시 알고리즘', value: 'Web Crypto API SHA-256' },
+              { label: '저장 형식', value: 'PNG + 해시 페어' },
+              { label: '위변조 검증', value: '재계산 해시 비교' },
+              { label: '컴포넌트', value: 'React 재사용 컴포넌트' },
+            ].map(({ label, value }) => (
+              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
+                <span style={{ color: C.textS }}>{label}</span>
+                <span style={{ color: C.textP, fontWeight: 500 }}>{value}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: C.surface, borderRadius: 14, padding: 18, border: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.textP, marginBottom: 8 }}>서명 검증 프로세스</div>
+            {['1. Canvas에서 서명 입력 (Bézier 보간)','2. toBlob()으로 PNG 추출','3. SHA-256 해시 생성','4. 서명 이미지 + 해시 함께 저장','5. 위변조 시: 재계산 해시 불일치 감지'].map((t,i) => (
+              <div key={i} style={{ fontSize: 11, color: C.textS, padding: '4px 0', borderBottom: i<4 ? `1px solid ${C.border}` : 'none' }}>{t}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== SCREEN 4: 인증 이력 및 컴플라이언스 =====
+function AuditDashboardScreen() {
+  const stepData = [
+    { stage: '신분증 촬영', 완료: 89, 이탈: 11 },
+    { stage: '얼굴 대조', 완료: 78, 이탈: 11 },
+    { stage: '서명 검증', 완료: 72, 이탈: 6 },
+    { stage: '최종 완료', 완료: 68, 이탈: 4 },
+  ];
+
+  const anomalies = [
+    { id: 'ANO-031', desc: '짧은 시간 내 3회 연속 시도', time: '14:22', level: 'high' },
+    { id: 'ANO-029', desc: '얼굴 유사도 낮음 (52%)', time: '13:48', level: 'medium' },
+    { id: 'ANO-027', desc: '신분증 이미지 품질 불량 반복', time: '11:30', level: 'low' },
+  ];
+
+  const recentLogs = [
+    { id: 'KYC-2024-0892', time: '14:35', status: '완료', score: 94 },
+    { id: 'KYC-2024-0891', time: '14:28', status: '완료', score: 88 },
+    { id: 'KYC-2024-0890', time: '14:15', status: '이상 감지', score: 52 },
+    { id: 'KYC-2024-0889', time: '14:02', status: '완료', score: 91 },
+    { id: 'KYC-2024-0888', time: '13:48', status: '미완료', score: null },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18, animation: 'fadeIn .3s ease' }}>
+      {/* KPI */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+        {[
+          { label: '오늘 인증', value: '142', sub: '건', color: C.primary, bg: '#f0fdf4' },
+          { label: '완료율', value: '68%', sub: '전체 대비', color: '#0891b2', bg: '#ecfeff' },
+          { label: '이상 감지', value: '3', sub: '건 플래그', color: C.danger, bg: '#fef2f2' },
+          { label: '평균 소요', value: '4.2분', sub: '3단계 합산', color: C.warning, bg: '#fffbeb' },
+        ].map(k => (
+          <div key={k.label} style={{ background: k.bg, borderRadius: 14, padding: '16px 18px', border: `1px solid ${k.color}25` }}>
+            <div style={{ fontSize: 11, color: C.textS, marginBottom: 6 }}>{k.label}</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: k.color, lineHeight: 1 }}>{k.value}</div>
+            <div style={{ fontSize: 11, color: C.textS, marginTop: 3 }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Charts */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 16 }}>
+        <div style={{ background: C.surface, borderRadius: 14, padding: '18px 20px', border: `1px solid ${C.border}`, boxShadow: '0 1px 6px rgba(5,150,105,.06)' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.textP, marginBottom: 4 }}>인증 단계별 완료율</div>
+          <div style={{ fontSize: 11, color: C.textS, marginBottom: 14 }}>PostgreSQL window function 집계</div>
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={stepData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0fdf4" />
+              <XAxis dataKey="stage" tick={{ fontSize: 10, fill: C.textS }} />
+              <YAxis tick={{ fontSize: 10, fill: C.textS }} unit="%" />
+              <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+              <Bar dataKey="완료" fill={C.primary} radius={[4,4,0,0]} stackId="a" />
+              <Bar dataKey="이탈" fill="#fca5a5" radius={[4,4,0,0]} stackId="a" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div style={{ background: C.surface, borderRadius: 14, padding: 18, border: `1px solid ${C.border}`, boxShadow: '0 1px 6px rgba(5,150,105,.06)' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.textP, marginBottom: 10 }}>이상 감지 플래그</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {anomalies.map(a => (
+              <div key={a.id} style={{ padding: '10px 12px', borderRadius: 8, background: a.level==='high' ? '#fef2f2' : a.level==='medium' ? '#fffbeb' : '#f8fafc', border: `1px solid ${a.level==='high' ? '#fecaca' : a.level==='medium' ? '#fde68a' : C.border}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                  <span style={{ fontSize: 11, fontFamily: 'monospace', color: C.textS }}>{a.id}</span>
+                  <span style={{ fontSize: 10, color: C.textS }}>{a.time}</span>
+                </div>
+                <div style={{ fontSize: 11, color: C.textP }}>{a.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Log table + Export */}
+      <div style={{ background: C.surface, borderRadius: 14, padding: '18px 20px', border: `1px solid ${C.border}`, boxShadow: '0 1px 6px rgba(5,150,105,.06)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.textP }}>최근 인증 이력</div>
+          <button style={{ padding: '7px 14px', background: C.primary + '15', color: C.primary, border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>📄 PDF 리포트 내보내기</button>
+        </div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom: `2px solid ${C.border}` }}>
+              {['인증 ID', '요청 시각', '최종 상태', 'Face 유사도', '액션'].map(h => (
+                <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: C.textS }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {recentLogs.map((row, i) => (
+              <tr key={row.id} style={{ borderBottom: `1px solid ${C.border}`, background: i%2===0 ? '#fafffe' : C.surface }}>
+                <td style={{ padding: '10px 10px', fontSize: 12, fontFamily: 'monospace', color: C.primary }}>{row.id}</td>
+                <td style={{ padding: '10px 10px', fontSize: 12, color: C.textS }}>{row.time}</td>
+                <td style={{ padding: '10px 10px' }}>
+                  <span style={{ padding: '3px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600, background: row.status==='완료' ? '#f0fdf4' : row.status==='이상 감지' ? '#fef2f2' : '#fffbeb', color: row.status==='완료' ? C.success : row.status==='이상 감지' ? C.danger : C.warning }}>{row.status}</span>
+                </td>
+                <td style={{ padding: '10px 10px', fontSize: 12, color: row.score >= 80 ? C.success : row.score < 60 ? C.danger : C.warning }}>{row.score ? `${row.score}%` : '—'}</td>
+                <td style={{ padding: '10px 10px' }}>
+                  <button style={{ padding: '4px 10px', background: C.primary + '15', color: C.primary, border: 'none', borderRadius: 6, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>상세</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ===== MAIN APP =====
+function App() {
+  const [current, setCurrent] = useState('id-capture');
+
+  const COMPS = {
+    'id-capture': IDCaptureScreen,
+    'face-verification': FaceVerificationScreen,
+    'signature-capture': SignatureCaptureScreen,
+    'audit-dashboard': AuditDashboardScreen,
+  };
+  const PAGE_TITLES = {
+    'id-capture': { title: '신분증 촬영 및 보정', sub: 'e-KYC 1단계 · OpenCV 파이프라인' },
+    'face-verification': { title: '얼굴 대조 검증', sub: 'e-KYC 2단계 · Azure Face API + 라이브니스 감지' },
+    'signature-capture': { title: '서명 캡처 및 검증', sub: 'e-KYC 3단계 · Canvas Bézier + SHA-256' },
+    'audit-dashboard': { title: '인증 이력 및 컴플라이언스', sub: '감사 로그 · 이상 감지 · PDF 리포트' },
+  };
+  const Screen = COMPS[current];
+  const pageInfo = PAGE_TITLES[current];
+
+  return (
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      {/* Sidebar (bright-workspace) */}
+      <div style={{ width: 240, background: C.sidebarBg, display: 'flex', flexDirection: 'column', borderRight: `1px solid ${C.border}`, flexShrink: 0 }}>
+        {/* Logo */}
+        <div style={{ padding: '22px 18px 18px', borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 12, background: C.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>🔐</div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.secondary }}>e-KYC Platform</div>
+              <div style={{ fontSize: 10, color: C.textS }}>비대면 통합 인증</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Nav groups */}
+        <nav style={{ flex: 1, padding: '12px 10px', overflowY: 'auto' }}>
+          <div style={{ fontSize: 10, color: C.textS, padding: '6px 10px 4px', letterSpacing: 1, fontWeight: 600, textTransform: 'uppercase' }}>인증 프로세스</div>
+          {NAV_ITEMS.filter(n => n.step).map(item => {
+            const active = current === item.id;
+            return (
+              <button key={item.id} onClick={() => setCurrent(item.id)} style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
+                borderRadius: 10, border: 'none', cursor: 'pointer', marginBottom: 3, fontFamily: 'inherit',
+                background: active ? C.primary : 'transparent',
+                color: active ? '#fff' : C.textP,
+                transition: 'all .15s',
+              }}>
+                <div style={{ width: 18, height: 18, borderRadius: '50%', background: active ? 'rgba(255,255,255,.3)' : C.border, color: active ? '#fff' : C.textS, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, flexShrink: 0 }}>{item.step}</div>
+                <span style={{ fontSize: 13, fontWeight: active ? 600 : 400 }}>{item.icon} {item.label}</span>
+              </button>
+            );
+          })}
+
+          <div style={{ fontSize: 10, color: C.textS, padding: '12px 10px 4px', letterSpacing: 1, fontWeight: 600, textTransform: 'uppercase' }}>관리</div>
+          <button onClick={() => setCurrent('audit-dashboard')} style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
+            borderRadius: 10, border: 'none', cursor: 'pointer', marginBottom: 3, fontFamily: 'inherit',
+            background: current === 'audit-dashboard' ? C.primary : 'transparent',
+            color: current === 'audit-dashboard' ? '#fff' : C.textP,
+          }}>
+            <span style={{ fontSize: 13, fontWeight: current === 'audit-dashboard' ? 600 : 400 }}>📋 인증 이력 및 컴플라이언스</span>
+          </button>
+        </nav>
+
+        {/* Status */}
+        <div style={{ padding: '14px 18px', borderTop: `1px solid ${C.border}` }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.success }} />
+            <span style={{ fontSize: 11, color: C.textS }}>시스템 정상 운영중</span>
+          </div>
+          <div style={{ fontSize: 10, color: C.textS, lineHeight: 1.6 }}>
+            <div>오늘 인증: 142건</div>
+            <div>구현 데모 · Forest Fresh</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Topbar */}
+        <div style={{ height: 58, background: C.surface, borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', padding: '0 26px', justifyContent: 'space-between', flexShrink: 0 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.secondary }}>{pageInfo.title}</div>
+            <div style={{ fontSize: 11, color: C.textS }}>{pageInfo.sub}</div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ fontSize: 12, color: C.textS }}>관리자</div>
+            <div style={{ width: 32, height: 32, borderRadius: '50%', background: C.primary, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700 }}>최</div>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '24px 28px' }}>
+          <Screen key={current} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
