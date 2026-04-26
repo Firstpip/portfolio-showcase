@@ -461,15 +461,26 @@ Phase 6 (E2E)
 - **last_failure**: —
 
 #### T4.2 재생성 UI (전체/부분)
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T4.1
 - **requires_test**: yes
-- **파일**: 대시보드 + 워커 라우터에 `regenerate_scope={pass|flow_id}` 컬럼/필드
+- **파일**: `supabase/migrations/20260426221914_demo_regenerate_columns.sql`, `worker/generate-demo/orchestrator.ts`, `worker/index.ts`, `dashboard/index.html`, `worker/test-regenerate.ts`
 - **해야 할 일**: 대시보드에서 "전체 재생성" / "특정 플로우만 재생성" 버튼 → DB에 `regenerate_scope` 쓰고 `demo_status='gen_queued'` 세팅. 워커가 scope에 따라 3-pass 전체 또는 Pass B 특정 플로우만 재실행. 사용량 리밋 도달 가능성 UI에 명시.
+- **구현 메모**:
+  - 마이그레이션: `regenerate_scope` TEXT (NULL/'all'/'flow:<id>' CHECK 제약), `demo_artifacts` JSONB (skeleton+patches+seed+tokens 캐시).
+  - `runGenerationPipeline(inputs, scope)` 순수 함수: `mode='all'`이면 tokens→skeleton→seed→sections→assemble 전체; `mode='partial'`이면 prevArtifacts 재사용 + spec.core_flows를 1개로 좁힌 generateSections 호출 + 캐시 patches에서 해당 flow_id만 교체. 부분 모드는 LLM 1회 호출(~30-60s).
+  - `handleGenQueued(supabase, projectId)` 래퍼: atomic claim(`gen_queued`→`generating`) → 파이프라인 → 성공 시 임시파일 작성 후 `renameSync`로 atomic 교체 → demo_artifacts/demo_status='ready'/demo_generated_at 갱신 + regenerate_scope NULL 리셋. 실패 시 기존 HTML/artifacts 손대지 않고 `demo_status='failed'`만 전이 (regenerate_scope는 보존해 사용자가 같은 의도로 재시도 가능).
+  - 대시보드: `RegenerationPanel` 컴포넌트 — `demo_status='ready'` 또는 `'failed'` 분기에서 노출. "전체 재생성" + 각 core_flow 별 칩 버튼(T1/T2/T3 색상 구분), confirm 단계로 의도 재확인. Max 5h 롤링 리밋 안내 푸터 포함. `handleRegenerate(project, scope)`가 `regenerate_scope` + `demo_status='gen_queued'` 동시 세팅. `handleStartDemoGen`도 `regenerate_scope: null`로 리셋해 최초 생성과 재생성을 구분.
+  - 워커 라우터(`worker/index.ts`): demo_status='gen_queued' 분기에 `void handleGenQueued(supabase, newRow.id)` 추가.
 - **test_spec**:
-  - [ ] 특정 플로우만 재생성 시 다른 플로우 코드는 불변
-  - [ ] 재생성 중 `demo_status = generating` 반영
-  - [ ] 실패 시 이전 HTML 유지 (덮어쓰지 않음)
+  - [x] 특정 플로우만 재생성 시 다른 플로우 코드는 불변 — `runGenerationPipeline(mode=partial)`로 flow_patient_signup만 재호출, flow_appointment_new + flow_insurance_claim은 byte-identical 확인 (component_name + component_code 전부 일치, target은 reqId 변화로 재호출 확인). stages=sections,assemble만 실행 (skeleton/seed/tokens 캐시 재사용).
+  - [x] 재생성 중 `demo_status = generating` 반영 — atomic UPDATE `demo_status='generating' WHERE id=$1 AND demo_status='gen_queued'` 1차 1행 영향, 2차 0행 (중복 선점 방지). 최종 SELECT로 'generating' 잔존 확인.
+  - [x] 실패 시 이전 HTML 유지 (덮어쓰지 않음) — `__T4_2_PROBE_fail_*` 슬러그에 marker가 있는 사전 HTML 작성, spec_structured=NULL인 행으로 handleGenQueued 호출 → preflight 실패 → demo_status='failed' 전이, demo_artifacts/demo_generated_at NULL 유지, HTML 파일 byte-identical 보존(149B + marker 일치).
+- **자동 검증 결과 (2026-04-27, 3/3 통과)**:
+  - 테스트 1: Opus 1회 호출 37.5s, output 3802 토큰. 다른 2개 flow 코드 byte-identical, target flow reqId 840aab08→962ab0d6 변화. 산출 HTML 45,541 bytes.
+  - 테스트 2: 1차 claim 1행, 2차 0행, 최종 demo_status='generating'.
+  - 테스트 3: handleGenQueued FAILED at preflight, HTML 보존, artifacts NULL 유지.
+- **last_failure**: —
 
 #### T4.3 수동 수정 워크플로우 문서 (병행 가능)
 - **상태**: `TODO`
@@ -534,10 +545,10 @@ Phase 6 (E2E)
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-25 (T4.1 DONE — 로컬 프리뷰 명령 `preview-demo.sh` 추가, 자동 검증 2/2 통과)
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1
+- **마지막 업데이트**: 2026-04-27 (T4.2 DONE — 재생성 UI + 워커 gen_queued 오케스트레이터, 자동 검증 3/3 통과)
+- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2
 - **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: T4.2 (T4.1 DONE, 재생성 UI), T4.3 (문서, 선행 의존성 없음)
+- **다음에 착수 가능**: T4.3 (문서, 선행 의존성 없음), T5.1 (T4.2 DONE, deploy-demo 워커 모듈)
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
@@ -576,3 +587,4 @@ Phase 6 (E2E)
 | 2026-04-25 | T3.4 완료 | Pass C 통합 빌드 (worker/generate-demo/assemble.ts + test-assemble.ts + test-assemble-browser.ts). assembleDemo: text/babel 블록 경계 슬라이스 → FlowPlaceholder 본문 첫줄에 `__FLOW_COMPONENTS[flowId]` 디스패처 주입(파라미터 괄호는 문자열/주석 건너뛰며 수동 매칭) → createRoot 직전에 Pass B 컴포넌트 + flow_id→컴포넌트명 맵 인라인 → text/babel 직전에 `<script>window.__DEMO_SEED__=...;</script>` plain script 삽입(`</script>`·`<!--`·`-->`·U+2028/U+2029 이스케이프) → PASS_B_PLACEHOLDER 주석 청소 → babel 태그에 `data-presets="env,react"` 보강 → 400KB 상한. 캐시: `.test-cache/t3.4-{skeleton.html,patches.json,seed.json}`로 단계별 산출물 분리(`--fresh`/`--regen=…`). 자동 8/8 통과(46.2 KB, CDN 4개, 시드 33 records, 디스패처/맵/3 컴포넌트 인라인 OK). Playwright 헤드리스 Chromium으로 실측: FCP **816ms**(예산 2000ms), patient 배열에 마커 push → reload → 잔존, 페이지 콘솔 에러 0건. tsx(esbuild)가 evaluate 콜백을 변환하며 `__name` helper 주입해 ReferenceError → FCP 폴링을 Node 측 짧은 evaluate 반복으로 변경해 우회 |
 | 2026-04-25 | T3.5 완료 (코드 변경 없음) | T3.4 산출물 감사 결과 review_checklist 3/3 자동 충족: Lorem ipsum 0건, `<img>` 부재로 이미지 깨짐 불가, 가격·생년월일·전화번호 분포 현실적. T3.1 realistic seed + T3.3 domain-aware Pass B 단계에서 이미 리얼리티 확보. 별도 후처리 모듈은 YAGNI라 판단 — 사용자 위임으로 코드 변경 없이 승인. 향후 사진/리뷰 텍스트 도메인 등장 시 신규 task로 재개 |
 | 2026-04-25 | T4.1 완료 | 루트 `preview-demo.sh` 추가 — node/npm 의존 없이 python3 http.server + macOS `open`으로 단일 명령 프리뷰. 인자 형태 4종(latest/project_slug/dir/file), 환경변수 `PREVIEW_PORT`·`PREVIEW_NO_OPEN`. 자동 검증 2/2 통과: 단일 명령으로 서버 부팅+open 호출(stub으로 URL 인자 검증), HTTP 200+올바른 HTML 서빙, 정적 서버라 핵 리로드 불필요 |
+| 2026-04-27 | T4.2 완료 | 재생성 UI + 워커 gen_queued 오케스트레이터. 마이그레이션(regenerate_scope TEXT/CHECK + demo_artifacts JSONB), `worker/generate-demo/orchestrator.ts`(순수 `runGenerationPipeline` + DB래퍼 `handleGenQueued`: atomic claim→파이프라인→tempfile+rename atomic 교체→artifacts/ready/generated_at 갱신, 실패 시 HTML/artifacts 보존), 대시보드 `RegenerationPanel`(전체+flow별 버튼·confirm 단계·Max 5h 리밋 안내), 워커 라우터에 gen_queued 분기 추가. 자동 검증 3/3 통과: (1) partial=flow_patient_signup만 재호출 시 다른 2개 flow 코드 byte-identical(reqId 840aab08→962ab0d6, stages=sections+assemble만) (2) atomic gen_queued→generating 1행→0행으로 중복 선점 방지 (3) preflight 실패 시 사전 HTML 149B byte-identical 보존+demo_artifacts/generated_at NULL 유지 |

@@ -3177,10 +3177,108 @@ function StructuredSpecEditor({ spec, setSpec }) {
   );
 }
 
+// T4.2 재생성 패널.
+// demo_status='ready' 또는 'failed' 상태에서 노출. "전체 재생성" + 각 core_flow 개별 재생성 버튼.
+// scope='all' → 전체 3-pass 재실행. scope='flow:<id>' → 해당 플로우만 Pass B 재호출 (캐시 활용).
+// Max 구독 5시간 롤링 리밋 도달 가능성 안내 포함.
+function RegenerationPanel({ project, structuredChanged, onRegenerate, saving, failed }) {
+  const [confirming, setConfirming] = useState(null); // null | 'all' | 'flow:<id>'
+  const flows = (project?.spec_structured?.core_flows) || [];
+  const generatedAt = project?.demo_generated_at;
+  const lastScope = project?.regenerate_scope; // 가장 최근 시도된 scope (실패 시 보존됨)
+  const disabled = saving || structuredChanged;
+
+  const trigger = (scope) => {
+    if (disabled) return;
+    setConfirming(scope);
+  };
+  const confirm = async () => {
+    if (!confirming) return;
+    try { await onRegenerate(project, confirming); }
+    finally { setConfirming(null); }
+  };
+  const cancel = () => setConfirming(null);
+
+  const headerStyle = failed
+    ? { borderColor:'#ff6b6b44', bg:'#ff6b6b10', accent:'#e74c3c', icon:'❌' }
+    : { borderColor:'#00b89444', bg:'#00b89412', accent:'var(--green)', icon:'✅' };
+
+  return (
+    <div style={{ marginTop:14, padding:'0.85rem 0.95rem', borderRadius:10, border:`1px solid ${headerStyle.borderColor}`, background:headerStyle.bg }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+        <div style={{ fontSize:'0.8rem', fontWeight:700, color:headerStyle.accent }}>
+          {headerStyle.icon} {failed ? '데모 생성 실패 — 이전 산출물은 보존됨' : '데모 생성 완료'}
+        </div>
+        {generatedAt && (
+          <div style={{ fontSize:'0.72rem', color:'var(--text2)' }}>
+            마지막 생성: {new Date(generatedAt).toLocaleString('ko-KR', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' })}
+          </div>
+        )}
+      </div>
+      {failed && lastScope && (
+        <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:8 }}>
+          마지막 시도: <code style={{ background:'var(--surface2)', padding:'1px 4px', borderRadius:3 }}>{lastScope}</code>
+        </div>
+      )}
+      {structuredChanged && (
+        <div style={{ fontSize:'0.72rem', color:'var(--yellow)', marginBottom:8 }}>
+          ⚠ 저장되지 않은 spec 변경사항이 있습니다. 저장·재승인 후 재생성하세요.
+        </div>
+      )}
+
+      {confirming ? (
+        <div style={{ padding:'0.6rem 0.7rem', borderRadius:6, background:'var(--surface2)', border:'1px dashed var(--border)' }}>
+          <div style={{ fontSize:'0.78rem', color:'var(--text)', marginBottom:8 }}>
+            {confirming === 'all'
+              ? '전체 3-pass를 재실행합니다 (~2~3분, Opus 호출 5회 이상). Max 구독 5시간 리밋 잔량을 확인하세요.'
+              : `'${flows.find(f=>('flow:'+f.id)===confirming)?.title || confirming}' 플로우만 Pass B 재실행합니다 (~30~60초). 다른 플로우 코드는 변경되지 않습니다.`}
+          </div>
+          <div style={{ display:'flex', gap:6, justifyContent:'flex-end' }}>
+            <button onClick={cancel} disabled={saving} style={{ padding:'0.4rem 0.7rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:saving?'default':'pointer', fontSize:'0.78rem' }}>취소</button>
+            <button onClick={confirm} disabled={saving} style={{ padding:'0.4rem 0.7rem', borderRadius:6, border:'none', background:'var(--accent)', color:'#fff', cursor:saving?'default':'pointer', fontSize:'0.78rem', fontWeight:600, opacity:saving?0.7:1 }}>{saving?'등록 중...':'재생성 시작'}</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:8 }}>
+            <button onClick={() => trigger('all')} disabled={disabled} style={{
+              padding:'0.45rem 0.75rem', borderRadius:6, border:'1px solid var(--accent)55',
+              background:'var(--accent)15', color:'var(--accent)',
+              cursor:disabled?'not-allowed':'pointer', fontSize:'0.78rem', fontWeight:600,
+              opacity:disabled?0.5:1,
+            }}>🔁 전체 재생성</button>
+          </div>
+          {flows.length > 0 && (
+            <div>
+              <div style={{ fontSize:'0.7rem', color:'var(--text2)', marginBottom:6 }}>특정 플로우만 재생성:</div>
+              <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                {flows.map(f => (
+                  <button key={f.id} onClick={() => trigger('flow:'+f.id)} disabled={disabled} title={`Pass B를 ${f.id}만 재호출 (다른 플로우 불변)`} style={{
+                    padding:'0.35rem 0.65rem', borderRadius:6, border:'1px solid var(--border)',
+                    background:'var(--surface2)', color:'var(--text)',
+                    cursor:disabled?'not-allowed':'pointer', fontSize:'0.74rem',
+                    opacity:disabled?0.5:1,
+                  }}>
+                    <span style={{ marginRight:4, color: f.tier===1?'var(--green)':f.tier===2?'var(--yellow)':'var(--text2)' }}>T{f.tier}</span>
+                    {f.title || f.id}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div style={{ marginTop:10, fontSize:'0.7rem', color:'var(--text2)', borderTop:'1px dashed var(--border)', paddingTop:8 }}>
+            💡 Claude Max 구독은 5시간 롤링 사용량 리밋이 있습니다. 리밋 도달 시 워커가 자동 대기 후 재시도합니다.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // T2.4 승인·생성 패널.
 // 2단계 UX: 1) 저장된 스펙을 "승인"해 spec_approved_at 기록 → 2) "데모 생성 시작"으로 demo_status='gen_queued' 전이.
 // 스펙 재편집(structuredChanged) 또는 저장 핸들러가 spec_approved_at을 null로 리셋하면 자동으로 1단계로 복귀한다.
-function ApprovalPanel({ project, structuredChanged, flowCount, onApprove, onStartGen, saving }) {
+function ApprovalPanel({ project, structuredChanged, flowCount, onApprove, onStartGen, onRegenerate, saving }) {
   const approvedAt = project?.spec_approved_at || null;
   const demoStatus = project?.demo_status || 'none';
   const hasSpec = !!project?.spec_structured;
@@ -3188,19 +3286,21 @@ function ApprovalPanel({ project, structuredChanged, flowCount, onApprove, onSta
 
   // 생성 중/완료된 상태에서는 승인/시작 버튼을 노출하지 않는다.
   if (demoStatus === 'gen_queued' || demoStatus === 'generating') {
+    const scope = project?.regenerate_scope;
+    const scopeLabel = !scope ? '최초 생성' : (scope === 'all' ? '전체 재생성' : `재생성: ${scope}`);
     return (
       <div style={{ marginTop:14, padding:'0.75rem 0.9rem', borderRadius:8, border:'1px solid var(--accent)44', background:'var(--accent)12', fontSize:'0.8rem', color:'var(--accent)' }}>
-        ⏳ {demoStatus === 'gen_queued' ? '데모 생성 대기열에 등록됨 (워커 픽업 대기)' : '데모 생성 중...'}
+        ⏳ {demoStatus === 'gen_queued' ? `데모 생성 대기열에 등록됨 (${scopeLabel}, 워커 픽업 대기)` : `데모 생성 중... (${scopeLabel})`}
         {approvedAt && <span style={{ marginLeft:8, color:'var(--text2)', fontSize:'0.72rem' }}>승인 {new Date(approvedAt).toLocaleString('ko-KR', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' })}</span>}
       </div>
     );
   }
   if (demoStatus === 'ready') {
-    return (
-      <div style={{ marginTop:14, padding:'0.75rem 0.9rem', borderRadius:8, border:'1px solid #00b89444', background:'#00b89412', fontSize:'0.8rem', color:'var(--green)' }}>
-        ✅ 데모 배포 완료. 재생성은 별도 (T4.2).
-      </div>
-    );
+    return <RegenerationPanel project={project} structuredChanged={structuredChanged} onRegenerate={onRegenerate} saving={saving} />;
+  }
+  if (demoStatus === 'failed') {
+    // 실패 후 재시도 — 동일 패널로 노출 (이전 산출물은 보존됨).
+    return <RegenerationPanel project={project} structuredChanged={structuredChanged} onRegenerate={onRegenerate} saving={saving} failed />;
   }
 
   const canApprove = preconditionOk && !approvedAt && !saving;
@@ -3258,7 +3358,7 @@ function ApprovalPanel({ project, structuredChanged, flowCount, onApprove, onSta
   );
 }
 
-function SpecModal({ project, onClose, onSave, onApprove, onStartGen, saving }) {
+function SpecModal({ project, onClose, onSave, onApprove, onStartGen, onRegenerate, saving }) {
   const [tab, setTab] = useState('raw');
   const [draft, setDraft] = useState(project?.spec_raw || '');
   const [specDraft, setSpecDraft] = useState(() => cloneSpec(project?.spec_structured));
@@ -3384,7 +3484,7 @@ function SpecModal({ project, onClose, onSave, onApprove, onStartGen, saving }) 
               </div>
             )}
             <ApprovalPanel project={project} structuredChanged={structuredChanged} flowCount={flowCount}
-              onApprove={onApprove} onStartGen={onStartGen} saving={saving} />
+              onApprove={onApprove} onStartGen={onStartGen} onRegenerate={onRegenerate} saving={saving} />
           </div>
         )}
 
@@ -4337,19 +4437,44 @@ function App({ session }) {
       const today = new Date().toISOString().split('T')[0];
       const { data:updated, error } = await supabase
         .from(TABLE)
-        .update({ demo_status: 'gen_queued', updated_at: today })
+        .update({ demo_status: 'gen_queued', regenerate_scope: null, updated_at: today })
         .eq('slug', project.slug)
-        .select('slug, spec_approved_at, demo_status, updated_at');
+        .select('slug, spec_approved_at, demo_status, regenerate_scope, updated_at');
       if (error) throw error;
       if (!updated || updated.length === 0) throw new Error(`프로젝트를 찾을 수 없습니다: ${project.slug}`);
       const row = updated[0];
-      const merge = { spec_approved_at: row.spec_approved_at, demo_status: row.demo_status, updated_at: row.updated_at };
+      const merge = { spec_approved_at: row.spec_approved_at, demo_status: row.demo_status, regenerate_scope: row.regenerate_scope, updated_at: row.updated_at };
       setData(prev => prev.map(d => d.slug===project.slug?{...d,...merge}:d));
       setSelectedProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
       setSpecProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
       toast('데모 생성 대기열에 등록됨','success');
     } catch(err) {
       toast('생성 시작 실패: '+err.message,'error');
+      throw err;
+    } finally { setSaving(false); }
+  }, [toast]);
+
+  // T4.2 데모 재생성 (전체/특정 플로우). scope = 'all' | 'flow:<flow_id>'.
+  // demo_status='gen_queued' + regenerate_scope 세팅 → 워커가 동일 핸들러로 처리.
+  const handleRegenerate = useCallback(async (project, scope) => {
+    setSaving(true);
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const { data:updated, error } = await supabase
+        .from(TABLE)
+        .update({ demo_status: 'gen_queued', regenerate_scope: scope, updated_at: today })
+        .eq('slug', project.slug)
+        .select('slug, demo_status, regenerate_scope, updated_at');
+      if (error) throw error;
+      if (!updated || updated.length === 0) throw new Error(`프로젝트를 찾을 수 없습니다: ${project.slug}`);
+      const row = updated[0];
+      const merge = { demo_status: row.demo_status, regenerate_scope: row.regenerate_scope, updated_at: row.updated_at };
+      setData(prev => prev.map(d => d.slug===project.slug?{...d,...merge}:d));
+      setSelectedProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
+      setSpecProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
+      toast(scope==='all' ? '전체 재생성 큐 등록' : `재생성 큐 등록 (${scope})`,'success');
+    } catch(err) {
+      toast('재생성 등록 실패: '+err.message,'error');
       throw err;
     } finally { setSaving(false); }
   }, [toast]);
@@ -4593,6 +4718,7 @@ function App({ session }) {
           onSave={handleSaveSpec}
           onApprove={handleApproveSpec}
           onStartGen={handleStartDemoGen}
+          onRegenerate={handleRegenerate}
           saving={saving}
         />
       )}

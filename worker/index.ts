@@ -17,6 +17,7 @@ import "./shared/env.ts";
 import { supabaseClient } from "./shared/supabase.ts";
 import { verifyAuth } from "./shared/claude.ts";
 import { handleExtractQueued } from "./extract-spec.ts";
+import { handleGenQueued } from "./generate-demo/orchestrator.ts";
 
 async function main() {
   console.log("[worker] 시작 — 전제 조건 확인 중...");
@@ -63,7 +64,11 @@ async function main() {
         if (newRow.demo_status === "extract_queued") {
           void handleExtractQueued(supabase, newRow.id);
         }
-        // TODO(T3.x, T5.1): gen_queued 등 추가 분기
+        if (newRow.demo_status === "gen_queued") {
+          // T4.2: 최초 생성(regenerate_scope=NULL) + 재생성(scope='all'|'flow:<id>') 통합 처리.
+          void handleGenQueued(supabase, newRow.id);
+        }
+        // TODO(T5.1): deploy 단계는 handleGenQueued 성공 직후 호출 추가
       },
     )
     .subscribe((status) => {
