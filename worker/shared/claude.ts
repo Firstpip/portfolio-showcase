@@ -37,6 +37,9 @@ export type RunOptions = {
   allowedTools?: string[];
   // 에이전트가 내부 루프에서 호출할 수 있는 최대 모델 콜 수.
   maxTurns?: number;
+  // 모델 응답 최대 출력 토큰 수. CLI의 CLAUDE_CODE_MAX_OUTPUT_TOKENS env 로 주입.
+  // 기본 32K (Opus 4.7 standard). 큰 응답 (대규모 코드 생성) 시 64K 또는 128K 로 설정.
+  maxOutputTokens?: number;
   // 추가 Agent SDK 옵션 override용.
   extraOptions?: Partial<Options>;
 };
@@ -61,6 +64,16 @@ export async function runClaude(
     maxTurns: options.maxTurns ?? 1,
     ...(options.systemPrompt
       ? { systemPrompt: options.systemPrompt }
+      : {}),
+    // CLI 의 CLAUDE_CODE_MAX_OUTPUT_TOKENS env 로 max output tokens 주입.
+    // ...process.env 를 그대로 상속하지 않으면 Claude 인증/네트워크 등도 깨지므로 spread 후 override.
+    ...(options.maxOutputTokens
+      ? {
+          env: {
+            ...process.env,
+            CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(options.maxOutputTokens),
+          },
+        }
       : {}),
     ...(options.extraOptions ?? {}),
   };

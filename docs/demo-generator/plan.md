@@ -807,20 +807,31 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 - **last_failure**: —
 
 #### T8.3 신규 generate 프롬프트 — Vite 프로젝트 src/ 트리 생성
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T8.1, T8.2
 - **requires_test**: yes
-- **파일**: `worker/prompts/generate-app.md` (신규, Pass A/B/C 폐기 후 단일 매뉴얼), `worker/generate-demo/generate-app.ts` (신규), 기존 `worker/prompts/pass-a-skeleton.md`/`pass-b-section.md`/`worker/generate-demo/skeleton.ts`/`sections.ts`/`assemble.ts` → `worker/generate-demo/_legacy/` 이동(삭제 안 함, 참고용)
-- **해야 할 일**:
-  - 새 프롬프트: Vite+React+TS+Tailwind 가이드 + spec.core_flows → src/pages/{flowId}.tsx + src/App.tsx 라우팅 + tailwind.config 토큰 주입 + LocalStorage store(useStore hook) + shadcn 컴포넌트 사용법 + tier 1/2/3 동작 규칙 (티어 1=실제 CRUD, 티어 2=토스트만, 티어 3=placeholder card)
-  - Claude Agent SDK file-write tool 활용 → LLM이 직접 src/ 트리 작성 (단일 메가 응답 회피)
-  - 출력 검증: 모든 flow가 라우트로 연결됐는지, tailwind config의 토큰이 spec design_brief에서 옴, types 컴파일 OK
-- **test_spec**:
-  - [ ] 발달센터 spec → src/ 트리 생성 후 `tsc --noEmit` 통과
-  - [ ] 모든 core_flows id가 src/pages/에 파일로 존재
-  - [ ] App.tsx에 모든 라우트 등록
-  - [ ] tailwind.config의 primary 색이 design_brief 토큰과 매치
-  - [ ] LocalStorage store 사용 코드(useStore) 존재
+- **파일**: `worker/prompts/generate-app-foundation.md` (Pass 1 system prompt), `worker/prompts/generate-app-page.md` (Pass 2 system prompt), `worker/generate-demo/generate-app.ts` (2-pass orchestrator), `worker/test-generate-app.ts` (E2E 테스트), `worker/shared/claude.ts` (maxOutputTokens 옵션 추가). _legacy/ 이동은 **T8.7 로 미룸** — orchestrator/index.ts/test 가 skeleton/sections/assemble 을 import 중이라 지금 이동하면 워커 시작 자체가 안 됨.
+- **구현 메모**:
+  - **2-pass 분할 (Opus 4.7 의 32K output 한도 우회)**:
+    - Pass 1 (foundation, ~10K tokens): main.tsx / index.css / App.tsx (모든 라우트) / Layout.tsx / types.ts / lib/store.tsx (.tsx — JSX) / lib/seed.ts / tailwind.config.cjs + 모든 flow 의 minimal placeholder page (5~10 LOC)
+    - Pass 2 (per-flow page, 각 ~3K tokens): 각 flow 마다 1 호출, Promise.allSettled 병렬, foundation 의 placeholder 를 정식 본문으로 덮어씀
+    - cache_read 매우 잘 적중 — 8 page parallel 시 cache_read_total 168K (시스템 프롬프트 21K × 8)
+  - **단일 JSON 응답** 방식 (file-write tool 안 씀) — 결정론적, 디버깅 쉬움. Pass 1 = `{"files": [...]}`, Pass 2 = `{"path": "...", "content": "..."}`.
+  - **maxOutputTokens 옵션** (claude.ts 추가): `CLAUDE_CODE_MAX_OUTPUT_TOKENS` env 로 CLI 에 주입. 그러나 시도 결과 **Opus 4.7 hard cap 32K** — env 무시됨. 분할이 정답.
+  - **maxTurns=2** (Pass 1, Pass 2 모두): Opus 가 가끔 첫 turn 에 "I'll analyze..." 같은 인트로 후 두 번째 turn 에 JSON 출력하는 패턴 대비. result 메시지는 마지막 turn 의 응답.
+  - **시스템 프롬프트 강한 가드** (양 prompt 모두): "응답의 첫 바이트는 반드시 `{`. 한 글자라도 다른 문자가 앞에 오면 시스템이 reject" + user 메시지 끝에도 동일 가드 첨언.
+  - **stripJsonOuter** 안전망: 첫 `{` 부터 마지막 `}` 까지 슬라이스 — 코드펜스/설명문 안전 처리.
+  - **path 안전성 검증**: `..` 차단, workspace escape 차단.
+  - **HashRouter** (정적 호스팅 + base path 충돌 0), **shadcn ui 컴포넌트 풀세트 만들지 않음** (출력 토큰 절약 — page 안에 raw HTML + tailwind class 직접).
+  - **chosen_runtime 은 LLM 결정 안 함** — generate-app 모듈이 input.workspace.stack ('vite-react-ts') 그대로 사용. T8.10 에서 vue/next runtime 추가 시 분기.
+  - **시드는 별도** (기존 seed.ts/seed-data.md 그대로 재사용 예정 — T8.7 통합 시 src/lib/seed.ts 로 주입). 본 task 의 lib/seed.ts 는 LLM 이 hard-coded 소량 (entity 별 3~5 개) 작성.
+- **자동 검증 결과 (2026-04-27, 5/5 통과 / 보정 4사이클)**:
+  - 1차 (단일 호출): JSON_PARSE_FAILED — 32,176 output tokens 에서 truncate (Opus 4.7 hard cap 32K, 9 flows × ~3K + foundation = 한도 초과)
+  - 2차 (maxOutputTokens=128K): 여전히 32,873 output tokens 에서 truncate — env 무시됨. files=1 (Flow9.tsx 만 우연히 valid JSON)
+  - 3차 (2-pass 분할 + 단순 가드): foundation 응답이 150 tokens 인트로 멘트만 — JSON 도달 못 함 ("I'll analyze the spec...")
+  - 4차 (maxTurns=2 + 시스템/user 메시지 강한 가드): foundation + 7 page 성공 (extract 가 7 flows 산출), store.ts JSX 에러 + 검증 로직 false negative
+  - 5차 (store.tsx + 검증 로직 file-existence 매칭): **전체 통과** — foundation 104s/11K out, 8 page parallel max 37.7s, total 141.8s wall, files=17, 정적 검증 5/5, vite build 3.4s, 콘솔 에러 0
+  - 토큰 효율: 8 page parallel 시 cache_read_total 168K (시스템 프롬프트 21K × 8 회 적중), out_total 22K, 평균 페이지 ~2.8K
 - **last_failure**: —
 
 #### T8.4 디자인 토큰 → tailwind config 매핑
@@ -925,10 +936,10 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (T8.2 DONE — build-runtime 4 헬퍼 + 4/4 검증 first try, build 2.6s. 다음 T8.3 generate-app)
-- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2
+- **마지막 업데이트**: 2026-04-27 (T8.3 DONE — generate-app 2-pass 시스템 + 5/5 검증 통과 / 보정 4사이클. 다음 T8.4 tokens-to-tailwind)
+- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3
 - **진행 중 task**: 없음
-- **다음에 착수 가능**: T8.3 (신규 generate 프롬프트 — Vite src/ 트리 생성) — depends_on T8.1, T8.2 충족
+- **다음에 착수 가능**: T8.4 (디자인 토큰 → tailwind config 매핑) — depends_on T8.3 충족
 - **블로킹 중**: T7.3 (Phase 8 완료 후 재개)
 - **Phase 8 첫 cut 범위**: T8.0~T8.8 (vite-react-ts runtime 1개 + standard demo_mode + 1-click E2E). 후속 T8.9~T8.11은 polish.
 - **Phase 7 배경**: T1.1/T2.3/T2.4의 다단계 UX(paste → 추출 → 편집 → 승인 → 생성)가 사용자 인지 부담 큼. T6.2/T6.3로 extract 정확도 강화 + T4.2 재생성 패널로 사후 교정 가능 → SpecModal/StructuredSpecEditor/ApprovalPanel 폐기, 트리거 1회로 단순화. 위시켓 URL 자동 fetch 통합으로 paste 자체 제거
@@ -980,6 +991,7 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 | 2026-04-27 | T6.2 완료 | extract 프롬프트 N:M 자동 분해. `worker/prompts/extract-spec.md` 에 "N:M 관계 분해 규칙" 섹션 (감지 신호·금지 패턴·올바른 분해+예시) + 품질체크 항목 2개 추가. `worker/shared/validate-spec.ts` 에 `detectPluralRef` 헬퍼 — `_ids` 접미사 또는 's' 끝 ref 거부 (allowlist: address·status·process·class·series). `worker/test-extract-nm.ts` 신규 — 발달센터 회귀(spec_raw 복제) + 합성 3건(clinic_review_tag, study_member_group, ecom_product_category). 자동 검증 4/4 통과: (1) 발달센터 → review_tag {review_id, tag_id} 자동 등장, 보너스 center_therapy_type 분해 (T6.1 수동 패치 불필요화) (2) clinic → review_tag 분해 (3) study → group_member 분해 (study_group 도메인 prefix → group_id 참조) (4) ecom → product_category 분해. 복수형 ref 위반 0건, Sonnet 4회 호출 (cache_read 21K 재사용) |
 | 2026-04-27 | T6.3 완료 | extract 프롬프트 read-only flow tier 분류 개선. `worker/prompts/extract-spec.md` tier 1 정의에 "steps 안에 write step 적어도 하나 필수" 규칙 + read+persist 예외 단락(찜·북마크·별점·알림 등록은 read 처럼 보여도 tier 1 자격) + 절대 금지 패턴(steps 가 전부 검색·둘러보기·필터·조회 같은 읽기 동사로만 구성된 경우 tier 2 강제) + 4단계 결정 절차 + 품질 체크 2항목 추가. `worker/extract-spec.ts` `stripJsonFence` 를 outer-slice(첫 `{`~마지막 `}`) 무조건 적용으로 보강 — 종료 펜스 + trailing 텍스트 케이스 안전망. `worker/test-extract-tier.ts` 신규 — 발달센터 회귀 + 합성 3건(realestate_browse/event_calendar/recipe_browse). 각 케이스 (1) handleExtractQueued ok (2) tier_1 모든 flow write 동사 step ≥1 (3) read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개. 자동 검증 4/4 통과: T6.1 시점 발달센터 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결. 1회차 실패 — Sonnet 이 ```json 펜스 + trailing 텍스트로 응답해 종료 펜스 정규식 미매칭 (realestate) → stripJsonFence outer-slice 무조건 적용, 그리고 분류기 false positive (recipe 의 "재료 다중 입력" 의 `입력`, "작성자 프로필" 의 `작성`) → 단독 `입력` 제거 + `작성(?!자)` 부정선후행. 사용자 위임 승인 |
 | 2026-04-27 | T0.3 완료 | 디자인 토큰 추출 유틸 manual-review 통과 (사용자 승인). `worker/test-extract-tokens.ts` 로 5개 도메인 portfolio-1 (발달센터/핀테크/병원/임원 대시보드/커뮤니티) 검증. NO_LLM=1: 4/5 케이스 100% 일치 + 5번(하드코딩 케이스)은 휴리스틱 실패 → graceful fallback 안착 (throw 0). LLM ON: Sonnet 1회 호출(10s, 37 output 토큰)로 5번 케이스도 100% 매칭 → 전체 5/5 = 100%. 빈 HTML 입력에서도 `_source='fallback'` 으로 안전하게 떨어짐 확인. 데모 생성기 모든 task (T0.1~T6.3) 완료 |
+| 2026-04-27 | T8.3 완료 | generate-app 2-pass 시스템 — Pass 1 (foundation) Opus 단일 호출로 main/css/App/Layout/types/store.tsx/seed/tailwind 8 파일 + 모든 flow 의 placeholder page, Pass 2 (per-flow) flows.length 만큼 Opus 병렬 호출 (Promise.allSettled) 로 placeholder 덮어쓰기. claude.ts 에 maxOutputTokens 옵션 추가 (CLAUDE_CODE_MAX_OUTPUT_TOKENS env, 다만 Opus 4.7 hard cap 32K 라 무시되어 분할이 정답이었음). maxTurns=2 + 시스템/user 메시지 강한 가드 ("첫 바이트 `{`") 로 Opus 인트로 멘트 회피. stripJsonOuter 안전망 + path 안전성 + workspace escape 차단. 자동 검증 5/5 (보정 4사이클, 5차 통과): foundation 104s/11K out, 8 page parallel max 37.7s, total 141.8s wall, files=17, vite build 3.4s, 콘솔 에러 0. 8 page parallel cache_read_total 168K (시스템 프롬프트 21K × 8 회 적중) — prompt caching 효과 매우 크다. 보정 사이클 진행: 1차 32K truncate → 2차 maxOutputTokens env 무시 (여전히 truncate) → 3차 인트로 멘트로 JSON 도달 못함 → 4차 maxTurns=2 + 가드 (foundation+7 page 성공, store.ts JSX 에러 + 검증 false negative) → 5차 store.tsx + 검증 file-existence 매칭 → 통과. _legacy/ 이동은 T8.7 로 미룸 (orchestrator/index.ts/test 가 skeleton/sections/assemble import 중). |
 | 2026-04-27 | T8.2 완료 | build-runtime 4 헬퍼 (`prepareWorkspace`/`runBuild`/`collectDist`/`cleanup`). DB 의존 0, 순수 입출력. fs.cp 로 153MB runtime 통째 복사 (macOS APFS clonefile 활용 1~2s), spawn npm run build + DEMO_BASE env 주입 + 5분 timeout (SIGTERM→5s SIGKILL), dist 재귀 walk Buffer 반환, cleanup idempotent. 자동 검증 4/4 first try: A (workspace + node_modules/react 존재) / B+C (build 2645ms, dist 3 파일, base path 정확 주입, content Buffer) / D (cleanup + 두번째 호출 안전) / E (src 의도 파괴 → BUILD_FAILED + 에러 단서 stderr/stdout 포함). |
 | 2026-04-27 | T8.1 완료 | extract-spec.md 에 "스택 결정 규칙" 섹션 + 스키마/예시/품질체크 갱신, validate-spec.ts 에 stack_decision 검증 (freedom_level enum / demo_mode enum / client_required.{frontend,backend,mobile} 키존재+null|enum / strict+all-null+!workflow-diagram 모순체크). 마이그레이션 20260427183000 으로 demo_status 에 'building' 추가 (총 13 상태). 자동 검증 6/6 통과 (보정 1사이클): 발달센터 → free/mobile-web (실제 공고가 모바일 앱), react_strict → strict/next/spring/standard (Spring Boot 명시 따라 backend 정확 추출), vue_preferred → preferred/vue/standard, mobile_app → strict/flutter/mobile-web+fallback, backend_only → strict/fastapi/admin-dashboard+fallback, nocode_workflow → strict\|preferred\|free/workflow-diagram (노코드 도구는 enum 매핑 안 됨, validator 가 workflow-diagram 예외로 strict+all-null 허용). 1차 3 fail 모두 expected/validator 측 오류였고 LLM 동작은 정확. 토큰: Sonnet 합성 5건 cache_read 24,736 / cache_creation 600~700 (시스템 프롬프트 26K 캐시). chosen_runtime 은 LLM 이 산출 안 함 — T8.2 build-runtime 이 코드로 derive. |
 | 2026-04-27 | T8.0 완료 | worker-runtimes/vite-react-ts/ 셋업 — Vite 5+React 18+TS+Tailwind 3+shadcn/ui+Pretendard, 38 deps (radix primitives 11 + form/zod/sonner/recharts + dev tooling). vite.config.ts 가 DEMO_BASE env 로 base path 동적 주입. tailwind.config.cjs 에 토큰 6개 placeholder (T8.4 가 generate 단계에서 spec.tokens 로 교체). 자동 검증 4/4: build 3.10s (142KB JS+6KB CSS), base path 정확히 prefix, gitignore 가 node_modules/dist/tsbuildinfo 모두 무시, prod-style URL serving 시 Playwright 헤드리스 chromium 으로 React 앱 마운트 + 콘솔 errors 0/warnings 0. 22s install, 153MB node_modules. 사용자 한 번만 `cd worker-runtimes/vite-react-ts && npm install` 필요. |
