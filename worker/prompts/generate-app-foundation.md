@@ -21,15 +21,16 @@
 당신은 Vite + React + TypeScript + Tailwind + shadcn/ui 프로젝트의 **foundation 만** 생성한다. 각 flow 의 본격 page 본문은 **이번 호출에서 작성하지 마라** — 후속 Pass 가 같은 path 에 page 정식 본문을 덮어쓴다.
 
 이번 Pass 의 책임:
-1. `src/main.tsx`, `src/index.css`, `src/App.tsx` (모든 라우트 등록), `src/components/Layout.tsx`, `src/types.ts`, `src/lib/store.ts`, `src/lib/seed.ts`, `tailwind.config.cjs` 작성.
+1. `src/main.tsx`, `src/index.css`, `src/App.tsx` (모든 라우트 등록), `src/components/Layout.tsx`, `src/types.ts`, `src/lib/store.tsx` (.tsx — JSX), `src/lib/seed.ts` 작성.
 2. 각 `core_flows[].id` 마다 **minimal placeholder page** `src/pages/{Pascal(flowId)}.tsx` — 5~10 LOC, 그저 `<div>` 안에 flow 제목만. 후속 Pass 가 덮어씀.
 3. tier 별 page 본문은 **이번 Pass 에 작성 금지** (출력 토큰 절약). placeholder 만.
+
+**`tailwind.config.cjs` 는 작성하지 마라** — T8.4 모듈이 결정론적으로 직접 작성한다. 응답에 포함시키면 무시된다.
 
 성공 조건 (이번 Pass):
 - foundation 파일들이 TypeScript strict 통과 가능 (placeholder page 도 valid TS).
 - `App.tsx` 의 라우트가 모든 flow 를 cover.
-- `tailwind.config.cjs` 의 `theme.extend.colors.primary.DEFAULT` = `tokens.primary` 값.
-- `src/lib/store.ts` 의 `DemoStore` 가 `data_entities` 의 모든 entity 를 배열 필드로 가짐.
+- `src/lib/store.tsx` 의 `DemoStore` 가 `data_entities` 의 모든 entity 를 배열 필드로 가짐.
 - `src/types.ts` 가 `data_entities` 모두 interface 로.
 
 ---
@@ -119,8 +120,7 @@
 5. **`src/types.ts`** — `data_entities` 의 모든 entity 를 TypeScript interface 로. 필드 매핑: string→string, number→number, date/datetime→string (ISO), boolean→boolean, text→string, enum→string, ref→string.
 6. **`src/lib/store.tsx`** (확장자 `.tsx` — JSX 사용하므로 `.ts` 가 아닌 `.tsx`) — LocalStorage 기반 store + `useStore()` hook + `StoreProvider` 컴포넌트 + `INITIAL_STORE` 상수. 다른 파일에서는 `import { useStore, StoreProvider } from "@/lib/store"` (vite alias 가 .tsx 자동 resolve).
 7. **`src/lib/seed.ts`** — 작은 hard-coded 시드 데이터 (entity 별 3~5 개) `INITIAL_SEED` export. store.ts 가 LocalStorage 비어있을 때 이걸로 초기화.
-8. **`tailwind.config.cjs`** — 토큰 6 개 (primary/secondary/surface/text/radius/fontFamily) `theme.extend` 주입.
-9. **`src/pages/{Pascal(flowId)}.tsx`** — `spec.core_flows[]` 의 **모든** flow 마다 정확히 1 개 (N개면 정확히 N개), **placeholder 만** (5~10 LOC). 하나도 빠뜨리지 마라 — Pass 2 가 각 placeholder 를 정식 본문으로 덮어쓰기 때문에 placeholder 가 없으면 page 자체가 만들어지지 않는다. 예시:
+8. **`src/pages/{Pascal(flowId)}.tsx`** — `spec.core_flows[]` 의 **모든** flow 마다 정확히 1 개 (N개면 정확히 N개), **placeholder 만** (5~10 LOC). 하나도 빠뜨리지 마라 — Pass 2 가 각 placeholder 를 정식 본문으로 덮어쓰기 때문에 placeholder 가 없으면 page 자체가 만들어지지 않는다. 예시:
    ```tsx
    // tier: 1 (또는 2/3) — Pass 2 가 본문 덮어씀
    export default function Flow1Page() {
@@ -300,31 +300,15 @@ export function useStore(): StoreContextValue {
 
 ---
 
-## tailwind.config.cjs 토큰 주입
+## tailwind.config.cjs 는 작성 금지 — T8.4 모듈이 처리
 
-```js
-/** @type {import('tailwindcss').Config} */
-module.exports = {
-  content: ["./index.html", "./src/**/*.{ts,tsx}"],
-  theme: {
-    extend: {
-      colors: {
-        primary: { DEFAULT: "{tokens.primary}", foreground: "#FFFFFF" },
-        secondary: { DEFAULT: "{tokens.secondary}", foreground: "#FFFFFF" },
-        surface: "{tokens.surface}",
-        text: "{tokens.text}",
-      },
-      borderRadius: { DEFAULT: "{tokens.radius}" },
-      fontFamily: { sans: ["{tokens.fontFamily}", "Pretendard", "system-ui", "sans-serif"] },
-    },
-  },
-  plugins: [require("tailwindcss-animate")],
-};
-```
+이번 Pass 응답에 `tailwind.config.cjs` 항목을 포함시키지 마라. 결정론적 모듈 (T8.4 tokens-to-tailwind) 이 외부에서 직접 작성한다. 너의 책임은 page/Layout/store/types/main 등 React 코드 부분뿐.
 
-`{tokens.X}` 는 사용자 input 의 `tokens` 객체에서 그대로 치환. 따옴표 유지.
-
-`primary.foreground` 는 흰색 고정 (대부분 도메인에서 안전). 필요 시 `secondary.foreground` 도 흰색.
+생성된 tailwind.config.cjs 의 클래스 이름은 다음을 사용 가능 (네 컴포넌트에서 자유롭게):
+- `bg-primary` / `text-primary-foreground` / `bg-secondary` / `text-secondary-foreground`
+- `bg-surface` / `text-text`
+- `rounded` (default radius)
+- `font-sans` (Pretendard fallback 포함)
 
 ---
 
@@ -359,9 +343,9 @@ JSON 작성 직전 다음을 모두 통과시켜라:
 - [ ] `src/App.tsx` 가 모든 `core_flows[].id` 에 대해 `<Route path="/{id}" element={<XxxPage />} />` 등록 + 해당 page import.
 - [ ] 각 `core_flows[].id` 마다 `src/pages/*.tsx` 에 placeholder 존재 (5~10 LOC, form/input/store 호출 0).
 - [ ] 각 page 첫 줄 주석에 `// tier: 1` 또는 `// tier: 2` / `// tier: 3`.
-- [ ] `tailwind.config.cjs` 의 `theme.extend.colors.primary.DEFAULT` 가 `tokens.primary` 값.
+- [ ] **`tailwind.config.cjs` 는 응답에 포함 안 함** (T8.4 모듈이 처리).
 - [ ] `src/types.ts` 가 `data_entities[].name` 모두 TypeScript interface 로 정의.
-- [ ] `src/lib/store.ts` 의 `DemoStore` 가 모든 entity 를 배열 필드로 가짐 + `useStore` + `StoreProvider` export.
+- [ ] `src/lib/store.tsx` 의 `DemoStore` 가 모든 entity 를 배열 필드로 가짐 + `useStore` + `StoreProvider` export.
 - [ ] `src/main.tsx` 가 `<StoreProvider>` 로 `<App />` 감쌈.
 - [ ] 모든 import 경로가 `@/` 또는 외부 패키지 (상대경로 `./` 사용 시 같은 디렉토리만).
 - [ ] `any`, `// @ts-ignore`, `// @ts-expect-error` 0 건.

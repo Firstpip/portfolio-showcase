@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { runClaude, OPUS, type RunResult } from "../shared/claude.ts";
 import type { Workspace } from "./build-runtime.ts";
+import { tokensToTailwindConfig } from "./tokens-to-tailwind.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 타입
@@ -397,8 +398,13 @@ export async function generateApp(input: GenerateAppInput): Promise<GenerateAppR
     };
   }
 
-  // foundation 파일 작성
+  // foundation 파일 작성. tailwind.config.cjs 는 결정론적 모듈로 강제 작성/덮어쓰기
+  // (T8.4 — LLM 비결정성 제거 + 출력 토큰 절약).
   for (const f of foundation.files) {
+    if (f.path === "tailwind.config.cjs") {
+      // LLM 응답에 포함됐으면 무시 (모듈이 덮어씀)
+      continue;
+    }
     try {
       await writeWorkspaceFile(input.workspace, f.path, f.content);
     } catch (err) {
@@ -408,6 +414,27 @@ export async function generateApp(input: GenerateAppInput): Promise<GenerateAppR
         message: `${f.path} 쓰기 실패: ${(err as Error).message}`,
       };
     }
+  }
+  // tailwind.config.cjs 결정론적 작성
+  try {
+    await writeWorkspaceFile(
+      input.workspace,
+      "tailwind.config.cjs",
+      tokensToTailwindConfig({
+        primary: input.tokens.primary,
+        secondary: input.tokens.secondary,
+        surface: input.tokens.surface,
+        text: input.tokens.text,
+        radius: input.tokens.radius,
+        fontFamily: input.tokens.fontFamily,
+      }),
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      code: "FOUNDATION_WRITE",
+      message: `tailwind.config.cjs 쓰기 실패: ${(err as Error).message}`,
+    };
   }
 
   // ─── Pass 2: per-flow pages 병렬 ───
@@ -442,10 +469,22 @@ export async function generateApp(input: GenerateAppInput): Promise<GenerateAppR
     }
   }
 
-  // 최종 written 목록 — foundation 파일 (단, page placeholder 는 page 결과로 대체) + page 파일
+  // 최종 written 목록 — foundation 파일 (page placeholder 는 page 결과로 대체,
+  // tailwind.config.cjs 는 결정론적 모듈 결과로 대체) + page 파일.
   const pagePaths = new Set(pageOks.map((p) => p.file.path));
+  const tailwindContent = tokensToTailwindConfig({
+    primary: input.tokens.primary,
+    secondary: input.tokens.secondary,
+    surface: input.tokens.surface,
+    text: input.tokens.text,
+    radius: input.tokens.radius,
+    fontFamily: input.tokens.fontFamily,
+  });
   const finalFiles: GeneratedFile[] = [
-    ...foundation.files.filter((f) => !pagePaths.has(f.path)),
+    ...foundation.files.filter(
+      (f) => !pagePaths.has(f.path) && f.path !== "tailwind.config.cjs",
+    ),
+    { path: "tailwind.config.cjs", content: tailwindContent },
     ...pageOks.map((p) => p.file),
   ];
 
