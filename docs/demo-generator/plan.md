@@ -738,21 +738,25 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 > **첫 cut 범위**: vite-react-ts runtime 1개 + standard demo_mode 만 구현해 1-click E2E 통과 (T8.0~T8.8). 이후 단계적 추가 (T8.9~T8.11).
 
 #### T8.0 인프라 셋업 — worker-runtimes/vite-react-ts/
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: 없음
 - **requires_test**: yes
-- **파일**: `worker-runtimes/vite-react-ts/` 신규 디렉토리 (package.json, vite.config.ts, tailwind.config.js, postcss.config.js, tsconfig.json, src/main.tsx skeleton, src/index.css with Pretendard import + Tailwind directives, .gitignore), `worker-runtimes/.gitignore` (node_modules, dist 제외), 루트 `.gitignore` 업데이트, `worker/package.json`에 `setup-runtimes` 스크립트 추가
-- **해야 할 일**:
-  - Vite 5 + React 18 + TypeScript + Tailwind 3 + shadcn/ui 기본 deps + radix primitives 자주 쓰는 것 (button/dialog/dropdown/input/select/tabs) + lucide-react + react-router-dom + Pretendard CDN import 셋업
-  - vite.config.ts: base path `/portfolio-showcase/{slug}/portfolio-demo/` 동적 주입 가능하도록 env 기반
-  - tailwind.config.js: theme.extend.colors에 primary/secondary/surface/text 토큰 placeholder + radius/fontFamily
-  - npm install 1회 + git에는 node_modules 안 올림
-  - 워커 README에 "최초 1회 `cd worker-runtimes/vite-react-ts && npm install` 필요" 명시
-- **test_spec**:
-  - [ ] `cd worker-runtimes/vite-react-ts && npm install` 후 `npm run build` 정상 (dist/index.html + dist/assets/*.js/*.css 생성)
-  - [ ] dist/index.html에서 base path가 env로 주입된 값으로 치환됨
-  - [ ] node_modules가 git status에 안 보임
-  - [ ] 셋업 직후 dist/index.html을 `python3 -m http.server`로 서빙 시 빈 React 앱이 콘솔 에러 없이 마운트
+- **파일**: `worker-runtimes/vite-react-ts/` (package.json, vite.config.ts, tsconfig.json, tsconfig.node.json, tailwind.config.cjs, postcss.config.cjs, index.html, src/main.tsx, src/index.css, src/lib/utils.ts, .gitignore), `worker-runtimes/README.md`
+- **구현 메모**:
+  - 의존성 38개 (react/react-dom/react-router-dom + 11개 radix primitives + cva/clsx/tailwind-merge/lucide-react + react-hook-form/@hookform/resolvers/zod + sonner + recharts + dev tooling). `npm install` 22초, node_modules 153MB.
+  - `vite.config.ts`: `loadEnv(mode, cwd, "DEMO_")` 로 `DEMO_BASE` env 읽고 `base` 옵션에 주입. 기본값 `/`. assets 해시 파일명, sourcemap 0, cssCodeSplit 0 (단일 css 파일).
+  - `tailwind.config.cjs`: theme.extend.colors 에 `primary`(DEFAULT+foreground)/secondary/surface/text + borderRadius DEFAULT + fontFamily.sans=Pretendard placeholder. tokens-to-tailwind (T8.4) 가 generate 단계에서 이 6개를 spec.tokens 로 교체.
+  - `src/index.css`: Pretendard CDN @import + tailwind directives + body margin reset.
+  - `src/lib/utils.ts`: shadcn `cn(...)` 헬퍼 미리 포함 (twMerge+clsx).
+  - `.gitignore`: node_modules / dist / .vite / *.tsbuildinfo. git status --ignored 로 확인.
+  - 루트 `.gitignore`는 수정 안 함 — runtime 디렉토리 자체의 .gitignore 가 우선 적용됨.
+  - 사용자 한 번만 `cd worker-runtimes/vite-react-ts && npm install` 실행 필요. README에 운용 원리 + 새 runtime 추가 체크리스트 명시.
+  - 1차 시도 — `tsc -b` (composite refs) + tsconfig.node.json 분리로 했더니 빌드가 `vite.config.js` / `vite.config.d.ts` / `*.tsbuildinfo` 부산물을 생성해 git에 staged 됨. tsconfig.node.json 의 `noEmit` 추가 시 TS6310 충돌 (referenced project may not disable emit). references 패턴 자체를 폐기하고 단일 tsconfig.json + `"build": "tsc --noEmit && vite build"` 로 단순화 → 부산물 0건, 빌드 796ms 로 단축.
+- **자동 검증 결과 (2026-04-27, 4/4 통과 / first try)**:
+  - 테스트 A (build, 3.10s): `DEMO_BASE=/portfolio-showcase/test-slug/portfolio-demo/ npm run build` → 30 modules transformed, dist/index.html 0.48 KB + dist/assets/index-PPP3bZCX.js 142.95 KB + dist/assets/style-DYLbafWm.css 5.98 KB
+  - 테스트 B (base path 주입): dist/index.html 의 `<script src=>` / `<link href=>` 가 `/portfolio-showcase/test-slug/portfolio-demo/assets/...` 로 정확히 prefix 됨
+  - 테스트 C (gitignore): `git status --ignored worker-runtimes/vite-react-ts/` → node_modules/, dist/, tsconfig.tsbuildinfo, tsconfig.node.tsbuildinfo 모두 무시됨. untracked 에는 디렉토리 자체만 표시.
+  - 테스트 D (prod-style serving + 콘솔 에러): `/tmp/.../portfolio-showcase/test-slug/portfolio-demo/` 트리 만들어 python3 http.server 8766 → curl HTTP 200 (index.html + JS + CSS), Playwright headless chromium 으로 페이지 로드 → h1 "Demo runtime ready" 추출, 콘솔 errors 0 / warnings 0
 - **last_failure**: —
 
 #### T8.1 spec_structured stack_decision 추출
@@ -912,10 +916,10 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (Phase 8 신설 — §0 단일 HTML/CDN 정책 폐기 + 공고 스택 반영 + 빌드 SPA 파이프라인. T7.3 BLOCKED. T8.0~T8.11 등록)
-- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2
+- **마지막 업데이트**: 2026-04-27 (T8.0 DONE — vite-react-ts runtime 셋업 완료, 22s install + 3s build, 4/4 검증 통과. 다음 T8.1 spec stack_decision 추출)
+- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0
 - **진행 중 task**: 없음
-- **다음에 착수 가능**: T8.0 (인프라 셋업 — worker-runtimes/vite-react-ts/) — depends_on 없음
+- **다음에 착수 가능**: T8.1 (spec_structured stack_decision 추출) — depends_on T8.0 충족
 - **블로킹 중**: T7.3 (Phase 8 완료 후 재개)
 - **Phase 8 첫 cut 범위**: T8.0~T8.8 (vite-react-ts runtime 1개 + standard demo_mode + 1-click E2E). 후속 T8.9~T8.11은 polish.
 - **Phase 7 배경**: T1.1/T2.3/T2.4의 다단계 UX(paste → 추출 → 편집 → 승인 → 생성)가 사용자 인지 부담 큼. T6.2/T6.3로 extract 정확도 강화 + T4.2 재생성 패널로 사후 교정 가능 → SpecModal/StructuredSpecEditor/ApprovalPanel 폐기, 트리거 1회로 단순화. 위시켓 URL 자동 fetch 통합으로 paste 자체 제거
@@ -967,6 +971,7 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 | 2026-04-27 | T6.2 완료 | extract 프롬프트 N:M 자동 분해. `worker/prompts/extract-spec.md` 에 "N:M 관계 분해 규칙" 섹션 (감지 신호·금지 패턴·올바른 분해+예시) + 품질체크 항목 2개 추가. `worker/shared/validate-spec.ts` 에 `detectPluralRef` 헬퍼 — `_ids` 접미사 또는 's' 끝 ref 거부 (allowlist: address·status·process·class·series). `worker/test-extract-nm.ts` 신규 — 발달센터 회귀(spec_raw 복제) + 합성 3건(clinic_review_tag, study_member_group, ecom_product_category). 자동 검증 4/4 통과: (1) 발달센터 → review_tag {review_id, tag_id} 자동 등장, 보너스 center_therapy_type 분해 (T6.1 수동 패치 불필요화) (2) clinic → review_tag 분해 (3) study → group_member 분해 (study_group 도메인 prefix → group_id 참조) (4) ecom → product_category 분해. 복수형 ref 위반 0건, Sonnet 4회 호출 (cache_read 21K 재사용) |
 | 2026-04-27 | T6.3 완료 | extract 프롬프트 read-only flow tier 분류 개선. `worker/prompts/extract-spec.md` tier 1 정의에 "steps 안에 write step 적어도 하나 필수" 규칙 + read+persist 예외 단락(찜·북마크·별점·알림 등록은 read 처럼 보여도 tier 1 자격) + 절대 금지 패턴(steps 가 전부 검색·둘러보기·필터·조회 같은 읽기 동사로만 구성된 경우 tier 2 강제) + 4단계 결정 절차 + 품질 체크 2항목 추가. `worker/extract-spec.ts` `stripJsonFence` 를 outer-slice(첫 `{`~마지막 `}`) 무조건 적용으로 보강 — 종료 펜스 + trailing 텍스트 케이스 안전망. `worker/test-extract-tier.ts` 신규 — 발달센터 회귀 + 합성 3건(realestate_browse/event_calendar/recipe_browse). 각 케이스 (1) handleExtractQueued ok (2) tier_1 모든 flow write 동사 step ≥1 (3) read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개. 자동 검증 4/4 통과: T6.1 시점 발달센터 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결. 1회차 실패 — Sonnet 이 ```json 펜스 + trailing 텍스트로 응답해 종료 펜스 정규식 미매칭 (realestate) → stripJsonFence outer-slice 무조건 적용, 그리고 분류기 false positive (recipe 의 "재료 다중 입력" 의 `입력`, "작성자 프로필" 의 `작성`) → 단독 `입력` 제거 + `작성(?!자)` 부정선후행. 사용자 위임 승인 |
 | 2026-04-27 | T0.3 완료 | 디자인 토큰 추출 유틸 manual-review 통과 (사용자 승인). `worker/test-extract-tokens.ts` 로 5개 도메인 portfolio-1 (발달센터/핀테크/병원/임원 대시보드/커뮤니티) 검증. NO_LLM=1: 4/5 케이스 100% 일치 + 5번(하드코딩 케이스)은 휴리스틱 실패 → graceful fallback 안착 (throw 0). LLM ON: Sonnet 1회 호출(10s, 37 output 토큰)로 5번 케이스도 100% 매칭 → 전체 5/5 = 100%. 빈 HTML 입력에서도 `_source='fallback'` 으로 안전하게 떨어짐 확인. 데모 생성기 모든 task (T0.1~T6.3) 완료 |
+| 2026-04-27 | T8.0 완료 | worker-runtimes/vite-react-ts/ 셋업 — Vite 5+React 18+TS+Tailwind 3+shadcn/ui+Pretendard, 38 deps (radix primitives 11 + form/zod/sonner/recharts + dev tooling). vite.config.ts 가 DEMO_BASE env 로 base path 동적 주입. tailwind.config.cjs 에 토큰 6개 placeholder (T8.4 가 generate 단계에서 spec.tokens 로 교체). 자동 검증 4/4: build 3.10s (142KB JS+6KB CSS), base path 정확히 prefix, gitignore 가 node_modules/dist/tsbuildinfo 모두 무시, prod-style URL serving 시 Playwright 헤드리스 chromium 으로 React 앱 마운트 + 콘솔 errors 0/warnings 0. 22s install, 153MB node_modules. 사용자 한 번만 `cd worker-runtimes/vite-react-ts && npm install` 필요. |
 | 2026-04-27 | Phase 8 신설 + §0 스코프 변경 | 사용자 의도 — 공고에 클라이언트 요구 스택 명시 시 그것 따르고, 자유면 Claude Code 친화 + 유지보수 최소 공수 스택으로 실제 동작하는 데모. 단일 HTML+CDN 강제 폐기, Vite+React+TS+Tailwind+shadcn/ui 자유 모드 기본. 빌드 SPA + 멀티파일 GitHub Pages 배포. 인프라는 레포 루트 `worker-runtimes/{stack}/` 공유 (Docker는 1인 로컬 워커 + 단순 SPA에 오버킬이라 기각). 데모 시간 5~10분 → 15~25분 허용. T7.3 BLOCKED — 새 빌드 시스템으로 generate 내부가 통째로 교체되므로 T8.8 (standard mode 1-click E2E) 가 사실상 T7.3 의 새 버전. 첫 cut 범위 T8.0~T8.8 (vite-react-ts + standard 만), 후속 T8.9~T8.11 (mobile-web/vue/next/admin-dashboard/workflow-diagram). |
 | 2026-04-27 | Phase 7 신설 | 사용자 피드백 반영해 데모 생성기 UX 재설계. (a) wishket_projects.wishket_url + wishket-portfolio-system/scripts/fetch-wishket-project.js 인프라가 이미 있는데 dashboard는 수동 paste UI(T1.1)로 구현됐음을 사용자가 지적. (b) 추가로 "구조화 편집기는 LLM이 알아서 하면 되는 거 아닌가"라는 질문 — T6.2/T6.3 프롬프트 강화 + T4.2 재생성 패널로 pre-edit 안전망 redundant. **T7.1** 워커 fetch + auto chain (autorun_queued → fetching → extract → auto-approve → gen → ready 전 단계 자동), **T7.2** dashboard SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + "🎬 데모 생성" 단일 버튼, **T7.3** 1-click E2E 검증. 기존 T1.1/T2.3/T2.4 결과물은 T7.2에서 명시 삭제 (백워드 호환 안 둠) |
 | 2026-04-27 | T7.1 완료 | 워커 자동 파이프라인. (1) `worker/shared/wishket-fetch.ts` — wishket-portfolio-system/scripts/fetch-wishket-project.js 를 child process 호출 (puppeteer 재구현 안 함, DRY). 90s 타임아웃, balanced-brace JSON 추출, `WishketFetchError` 6 코드. (2) `worker/fetch-spec.ts` — `handleAutorunQueued`: atomic claim autorun_queued→fetching → wishket-fetch → spec_raw 저장 + extract_queued chain. 실패는 모두 fetch_failed 전이. (3) `worker/extract-spec.ts` 수정 — extract 성공 시 extract_ready 단계 폐기, gen_queued auto-promote (spec_approved_at=now() + regenerate_scope=null 동시 세팅). (4) `worker/index.ts` 라우터에 autorun_queued 분기. (5) 마이그레이션 20260427072729 — demo_status CHECK 에 autorun_queued/fetching/fetch_failed 3 상태 추가. 5/5 통과 first try: 마이그레이션 OK + URL_INVALID/MISSING_SCRIPT 즉시 throw + 실제 wishket fetch 11.3s/936자 + Sonnet auto-promote 30s/2252 out tokens + spec_approved_at 시각 동기 |
