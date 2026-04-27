@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>요양기관 재무회계 자동화 ERP — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { width: 100%; height: 100%; font-family: 'Pretendard', sans-serif; }
+body { background: #F4F6F9; color: #1A2332; overflow: hidden; }
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+@keyframes fadeInScale { from { opacity: 0; transform: scale(0.95) } to { opacity: 1; transform: scale(1) } }
+@keyframes slideInRight { from { opacity: 0; transform: translateX(30px) } to { opacity: 1; transform: translateX(0) } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes ripple { 0% { transform: scale(0); opacity: 0.5 } 100% { transform: scale(4); opacity: 0 } }
+@keyframes countUp { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+@keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+@keyframes barGrow { from { width: 0% } to { width: var(--target-width) } }
+@keyframes slideDown { from { opacity: 0; transform: translateY(-10px); max-height: 0 } to { opacity: 1; transform: translateY(0); max-height: 500px } }
+.chart-canvas-wrap { position: relative; height: 220px; }
+.chart-canvas-wrap canvas { width: 100% !important; height: 100% !important; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+/* ============ MOCK DATA ============ */
+const TRANSACTIONS = [
+  { id: 1, date: '2025-04-25', desc: '한국복지병원 검사비', account: '의료비', category: '외부진료', amount: -280000, mapped: true, bankType: '계좌' },
+  { id: 2, date: '2025-04-25', desc: '삼성카드 요양소모품', account: '소모품비', category: '운영비', amount: -142000, mapped: true, bankType: '카드' },
+  { id: 3, date: '2025-04-24', desc: '국민건강보험공단 급여', account: '급여수익', category: '수익', amount: 3240000, mapped: true, bankType: '계좌' },
+  { id: 4, date: '2025-04-24', desc: '코리아가스 도시가스', account: '', category: '', amount: -88000, mapped: false, bankType: '계좌' },
+  { id: 5, date: '2025-04-23', desc: '요양봉사원 교통비', account: '여비교통비', category: '인건비', amount: -56000, mapped: true, bankType: '카드' },
+  { id: 6, date: '2025-04-23', desc: '신한은행 이자수익', account: '이자수익', category: '수익', amount: 12400, mapped: true, bankType: '계좌' },
+  { id: 7, date: '2025-04-22', desc: '식재료 마트 구입', account: '', category: '', amount: -234000, mapped: false, bankType: '카드' },
+  { id: 8, date: '2025-04-22', desc: '정기 보험료 납부', account: '보험료', category: '관리비', amount: -520000, mapped: true, bankType: '계좌' },
+  { id: 9, date: '2025-04-21', desc: '요양보호사 급여 지급', account: '급여', category: '인건비', amount: -4800000, mapped: true, bankType: '계좌' },
+  { id: 10, date: '2025-04-20', desc: '의약품 구입', account: '의약품비', category: '운영비', amount: -176000, mapped: true, bankType: '카드' },
+];
+
+const VOUCHERS = [
+  { id: 'V-20250425-001', date: '2025-04-25', desc: '의료비 지출 전표', debit: '의료비', credit: '보통예금', amount: 280000, status: '확정' },
+  { id: 'V-20250425-002', date: '2025-04-25', desc: '소모품 구매 전표', debit: '소모품비', credit: '미지급금', amount: 142000, status: '검토중' },
+  { id: 'V-20250424-001', date: '2025-04-24', desc: '건강보험공단 급여 수령', debit: '보통예금', credit: '급여수익', amount: 3240000, status: '확정' },
+  { id: 'V-20250423-001', date: '2025-04-23', desc: '요양봉사원 교통비 정산', debit: '여비교통비', credit: '미지급금', amount: 56000, status: '초안' },
+  { id: 'V-20250422-001', date: '2025-04-22', desc: '정기 보험료 납부', debit: '보험료', credit: '보통예금', amount: 520000, status: '확정' },
+  { id: 'V-20250421-001', date: '2025-04-21', desc: '요양보호사 4월 급여', debit: '급여', credit: '보통예금', amount: 4800000, status: '확정' },
+];
+
+const ACCOUNTS_LIST = ['의료비','소모품비','급여수익','여비교통비','보험료','급여','이자수익','의약품비','식재료비','도시가스비','관리비','복리후생비'];
+
+const BANK_ACCOUNTS = [
+  { id: 1, bank: '국민은행', accountNo: '***-***-1234', balance: 12480000, status: 'connected', type: '당좌' },
+  { id: 2, bank: '신한은행', accountNo: '***-***-5678', balance: 8320000, status: 'connected', type: '보통' },
+  { id: 3, bank: '삼성카드', accountNo: '****-****-****-9012', balance: -1240000, status: 'connected', type: '법인카드' },
+];
+
+/* ============ COMPONENTS ============ */
+function Toast({ message, onClose }) {
+  React.useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  return (
+    <div style={{ position:'fixed', bottom:24, right:24, zIndex:9999, background:'#1E3A5F', color:'#fff', padding:'12px 24px', borderRadius:8, animation:'slideUp 300ms ease', boxShadow:'0 4px 16px rgba(0,0,0,0.2)', fontSize:14 }}>
+      {message}
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, width=560 }) {
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:500, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      <div onClick={onClose} style={{ position:'absolute', inset:0, background:'rgba(0,0,0,0.45)', animation:'fadeIn 200ms ease' }} />
+      <div style={{ position:'relative', width, maxHeight:'85vh', background:'#fff', borderRadius:12, zIndex:501, animation:'fadeInScale 200ms ease', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.18)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'20px 24px', borderBottom:'1px solid #E2E8F0' }}>
+          <h3 style={{ fontSize:17, fontWeight:700, color:'#1A2332' }}>{title}</h3>
+          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:'#5A6A7E' }}>✕</button>
+        </div>
+        <div style={{ padding:24, overflowY:'auto', flex:1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function CountUp({ end, duration=1200, prefix='', suffix='' }) {
+  const [val, setVal] = React.useState(0);
+  React.useEffect(() => {
+    let s=0; const step = end/(duration/16);
+    const t = setInterval(() => { s+=step; if(s>=end){setVal(end);clearInterval(t);}else setVal(Math.floor(s)); },16);
+    return () => clearInterval(t);
+  }, [end]);
+  return <span style={{ animation:'countUp 400ms ease' }}>{prefix}{val.toLocaleString()}{suffix}</span>;
+}
+
+function StatusBadge({ status }) {
+  const map = { '확정':['#DCFCE7','#16A34A'], '검토중':['#FEF9C3','#CA8A04'], '초안':['#EFF6FF','#3B82F6'], '연결됨':['#DCFCE7','#16A34A'], '오류':['#FEE2E2','#DC2626'] };
+  const [bg, color] = map[status] || ['#F1F5F9','#64748B'];
+  return <span style={{ background:bg, color, padding:'2px 10px', borderRadius:20, fontSize:12, fontWeight:600 }}>{status}</span>;
+}
+
+/* ============ SCREENS ============ */
+function DashboardScreen({ onToast }) {
+  const chartRef = React.useRef(null);
+  const donutRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (chartRef.current) {
+      const ctx = chartRef.current.getContext('2d');
+      if (chartRef.current._chart) chartRef.current._chart.destroy();
+      const c = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: ['11월','12월','1월','2월','3월','4월'],
+          datasets: [
+            { label:'수입', data:[8200000,9100000,8750000,9480000,10200000,10840000], borderColor:'#3B9DE8', backgroundColor:'rgba(59,157,232,0.1)', tension:0.4, fill:true, pointBackgroundColor:'#3B9DE8' },
+            { label:'지출', data:[6800000,7200000,7100000,7650000,8100000,8340000], borderColor:'#F59E0B', backgroundColor:'rgba(245,158,11,0.08)', tension:0.4, fill:true, pointBackgroundColor:'#F59E0B' },
+          ]
+        },
+        options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'top' } }, scales:{ y:{ ticks:{ callback: v=>(v/10000)+'만' } } } }
+      });
+      chartRef.current._chart = c;
+    }
+    if (donutRef.current) {
+      const ctx = donutRef.current.getContext('2d');
+      if (donutRef.current._chart) donutRef.current._chart.destroy();
+      const c = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels:['인건비','의료비','운영비','관리비','기타'],
+          datasets:[{ data:[48,18,16,12,6], backgroundColor:['#1E3A5F','#3B9DE8','#F59E0B','#10B981','#6B7280'], borderWidth:0 }]
+        },
+        options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'right', labels:{ font:{size:12} } } }, cutout:'65%' }
+      });
+      donutRef.current._chart = c;
+    }
+    return () => {
+      if(chartRef.current?._chart) chartRef.current._chart.destroy();
+      if(donutRef.current?._chart) donutRef.current._chart.destroy();
+    };
+  }, []);
+
+  const kpis = [
+    { label:'이번달 총수입', value:10840000, prefix:'', suffix:'원', color:'#3B9DE8', icon:'📈', sub:'전월 대비 +640,000원' },
+    { label:'이번달 총지출', value:8340000, prefix:'', suffix:'원', color:'#F59E0B', icon:'📉', sub:'전월 대비 +240,000원' },
+    { label:'순이익', value:2500000, prefix:'', suffix:'원', color:'#10B981', icon:'💰', sub:'예산 대비 83.3%' },
+    { label:'미처리 전표', value:3, prefix:'', suffix:'건', color:'#EF4444', icon:'⚠️', sub:'즉시 검토 필요' },
+  ];
+
+  return (
+    <div style={{ animation:'fadeIn 300ms ease' }}>
+      <div style={{ marginBottom:24 }}>
+        <h2 style={{ fontSize:22, fontWeight:800, color:'#1A2332' }}>재무 현황 대시보드</h2>
+        <p style={{ color:'#5A6A7E', fontSize:13, marginTop:4 }}>2025년 4월 기준 · 실시간 업데이트</p>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:16, marginBottom:24 }}>
+        {kpis.map((k,i)=>(
+          <div key={i} style={{ background:'#fff', borderRadius:12, padding:'20px 20px 16px', boxShadow:'0 1px 6px rgba(0,0,0,0.07)', animation:`slideUp 400ms ease ${i*80}ms both`, borderLeft:`4px solid ${k.color}` }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
+              <span style={{ fontSize:13, color:'#5A6A7E', fontWeight:500 }}>{k.label}</span>
+              <span style={{ fontSize:20 }}>{k.icon}</span>
+            </div>
+            <div style={{ fontSize:22, fontWeight:800, color:'#1A2332', marginBottom:4 }}>
+              <CountUp end={k.value} prefix={k.prefix} suffix={k.suffix} />
+            </div>
+            <p style={{ fontSize:11, color:'#5A6A7E' }}>{k.sub}</p>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:16, marginBottom:20 }}>
+        <div style={{ background:'#fff', borderRadius:12, padding:20, boxShadow:'0 1px 6px rgba(0,0,0,0.07)' }}>
+          <h3 style={{ fontSize:14, fontWeight:700, marginBottom:16, color:'#1A2332' }}>월별 수입·지출 추이</h3>
+          <div className="chart-canvas-wrap"><canvas ref={chartRef}></canvas></div>
+        </div>
+        <div style={{ background:'#fff', borderRadius:12, padding:20, boxShadow:'0 1px 6px rgba(0,0,0,0.07)' }}>
+          <h3 style={{ fontSize:14, fontWeight:700, marginBottom:16, color:'#1A2332' }}>지출 항목별 비중</h3>
+          <div className="chart-canvas-wrap"><canvas ref={donutRef}></canvas></div>
+        </div>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+        <div style={{ background:'#fff', borderRadius:12, padding:20, boxShadow:'0 1px 6px rgba(0,0,0,0.07)' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:16 }}>
+            <h3 style={{ fontSize:14, fontWeight:700, color:'#1A2332' }}>계좌 잔액 현황</h3>
+            <span style={{ fontSize:12, color:'#3B9DE8', cursor:'pointer', fontWeight:600 }}>전체 보기</span>
+          </div>
+          {BANK_ACCOUNTS.map((a,i)=>(
+            <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px 0', borderBottom: i<BANK_ACCOUNTS.length-1 ? '1px solid #F1F5F9' : 'none' }}>
+              <div>
+                <div style={{ fontWeight:600, fontSize:13 }}>{a.bank}</div>
+                <div style={{ fontSize:11, color:'#5A6A7E' }}>{a.accountNo} · {a.type}</div>
+              </div>
+              <div style={{ textAlign:'right' }}>
+                <div style={{ fontWeight:700, fontSize:14, color: a.balance < 0 ? '#EF4444' : '#1A2332' }}>{a.balance.toLocaleString()}원</div>
+                <StatusBadge status="연결됨" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ background:'#fff', borderRadius:12, padding:20, boxShadow:'0 1px 6px rgba(0,0,0,0.07)' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:16 }}>
+            <h3 style={{ fontSize:14, fontWeight:700, color:'#1A2332' }}>미처리 항목 알림</h3>
+            <span style={{ background:'#FEE2E2', color:'#EF4444', padding:'2px 10px', borderRadius:20, fontSize:12, fontWeight:700 }}>3건</span>
+          </div>
+          {[
+            { icon:'🔴', label:'미매핑 거래 내역', count:2, desc:'계정과목 미입력', action:'매핑하기' },
+            { icon:'🟡', label:'검토 대기 전표', count:1, desc:'승인 대기중', action:'검토하기' },
+            { icon:'🔵', label:'인증서 만료 예정', count:0, desc:'30일 이내', action:'갱신하기' },
+          ].map((n,i)=>(
+            <div key={i} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 0', borderBottom: i<2 ? '1px solid #F1F5F9' : 'none' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                <span style={{ fontSize:18 }}>{n.icon}</span>
+                <div>
+                  <div style={{ fontSize:13, fontWeight:600 }}>{n.label} {n.count > 0 && <span style={{ background:'#FEE2E2', color:'#EF4444', padding:'1px 7px', borderRadius:10, fontSize:11 }}>{n.count}</span>}</div>
+                  <div style={{ fontSize:11, color:'#5A6A7E' }}>{n.desc}</div>
+                </div>
+              </div>
+              <button onClick={()=>onToast(n.action+' 화면으로 이동합니다')} style={{ background:'#EFF6FF', color:'#3B9DE8', border:'none', borderRadius:6, padding:'5px 12px', fontSize:12, fontWeight:600, cursor:'pointer' }}>{n.action}</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TransactionsScreen({ onToast }) {
+  const [filter, setFilter] = React.useState('전체');
+  const [search, setSearch] = React.useState('');
+  const [selected, setSelected] = React.useState(null);
+  const [items, setItems] = React.useState(TRANSACTIONS);
+
+  const filtered = items.filter(t => {
+    if (filter === '미매핑') return !t.mapped;
+    if (filter === '수입') return t.amount > 0;
+    if (filter === '지출') return t.amount < 0;
+    return true;
+  }).filter(t => t.desc.includes(search) || t.account.includes(search));
+
+  function handleMap(item, account) {
+    setItems(prev => prev.map(t => t.id === item.id ? { ...t, account, mapped: true } : t));
+    setSelected(null);
+    onToast('계정과목 매핑이 완료되었습니다.');
+  }
+
+  return (
+    <div style={{ animation:'fadeIn 300ms ease' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+        <div>
+          <h2 style={{ fontSize:22, fontWeight:800, color:'#1A2332' }}>거래 내역</h2>
+          <p style={{ color:'#5A6A7E', fontSize:13, marginTop:4 }}>은행·카드 자동 수집 내역 · 총 {items.length}건</p>
+        </div>
+        <button onClick={()=>onToast('금융 API에서 최신 거래를 수집합니다...')} style={{ background:'#1E3A5F', color:'#fff', border:'none', borderRadius:8, padding:'10px 18px', fontSize:13, fontWeight:600, cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}>
+          🔄 자동 수집
+        </button>
+      </div>
+
+      <div style={{ background:'#fff', borderRadius:12, padding:16, boxShadow:'0 1px 6px rgba(0,0,0,0.07)', marginBottom:16 }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center' }}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="거래처·적요 검색..." style={{ flex:1, border:'1px solid #E2E8F0', borderRadius:8, padding:'9px 14px', fontSize:13, outline:'none', color:'#1A2332' }} />
+          {['전체','미매핑','수입','지출'].map(f=>(
+            <button key={f} onClick={()=>setFilter(f)} style={{ padding:'8px 16px', borderRadius:8, border:'none', fontSize:13, fontWeight:600, cursor:'pointer', background: filter===f ? '#1E3A5F' : '#F4F6F9', color: filter===f ? '#fff' : '#5A6A7E', transition:'all 150ms' }}>
+              {f} {f==='미매핑' && <span style={{ background:'#FEE2E2', color:'#EF4444', borderRadius:10, padding:'1px 6px', fontSize:11, marginLeft:4 }}>{items.filter(t=>!t.mapped).length}</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ background:'#fff', borderRadius:12, boxShadow:'0 1px 6px rgba(0,0,0,0.07)', overflow:'hidden' }}>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ background:'#F8FAFC' }}>
+              {['날짜','거래처·적요','구분','금액','계정과목','상태',''].map(h=>(
+                <th key={h} style={{ padding:'12px 14px', fontSize:12, fontWeight:600, color:'#5A6A7E', textAlign:'left', borderBottom:'1px solid #E2E8F0' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((t,i)=>(
+              <tr key={t.id} onClick={()=>setSelected(t)} style={{ cursor:'pointer', transition:'background 150ms', borderBottom:'1px solid #F1F5F9' }}
+                onMouseEnter={e=>e.currentTarget.style.background='rgba(30,58,95,0.04)'}
+                onMouseLeave={e=>e.currentTarget.style.background=''}
+              >
+                <td style={{ padding:'13px 14px', fontSize:12, color:'#5A6A7E' }}>{t.date}</td>
+                <td style={{ padding:'13px 14px', fontSize:13, fontWeight:500 }}>{t.desc}</td>
+                <td style={{ padding:'13px 14px' }}><span style={{ background: t.bankType==='카드' ? '#EFF6FF' : '#F0FDF4', color: t.bankType==='카드' ? '#3B82F6' : '#16A34A', padding:'2px 8px', borderRadius:12, fontSize:11, fontWeight:600 }}>{t.bankType}</span></td>
+                <td style={{ padding:'13px 14px', fontSize:13, fontWeight:700, color: t.amount>0 ? '#16A34A' : '#EF4444' }}>{t.amount>0?'+':''}{t.amount.toLocaleString()}원</td>
+                <td style={{ padding:'13px 14px', fontSize:13, color: t.account ? '#1A2332' : '#9CA3AF', fontStyle: t.account ? 'normal' : 'italic' }}>{t.account || '미지정'}</td>
+                <td style={{ padding:'13px 14px' }}>{t.mapped ? <StatusBadge status="확정" /> : <StatusBadge status="초안" />}</td>
+                <td style={{ padding:'13px 14px' }}>
+                  {!t.mapped && <button onClick={e=>{e.stopPropagation();setSelected(t);}} style={{ background:'#3B9DE8', color:'#fff', border:'none', borderRadius:6, padding:'5px 12px', fontSize:12, cursor:'pointer', fontWeight:600 }}>매핑</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {selected && (
+        <Modal title="거래 내역 편집 — 계정과목 매핑" onClose={()=>setSelected(null)} width={520}>
+          <div style={{ background:'#F8FAFC', borderRadius:8, padding:16, marginBottom:20 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, fontSize:13 }}>
+              <div><span style={{ color:'#5A6A7E' }}>날짜: </span><strong>{selected.date}</strong></div>
+              <div><span style={{ color:'#5A6A7E' }}>유형: </span><strong>{selected.bankType}</strong></div>
+              <div style={{ gridColumn:'1/-1' }}><span style={{ color:'#5A6A7E' }}>적요: </span><strong>{selected.desc}</strong></div>
+              <div style={{ gridColumn:'1/-1' }}><span style={{ color:'#5A6A7E' }}>금액: </span><strong style={{ color: selected.amount>0?'#16A34A':'#EF4444', fontSize:15 }}>{selected.amount>0?'+':''}{selected.amount.toLocaleString()}원</strong></div>
+            </div>
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <label style={{ fontSize:13, fontWeight:600, color:'#1A2332', display:'block', marginBottom:8 }}>계정과목 선택</label>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>
+              {ACCOUNTS_LIST.map(a=>(
+                <button key={a} onClick={()=>handleMap(selected, a)} style={{ padding:'8px 6px', background: selected.account===a ? '#1E3A5F' : '#F4F6F9', color: selected.account===a ? '#fff' : '#1A2332', border: selected.account===a ? 'none' : '1px solid #E2E8F0', borderRadius:8, fontSize:12, fontWeight:500, cursor:'pointer', transition:'all 150ms' }}>
+                  {a}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <label style={{ fontSize:13, fontWeight:600, color:'#1A2332', display:'block', marginBottom:8 }}>거래처</label>
+            <input defaultValue={selected.desc} style={{ width:'100%', border:'1px solid #E2E8F0', borderRadius:8, padding:'9px 14px', fontSize:13, outline:'none' }} />
+          </div>
+          <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+            <button onClick={()=>setSelected(null)} style={{ padding:'9px 20px', background:'#F4F6F9', border:'none', borderRadius:8, fontSize:13, cursor:'pointer', fontWeight:600 }}>취소</button>
+            <button onClick={()=>{ handleMap(selected, selected.account || ACCOUNTS_LIST[0]); }} style={{ padding:'9px 20px', background:'#1E3A5F', color:'#fff', border:'none', borderRadius:8, fontSize:13, cursor:'pointer', fontWeight:600 }}>매핑 저장</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function VouchersScreen({ onToast }) {
+  const [vouchers, setVouchers] = React.useState(VOUCHERS);
+  const [selected, setSelected] = React.useState(null);
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [filterStatus, setFilterStatus] = React.useState('전체');
+
+  const filtered = vouchers.filter(v => filterStatus === '전체' || v.status === filterStatus);
+
+  function handleApprove(id) {
+    setVouchers(prev => prev.map(v => v.id === id ? { ...v, status: '확정' } : v));
+    setSelected(null);
+    onToast('전표가 확정 처리되었습니다.');
+  }
+
+  return (
+    <div style={{ animation:'fadeIn 300ms ease' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+        <div>
+          <h2 style={{ fontSize:22, fontWeight:800, color:'#1A2332' }}>전표 관리</h2>
+          <p style={{ color:'#5A6A7E', fontSize:13, marginTop:4 }}>복식부기 원칙 · 총 {vouchers.length}건</p>
+        </div>
+        <button onClick={()=>setCreateOpen(true)} style={{ background:'#1E3A5F', color:'#fff', border:'none', borderRadius:8, padding:'10px 18px', fontSize:13, fontWeight:600, cursor:'pointer' }}>
+          + 전표 생성
+        </button>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12, marginBottom:20 }}>
+        {[{s:'확정',color:'#16A34A',bg:'#DCFCE7'},{s:'검토중',color:'#CA8A04',bg:'#FEF9C3'},{s:'초안',color:'#3B82F6',bg:'#EFF6FF'}].map(({s,color,bg})=>(
+          <div key={s} style={{ background:'#fff', borderRadius:10, padding:'14px 18px', boxShadow:'0 1px 4px rgba(0,0,0,0.06)', display:'flex', justifyContent:'space-between', alignItems:'center', cursor:'pointer' }} onClick={()=>setFilterStatus(filterStatus===s?'전체':s)}>
+            <span style={{ fontSize:13, fontWeight:600, color:'#1A2332' }}>{s}</span>
+            <span style={{ background:bg, color, padding:'3px 12px', borderRadius:20, fontSize:14, fontWeight:800 }}>{vouchers.filter(v=>v.status===s).length}건</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ background:'#fff', borderRadius:12, boxShadow:'0 1px 6px rgba(0,0,0,0.07)', overflow:'hidden' }}>
+        <div style={{ display:'flex', gap:8, padding:'14px 16px', borderBottom:'1px solid #E2E8F0' }}>
+          {['전체','확정','검토중','초안'].map(f=>(
+            <button key={f} onClick={()=>setFilterStatus(f)} style={{ padding:'6px 14px', borderRadius:20, border:'none', fontSize:12, fontWeight:600, cursor:'pointer', background: filterStatus===f ? '#1E3A5F' : '#F4F6F9', color: filterStatus===f ? '#fff' : '#5A6A7E', transition:'all 150ms' }}>{f}</button>
+          ))}
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ background:'#F8FAFC' }}>
+              {['전표번호','날짜','적요','차변','대변','금액','상태',''].map(h=>(
+                <th key={h} style={{ padding:'11px 14px', fontSize:12, fontWeight:600, color:'#5A6A7E', textAlign:'left', borderBottom:'1px solid #E2E8F0' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((v,i)=>(
+              <tr key={v.id} onClick={()=>setSelected(v)} style={{ cursor:'pointer', transition:'background 150ms', borderBottom:'1px solid #F1F5F9' }}
+                onMouseEnter={e=>e.currentTarget.style.background='rgba(30,58,95,0.04)'}
+                onMouseLeave={e=>e.currentTarget.style.background=''}
+              >
+                <td style={{ padding:'12px 14px', fontSize:12, color:'#3B9DE8', fontWeight:600, fontFamily:'monospace' }}>{v.id}</td>
+                <td style={{ padding:'12px 14px', fontSize:12, color:'#5A6A7E' }}>{v.date}</td>
+                <td style={{ padding:'12px 14px', fontSize:13 }}>{v.desc}</td>
+                <td style={{ padding:'12px 14px', fontSize:12, color:'#1A2332' }}>{v.debit}</td>
+                <td style={{ padding:'12px 14px', fontSize:12, color:'#1A2332' }}>{v.credit}</td>
+                <td style={{ padding:'12px 14px', fontSize:13, fontWeight:700 }}>{v.amount.toLocaleString()}원</td>
+                <td style={{ padding:'12px 14px' }}><StatusBadge status={v.status} /></td>
+                <td style={{ padding:'12px 14px' }}>
+                  {v.status !== '확정' && <button onClick={e=>{e.stopPropagation();handleApprove(v.id);}} style={{ background:'#DCFCE7', color:'#16A34A', border:'none', borderRadius:6, padding:'5px 10px', fontSize:12, cursor:'pointer', fontWeight:600 }}>확정</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {selected && (
+        <Modal title={`전표 상세 — ${selected.id}`} onClose={()=>setSelected(null)} width={540}>
+          <div style={{ marginBottom:20 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, fontSize:13, background:'#F8FAFC', padding:16, borderRadius:8, marginBottom:16 }}>
+              <div><span style={{ color:'#5A6A7E' }}>날짜: </span><strong>{selected.date}</strong></div>
+              <div><span style={{ color:'#5A6A7E' }}>상태: </span><StatusBadge status={selected.status} /></div>
+              <div style={{ gridColumn:'1/-1' }}><span style={{ color:'#5A6A7E' }}>적요: </span><strong>{selected.desc}</strong></div>
+            </div>
+            <div style={{ border:'1px solid #E2E8F0', borderRadius:8, overflow:'hidden' }}>
+              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+                <thead><tr style={{ background:'#F8FAFC' }}>
+                  {['구분','계정과목','금액'].map(h=><th key={h} style={{ padding:'10px 14px', textAlign:'left', fontWeight:600, color:'#5A6A7E', borderBottom:'1px solid #E2E8F0' }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  <tr style={{ borderBottom:'1px solid #F1F5F9' }}>
+                    <td style={{ padding:'12px 14px' }}><span style={{ background:'#EFF6FF', color:'#3B82F6', padding:'2px 8px', borderRadius:4, fontWeight:600, fontSize:12 }}>차변</span></td>
+                    <td style={{ padding:'12px 14px', fontWeight:600 }}>{selected.debit}</td>
+                    <td style={{ padding:'12px 14px', fontWeight:700, color:'#1A2332' }}>{selected.amount.toLocaleString()}원</td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding:'12px 14px' }}><span style={{ background:'#FEF9C3', color:'#CA8A04', padding:'2px 8px', borderRadius:4, fontWeight:600, fontSize:12 }}>대변</span></td>
+                    <td style={{ padding:'12px 14px', fontWeight:600 }}>{selected.credit}</td>
+                    <td style={{ padding:'12px 14px', fontWeight:700, color:'#1A2332' }}>{selected.amount.toLocaleString()}원</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div style={{ background:'#DCFCE7', borderRadius:8, padding:'10px 14px', marginTop:10, fontSize:13, color:'#16A34A', fontWeight:600 }}>✅ 차변·대변 합계 일치 — 전표 유효</div>
+          </div>
+          <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+            <button onClick={()=>setSelected(null)} style={{ padding:'9px 20px', background:'#F4F6F9', border:'none', borderRadius:8, fontSize:13, cursor:'pointer', fontWeight:600 }}>닫기</button>
+            {selected.status !== '확정' && <button onClick={()=>handleApprove(selected.id)} style={{ padding:'9px 20px', background:'#16A34A', color:'#fff', border:'none', borderRadius:8, fontSize:13, cursor:'pointer', fontWeight:600 }}>✅ 확정 처리</button>}
+          </div>
+        </Modal>
+      )}
+
+      {createOpen && (
+        <Modal title="새 전표 생성" onClose={()=>setCreateOpen(false)} width={560}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:16 }}>
+            {[['날짜','date','2025-04-26'],['적요','text','전표 설명 입력']].map(([l,t,p])=>(
+              <div key={l} style={{ gridColumn: l==='적요'?'1/-1':'auto' }}>
+                <label style={{ fontSize:13, fontWeight:600, color:'#1A2332', display:'block', marginBottom:6 }}>{l}</label>
+                <input type={t} defaultValue={t==='date'?p:''} placeholder={t!=='date'?p:''} style={{ width:'100%', border:'1px solid #E2E8F0', borderRadius:8, padding:'9px 14px', fontSize:13, outline:'none' }} />
+              </div>
+            ))}
+          </div>
+          <div style={{ border:'1px solid #E2E8F0', borderRadius:8, overflow:'hidden', marginBottom:16 }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead><tr style={{ background:'#F8FAFC' }}>
+                {['구분','계정과목','금액'].map(h=><th key={h} style={{ padding:'10px 14px', textAlign:'left', fontWeight:600, color:'#5A6A7E', borderBottom:'1px solid #E2E8F0' }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {[['차변','EFF6FF','3B82F6'],['대변','FEF9C3','CA8A04']].map(([l,bg,c])=>(
+                  <tr key={l} style={{ borderBottom:'1px solid #F1F5F9' }}>
+                    <td style={{ padding:'10px 14px' }}><span style={{ background:`#${bg}`, color:`#${c}`, padding:'2px 8px', borderRadius:4, fontWeight:600, fontSize:12 }}>{l}</span></td>
+                    <td style={{ padding:'10px 14px' }}><select style={{ border:'1px solid #E2E8F0', borderRadius:6, padding:'6px 10px', fontSize:12, outline:'none' }}>{ACCOUNTS_LIST.map(a=><option key={a}>{a}</option>)}</select></td>
+                    <td style={{ padding:'10px 14px' }}><input type="number" placeholder="0" style={{ width:120, border:'1px solid #E2E8F0', borderRadius:6, padding:'6px 10px', fontSize:12, outline:'none' }} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+            <button onClick={()=>setCreateOpen(false)} style={{ padding:'9px 20px', background:'#F4F6F9', border:'none', borderRadius:8, fontSize:13, cursor:'pointer', fontWeight:600 }}>취소</button>
+            <button onClick={()=>{ setCreateOpen(false); onToast('전표가 초안으로 생성되었습니다.'); }} style={{ padding:'9px 20px', background:'#1E3A5F', color:'#fff', border:'none', borderRadius:8, fontSize:13, cursor:'pointer', fontWeight:600 }}>초안 저장</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function SettingsScreen({ onToast }) {
+  const [certExpiry] = React.useState('2025-12-31');
+  const [drawerOpen, setDrawerOpen] = React.useState(false);
+  const [addAcctOpen, setAddAcctOpen] = React.useState(false);
+  const [accounts, setAccounts] = React.useState(BANK_ACCOUNTS);
+
+  return (
+    <div style={{ animation:'fadeIn 300ms ease' }}>
+      <div style={{ marginBottom:24 }}>
+        <h2 style={{ fontSize:22, fontWeight:800, color:'#1A2332' }}>기본 설정</h2>
+        <p style={{ color:'#5A6A7E', fontSize:13, marginTop:4 }}>기관 정보 · 인증서 · 계좌 연동 관리</p>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+        <div style={{ background:'#fff', borderRadius:12, padding:24, boxShadow:'0 1px 6px rgba(0,0,0,0.07)' }}>
+          <h3 style={{ fontSize:15, fontWeight:700, marginBottom:16, color:'#1A2332' }}>🏢 사업자 정보</h3>
+          {[['기관명','행복한 봄 요양원'],['사업자번호','123-45-67890'],['대표자','김복지'],['주소','서울시 마포구 서강로 45'],['전화','02-1234-5678'],['이메일','admin@happycare.kr']].map(([l,v])=>(
+            <div key={l} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 0', borderBottom:'1px solid #F4F6F9' }}>
+              <span style={{ fontSize:13, color:'#5A6A7E', fontWeight:500 }}>{l}</span>
+              <span style={{ fontSize:13, fontWeight:600, color:'#1A2332' }}>{v}</span>
+            </div>
+          ))}
+          <button onClick={()=>onToast('사업자 정보 편집 모드가 활성화되었습니다.')} style={{ width:'100%', marginTop:16, padding:'10px', background:'#EFF6FF', color:'#3B9DE8', border:'1px solid #BFDBFE', borderRadius:8, fontSize:13, fontWeight:600, cursor:'pointer' }}>정보 수정</button>
+        </div>
+
+        <div style={{ background:'#fff', borderRadius:12, padding:24, boxShadow:'0 1px 6px rgba(0,0,0,0.07)' }}>
+          <h3 style={{ fontSize:15, fontWeight:700, marginBottom:16, color:'#1A2332' }}>🔐 공인인증서 관리</h3>
+          <div style={{ background:'#F0FDF4', border:'1px solid #BBF7D0', borderRadius:8, padding:14, marginBottom:16 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div>
+                <div style={{ fontSize:13, fontWeight:700, color:'#16A34A' }}>✅ 인증서 유효</div>
+                <div style={{ fontSize:12, color:'#5A6A7E', marginTop:2 }}>만료일: {certExpiry} (249일 남음)</div>
+              </div>
+              <span style={{ background:'#DCFCE7', color:'#16A34A', padding:'3px 10px', borderRadius:20, fontSize:12, fontWeight:600 }}>정상</span>
+            </div>
+          </div>
+          <div style={{ fontSize:13, color:'#1A2332', marginBottom:8, fontWeight:600 }}>등록된 인증서</div>
+          {[{name:'범용 공동인증서', org:'한국정보인증', expire:'2025-12-31'},{name:'금융거래용 인증서', org:'금융결제원', expire:'2025-09-30'}].map((cert,i)=>(
+            <div key={i} style={{ background:'#F8FAFC', borderRadius:8, padding:12, marginBottom:8, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div>
+                <div style={{ fontSize:13, fontWeight:600 }}>{cert.name}</div>
+                <div style={{ fontSize:11, color:'#5A6A7E' }}>{cert.org} · {cert.expire}</div>
+              </div>
+              <button onClick={()=>onToast('인증서 갱신 절차를 시작합니다.')} style={{ background:'#EFF6FF', color:'#3B9DE8', border:'none', borderRadius:6, padding:'5px 10px', fontSize:11, cursor:'pointer', fontWeight:600 }}>갱신</button>
+            </div>
+          ))}
+          <button onClick={()=>setDrawerOpen(true)} style={{ width:'100%', marginTop:8, padding:'10px', background:'#1E3A5F', color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:600, cursor:'pointer' }}>+ 인증서 추가</button>
+        </div>
+
+        <div style={{ background:'#fff', borderRadius:12, padding:24, boxShadow:'0 1px 6px rgba(0,0,0,0.07)', gridColumn:'1/-1' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+            <h3 style={{ fontSize:15, fontWeight:700, color:'#1A2332' }}>🏦 계좌·카드 연동 현황</h3>
+            <button onClick={()=>setAddAcctOpen(true)} style={{ background:'#1E3A5F', color:'#fff', border:'none', borderRadius:8, padding:'8px 16px', fontSize:12, fontWeight:600, cursor:'pointer' }}>+ 계좌 추가</button>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12 }}>
+            {accounts.map((a,i)=>(
+              <div key={i} style={{ background:'#F8FAFC', borderRadius:10, padding:16, border:'1px solid #E2E8F0' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
+                  <span style={{ fontWeight:700, fontSize:14 }}>{a.bank}</span>
+                  <StatusBadge status="연결됨" />
+                </div>
+                <div style={{ fontSize:12, color:'#5A6A7E', marginBottom:4 }}>{a.accountNo} · {a.type}</div>
+                <div style={{ fontSize:16, fontWeight:800, color: a.balance<0?'#EF4444':'#1A2332' }}>{a.balance.toLocaleString()}원</div>
+                <div style={{ display:'flex', gap:6, marginTop:10 }}>
+                  <button onClick={()=>onToast(`${a.bank} 연동 상태를 확인합니다.`)} style={{ flex:1, background:'#EFF6FF', color:'#3B9DE8', border:'none', borderRadius:6, padding:'6px 0', fontSize:11, cursor:'pointer', fontWeight:600 }}>상태 확인</button>
+                  <button onClick={()=>onToast('최신 거래를 동기화합니다.')} style={{ flex:1, background:'#F0FDF4', color:'#16A34A', border:'none', borderRadius:6, padding:'6px 0', fontSize:11, cursor:'pointer', fontWeight:600 }}>동기화</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {drawerOpen && (
+        <div style={{ position:'fixed', inset:0, zIndex:500, display:'flex', justifyContent:'flex-end' }}>
+          <div onClick={()=>setDrawerOpen(false)} style={{ flex:1, background:'rgba(0,0,0,0.35)', animation:'fadeIn 200ms ease' }} />
+          <div style={{ width:400, background:'#fff', height:'100%', padding:28, overflowY:'auto', animation:'slideInRight 200ms ease', boxShadow:'-4px 0 20px rgba(0,0,0,0.12)' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:24 }}>
+              <h3 style={{ fontSize:17, fontWeight:700 }}>인증서 업로드</h3>
+              <button onClick={()=>setDrawerOpen(false)} style={{ background:'none', border:'none', fontSize:20, cursor:'pointer' }}>✕</button>
+            </div>
+            <div style={{ border:'2px dashed #E2E8F0', borderRadius:10, padding:32, textAlign:'center', marginBottom:20, cursor:'pointer', transition:'all 150ms' }}
+              onMouseEnter={e=>e.currentTarget.style.borderColor='#3B9DE8'}
+              onMouseLeave={e=>e.currentTarget.style.borderColor='#E2E8F0'}
+              onClick={()=>onToast('파일을 업로드 중입니다...')}
+            >
+              <div style={{ fontSize:36, marginBottom:10 }}>📁</div>
+              <div style={{ fontSize:13, fontWeight:600, color:'#1A2332' }}>인증서 파일을 드래그하거나 클릭하여 업로드</div>
+              <div style={{ fontSize:12, color:'#9CA3AF', marginTop:6 }}>.p12, .pfx 파일 지원</div>
+            </div>
+            {[['인증서 유형','select',['범용','금융거래용','전자세금계산서용']],['비밀번호','password',''],['만료일','date','']].map(([l,t,opts])=>(
+              <div key={l} style={{ marginBottom:14 }}>
+                <label style={{ fontSize:13, fontWeight:600, color:'#1A2332', display:'block', marginBottom:6 }}>{l}</label>
+                {t==='select' ? <select style={{ width:'100%', border:'1px solid #E2E8F0', borderRadius:8, padding:'9px 14px', fontSize:13, outline:'none' }}>{opts.map(o=><option key={o}>{o}</option>)}</select>
+                  : <input type={t} style={{ width:'100%', border:'1px solid #E2E8F0', borderRadius:8, padding:'9px 14px', fontSize:13, outline:'none' }} />}
+              </div>
+            ))}
+            <button onClick={()=>{ setDrawerOpen(false); onToast('인증서가 등록되었습니다.'); }} style={{ width:'100%', padding:'12px', background:'#1E3A5F', color:'#fff', border:'none', borderRadius:8, fontSize:14, fontWeight:700, cursor:'pointer', marginTop:8 }}>등록 완료</button>
+          </div>
+        </div>
+      )}
+
+      {addAcctOpen && (
+        <Modal title="계좌 추가 연동" onClose={()=>setAddAcctOpen(false)} width={480}>
+          {[['금융기관','select',['국민은행','신한은행','우리은행','하나은행','IBK기업은행','삼성카드','현대카드','KB국민카드']],['계좌번호','text','계좌번호 입력'],['계좌 유형','select',['당좌','보통','법인카드','정기예금']]].map(([l,t,opts])=>(
+            <div key={l} style={{ marginBottom:14 }}>
+              <label style={{ fontSize:13, fontWeight:600, display:'block', marginBottom:6 }}>{l}</label>
+              {t==='select' ? <select style={{ width:'100%', border:'1px solid #E2E8F0', borderRadius:8, padding:'9px 14px', fontSize:13, outline:'none' }}>{opts.map(o=><option key={o}>{o}</option>)}</select>
+                : <input type={t} placeholder={opts} style={{ width:'100%', border:'1px solid #E2E8F0', borderRadius:8, padding:'9px 14px', fontSize:13, outline:'none' }} />}
+            </div>
+          ))}
+          <div style={{ background:'#FEF9C3', border:'1px solid #FDE68A', borderRadius:8, padding:12, fontSize:12, color:'#92400E', marginBottom:16 }}>
+            ⚠️ API 연동 시 공인인증서 확인이 필요합니다.
+          </div>
+          <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+            <button onClick={()=>setAddAcctOpen(false)} style={{ padding:'9px 20px', background:'#F4F6F9', border:'none', borderRadius:8, fontSize:13, cursor:'pointer', fontWeight:600 }}>취소</button>
+            <button onClick={()=>{ setAddAcctOpen(false); onToast('계좌 연동이 완료되었습니다.'); }} style={{ padding:'9px 20px', background:'#1E3A5F', color:'#fff', border:'none', borderRadius:8, fontSize:13, cursor:'pointer', fontWeight:600 }}>연동 완료</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ============ MAIN APP ============ */
+function App() {
+  const [page, setPage] = React.useState('main');
+  const [toast, setToast] = React.useState(null);
+  const [pageKey, setPageKey] = React.useState(0);
+
+  function navigate(p) { setPage(p); setPageKey(k=>k+1); }
+  function showToast(msg) { setToast(msg); }
+  function clearToast() { setToast(null); }
+
+  const NAV_ITEMS = [
+    { id:'main', label:'대시보드', icon:'📊' },
+    { id:'transactions', label:'거래 내역', icon:'💳' },
+    { id:'vouchers', label:'전표 관리', icon:'📋' },
+    { id:'settings', label:'기본 설정', icon:'⚙️' },
+  ];
+
+  return (
+    <div style={{ display:'flex', width:'100%', height:'100vh', overflow:'hidden' }}>
+      {/* Sidebar */}
+      <aside style={{ width:220, background:'#1E3A5F', display:'flex', flexDirection:'column', flexShrink:0 }}>
+        <div style={{ padding:'24px 20px', borderBottom:'1px solid rgba(255,255,255,0.1)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ width:36, height:36, background:'#3B9DE8', borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>🏥</div>
+            <div>
+              <div style={{ color:'#fff', fontSize:13, fontWeight:700 }}>케어ERP</div>
+              <div style={{ color:'rgba(255,255,255,0.5)', fontSize:11 }}>재무회계 자동화</div>
+            </div>
+          </div>
+        </div>
+        <div style={{ padding:'16px 12px', flex:1 }}>
+          <div style={{ fontSize:10, color:'rgba(255,255,255,0.35)', fontWeight:700, letterSpacing:'0.08em', textTransform:'uppercase', padding:'0 8px', marginBottom:8 }}>메뉴</div>
+          {NAV_ITEMS.map(item=>(
+            <button key={item.id} onClick={()=>navigate(item.id)} style={{ width:'100%', textAlign:'left', display:'flex', alignItems:'center', gap:10, padding:'10px 12px', borderRadius:8, border:'none', cursor:'pointer', marginBottom:2, transition:'all 150ms', background: page===item.id ? 'rgba(59,157,232,0.2)' : 'transparent', color: page===item.id ? '#3B9DE8' : 'rgba(255,255,255,0.6)', fontWeight: page===item.id ? 600 : 400, fontSize:13 }}>
+              <span style={{ fontSize:16 }}>{item.icon}</span>
+              {item.label}
+              {item.id==='main' && page===item.id && <div style={{ marginLeft:'auto', width:6, height:6, background:'#3B9DE8', borderRadius:'50%' }} />}
+            </button>
+          ))}
+        </div>
+        <div style={{ padding:'16px 20px', borderTop:'1px solid rgba(255,255,255,0.1)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <div style={{ width:30, height:30, background:'#3B9DE8', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, color:'#fff', fontWeight:700 }}>김</div>
+            <div>
+              <div style={{ color:'#fff', fontSize:12, fontWeight:600 }}>김회계</div>
+              <div style={{ color:'rgba(255,255,255,0.4)', fontSize:10 }}>회계담당자</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <header style={{ height:60, background:'#fff', borderBottom:'1px solid #E2E8F0', display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0 24px', flexShrink:0 }}>
+          <div>
+            <span style={{ fontSize:14, fontWeight:700, color:'#1A2332' }}>행복한 봄 요양원</span>
+            <span style={{ fontSize:12, color:'#5A6A7E', marginLeft:8 }}>· 2025년 4월</span>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+            <button onClick={()=>showToast('시스템 동기화를 시작합니다.')} style={{ background:'#F4F6F9', border:'none', borderRadius:8, padding:'7px 12px', fontSize:12, cursor:'pointer', color:'#5A6A7E', fontWeight:500 }}>🔄 동기화</button>
+            <div style={{ position:'relative' }}>
+              <button onClick={()=>showToast('알림 3건이 있습니다.')} style={{ background:'none', border:'none', cursor:'pointer', fontSize:20 }}>🔔</button>
+              <span style={{ position:'absolute', top:-2, right:-2, background:'#EF4444', color:'#fff', width:16, height:16, borderRadius:'50%', fontSize:9, display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700 }}>3</span>
+            </div>
+          </div>
+        </header>
+
+        <main style={{ flex:1, overflowY:'auto', padding:24 }}>
+          <div key={pageKey}>
+            {page==='main' && <DashboardScreen onToast={showToast} />}
+            {page==='transactions' && <TransactionsScreen onToast={showToast} />}
+            {page==='vouchers' && <VouchersScreen onToast={showToast} />}
+            {page==='settings' && <SettingsScreen onToast={showToast} />}
+          </div>
+        </main>
+      </div>
+
+      {toast && <Toast message={toast} onClose={clearToast} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
