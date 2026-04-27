@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>통합 결제·인증 관리 콘솔 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;font-family:'Pretendard',-apple-system,sans-serif;background:#0F172A;color:#F1F5F9}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#1E293B}
+::-webkit-scrollbar-thumb{background:#334155;border-radius:3px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideInRight{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes slideInUp{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+@keyframes bounceIn{0%{opacity:0;transform:scale(0.88)}60%{transform:scale(1.03)}100%{opacity:1;transform:scale(1)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.45}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes glowPulse{0%,100%{box-shadow:0 0 0 0 rgba(52,211,153,0.4)}70%{box-shadow:0 0 0 8px rgba(52,211,153,0)}}
+@keyframes streamIn{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:translateX(0)}}
+@keyframes gradientShift{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+@keyframes progressFill{from{width:0}to{width:var(--pct)}}
+@keyframes toastSlide{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.90) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.55}100%{transform:scale(5);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-300px 0}100%{background-position:calc(300px + 100%) 0}}
+@keyframes barGrow{from{width:0;opacity:0}to{width:var(--bw,80%);opacity:1}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback} = React;
+
+function CountUp({end,prefix='',suffix='',duration=1100}){
+  const [val,setVal]=useState(0);
+  const rafRef=useRef(null);
+  useEffect(()=>{
+    const n=parseFloat(String(end).replace(/[^0-9.]/g,''))||0;
+    const s=Date.now();
+    const tick=()=>{
+      const p=Math.min((Date.now()-s)/duration,1);
+      const e2=1-Math.pow(1-p,3);
+      setVal(Math.round(n*e2));
+      if(p<1)rafRef.current=requestAnimationFrame(tick);
+    };
+    rafRef.current=requestAnimationFrame(tick);
+    return()=>{if(rafRef.current)cancelAnimationFrame(rafRef.current)};
+  },[end]);
+  const disp=String(end).includes('.')?val.toFixed(1):String(end).includes(',')?val.toLocaleString():val;
+  return <span style={{animation:'countUp 0.4s ease both'}}>{prefix}{disp}{suffix}</span>;
+}
+
+function RippleBtn({onClick,style,children,disabled}){
+  const [rpl,setRpl]=useState([]);
+  function hc(e){
+    if(disabled)return;
+    const b=e.currentTarget.getBoundingClientRect();
+    const id=Date.now();
+    setRpl(p=>[...p,{id,x:e.clientX-b.left,y:e.clientY-b.top}]);
+    setTimeout(()=>setRpl(p=>p.filter(r=>r.id!==id)),700);
+    if(onClick)onClick(e);
+  }
+  return(
+    <button onClick={hc} disabled={disabled} style={{...style,position:'relative',overflow:'hidden'}}>
+      {children}
+      {rpl.map(r=>(
+        <span key={r.id} style={{position:'absolute',left:r.x-12,top:r.y-12,width:24,height:24,borderRadius:'50%',background:'rgba(255,255,255,0.3)',animation:'ripple 0.7s ease-out forwards',pointerEvents:'none'}}/>
+      ))}
+    </button>
+  );
+}
+
+function StaggerCards({items,renderItem,cols=1,gap=12}){
+  return(
+    <div style={{display:'grid',gridTemplateColumns:`repeat(${cols},1fr)`,gap}}>
+      {items.map((item,i)=>(
+        <div key={i} style={{animation:`fadeInScale 0.4s ease ${i*0.08}s both`}}>
+          {renderItem(item,i)}
+        </div>
+      ))}
+    </div>
+  );
+}
+const {LineChart,Line,BarChart,Bar,AreaChart,Area,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,RadarChart,Radar,PolarGrid,PolarAngleAxis} = Recharts;
+
+const C = {
+  primary:'#7C3AED',primaryLight:'#9F67F5',
+  secondary:'#4C1D95',accent:'#34D399',accentDim:'#065F46',
+  bg:'#0F172A',surface:'#1E293B',surface2:'#263548',border:'#334155',
+  text:'#F1F5F9',textSub:'#94A3B8',textDim:'#64748B',
+  success:'#34D399',successDim:'rgba(52,211,153,0.15)',
+  error:'#F87171',errorDim:'rgba(248,113,113,0.15)',
+  warn:'#FBBF24',warnDim:'rgba(251,191,36,0.15)',
+  purple:'#A78BFA',purpleDim:'rgba(124,58,237,0.2)',
+  cyan:'#22D3EE',
+};
+
+function Toast({msg,type,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3200);return()=>clearTimeout(t)},[]);
+  const bc={success:C.success,error:C.error,info:C.cyan,warn:C.warn}[type]||C.success;
+  return(
+    <div style={{position:'fixed',top:70,right:20,zIndex:9999,animation:'toastSlide 0.3s ease',
+      background:C.surface2,border:`1px solid ${bc}40`,borderLeft:`3px solid ${bc}`,borderRadius:4,
+      padding:'12px 16px',display:'flex',alignItems:'center',gap:10,boxShadow:'0 8px 32px rgba(0,0,0,0.4)',minWidth:280}}>
+      <span style={{fontSize:16}}>{type==='success'?'✅':type==='error'?'❌':type==='warn'?'⚠️':'ℹ️'}</span>
+      <span style={{color:C.text,fontWeight:600,fontSize:13,flex:1}}>{msg}</span>
+      <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:C.textSub,fontWeight:700,fontSize:18,lineHeight:1}}>×</button>
+    </div>
+  );
+}
+
+function Modal({title,onClose,children,width=540}){
+  return(
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.65)',zIndex:5000,display:'flex',alignItems:'center',justifyContent:'center',animation:'fadeIn 0.2s ease'}}>
+      <div style={{background:C.surface,borderRadius:6,width,maxWidth:'90vw',maxHeight:'85vh',overflow:'auto',border:`1px solid ${C.border}`,boxShadow:'0 24px 80px rgba(0,0,0,0.5)',animation:'bounceIn 0.3s ease'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'18px 22px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:16,fontWeight:700,color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:22,color:C.textSub,lineHeight:1}}>×</button>
+        </div>
+        <div style={{padding:'22px'}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Drawer({title,onClose,children}){
+  return(
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:4000,display:'flex',justifyContent:'flex-end'}}>
+      <div style={{width:500,maxWidth:'92vw',background:C.surface,height:'100vh',overflow:'auto',border:`1px solid ${C.border}`,boxShadow:'-8px 0 40px rgba(0,0,0,0.4)',animation:'slideInRight 0.3s ease'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'18px 22px',borderBottom:`1px solid ${C.border}`,position:'sticky',top:0,background:C.surface,zIndex:1}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:22,color:C.textSub}}>×</button>
+        </div>
+        <div style={{padding:'22px'}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Badge({status,size='sm'}){
+  const map={
+    '승인완료':{bg:C.successDim,c:C.success},
+    '인증성공':{bg:C.successDim,c:C.success},
+    '처리중':{bg:C.warnDim,c:C.warn},
+    '실패':{bg:C.errorDim,c:C.error},
+    '망취소':{bg:C.purpleDim,c:C.purple},
+    '대기':{bg:'rgba(100,116,139,0.15)',c:C.textSub},
+    '정상':{bg:C.successDim,c:C.success},
+    '경고':{bg:C.warnDim,c:C.warn},
+    '오류':{bg:C.errorDim,c:C.error},
+    '활성':{bg:C.successDim,c:C.success},
+    '비활성':{bg:'rgba(100,116,139,0.15)',c:C.textSub},
+    'PASS':{bg:C.purpleDim,c:C.purple},
+    '전달완료':{bg:C.successDim,c:C.success},
+    '미전달':{bg:C.errorDim,c:C.error},
+  };
+  const s=map[status]||{bg:'rgba(100,116,139,0.15)',c:C.textSub};
+  const pad=size==='sm'?'3px 9px':'4px 12px';
+  return(
+    <span style={{display:'inline-flex',alignItems:'center',gap:4,padding:pad,borderRadius:20,background:s.bg,color:s.c,fontSize:size==='sm'?11:13,fontWeight:700,border:`1px solid ${s.c}30`}}>
+      {(status==='처리중'||status==='정상'||status==='활성')&&<span style={{width:6,height:6,borderRadius:'50%',background:s.c,animation:'glowPulse 1.8s infinite'}}/>}
+      {status}
+    </span>
+  );
+}
+
+function Stat({icon,label,val,sub,color,countEnd}){
+  return(
+    <div style={{background:C.surface,borderRadius:6,padding:'18px 20px',border:`1px solid ${C.border}`,boxShadow:`0 4px 20px rgba(0,0,0,0.25),inset 0 1px 0 rgba(255,255,255,0.04)`,animation:'fadeInScale 0.4s ease both',transition:'border-color 0.2s,transform 0.2s,box-shadow 0.2s'}}
+      onMouseEnter={e=>{e.currentTarget.style.borderColor=color||C.primary;e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow=`0 8px 30px rgba(0,0,0,0.35),0 0 0 1px ${(color||C.primary)}40`}}
+      onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.transform='none';e.currentTarget.style.boxShadow='0 4px 20px rgba(0,0,0,0.25),inset 0 1px 0 rgba(255,255,255,0.04)'}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
+        <div style={{width:38,height:38,borderRadius:4,background:`${color||C.primary}20`,border:`1px solid ${color||C.primary}40`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,boxShadow:`0 2px 8px ${(color||C.primary)}20`}}>{icon}</div>
+        <span style={{fontSize:11,color:C.textSub,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.05em'}}>{label}</span>
+      </div>
+      <div style={{fontSize:22,fontWeight:800,color:C.text,marginBottom:4}}>
+        {countEnd?<CountUp end={countEnd} prefix={val.startsWith('₩')?'₩':''} suffix={val.includes('건')?'건':val.includes('개')?'개':val.includes('%')?'%':val.includes('TPS')?'TPS':''} duration={1000}/>:val}
+      </div>
+      {sub&&<div style={{fontSize:11,color:C.textSub}}>{sub}</div>}
+    </div>
+  );
+}
+
+// ──── GLOBAL NAV (spa-modern) ────
+function GlobalNav({route,setRoute}){
+  const links=[
+    {id:'transactions',label:'트랜잭션'},
+    {id:'audit',label:'감사 로그'},
+    {id:'settlement',label:'정산·환불'},
+    {id:'routing',label:'PG 라우팅'},
+  ];
+  return(
+    <nav style={{background:`${C.surface}ee`,backdropFilter:'blur(12px)',borderBottom:`1px solid ${C.border}`,position:'sticky',top:0,zIndex:100}}>
+      <div style={{maxWidth:1360,margin:'0 auto',padding:'0 24px',display:'flex',alignItems:'center',height:58,gap:8}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginRight:28,cursor:'pointer'}} onClick={()=>setRoute('main')}>
+          <div style={{width:32,height:32,borderRadius:4,background:`linear-gradient(135deg,${C.primary},${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',boxShadow:`0 2px 10px ${C.primary}60`}}>
+            <span style={{color:'#fff',fontSize:15,fontWeight:800}}>C</span>
+          </div>
+          <div>
+            <div style={{fontSize:14,fontWeight:800,color:C.text,lineHeight:1.1}}>콘솔</div>
+            <div style={{fontSize:10,color:C.textSub}}>결제·인증 관리</div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:2,flex:1}}>
+          {links.map(l=>(
+            <button key={l.id} onClick={()=>setRoute(l.id)} style={{
+              padding:'7px 15px',borderRadius:4,border:'none',cursor:'pointer',fontWeight:600,fontSize:13,fontFamily:'Pretendard',
+              background:route===l.id?`${C.primary}25`:'transparent',
+              color:route===l.id?C.primaryLight:C.textSub,
+              transition:'all 0.15s',borderBottom:route===l.id?`2px solid ${C.primaryLight}`:'2px solid transparent'}}>
+              {l.label}
+            </button>
+          ))}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <span style={{fontSize:11,color:C.textSub,background:C.surface2,padding:'4px 8px',borderRadius:6,border:`1px solid ${C.border}`}}>LIVE</span>
+          <button style={{background:'none',border:'none',cursor:'pointer',fontSize:18,color:C.textSub,position:'relative'}}>
+            🔔<span style={{position:'absolute',top:-2,right:-2,width:7,height:7,borderRadius:'50%',background:C.error}}/>
+          </button>
+          <div style={{width:32,height:32,borderRadius:'50%',background:`linear-gradient(135deg,${C.primary},${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}}>
+            <span style={{color:'#fff',fontSize:12,fontWeight:700}}>관</span>
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+// ──── MAIN PAGE: 다중 PG 라우팅 관리 (home) ────
+const pgList=[
+  {id:'PG-01',name:'KG이니시스',type:'신용카드/계좌이체',weight:65,status:'정상',latency:'120ms',success:'99.2%'},
+  {id:'PG-02',name:'카카오페이',type:'간편결제',weight:20,status:'정상',latency:'85ms',success:'99.8%'},
+  {id:'PG-03',name:'네이버페이',type:'간편결제',weight:15,status:'경고',latency:'340ms',success:'97.1%'},
+  {id:'PG-04',name:'토스페이먼츠',type:'신용카드/간편',weight:0,status:'비활성',latency:'-',success:'-'},
+];
+function MainPage({showToast}){
+  const [selected,setSelected]=useState(null);
+  const [showAdd,setShowAdd]=useState(false);
+  const [weights,setWeights]=useState({});
+  const routeStats=[
+    {label:'현재 활성 PG',val:'3개',icon:'🔗',color:C.accent},
+    {label:'전체 가중치 합',val:'100%',icon:'⚖️',color:C.cyan},
+    {label:'평균 응답시간',val:'180ms',icon:'⚡',color:C.warn},
+    {label:'라우팅 성공률',val:'98.7%',icon:'✅',color:C.accent},
+  ];
+  return(
+    <div style={{maxWidth:1360,margin:'0 auto',padding:'28px 24px',animation:'fadeIn 0.4s ease'}}>
+      <div style={{marginBottom:24}}>
+        <h2 style={{fontSize:22,fontWeight:800,color:C.text}}>다중 PG 라우팅 관리</h2>
+        <p style={{fontSize:13,color:C.textSub,marginTop:4}}>PG사별 가중치 설정 · 헬스체크 모니터링 · 자동 폴백 전환</p>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:24}}>
+        {routeStats.map((s,i)=><Stat key={i} icon={s.icon} label={s.label} val={s.val} color={s.color}/>)}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 380px',gap:20}}>
+        {/* PG list */}
+        <div style={{background:C.surface,borderRadius:6,padding:'22px 24px',border:`1px solid ${C.border}`}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:18}}>
+            <h3 style={{fontSize:15,fontWeight:700,color:C.text}}>등록된 PG사</h3>
+            <button onClick={()=>setShowAdd(true)} style={{padding:'8px 16px',borderRadius:4,border:`1px solid ${C.primary}`,background:`${C.primary}20`,color:C.primaryLight,cursor:'pointer',fontWeight:700,fontSize:13,fontFamily:'Pretendard',display:'flex',alignItems:'center',gap:6}}>+ PG 추가</button>
+          </div>
+          {pgList.map((pg,i)=>(
+            <div key={pg.id} onClick={()=>setSelected(pg)} style={{display:'flex',alignItems:'center',gap:16,padding:'16px 14px',borderRadius:6,cursor:'pointer',transition:'all 0.15s',border:`1px solid transparent`,marginBottom:8}}
+              onMouseEnter={e=>{e.currentTarget.style.background=C.surface2;e.currentTarget.style.borderColor=C.border}}
+              onMouseLeave={e=>{e.currentTarget.style.background='transparent';e.currentTarget.style.borderColor='transparent'}}>
+              <div style={{width:44,height:44,borderRadius:6,background:`${C.primary}20`,border:`1px solid ${C.primary}30`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,flexShrink:0}}>
+                {pg.name.includes('카카오')?'💛':pg.name.includes('네이버')?'💚':pg.name.includes('토스')?'🔵':'🏦'}
+              </div>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                  <span style={{fontSize:14,fontWeight:700,color:C.text}}>{pg.name}</span>
+                  <Badge status={pg.status}/>
+                </div>
+                <div style={{fontSize:12,color:C.textSub}}>{pg.type}</div>
+                <div style={{marginTop:6,background:'rgba(255,255,255,0.06)',borderRadius:4,height:4,overflow:'hidden'}}>
+                  <div style={{height:'100%',background:pg.status==='정상'?C.accent:pg.status==='경고'?C.warn:'#334155',borderRadius:4,width:`${pg.weight}%`,transition:'width 0.6s ease'}}/>
+                </div>
+              </div>
+              <div style={{textAlign:'right',flexShrink:0}}>
+                <div style={{fontSize:18,fontWeight:800,color:C.text}}>{pg.weight}%</div>
+                <div style={{fontSize:11,color:C.textSub}}>가중치</div>
+                <div style={{fontSize:11,color:pg.status==='정상'?C.accent:pg.status==='경고'?C.warn:C.textSub,marginTop:2}}>{pg.latency}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+        {/* Config panel */}
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{background:C.surface,borderRadius:6,padding:'20px',border:`1px solid ${C.border}`}}>
+            <h3 style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:14}}>폴백 정책 설정</h3>
+            {[{label:'자동 폴백 전환',checked:true},{label:'장애 감지 시 알림',checked:true},{label:'라우팅 로그 기록',checked:true}].map((opt,i)=>(
+              <div key={i} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:13,color:C.text}}>{opt.label}</span>
+                <div style={{width:40,height:22,borderRadius:11,background:opt.checked?C.primary:'#334155',position:'relative',cursor:'pointer',transition:'background 0.2s'}}
+                  onClick={()=>showToast(`${opt.label} 설정이 변경되었습니다`,'success')}>
+                  <div style={{width:18,height:18,borderRadius:'50%',background:'#fff',position:'absolute',top:2,transition:'left 0.2s',left:opt.checked?20:2}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{background:C.surface,borderRadius:6,padding:'20px',border:`1px solid ${C.border}`}}>
+            <h3 style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:12}}>헬스체크 상태</h3>
+            {pgList.filter(p=>p.status!=='비활성').map(pg=>(
+              <div key={pg.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{width:8,height:8,borderRadius:'50%',background:pg.status==='정상'?C.accent:C.warn,animation:'glowPulse 2s infinite',flexShrink:0}}/>
+                <span style={{fontSize:13,color:C.text,flex:1}}>{pg.name}</span>
+                <span style={{fontSize:12,color:C.textSub,fontFamily:'monospace'}}>{pg.latency}</span>
+                <span style={{fontSize:12,color:pg.status==='정상'?C.accent:C.warn,fontWeight:700}}>{pg.success}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {selected&&(
+        <Drawer title={`PG 상세 — ${selected.name}`} onClose={()=>setSelected(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+              <Badge status={selected.status}/>
+              <span style={{fontSize:12,color:C.textSub}}>{selected.type}</span>
+            </div>
+            {[['PG ID',selected.id],['PG명',selected.name],['결제 수단',selected.type],['라우팅 가중치',`${selected.weight}%`],['응답 시간',selected.latency],['성공률',selected.success]].map(([k,v])=>(
+              <div key={k} style={{padding:'10px 0',borderBottom:`1px solid ${C.border}`,display:'flex',flexDirection:'column',gap:3}}>
+                <span style={{fontSize:11,color:C.textSub}}>{k}</span>
+                <span style={{fontSize:14,fontWeight:700,color:C.text,fontFamily:k.includes('ID')?'monospace':'inherit'}}>{v}</span>
+              </div>
+            ))}
+            <div>
+              <label style={{fontSize:12,color:C.textSub,marginBottom:6,display:'block'}}>가중치 조정</label>
+              <input type="range" min={0} max={100} defaultValue={selected.weight} style={{width:'100%',accentColor:C.primary}}
+                onChange={e=>showToast(`${selected.name} 가중치 → ${e.target.value}%`,'info')}/>
+            </div>
+            <button onClick={()=>{setSelected(null);showToast(`${selected.name} 설정이 저장되었습니다`,'success')}} style={{padding:12,borderRadius:4,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontWeight:700,fontSize:14,fontFamily:'Pretendard'}}>저장</button>
+          </div>
+        </Drawer>
+      )}
+      {showAdd&&(
+        <Modal title="PG사 추가" onClose={()=>setShowAdd(false)}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            {[['PG사명','예: 스마트로'],['연동 방식','예: 웹표준'],['MID','발급된 MID 입력'],['비밀키','API 비밀키']].map(([l,p])=>(
+              <div key={l}>
+                <label style={{fontSize:13,fontWeight:600,color:C.text,display:'block',marginBottom:5}}>{l}</label>
+                <input placeholder={p} style={{width:'100%',padding:'10px 12px',border:`1px solid ${C.border}`,borderRadius:4,background:C.surface2,color:C.text,fontSize:13,fontFamily:'Pretendard',outline:'none'}}
+                  onFocus={e=>e.target.style.borderColor=C.primary}
+                  onBlur={e=>e.target.style.borderColor=C.border}/>
+              </div>
+            ))}
+            <div style={{display:'flex',gap:10,marginTop:4}}>
+              <button onClick={()=>setShowAdd(false)} style={{flex:1,padding:11,borderRadius:4,border:`1px solid ${C.border}`,background:'transparent',color:C.textSub,cursor:'pointer',fontWeight:600,fontFamily:'Pretendard',fontSize:14}}>취소</button>
+              <button onClick={()=>{setShowAdd(false);showToast('새 PG사가 등록되었습니다','success');}} style={{flex:2,padding:11,borderRadius:4,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontWeight:700,fontSize:14,fontFamily:'Pretendard'}}>등록</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ──── TRANSACTIONS PAGE ────
+const txStream=[
+  {id:'TX-9920',pg:'KG이니시스',amount:'198,000',type:'카드',status:'승인완료',event:'승인',ip:'211.218.x.x',time:'14:23:41',flag:false},
+  {id:'TX-9919',pg:'카카오페이',amount:'29,000',type:'간편',status:'승인완료',event:'승인',ip:'125.138.x.x',time:'14:23:35',flag:false},
+  {id:'TX-9918',pg:'KG이니시스',amount:'850,000',type:'카드',status:'처리중',event:'인증',ip:'221.148.x.x',time:'14:23:28',flag:false},
+  {id:'TX-9917',pg:'네이버페이',amount:'15,000',type:'간편',status:'실패',event:'실패',ip:'175.193.x.x',time:'14:23:10',flag:true},
+  {id:'TX-9916',pg:'KG이니시스',amount:'1,250,000',type:'카드',status:'처리중',event:'인증',ip:'61.78.x.x',time:'14:22:58',flag:true},
+  {id:'TX-9915',pg:'카카오페이',amount:'45,000',type:'간편',status:'승인완료',event:'승인',ip:'110.12.x.x',time:'14:22:40',flag:false},
+  {id:'TX-9914',pg:'KG이니시스',amount:'680,000',type:'카드',status:'망취소',event:'망취소',ip:'203.246.x.x',time:'14:22:15',flag:false},
+];
+const streamData=[
+  {t:'14:20',count:12},{t:'14:21',count:18},{t:'14:22',count:15},{t:'14:23',count:24},{t:'지금',count:8},
+];
+function TransactionsPage({showToast}){
+  const [selected,setSelected]=useState(null);
+  const [filterFlag,setFilterFlag]=useState(false);
+  const displayed=filterFlag?txStream.filter(t=>t.flag):txStream;
+  return(
+    <div style={{maxWidth:1360,margin:'0 auto',padding:'28px 24px',animation:'fadeIn 0.4s ease'}}>
+      <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:22}}>
+        <div>
+          <h2 style={{fontSize:22,fontWeight:800,color:C.text}}>실시간 트랜잭션 모니터링</h2>
+          <p style={{fontSize:13,color:C.textSub,marginTop:4}}>Redis Streams 기반 이벤트 파이프라인 · SSE 실시간 피드 · 이상 거래 감지</p>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <span style={{width:8,height:8,borderRadius:'50%',background:C.accent,animation:'glowPulse 1.5s infinite'}}/>
+          <span style={{fontSize:12,color:C.accent,fontWeight:700}}>LIVE</span>
+        </div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:24}}>
+        {[
+          {icon:'⚡',label:'초당 트랜잭션',val:'4.2 TPS',countEnd:'4',color:C.accent},
+          {icon:'🚨',label:'이상 거래 감지',val:'2건',countEnd:'2',sub:'플래그 처리 중',color:C.error},
+          {icon:'📊',label:'1분 트랜잭션',val:'127건',countEnd:'127',color:C.cyan},
+          {icon:'💰',label:'1시간 결제 총액',val:'₩18.4M',color:C.warn},
+        ].map((s,i)=><Stat key={i} {...s}/>)}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:20}}>
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          {/* Stream chart */}
+          <div style={{background:C.surface,borderRadius:6,padding:'20px 22px',border:`1px solid ${C.border}`}}>
+            <h3 style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:14}}>트랜잭션 빈도 (최근 5분)</h3>
+            <ResponsiveContainer width="100%" height={120}>
+              <AreaChart data={streamData} margin={{top:0,right:0,bottom:0,left:-20}}>
+                <defs>
+                  <linearGradient id="txGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.accent} stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor={C.accent} stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1E293B"/>
+                <XAxis dataKey="t" tick={{fontSize:11,fill:C.textSub}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fontSize:11,fill:C.textSub}} axisLine={false} tickLine={false}/>
+                <Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:4,fontSize:12,color:C.text}}/>
+                <Area type="monotone" dataKey="count" stroke={C.accent} strokeWidth={2} fill="url(#txGrad)" name="건수"/>
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+          {/* Table */}
+          <div style={{background:C.surface,borderRadius:6,padding:'20px 22px',border:`1px solid ${C.border}`}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
+              <h3 style={{fontSize:14,fontWeight:700,color:C.text}}>실시간 트랜잭션 피드</h3>
+              <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',fontSize:12,color:filterFlag?C.error:C.textSub,fontWeight:600}}>
+                <input type="checkbox" checked={filterFlag} onChange={e=>setFilterFlag(e.target.checked)} style={{accentColor:C.error}}/>
+                🚨 이상 거래만
+              </label>
+            </div>
+            <div style={{overflowX:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead>
+                  <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                    {['거래 ID','PG','금액','유형','상태','IP','시각',''].map(h=>(
+                      <th key={h} style={{padding:'8px 10px',textAlign:'left',fontWeight:600,color:C.textDim,fontSize:11,whiteSpace:'nowrap'}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayed.map((tx,i)=>(
+                    <tr key={tx.id} onClick={()=>setSelected(tx)} style={{borderBottom:`1px solid ${C.border}20`,cursor:'pointer',transition:'background 0.15s',animation:`streamIn 0.3s ease ${i*0.05}s both`,background:tx.flag?`${C.error}08`:'transparent'}}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.surface2}
+                      onMouseLeave={e=>e.currentTarget.style.background=tx.flag?`${C.error}08`:'transparent'}>
+                      <td style={{padding:'10px 10px',fontFamily:'monospace',color:C.cyan,fontWeight:600}}>{tx.id}</td>
+                      <td style={{padding:'10px 10px',color:C.text}}>{tx.pg}</td>
+                      <td style={{padding:'10px 10px',fontWeight:700,color:C.text}}>₩{tx.amount}</td>
+                      <td style={{padding:'10px 10px',color:C.textSub}}>{tx.type}</td>
+                      <td style={{padding:'10px 10px'}}><Badge status={tx.status}/></td>
+                      <td style={{padding:'10px 10px',color:C.textSub,fontFamily:'monospace',fontSize:11}}>{tx.ip}</td>
+                      <td style={{padding:'10px 10px',color:C.textSub,fontFamily:'monospace',fontSize:11}}>{tx.time}</td>
+                      <td style={{padding:'10px 10px'}}>{tx.flag&&<span style={{fontSize:11,color:C.error,fontWeight:700}}>⚠️ 플래그</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        {/* Alert panel */}
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={{background:C.surface,borderRadius:6,padding:'18px',border:`1px solid ${C.error}40`}}>
+            <h4 style={{fontSize:13,fontWeight:700,color:C.error,marginBottom:12}}>🚨 이상 거래 알림</h4>
+            {[
+              {id:'TX-9916',msg:'단건 100만원 초과 거래 감지',time:'14:22:58'},
+              {id:'TX-9917',msg:'3회 연속 실패 (네이버페이)',time:'14:23:10'},
+            ].map((a,i)=>(
+              <div key={i} style={{background:`${C.error}12`,borderRadius:4,padding:'10px 12px',marginBottom:8,border:`1px solid ${C.error}30`}}>
+                <div style={{fontSize:11,fontFamily:'monospace',color:C.error,marginBottom:3}}>{a.id}</div>
+                <div style={{fontSize:12,color:C.text,fontWeight:600}}>{a.msg}</div>
+                <div style={{fontSize:11,color:C.textSub,marginTop:2}}>{a.time}</div>
+              </div>
+            ))}
+            <button onClick={()=>showToast('이상 거래 플래그가 처리되었습니다','success')} style={{width:'100%',padding:'8px',borderRadius:4,border:`1px solid ${C.error}`,background:`${C.error}15`,color:C.error,cursor:'pointer',fontWeight:700,fontSize:12,fontFamily:'Pretendard',marginTop:4}}>모두 처리</button>
+          </div>
+          <div style={{background:C.surface,borderRadius:6,padding:'18px',border:`1px solid ${C.border}`}}>
+            <h4 style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>PG 상태 현황</h4>
+            {pgList.map(pg=>(
+              <div key={pg.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{width:6,height:6,borderRadius:'50%',background:pg.status==='정상'?C.accent:pg.status==='경고'?C.warn:C.textDim,flexShrink:0}}/>
+                <span style={{fontSize:12,color:C.text,flex:1}}>{pg.name}</span>
+                <span style={{fontSize:11,color:C.textSub,fontFamily:'monospace'}}>{pg.latency||'-'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {selected&&(
+        <Drawer title={`트랜잭션 상세 — ${selected.id}`} onClose={()=>setSelected(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div style={{display:'flex',gap:8}}><Badge status={selected.status}/>{selected.flag&&<span style={{fontSize:12,color:C.error,fontWeight:700}}>⚠️ 이상 거래 플래그</span>}</div>
+            {[['거래 ID',selected.id],['PG사',selected.pg],['결제 금액',`₩${selected.amount}`],['결제 유형',selected.type],['이벤트',selected.event],['IP',selected.ip],['처리 시각',selected.time]].map(([k,v])=>(
+              <div key={k} style={{padding:'8px 0',borderBottom:`1px solid ${C.border}`,display:'flex',flexDirection:'column',gap:3}}>
+                <span style={{fontSize:11,color:C.textSub}}>{k}</span>
+                <span style={{fontSize:13,fontWeight:600,color:C.text,fontFamily:['거래 ID','IP'].includes(k)?'monospace':'inherit'}}>{v}</span>
+              </div>
+            ))}
+            <div style={{background:C.surface2,borderRadius:4,padding:12}}>
+              <div style={{fontSize:11,fontWeight:700,color:C.textSub,marginBottom:6}}>Redis Stream 이벤트</div>
+              <pre style={{fontSize:10,color:C.accent,fontFamily:'monospace',lineHeight:1.7}}>
+{`stream: tx:events
+id: ${selected.time.replace(':','-')}-001
+event: ${selected.event}
+tx_id: ${selected.id}
+amount: ${selected.amount.replace(',','')}`}
+              </pre>
+            </div>
+            {selected.flag&&(
+              <button onClick={()=>{setSelected(null);showToast('이상 거래 플래그가 해제되었습니다','success')}} style={{padding:11,borderRadius:4,border:'none',background:C.error,color:'#fff',cursor:'pointer',fontWeight:700,fontFamily:'Pretendard',fontSize:13}}>🚫 플래그 해제</button>
+            )}
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+// ──── AUDIT PAGE ────
+const auditLogs=[
+  {id:'AUD-5510',user:'김지수',uid:'USR-3821',event:'인증 완료',method:'PASS',ip:'211.218.x.x',result:'인증성공',time:'2026-04-27 14:23:05',ci:'CI_9f3a...'},
+  {id:'AUD-5509',user:'박민준',uid:'USR-7612',event:'인증 요청',method:'PASS',ip:'125.138.x.x',result:'인증성공',time:'2026-04-27 14:18:42',ci:'CI_8b2c...'},
+  {id:'AUD-5508',user:'이서연',uid:'USR-5509',event:'인증 요청',method:'PASS',ip:'61.78.x.x',result:'처리중',time:'2026-04-27 14:16:30',ci:'-'},
+  {id:'AUD-5507',user:'최현우',uid:'USR-2244',event:'인증 실패',method:'PASS',ip:'175.193.x.x',result:'실패',time:'2026-04-27 14:10:11',ci:'-'},
+  {id:'AUD-5506',user:'정유나',uid:'USR-8877',event:'인증 완료',method:'PASS',ip:'110.12.x.x',result:'인증성공',time:'2026-04-27 13:55:29',ci:'CI_7e1f...'},
+  {id:'AUD-5505',user:'강동현',uid:'USR-4411',event:'세션 갱신',method:'PASS',ip:'203.246.x.x',result:'인증성공',time:'2026-04-27 13:40:12',ci:'CI_6d8a...'},
+];
+function AuditPage({showToast}){
+  const [selected,setSelected]=useState(null);
+  const [search,setSearch]=useState('');
+  const filtered=auditLogs.filter(a=>!search||a.user.includes(search)||a.uid.includes(search)||a.id.includes(search));
+  return(
+    <div style={{maxWidth:1360,margin:'0 auto',padding:'28px 24px',animation:'fadeIn 0.4s ease'}}>
+      <div style={{marginBottom:22}}>
+        <h2 style={{fontSize:22,fontWeight:800,color:C.text}}>본인인증 이력 감사 로그</h2>
+        <p style={{fontSize:13,color:C.textSub,marginTop:4}}>INSERT-only 불변 로그 · 개인정보 마스킹 · 세션 타임라인 · 중복 시도 탐지</p>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:24}}>
+        {[{icon:'📋',label:'총 감사 로그',val:'8,241건',color:C.accent},{icon:'🔐',label:'오늘 인증',val:'142건',color:C.cyan},{icon:'⚠️',label:'실패 이력',val:'7건',sub:'최근 24시간',color:C.warn},{icon:'🔄',label:'중복 시도',val:'3건',sub:'탐지',color:C.error}].map((s,i)=><Stat key={i} {...s}/>)}
+      </div>
+      <div style={{background:C.surface,borderRadius:6,padding:'20px 22px',border:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',gap:12,marginBottom:16}}>
+          <div style={{flex:1,position:'relative'}}>
+            <span style={{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',fontSize:14,color:C.textDim}}>🔍</span>
+            <input placeholder="사용자명, UID, 로그 ID 검색" value={search} onChange={e=>setSearch(e.target.value)}
+              style={{width:'100%',padding:'9px 12px 9px 36px',border:`1px solid ${C.border}`,borderRadius:4,background:C.surface2,color:C.text,fontSize:13,fontFamily:'Pretendard',outline:'none'}}
+              onFocus={e=>e.target.style.borderColor=C.primary}
+              onBlur={e=>e.target.style.borderColor=C.border}/>
+          </div>
+          <button onClick={()=>showToast('감사 로그 내보내기가 시작됩니다','info')} style={{padding:'9px 16px',borderRadius:4,border:`1px solid ${C.border}`,background:'transparent',color:C.textSub,cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'Pretendard',display:'flex',alignItems:'center',gap:6}}>📥 내보내기</button>
+        </div>
+        <div style={{background:`${C.warn}15`,borderRadius:4,padding:'10px 14px',marginBottom:14,border:`1px solid ${C.warn}30`,fontSize:12,color:C.warn,display:'flex',alignItems:'center',gap:8}}>
+          🔒 <strong>불변 감사 로그</strong> — INSERT-only 정책 적용. 기록된 이력은 수정·삭제가 불가합니다. 개인정보는 자동 마스킹 처리됩니다.
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+          <thead>
+            <tr style={{borderBottom:`1px solid ${C.border}`}}>
+              {['로그 ID','사용자','UID','이벤트','방식','IP','결과','기록 일시'].map(h=>(
+                <th key={h} style={{padding:'8px 10px',textAlign:'left',fontWeight:600,color:C.textDim,fontSize:11}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((a,i)=>(
+              <tr key={a.id} onClick={()=>setSelected(a)} style={{borderBottom:`1px solid ${C.border}20`,cursor:'pointer',transition:'background 0.15s',animation:`fadeIn 0.4s ease ${i*0.05}s both`}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.surface2}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'10px 10px',fontFamily:'monospace',color:C.purple,fontWeight:600,fontSize:11}}>{a.id}</td>
+                <td style={{padding:'10px 10px',fontWeight:600,color:C.text}}>{a.user}</td>
+                <td style={{padding:'10px 10px',fontFamily:'monospace',color:C.textSub,fontSize:11}}>{a.uid}</td>
+                <td style={{padding:'10px 10px',color:C.text}}>{a.event}</td>
+                <td style={{padding:'10px 10px'}}><Badge status={a.method}/></td>
+                <td style={{padding:'10px 10px',fontFamily:'monospace',color:C.textSub,fontSize:11}}>{a.ip}</td>
+                <td style={{padding:'10px 10px'}}><Badge status={a.result}/></td>
+                <td style={{padding:'10px 10px',color:C.textSub,fontSize:11}}>{a.time}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {selected&&(
+        <Drawer title={`감사 로그 상세 — ${selected.id}`} onClose={()=>setSelected(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div style={{background:`${C.warn}15`,borderRadius:4,padding:'10px 12px',border:`1px solid ${C.warn}30`,fontSize:12,color:C.warn}}>
+              🔒 이 레코드는 불변 감사 로그입니다 — 수정·삭제 불가
+            </div>
+            <div style={{display:'flex',gap:8}}><Badge status={selected.result}/><Badge status={selected.method}/></div>
+            {[['로그 ID',selected.id],['사용자',selected.user],['사용자 UID',selected.uid],['이벤트',selected.event],['인증 방식',selected.method],['IP 주소',selected.ip],['CI값 (마스킹)',selected.ci],['기록 일시',selected.time]].map(([k,v])=>(
+              <div key={k} style={{padding:'8px 0',borderBottom:`1px solid ${C.border}`,display:'flex',flexDirection:'column',gap:3}}>
+                <span style={{fontSize:11,color:C.textSub}}>{k}</span>
+                <span style={{fontSize:13,fontWeight:600,color:C.text,fontFamily:['로그 ID','사용자 UID','IP 주소','CI값 (마스킹)'].includes(k)?'monospace':'inherit'}}>{v}</span>
+              </div>
+            ))}
+            <div style={{background:C.surface2,borderRadius:4,padding:12}}>
+              <div style={{fontSize:11,fontWeight:700,color:C.textSub,marginBottom:6}}>이벤트 타임라인</div>
+              {selected.result==='인증성공'&&(
+                ['요청 수신 → 암호화','PASS 서버 전송','콜백 수신','복호화 완료','DB INSERT'].map((s,i)=>(
+                  <div key={i} style={{display:'flex',alignItems:'center',gap:8,marginBottom:5,fontSize:11}}>
+                    <span style={{color:C.accent}}>✓</span>
+                    <span style={{color:C.text}}>{s}</span>
+                  </div>
+                ))
+              )}
+              {selected.result==='실패'&&<div style={{fontSize:11,color:C.error}}>✗ PASS 서버 타임아웃 (3s 초과)</div>}
+              {selected.result==='처리중'&&<div style={{fontSize:11,color:C.warn}}>⏳ 사용자 PASS 앱 인증 대기</div>}
+            </div>
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+// ──── SETTLEMENT PAGE ────
+const settleData=[
+  {date:'04/21',amount:8420000,refund:120000},{date:'04/22',amount:12340000,refund:240000},
+  {date:'04/23',amount:9870000,refund:80000},{date:'04/24',amount:14120000,refund:340000},
+  {date:'04/25',amount:11650000,refund:160000},{date:'04/26',amount:15890000,refund:280000},
+  {date:'04/27',amount:4832000,refund:60000},
+];
+const refundList=[
+  {id:'REF-4410',tx:'TXN-2289',user:'이서연',amount:'198,000',remain:'198,000',status:'대기',type:'전액',date:'2026-04-27 13:12'},
+  {id:'REF-4409',tx:'TXN-2280',user:'박민준',amount:'50,000',remain:'440,000',status:'승인완료',type:'부분',date:'2026-04-26 16:40'},
+  {id:'REF-4408',tx:'TXN-2271',user:'김지수',amount:'100,000',remain:'0',status:'승인완료',type:'전액',date:'2026-04-25 10:22'},
+];
+function SettlementPage({showToast}){
+  const [showRefund,setShowRefund]=useState(false);
+  const [selectedRefund,setSelectedRefund]=useState(null);
+  return(
+    <div style={{maxWidth:1360,margin:'0 auto',padding:'28px 24px',animation:'fadeIn 0.4s ease'}}>
+      <div style={{marginBottom:22}}>
+        <h2 style={{fontSize:22,fontWeight:800,color:C.text}}>정산·환불 통합 관리</h2>
+        <p style={{fontSize:13,color:C.textSub,marginTop:4}}>KG이니시스 정산 자동 수집 · 부분 환불 트랜잭션 · 월별 정산 캘린더</p>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:24}}>
+        {[{icon:'💰',label:'이번 달 총 정산',val:'₩76.5M',color:C.accent},{icon:'🔄',label:'환불 처리 건수',val:'18건',color:C.warn},{icon:'⏳',label:'대기 중 환불',val:'1건',sub:'검토 필요',color:C.error},{icon:'📅',label:'정산 주기',val:'D+1',sub:'영업일 기준',color:C.cyan}].map((s,i)=><Stat key={i} {...s}/>)}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:20}}>
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          {/* Chart */}
+          <div style={{background:C.surface,borderRadius:6,padding:'20px 22px',border:`1px solid ${C.border}`}}>
+            <h3 style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:16}}>일별 정산·환불 현황 (최근 7일)</h3>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={settleData} margin={{top:0,right:0,bottom:0,left:-10}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1E293B"/>
+                <XAxis dataKey="date" tick={{fontSize:11,fill:C.textSub}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fontSize:10,fill:C.textSub}} axisLine={false} tickLine={false} tickFormatter={v=>`${(v/1000000).toFixed(0)}M`}/>
+                <Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:4,fontSize:12,color:C.text}} formatter={(v,n)=>[`₩${v.toLocaleString()}`,n==='amount'?'정산 금액':'환불 금액']}/>
+                <Bar dataKey="amount" fill={C.accent} radius={[4,4,0,0]} name="amount"/>
+                <Bar dataKey="refund" fill={C.error} radius={[4,4,0,0]} name="refund"/>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          {/* Refund table */}
+          <div style={{background:C.surface,borderRadius:6,padding:'20px 22px',border:`1px solid ${C.border}`}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
+              <h3 style={{fontSize:14,fontWeight:700,color:C.text}}>환불 요청 목록</h3>
+              <button onClick={()=>setShowRefund(true)} style={{padding:'8px 16px',borderRadius:4,border:`1px solid ${C.warn}`,background:`${C.warn}15`,color:C.warn,cursor:'pointer',fontWeight:700,fontSize:12,fontFamily:'Pretendard'}}>+ 환불 요청</button>
+            </div>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+              <thead>
+                <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                  {['환불 ID','원 거래','사용자','환불 금액','잔액','유형','상태','일시'].map(h=>(
+                    <th key={h} style={{padding:'7px 8px',textAlign:'left',fontWeight:600,color:C.textDim,fontSize:11}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {refundList.map((r,i)=>(
+                  <tr key={r.id} onClick={()=>setSelectedRefund(r)} style={{borderBottom:`1px solid ${C.border}20`,cursor:'pointer',transition:'background 0.15s'}}
+                    onMouseEnter={e=>e.currentTarget.style.background=C.surface2}
+                    onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                    <td style={{padding:'10px 8px',fontFamily:'monospace',color:C.warn,fontWeight:600,fontSize:11}}>{r.id}</td>
+                    <td style={{padding:'10px 8px',fontFamily:'monospace',color:C.textSub,fontSize:11}}>{r.tx}</td>
+                    <td style={{padding:'10px 8px',color:C.text,fontWeight:600}}>{r.user}</td>
+                    <td style={{padding:'10px 8px',fontWeight:700,color:C.text}}>₩{r.amount}</td>
+                    <td style={{padding:'10px 8px',color:Number(r.remain.replace(',',''))===0?C.textDim:C.text}}>₩{r.remain}</td>
+                    <td style={{padding:'10px 8px',color:C.textSub}}>{r.type}</td>
+                    <td style={{padding:'10px 8px'}}><Badge status={r.status}/></td>
+                    <td style={{padding:'10px 8px',color:C.textSub,fontSize:11}}>{r.date.split(' ')[1]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {/* Summary panel */}
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={{background:C.surface,borderRadius:6,padding:'18px',border:`1px solid ${C.border}`}}>
+            <h4 style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>이번 달 정산 요약</h4>
+            {[['총 결제 건수','312건'],['총 정산 금액','₩76,542,000'],['환불 건수','18건'],['환불 금액','₩1,480,000'],['순 정산 금액','₩75,062,000'],['PG 수수료 (2.5%)','₩1,876,550']].map(([k,v])=>(
+              <div key={k} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:12,color:C.textSub}}>{k}</span>
+                <span style={{fontSize:13,fontWeight:700,color:C.text}}>{v}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{background:C.surface,borderRadius:6,padding:'18px',border:`1px solid ${C.border}`}}>
+            <h4 style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>PG별 정산 비중</h4>
+            {pgList.slice(0,3).map((pg,i)=>(
+              <div key={i} style={{marginBottom:10}}>
+                <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4}}>
+                  <span style={{color:C.text}}>{pg.name}</span>
+                  <span style={{color:C.textSub,fontWeight:600}}>{pg.weight}%</span>
+                </div>
+                <div style={{background:'rgba(255,255,255,0.06)',borderRadius:4,height:6,overflow:'hidden'}}>
+                  <div style={{height:'100%',background:i===0?C.accent:i===1?C.cyan:C.purple,borderRadius:4,width:`${pg.weight}%`,animation:'progressFill 0.8s ease'}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {showRefund&&(
+        <Modal title="환불 요청" onClose={()=>setShowRefund(false)}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            {[['원 거래 ID','예: TXN-2291'],['환불 금액','원'],['환불 사유','고객 요청, 상품 불량 등']].map(([l,p])=>(
+              <div key={l}>
+                <label style={{fontSize:13,fontWeight:600,color:C.text,display:'block',marginBottom:5}}>{l}</label>
+                <input placeholder={p} style={{width:'100%',padding:'10px 12px',border:`1px solid ${C.border}`,borderRadius:4,background:C.surface2,color:C.text,fontSize:13,fontFamily:'Pretendard',outline:'none'}}
+                  onFocus={e=>e.target.style.borderColor=C.primary}
+                  onBlur={e=>e.target.style.borderColor=C.border}/>
+              </div>
+            ))}
+            <div style={{background:`${C.warn}15`,borderRadius:4,padding:12,border:`1px solid ${C.warn}30`,fontSize:12,color:C.warn}}>
+              ⚠️ 환불 요청 전 원결제 잔액이 자동으로 검증됩니다. SELECT FOR UPDATE 트랜잭션으로 처리됩니다.
+            </div>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setShowRefund(false)} style={{flex:1,padding:11,borderRadius:4,border:`1px solid ${C.border}`,background:'transparent',color:C.textSub,cursor:'pointer',fontWeight:600,fontFamily:'Pretendard',fontSize:14}}>취소</button>
+              <button onClick={()=>{setShowRefund(false);showToast('환불 요청이 접수되었습니다','success');}} style={{flex:2,padding:11,borderRadius:4,border:'none',background:C.warn,color:'#fff',cursor:'pointer',fontWeight:700,fontSize:14,fontFamily:'Pretendard'}}>🔄 환불 처리</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {selectedRefund&&(
+        <Drawer title={`환불 상세 — ${selectedRefund.id}`} onClose={()=>setSelectedRefund(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div style={{display:'flex',gap:8}}><Badge status={selectedRefund.status}/><Badge status={selectedRefund.type==='전액'?'전액':'부분'}/></div>
+            {[['환불 ID',selectedRefund.id],['원 거래',selectedRefund.tx],['사용자',selectedRefund.user],['환불 금액',`₩${selectedRefund.amount}`],['잔액',`₩${selectedRefund.remain}`],['유형',selectedRefund.type],['일시',selectedRefund.date]].map(([k,v])=>(
+              <div key={k} style={{padding:'8px 0',borderBottom:`1px solid ${C.border}`,display:'flex',flexDirection:'column',gap:3}}>
+                <span style={{fontSize:11,color:C.textSub}}>{k}</span>
+                <span style={{fontSize:13,fontWeight:600,color:C.text,fontFamily:['환불 ID','원 거래'].includes(k)?'monospace':'inherit'}}>{v}</span>
+              </div>
+            ))}
+            {selectedRefund.status==='대기'&&(
+              <button onClick={()=>{setSelectedRefund(null);showToast('환불이 승인 처리되었습니다','success');}} style={{padding:12,borderRadius:4,border:'none',background:C.accent,color:'#0F172A',cursor:'pointer',fontWeight:700,fontSize:14,fontFamily:'Pretendard'}}>✅ 환불 승인</button>
+            )}
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+// ──── ROUTING PAGE (extra view) ────
+function RoutingPage({showToast}){
+  const [showModal,setShowModal]=useState(false);
+  const rules=[
+    {id:'RULE-01',cond:'카드 결제',pg:'KG이니시스',fallback:'토스페이먼츠',priority:1,active:true},
+    {id:'RULE-02',cond:'간편결제 (카카오)',pg:'카카오페이',fallback:'KG이니시스',priority:2,active:true},
+    {id:'RULE-03',cond:'간편결제 (네이버)',pg:'네이버페이',fallback:'KG이니시스',priority:3,active:true},
+    {id:'RULE-04',cond:'금액 ≥ 100만원',pg:'KG이니시스',fallback:'없음',priority:1,active:false},
+  ];
+  return(
+    <div style={{maxWidth:1360,margin:'0 auto',padding:'28px 24px',animation:'fadeIn 0.4s ease'}}>
+      <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:22}}>
+        <div>
+          <h2 style={{fontSize:22,fontWeight:800,color:C.text}}>PG 라우팅 규칙 설정</h2>
+          <p style={{fontSize:13,color:C.textSub,marginTop:4}}>결제 조건별 PG 우선순위 · 폴백 정책 · Circuit Breaker 설정</p>
+        </div>
+        <button onClick={()=>setShowModal(true)} style={{padding:'10px 18px',borderRadius:4,border:`1px solid ${C.primary}`,background:`${C.primary}20`,color:C.primaryLight,cursor:'pointer',fontWeight:700,fontSize:14,fontFamily:'Pretendard',display:'flex',alignItems:'center',gap:8}}>+ 규칙 추가</button>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 320px',gap:20}}>
+        <div style={{background:C.surface,borderRadius:6,padding:'20px 22px',border:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:16}}>라우팅 규칙 목록</h3>
+          {rules.map((r,i)=>(
+            <div key={r.id} style={{display:'flex',alignItems:'center',gap:16,padding:'16px 14px',borderRadius:6,marginBottom:8,border:`1px solid ${r.active?C.border:'rgba(100,116,139,0.2)'}`,background:r.active?C.surface2:'rgba(100,116,139,0.05)',opacity:r.active?1:0.6,transition:'all 0.2s'}}>
+              <div style={{width:28,height:28,borderRadius:4,background:`${C.primary}20`,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:800,fontSize:12,color:C.primaryLight,flexShrink:0}}>{r.priority}</div>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                  <span style={{fontSize:13,fontWeight:700,color:C.text}}>{r.cond}</span>
+                  <Badge status={r.active?'활성':'비활성'}/>
+                </div>
+                <div style={{fontSize:12,color:C.textSub}}>
+                  <span style={{color:C.accent}}>→ {r.pg}</span>
+                  {r.fallback!=='없음'&&<span style={{color:C.textDim}}> · 폴백: {r.fallback}</span>}
+                </div>
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>showToast(`${r.id} 규칙이 편집 모드로 전환됩니다`,'info')} style={{padding:'6px 12px',borderRadius:6,border:`1px solid ${C.border}`,background:'transparent',color:C.textSub,cursor:'pointer',fontSize:11,fontWeight:600,fontFamily:'Pretendard'}}>편집</button>
+                <div style={{width:38,height:22,borderRadius:11,background:r.active?C.primary:'#334155',position:'relative',cursor:'pointer',transition:'background 0.2s',flexShrink:0}}
+                  onClick={()=>showToast(`${r.id} 규칙이 ${r.active?'비활성화':'활성화'}되었습니다`,'success')}>
+                  <div style={{width:18,height:18,borderRadius:'50%',background:'#fff',position:'absolute',top:2,transition:'left 0.2s',left:r.active?18:2}}/>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div style={{background:C.surface,borderRadius:6,padding:'18px',border:`1px solid ${C.border}`}}>
+            <h4 style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>Circuit Breaker 설정</h4>
+            {[{label:'실패 임계값',val:'5회/분',color:C.error},{label:'대기 시간',val:'30초',color:C.warn},{label:'복구 조건',val:'성공률 > 90%',color:C.accent}].map((s,i)=>(
+              <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:12,color:C.textSub}}>{s.label}</span>
+                <span style={{fontSize:12,fontWeight:700,color:s.color,fontFamily:'monospace'}}>{s.val}</span>
+              </div>
+            ))}
+            <button onClick={()=>showToast('Circuit Breaker 설정이 저장되었습니다','success')} style={{width:'100%',padding:'9px',borderRadius:4,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontWeight:700,fontSize:13,fontFamily:'Pretendard',marginTop:12}}>저장</button>
+          </div>
+          <div style={{background:C.surface,borderRadius:6,padding:'18px',border:`1px solid ${C.border}`}}>
+            <h4 style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>Redis 캐시 상태</h4>
+            {[['PG 헬스체크 캐시','30초 TTL','활성'],['라우팅 규칙 캐시','5분 TTL','활성'],['세션 캐시','24시간','활성']].map(([k,ttl,s])=>(
+              <div key={k} style={{padding:'8px 0',borderBottom:`1px solid ${C.border}`}}>
+                <div style={{display:'flex',justifyContent:'space-between',fontSize:12}}>
+                  <span style={{color:C.text}}>{k}</span>
+                  <Badge status={s}/>
+                </div>
+                <div style={{fontSize:11,color:C.textSub,marginTop:2,fontFamily:'monospace'}}>{ttl}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {showModal&&(
+        <Modal title="라우팅 규칙 추가" onClose={()=>setShowModal(false)}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            {[{l:'적용 조건',p:'예: 금액 ≥ 50만원, 특정 결제 수단'},{l:'기본 PG',p:'예: KG이니시스'},{l:'폴백 PG',p:'예: 토스페이먼츠'}].map(({l,p})=>(
+              <div key={l}>
+                <label style={{fontSize:13,fontWeight:600,color:C.text,display:'block',marginBottom:5}}>{l}</label>
+                <input placeholder={p} style={{width:'100%',padding:'10px 12px',border:`1px solid ${C.border}`,borderRadius:4,background:C.surface2,color:C.text,fontSize:13,fontFamily:'Pretendard',outline:'none'}}
+                  onFocus={e=>e.target.style.borderColor=C.primary}
+                  onBlur={e=>e.target.style.borderColor=C.border}/>
+              </div>
+            ))}
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setShowModal(false)} style={{flex:1,padding:11,borderRadius:4,border:`1px solid ${C.border}`,background:'transparent',color:C.textSub,cursor:'pointer',fontWeight:600,fontFamily:'Pretendard',fontSize:14}}>취소</button>
+              <button onClick={()=>{setShowModal(false);showToast('새 라우팅 규칙이 추가되었습니다','success');}} style={{flex:2,padding:11,borderRadius:4,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontWeight:700,fontSize:14,fontFamily:'Pretendard'}}>추가</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ──── APP ────
+function App(){
+  const [route,setRoute]=useState('main');
+  const [toast,setToast]=useState(null);
+  const showToast=(msg,type='success')=>setToast({msg,type});
+  const pages={
+    main:<MainPage showToast={showToast}/>,
+    transactions:<TransactionsPage showToast={showToast}/>,
+    audit:<AuditPage showToast={showToast}/>,
+    settlement:<SettlementPage showToast={showToast}/>,
+    routing:<RoutingPage showToast={showToast}/>,
+  };
+  return(
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh',background:C.bg}}>
+      <GlobalNav route={route} setRoute={setRoute}/>
+      <main style={{flex:1}}>
+        {pages[route]||pages.main}
+      </main>
+      <footer style={{background:C.surface,borderTop:`1px solid ${C.border}`,padding:'14px 24px',textAlign:'center'}}>
+        <span style={{fontSize:11,color:C.textDim}}>통합 결제·인증 관리 콘솔 · Redis Streams · Node.js/Express · PostgreSQL · Prisma · 구현 데모</span>
+      </footer>
+      {toast&&<Toast msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

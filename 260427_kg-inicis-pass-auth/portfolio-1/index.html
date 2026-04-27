@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>페이게이트 통합 인증 플랫폼 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;font-family:'Pretendard',-apple-system,sans-serif;background:#F0F4FF}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh}
+@keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideInRight{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes slideInDown{from{transform:translateY(-20px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes bounceIn{0%{opacity:0;transform:scale(0.85)}60%{transform:scale(1.04)}100%{opacity:1;transform:scale(1)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes gradientFlow{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+@keyframes progressAnim{from{width:0}to{width:var(--w)}}
+@keyframes shimmer{0%{background-position:-200px 0}100%{background-position:calc(200px + 100%) 0}}
+@keyframes statusBlink{0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,0.4)}70%{box-shadow:0 0 0 8px rgba(34,197,94,0)}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.92) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes barGrow{from{width:0;opacity:0}to{width:var(--w,100%);opacity:1}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback} = React;
+
+function CountUp({end,prefix='',suffix='',duration=1200}){
+  const [val,setVal]=useState(0);
+  const ref=useRef(null);
+  useEffect(()=>{
+    const n=parseFloat(String(end).replace(/[^0-9.]/g,''))||0;
+    const start=Date.now();
+    const tick=()=>{
+      const p=Math.min((Date.now()-start)/duration,1);
+      const ease=1-Math.pow(1-p,3);
+      setVal(Math.round(n*ease));
+      if(p<1)ref.current=requestAnimationFrame(tick);
+    };
+    ref.current=requestAnimationFrame(tick);
+    return()=>{if(ref.current)cancelAnimationFrame(ref.current)};
+  },[end]);
+  const display=String(end).includes(',')?val.toLocaleString():val;
+  return <span style={{animation:'countUp 0.5s ease both'}}>{prefix}{display}{suffix}</span>;
+}
+
+function RippleButton({onClick,style,children}){
+  const [ripples,setRipples]=useState([]);
+  function handleClick(e){
+    const r=e.currentTarget.getBoundingClientRect();
+    const id=Date.now();
+    const x=e.clientX-r.left, y=e.clientY-r.top;
+    setRipples(prev=>[...prev,{id,x,y}]);
+    setTimeout(()=>setRipples(prev=>prev.filter(r=>r.id!==id)),600);
+    if(onClick)onClick(e);
+  }
+  return(
+    <button onClick={handleClick} style={{...style,position:'relative',overflow:'hidden'}}>
+      {children}
+      {ripples.map(r=>(
+        <span key={r.id} style={{position:'absolute',left:r.x-10,top:r.y-10,width:20,height:20,borderRadius:'50%',background:'rgba(255,255,255,0.4)',animation:'ripple 0.6s ease-out forwards',pointerEvents:'none'}}/>
+      ))}
+    </button>
+  );
+}
+
+function StaggerList({items,renderItem,gap=8}){
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap}}>
+      {items.map((item,i)=>(
+        <div key={i} style={{animation:`fadeInScale 0.4s ease ${i*0.07}s both`}}>
+          {renderItem(item,i)}
+        </div>
+      ))}
+    </div>
+  );
+}
+const {LineChart,Line,BarChart,Bar,AreaChart,Area,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,PieChart,Pie,Cell} = Recharts;
+
+const C = {
+  primary:'#1A56DB',secondary:'#0E3A8C',accent:'#38BDF8',
+  bg:'#F0F4FF',surface:'#FFFFFF',border:'#D1DCF7',
+  text:'#111827',textSub:'#6B7280',
+  success:'#16A34A',successBg:'#DCFCE7',
+  error:'#DC2626',errorBg:'#FEE2E2',
+  warn:'#D97706',warnBg:'#FEF3C7',
+  blue50:'#EFF6FF',blue100:'#DBEAFE',
+};
+
+function Toast({msg,type,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t)},[]);
+  const bg={success:C.successBg,error:C.errorBg,info:'#E0F2FE'}[type]||C.successBg;
+  const tc={success:C.success,error:C.error,info:'#0284C7'}[type]||C.success;
+  return(
+    <div style={{position:'fixed',top:72,right:24,zIndex:9999,animation:'slideUp 0.3s ease',
+      background:bg,border:`1px solid ${tc}`,borderRadius:10,padding:'12px 18px',
+      display:'flex',alignItems:'center',gap:10,boxShadow:'0 4px 20px rgba(0,0,0,0.12)',minWidth:260}}>
+      <span style={{fontSize:18}}>{type==='success'?'✅':type==='error'?'❌':'ℹ️'}</span>
+      <span style={{color:tc,fontWeight:600,fontSize:14}}>{msg}</span>
+      <button onClick={onClose} style={{marginLeft:'auto',background:'none',border:'none',cursor:'pointer',color:tc,fontWeight:700,fontSize:16}}>×</button>
+    </div>
+  );
+}
+
+function Modal({title,onClose,children,width=520}){
+  return(
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.45)',zIndex:5000,display:'flex',alignItems:'center',justifyContent:'center',animation:'fadeIn 0.2s ease'}}>
+      <div style={{background:C.surface,borderRadius:16,width,maxWidth:'90vw',maxHeight:'85vh',overflow:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.2)',animation:'bounceIn 0.3s ease'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'20px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:700,color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:22,color:C.textSub,lineHeight:1}}>×</button>
+        </div>
+        <div style={{padding:'24px'}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Drawer({title,onClose,children}){
+  return(
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:4000,display:'flex',justifyContent:'flex-end'}}>
+      <div style={{width:480,maxWidth:'90vw',background:C.surface,height:'100vh',overflow:'auto',boxShadow:'-4px 0 30px rgba(0,0,0,0.15)',animation:'slideInRight 0.3s ease'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'20px 24px',borderBottom:`1px solid ${C.border}`,position:'sticky',top:0,background:C.surface,zIndex:1}}>
+          <h3 style={{fontSize:16,fontWeight:700,color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',fontSize:22,color:C.textSub}}>×</button>
+        </div>
+        <div style={{padding:'24px'}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Badge({status}){
+  const map={
+    '승인완료':{bg:'#DCFCE7',c:'#16A34A'},
+    '인증성공':{bg:'#DCFCE7',c:'#16A34A'},
+    '처리중':{bg:'#FEF3C7',c:'#D97706'},
+    '실패':{bg:'#FEE2E2',c:'#DC2626'},
+    '망취소':{bg:'#F3E8FF',c:'#7C3AED'},
+    '대기':{bg:'#F1F5F9',c:'#475569'},
+  };
+  const s=map[status]||{bg:'#F1F5F9',c:'#475569'};
+  return <span style={{display:'inline-flex',alignItems:'center',gap:4,padding:'3px 10px',borderRadius:20,background:s.bg,color:s.c,fontSize:12,fontWeight:600}}>
+    {status==='처리중'&&<span style={{width:6,height:6,borderRadius:'50%',background:s.c,animation:'statusBlink 1.5s infinite'}}/>}
+    {status}
+  </span>;
+}
+
+function Input({label,type='text',placeholder,value,onChange,required}){
+  return(
+    <div style={{display:'flex',flexDirection:'column',gap:6}}>
+      <label style={{fontSize:13,fontWeight:600,color:C.text}}>{label}{required&&<span style={{color:C.error,marginLeft:3}}>*</span>}</label>
+      <input type={type} placeholder={placeholder} value={value} onChange={onChange}
+        style={{padding:'10px 14px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,color:C.text,outline:'none',
+          transition:'border 0.2s',fontFamily:'Pretendard'}}
+        onFocus={e=>e.target.style.borderColor=C.primary}
+        onBlur={e=>e.target.style.borderColor=C.border}/>
+    </div>
+  );
+}
+
+// ──── TOPNAV ────
+function TopNav({page,setPage}){
+  const tabs=[
+    {id:'payment',label:'결제하기'},
+    {id:'webhook',label:'결제 내역'},
+    {id:'dashboard',label:'대시보드'},
+    {id:'auth',label:'본인인증'},
+  ];
+  return(
+    <nav style={{background:C.surface,borderBottom:`1px solid ${C.border}`,position:'sticky',top:0,zIndex:100,boxShadow:'0 1px 8px rgba(0,0,0,0.06)'}}>
+      <div style={{maxWidth:1280,margin:'0 auto',padding:'0 24px',display:'flex',alignItems:'center',height:60,gap:8}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginRight:24,cursor:'pointer'}} onClick={()=>setPage('main')}>
+          <div style={{width:32,height:32,borderRadius:8,background:`linear-gradient(135deg,${C.primary},${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <span style={{color:'#fff',fontSize:16,fontWeight:800}}>P</span>
+          </div>
+          <span style={{fontWeight:800,fontSize:16,color:C.text}}>페이게이트</span>
+        </div>
+        <div style={{display:'flex',gap:2,flex:1}}>
+          {tabs.map(t=>(
+            <button key={t.id} onClick={()=>setPage(t.id)}
+              style={{padding:'8px 16px',borderRadius:8,border:'none',cursor:'pointer',fontWeight:600,fontSize:14,fontFamily:'Pretendard',
+                transition:'all 0.15s',background:page===t.id?C.blue50:'transparent',
+                color:page===t.id?C.primary:C.textSub,
+                borderBottom:page===t.id?`2px solid ${C.primary}`:'2px solid transparent'}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <button style={{background:'none',border:'none',cursor:'pointer',fontSize:18,color:C.textSub,position:'relative'}}>
+            🔔
+            <span style={{position:'absolute',top:-2,right:-2,width:8,height:8,borderRadius:'50%',background:C.error}}/>
+          </button>
+          <div style={{width:34,height:34,borderRadius:'50%',background:`linear-gradient(135deg,${C.primary},${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}}>
+            <span style={{color:'#fff',fontSize:13,fontWeight:700}}>김</span>
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+function HeroBanner({icon,title,subtitle,kpis,gradient}){
+  return(
+    <div style={{background:gradient||`linear-gradient(135deg,${C.secondary} 0%,${C.primary} 60%,${C.accent} 100%)`,
+      backgroundSize:'200% 200%',animation:'gradientFlow 8s ease infinite',padding:'32px 0 28px',color:'#fff'}}>
+      <div style={{maxWidth:1280,margin:'0 auto',padding:'0 24px'}}>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8}}>
+          <span style={{fontSize:28}}>{icon}</span>
+          <h1 style={{fontSize:24,fontWeight:800}}>{title}</h1>
+        </div>
+        <p style={{color:'rgba(255,255,255,0.8)',fontSize:14,marginBottom:20}}>{subtitle}</p>
+        {kpis&&(
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,maxWidth:700}}>
+            {kpis.map((k,i)=>(
+              <div key={i} style={{background:'rgba(255,255,255,0.12)',backdropFilter:'blur(8px)',borderRadius:10,padding:'12px 16px',animation:`fadeIn 0.5s ease ${i*0.1}s both`}}>
+                <div style={{fontSize:20,fontWeight:800}}>{k.val}</div>
+                <div style={{fontSize:12,color:'rgba(255,255,255,0.75)',marginTop:2}}>{k.label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ──── MAIN PAGE: PASS 본인인증 연동 ────
+const authRequests=[
+  {id:'AUTH-2840',name:'김지수',phone:'010-****-3821',birth:'1990-05',status:'인증성공',time:'14:23:05',method:'PASS',ci:'CI_9f3a...'},
+  {id:'AUTH-2839',name:'박민준',phone:'010-****-7612',birth:'1985-11',status:'인증성공',time:'14:18:42',method:'PASS',ci:'CI_8b2c...'},
+  {id:'AUTH-2838',name:'이서연',phone:'010-****-5509',birth:'1998-03',status:'처리중',time:'14:16:30',method:'PASS',ci:'-'},
+  {id:'AUTH-2837',name:'최현우',phone:'010-****-2244',birth:'1976-07',status:'실패',time:'14:10:11',method:'PASS',ci:'-'},
+  {id:'AUTH-2836',name:'정유나',phone:'010-****-8877',birth:'1993-09',status:'인증성공',time:'13:55:29',method:'PASS',ci:'CI_7e1f...'},
+];
+function MainPage({showToast}){
+  const [form,setForm]=useState({name:'',phone:'',birth:''});
+  const [showModal,setShowModal]=useState(false);
+  const [loading,setLoading]=useState(false);
+  const [selected,setSelected]=useState(null);
+  const steps=[
+    {n:1,icon:'🔐',t:'요청 암호화',d:'AES-256-CBC로 인증 요청 페이로드 생성'},
+    {n:2,icon:'📡',t:'PASS 서버 전송',d:'통신사 PASS 서버로 인증 요청 전달'},
+    {n:3,icon:'📱',t:'사용자 인증',d:'사용자 기기에서 PASS 앱 인증 진행'},
+    {n:4,icon:'🔄',t:'콜백 수신',d:'인증 완료 시 서버 콜백 수신 및 복호화'},
+    {n:5,icon:'💾',t:'DB 저장',d:'개인정보 마스킹 후 회원 DB 연동'},
+  ];
+  function submitAuth(){
+    if(!form.name||!form.phone){showToast('이름과 연락처를 입력해주세요','error');return;}
+    setLoading(true);
+    setTimeout(()=>{setLoading(false);setShowModal(false);showToast('PASS 본인인증이 요청되었습니다. 사용자 기기를 확인해주세요.','success');
+      setForm({name:'',phone:'',birth:''});},2000);
+  }
+  return(
+    <div style={{animation:'fadeIn 0.4s ease'}}>
+      <HeroBanner icon="🔐" title="PASS 본인인증 연동" subtitle="통신사 PASS API 기반 신원 검증 · AES-256 암호화 · PC/모바일 대응"
+        kpis={[{val:'142건',label:'오늘 인증 요청'},{val:'98.6%',label:'인증 성공률'},{val:'2건',label:'실패'},{val:'8건',label:'처리 중'}]}/>
+      <div style={{maxWidth:1280,margin:'0 auto',padding:'28px 24px',display:'grid',gridTemplateColumns:'1fr 380px',gap:24}}>
+        {/* Left: flow + recent */}
+        <div style={{display:'flex',flexDirection:'column',gap:20}}>
+          {/* Flow diagram */}
+          <div style={{background:C.surface,borderRadius:14,padding:'22px 24px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+            <h3 style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:18}}>인증 처리 흐름</h3>
+            <div style={{display:'flex',alignItems:'center',gap:0,overflowX:'auto',paddingBottom:4}}>
+              {steps.map((s,i)=>(
+                <React.Fragment key={i}>
+                  <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,minWidth:120,animation:`fadeIn 0.5s ease ${i*0.1}s both`}}>
+                    <div style={{width:52,height:52,borderRadius:14,background:C.blue50,border:`2px solid ${C.blue100}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>{s.icon}</div>
+                    <div style={{fontSize:12,fontWeight:700,color:C.primary,textAlign:'center'}}>{s.t}</div>
+                    <div style={{fontSize:11,color:C.textSub,textAlign:'center',lineHeight:1.4}}>{s.d}</div>
+                  </div>
+                  {i<steps.length-1&&<div style={{flex:'0 0 24px',height:2,background:`linear-gradient(90deg,${C.blue100},${C.accent})`,margin:'0 4px',marginBottom:40}}/>}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+          {/* Recent auth table */}
+          <div style={{background:C.surface,borderRadius:14,padding:'22px 24px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+              <h3 style={{fontSize:15,fontWeight:700,color:C.text}}>최근 인증 요청</h3>
+              <span style={{fontSize:12,color:C.textSub}}>실시간 갱신 · 5초 폴링</span>
+            </div>
+            <div style={{overflowX:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                <thead>
+                  <tr style={{background:C.bg}}>
+                    {['인증 ID','이름','연락처','생년월일','상태','요청 시각'].map(h=>(
+                      <th key={h} style={{padding:'10px 12px',textAlign:'left',fontWeight:600,color:C.textSub,fontSize:12}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {authRequests.map((r,i)=>(
+                    <tr key={r.id} onClick={()=>setSelected(r)} style={{borderTop:`1px solid ${C.border}`,cursor:'pointer',transition:'background 0.15s'}}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+                      onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                      <td style={{padding:'11px 12px',fontFamily:'monospace',color:C.primary,fontWeight:600}}>{r.id}</td>
+                      <td style={{padding:'11px 12px',fontWeight:600,color:C.text}}>{r.name}</td>
+                      <td style={{padding:'11px 12px',color:C.textSub}}>{r.phone}</td>
+                      <td style={{padding:'11px 12px',color:C.textSub}}>{r.birth}</td>
+                      <td style={{padding:'11px 12px'}}><Badge status={r.status}/></td>
+                      <td style={{padding:'11px 12px',color:C.textSub}}>{r.time}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        {/* Right: auth request form */}
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{background:C.surface,borderRadius:14,padding:'22px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+            <h3 style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:4}}>본인인증 요청</h3>
+            <p style={{fontSize:12,color:C.textSub,marginBottom:18}}>사용자 정보를 입력하면 PASS 인증 요청을 전송합니다</p>
+            <div style={{display:'flex',flexDirection:'column',gap:14}}>
+              <Input label="이름" placeholder="홍길동" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} required/>
+              <Input label="휴대폰 번호" placeholder="010-0000-0000" value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} required/>
+              <Input label="생년월일" type="date" value={form.birth} onChange={e=>setForm({...form,birth:e.target.value})}/>
+              <div style={{display:'flex',gap:8}}>
+                {['SKT','KT','LG U+'].map(c=>(
+                  <button key={c} style={{flex:1,padding:'8px',borderRadius:8,border:`1px solid ${C.border}`,background:C.bg,cursor:'pointer',fontSize:13,fontWeight:600,color:C.textSub,transition:'all 0.15s'}}
+                    onMouseEnter={e=>{e.target.style.borderColor=C.primary;e.target.style.color=C.primary;}}
+                    onMouseLeave={e=>{e.target.style.borderColor=C.border;e.target.style.color=C.textSub;}}>{c}</button>
+                ))}
+              </div>
+              <RippleButton onClick={()=>setShowModal(true)} style={{padding:'12px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontWeight:700,fontSize:15,cursor:'pointer',transition:'all 0.15s',fontFamily:'Pretendard',width:'100%'}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.secondary}
+                onMouseLeave={e=>e.currentTarget.style.background=C.primary}>
+                🔐 본인인증 요청
+              </RippleButton>
+            </div>
+          </div>
+          {/* Info cards */}
+          <div style={{background:C.blue50,borderRadius:12,padding:'16px',border:`1px solid ${C.blue100}`}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.primary,marginBottom:8}}>📋 암호화 사양</div>
+            {[['알고리즘','AES-256-CBC'],['서명','HMAC-SHA256'],['콜백','서버-서버 (S2S)']].map(([k,v])=>(
+              <div key={k} style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4}}>
+                <span style={{color:C.textSub}}>{k}</span>
+                <span style={{fontWeight:600,color:C.text,fontFamily:'monospace'}}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {showModal&&(
+        <Modal title="PASS 본인인증 요청 확인" onClose={()=>setShowModal(false)}>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <div style={{background:C.bg,borderRadius:10,padding:16}}>
+              {[['이름',form.name||'(미입력)'],['연락처',form.phone||'(미입력)'],['생년월일',form.birth||'(미입력)'],['인증 방식','PASS (통신사 본인인증)'],['암호화','AES-256-CBC']].map(([k,v])=>(
+                <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:`1px solid ${C.border}`,fontSize:14}}>
+                  <span style={{color:C.textSub}}>{k}</span>
+                  <span style={{fontWeight:600,color:C.text}}>{v}</span>
+                </div>
+              ))}
+            </div>
+            <p style={{fontSize:13,color:C.textSub}}>위 정보로 PASS 서버에 본인인증 요청을 전송합니다. 사용자 기기의 PASS 앱에서 인증을 완료해야 처리됩니다.</p>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>setShowModal(false)} style={{flex:1,padding:12,borderRadius:10,border:`1px solid ${C.border}`,background:'#fff',cursor:'pointer',fontWeight:600,fontSize:14,fontFamily:'Pretendard'}}>취소</button>
+              <button onClick={submitAuth} disabled={loading} style={{flex:2,padding:12,borderRadius:10,border:'none',background:loading?C.textSub:C.primary,color:'#fff',cursor:loading?'wait':'pointer',fontWeight:700,fontSize:14,fontFamily:'Pretendard',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+                {loading?<><span style={{width:16,height:16,borderRadius:'50%',border:'2px solid rgba(255,255,255,0.3)',borderTopColor:'#fff',animation:'spin 0.8s linear infinite',display:'inline-block'}}/>처리 중...</>:'✅ 인증 요청 전송'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {selected&&(
+        <Drawer title={`인증 상세 — ${selected.id}`} onClose={()=>setSelected(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <Badge status={selected.status}/>
+              <span style={{fontSize:12,color:C.textSub}}>{selected.time}</span>
+            </div>
+            {[['인증 ID',selected.id],['이름',selected.name],['연락처',selected.phone],['생년월일',selected.birth],['인증 방식',selected.method],['CI값',selected.ci]].map(([k,v])=>(
+              <div key={k} style={{display:'flex',flexDirection:'column',gap:4,padding:'12px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:12,color:C.textSub}}>{k}</span>
+                <span style={{fontSize:14,fontWeight:600,color:C.text,fontFamily:k.includes('CI')||k.includes('ID')?'monospace':'inherit'}}>{v}</span>
+              </div>
+            ))}
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>{setSelected(null);showToast('인증 이력이 내보내기되었습니다','success')}} style={{flex:1,padding:10,borderRadius:8,border:`1px solid ${C.border}`,background:'#fff',cursor:'pointer',fontWeight:600,fontSize:13,fontFamily:'Pretendard'}}>내보내기</button>
+              <button onClick={()=>{setSelected(null);showToast('재인증 요청이 전송되었습니다','info')}} style={{flex:1,padding:10,borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontWeight:600,fontSize:13,fontFamily:'Pretendard'}}>재요청</button>
+            </div>
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+// ──── PAYMENT PAGE: KG이니시스 결제창 호출 ────
+const paymentMethods=[{id:'card',icon:'💳',label:'신용/체크카드'},{id:'bank',icon:'🏦',label:'계좌이체'},{id:'kakao',icon:'💛',label:'카카오페이'},{id:'naver',icon:'💚',label:'네이버페이'}];
+function PaymentPage({showToast}){
+  const [form,setForm]=useState({product:'',amount:'',orderId:`ORD-${Date.now().toString().slice(-8)}`});
+  const [method,setMethod]=useState('card');
+  const [step,setStep]=useState(1);
+  const [loading,setLoading]=useState(false);
+  function proceedPayment(){
+    if(!form.product||!form.amount){showToast('상품명과 결제 금액을 입력해주세요','error');return;}
+    setStep(2);
+  }
+  function confirmPayment(){
+    setLoading(true);
+    setTimeout(()=>{setLoading(false);setStep(3);showToast('결제가 성공적으로 완료되었습니다','success');},2500);
+  }
+  function resetPayment(){setStep(1);setForm({product:'',amount:'',orderId:`ORD-${Date.now().toString().slice(-8)}`});setMethod('card');}
+  const recentPayments=[
+    {id:'TXN-2291',product:'프리미엄 구독 (월간)',amount:'29,000',method:'신용카드',status:'승인완료',time:'13:41'},
+    {id:'TXN-2290',product:'엔터프라이즈 라이선스',amount:'490,000',method:'계좌이체',status:'승인완료',time:'12:55'},
+    {id:'TXN-2289',product:'스타터 플랜 (연간)',amount:'198,000',method:'카카오페이',status:'망취소',time:'11:20'},
+    {id:'TXN-2288',product:'API 사용료 (1월)',amount:'85,000',method:'신용카드',status:'승인완료',time:'10:05'},
+  ];
+  return(
+    <div style={{animation:'fadeIn 0.4s ease'}}>
+      <HeroBanner icon="💳" title="KG이니시스 결제 연동" subtitle="웹표준 · 모바일 결제창 통합 · 서버사이드 서명 · SHA-256 페이로드"
+        kpis={[{val:'₩4.8M',label:'오늘 결제 총액'},{val:'38건',label:'성공'},{val:'1건',label:'망취소'},{val:'0건',label:'처리 중'}]}/>
+      <div style={{maxWidth:1280,margin:'0 auto',padding:'28px 24px',display:'grid',gridTemplateColumns:'1fr 420px',gap:24}}>
+        {/* Left: recent */}
+        <div style={{display:'flex',flexDirection:'column',gap:20}}>
+          <div style={{background:C.surface,borderRadius:14,padding:'22px 24px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+            <h3 style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:4}}>최근 결제 내역</h3>
+            <p style={{fontSize:12,color:C.textSub,marginBottom:16}}>오늘 처리된 결제 트랜잭션</p>
+            {recentPayments.map((r,i)=>(
+              <div key={r.id} onClick={()=>showToast(`${r.id} 상세 드로어 오픈`,'info')} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 12px',borderRadius:10,cursor:'pointer',transition:'background 0.15s',marginBottom:4}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <div style={{width:40,height:40,borderRadius:10,background:C.blue50,display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>
+                  {paymentMethods.find(m=>r.method.includes(m.label.split('/')[0]))?.icon||'💳'}
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:14,fontWeight:600,color:C.text}}>{r.product}</div>
+                  <div style={{fontSize:12,color:C.textSub,marginTop:2}}>{r.method} · {r.time}</div>
+                </div>
+                <div style={{textAlign:'right'}}>
+                  <div style={{fontSize:15,fontWeight:700,color:C.text}}>₩{r.amount}</div>
+                  <div style={{marginTop:4}}><Badge status={r.status}/></div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {/* SDK spec card */}
+          <div style={{background:C.surface,borderRadius:14,padding:'22px 24px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+            <h3 style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:14}}>연동 환경 설정</h3>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              {[['결제 환경','테스트 서버',true],['MID','test_inicis_****'],['결제창 방식','웹표준 (INIStdPay)'],['모바일','리다이렉트 자동 전환']].map(([k,v,warn])=>(
+                <div key={k} style={{background:C.bg,borderRadius:8,padding:'12px 14px'}}>
+                  <div style={{fontSize:11,color:C.textSub,marginBottom:4}}>{k}</div>
+                  <div style={{fontSize:13,fontWeight:700,color:warn?C.warn:C.text,fontFamily:'monospace'}}>{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        {/* Right: payment form */}
+        <div>
+          {step===1&&(
+            <div style={{background:C.surface,borderRadius:14,padding:'24px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)',animation:'fadeIn 0.3s ease'}}>
+              <h3 style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:18}}>결제 정보 입력</h3>
+              <div style={{display:'flex',flexDirection:'column',gap:14}}>
+                <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                  <label style={{fontSize:13,fontWeight:600,color:C.text}}>주문번호</label>
+                  <div style={{padding:'10px 14px',border:`1px solid ${C.border}`,borderRadius:8,background:C.bg,fontSize:13,fontFamily:'monospace',color:C.textSub}}>{form.orderId}</div>
+                </div>
+                <Input label="상품명" placeholder="프리미엄 구독 (월간)" value={form.product} onChange={e=>setForm({...form,product:e.target.value})} required/>
+                <Input label="결제 금액 (원)" type="number" placeholder="29000" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} required/>
+                <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                  <label style={{fontSize:13,fontWeight:600,color:C.text}}>결제 수단</label>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                    {paymentMethods.map(m=>(
+                      <button key={m.id} onClick={()=>setMethod(m.id)} style={{padding:'10px 8px',borderRadius:10,border:`2px solid ${method===m.id?C.primary:C.border}`,background:method===m.id?C.blue50:'#fff',cursor:'pointer',display:'flex',alignItems:'center',gap:8,fontSize:13,fontWeight:600,color:method===m.id?C.primary:C.textSub,transition:'all 0.15s',fontFamily:'Pretendard'}}>
+                        <span style={{fontSize:18}}>{m.icon}</span>{m.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button onClick={proceedPayment} style={{padding:'13px',borderRadius:10,border:'none',background:C.primary,color:'#fff',fontWeight:700,fontSize:15,cursor:'pointer',fontFamily:'Pretendard',transition:'all 0.15s'}}
+                  onMouseEnter={e=>e.target.style.background=C.secondary}
+                  onMouseLeave={e=>e.target.style.background=C.primary}>
+                  결제 진행 →
+                </button>
+              </div>
+            </div>
+          )}
+          {step===2&&(
+            <div style={{background:C.surface,borderRadius:14,padding:'24px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)',animation:'bounceIn 0.3s ease'}}>
+              <h3 style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:18}}>결제 확인</h3>
+              <div style={{background:C.bg,borderRadius:10,padding:16,marginBottom:16}}>
+                {[['주문번호',form.orderId],['상품명',form.product],['결제 금액',`₩${Number(form.amount||0).toLocaleString()}`],['결제 수단',paymentMethods.find(m=>m.id===method)?.label]].map(([k,v])=>(
+                  <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'9px 0',borderBottom:`1px solid ${C.border}`,fontSize:14}}>
+                    <span style={{color:C.textSub}}>{k}</span>
+                    <span style={{fontWeight:700,color:C.text,fontFamily:k.includes('번호')?'monospace':'inherit'}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:8,padding:12,marginBottom:16,fontSize:12,color:'#92400E'}}>
+                ⚠️ 결제창이 팝업으로 열립니다. 팝업이 차단된 경우 브라우저 설정에서 허용해주세요.
+              </div>
+              <div style={{display:'flex',gap:10}}>
+                <button onClick={resetPayment} style={{flex:1,padding:12,borderRadius:10,border:`1px solid ${C.border}`,background:'#fff',cursor:'pointer',fontWeight:600,fontFamily:'Pretendard',fontSize:14}}>이전</button>
+                <button onClick={confirmPayment} disabled={loading} style={{flex:2,padding:12,borderRadius:10,border:'none',background:loading?C.textSub:C.success,color:'#fff',cursor:loading?'wait':'pointer',fontWeight:700,fontSize:14,fontFamily:'Pretendard',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+                  {loading?<><span style={{width:16,height:16,borderRadius:'50%',border:'2px solid rgba(255,255,255,0.3)',borderTopColor:'#fff',animation:'spin 0.8s linear infinite',display:'inline-block'}}/>결제창 연결 중...</>:'💳 KG이니시스 결제창 열기'}
+                </button>
+              </div>
+            </div>
+          )}
+          {step===3&&(
+            <div style={{background:C.surface,borderRadius:14,padding:'32px 24px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)',textAlign:'center',animation:'bounceIn 0.4s ease'}}>
+              <div style={{fontSize:52,marginBottom:16}}>✅</div>
+              <h3 style={{fontSize:18,fontWeight:700,color:C.success,marginBottom:8}}>결제 완료</h3>
+              <p style={{fontSize:13,color:C.textSub,marginBottom:24}}>결제 승인이 완료되었습니다.<br/>웹훅을 통해 주문 상태가 자동 업데이트됩니다.</p>
+              <button onClick={resetPayment} style={{padding:'12px 28px',borderRadius:10,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontWeight:700,fontFamily:'Pretendard',fontSize:14}}>새 결제 시작</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ──── WEBHOOK PAGE: 결제 승인 및 웹훅 처리 ────
+const txData=[
+  {id:'TXN-2291',amount:'29,000',method:'신용카드',status:'승인완료',webhook:'수신',orderId:'ORD-48291001',time:'13:41:05',tid:'StdpayISP_WEB_****'},
+  {id:'TXN-2290',amount:'490,000',method:'계좌이체',status:'승인완료',webhook:'수신',orderId:'ORD-48291000',time:'12:55:22',tid:'StdpayISP_WEB_****'},
+  {id:'TXN-2289',amount:'198,000',method:'카카오페이',status:'망취소',webhook:'수신',orderId:'ORD-48290999',time:'11:20:14',tid:'StdpayISP_WEB_****'},
+  {id:'TXN-2288',amount:'85,000',method:'신용카드',status:'승인완료',webhook:'수신',orderId:'ORD-48290998',time:'10:05:33',tid:'StdpayISP_WEB_****'},
+  {id:'TXN-2287',amount:'12,000',method:'네이버페이',status:'실패',webhook:'미수신',orderId:'ORD-48290997',time:'09:48:10',tid:'-'},
+  {id:'TXN-2286',amount:'670,000',method:'신용카드',status:'승인완료',webhook:'수신',orderId:'ORD-48290996',time:'09:22:55',tid:'StdpayISP_WEB_****'},
+];
+function WebhookPage({showToast}){
+  const [filter,setFilter]=useState('전체');
+  const [selected,setSelected]=useState(null);
+  const filters=['전체','승인완료','망취소','실패'];
+  const filtered=txData.filter(t=>filter==='전체'||t.status===filter);
+  return(
+    <div style={{animation:'fadeIn 0.4s ease'}}>
+      <HeroBanner icon="🔄" title="결제 승인 · 웹훅 처리" subtitle="이니시스 승인 API · 망취소 처리 · 멱등성 키 중복 방지 · 트랜잭션 무결성"
+        gradient={`linear-gradient(135deg,#065F46 0%,#059669 60%,#34D399 100%)`}
+        kpis={[{val:'₩4.8M',label:'총 승인 금액'},{val:'38건',label:'승인 완료'},{val:'1건',label:'망취소'},{val:'1건',label:'웹훅 미수신'}]}/>
+      <div style={{maxWidth:1280,margin:'0 auto',padding:'28px 24px'}}>
+        <div style={{background:C.surface,borderRadius:14,padding:'22px 24px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+            <h3 style={{fontSize:15,fontWeight:700,color:C.text}}>결제 트랜잭션 목록</h3>
+            <div style={{display:'flex',gap:6}}>
+              {filters.map(f=>(
+                <button key={f} onClick={()=>setFilter(f)} style={{padding:'6px 14px',borderRadius:20,border:`1px solid ${filter===f?C.primary:C.border}`,background:filter===f?C.primary:'#fff',color:filter===f?'#fff':C.textSub,cursor:'pointer',fontWeight:600,fontSize:12,fontFamily:'Pretendard',transition:'all 0.15s'}}>{f}</button>
+              ))}
+            </div>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+            <thead>
+              <tr style={{background:C.bg}}>
+                {['거래 ID','주문 번호','결제 수단','금액','상태','웹훅','시각',''].map(h=>(
+                  <th key={h} style={{padding:'10px 12px',textAlign:'left',fontWeight:600,color:C.textSub,fontSize:12}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(t=>(
+                <tr key={t.id} style={{borderTop:`1px solid ${C.border}`,cursor:'pointer',transition:'background 0.15s'}}
+                  onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}
+                  onClick={()=>setSelected(t)}>
+                  <td style={{padding:'11px 12px',fontFamily:'monospace',color:C.primary,fontWeight:600}}>{t.id}</td>
+                  <td style={{padding:'11px 12px',fontFamily:'monospace',color:C.textSub,fontSize:12}}>{t.orderId}</td>
+                  <td style={{padding:'11px 12px',color:C.text}}>{t.method}</td>
+                  <td style={{padding:'11px 12px',fontWeight:700,color:C.text}}>₩{t.amount}</td>
+                  <td style={{padding:'11px 12px'}}><Badge status={t.status}/></td>
+                  <td style={{padding:'11px 12px'}}>
+                    <span style={{fontSize:12,fontWeight:600,color:t.webhook==='수신'?C.success:C.error}}>{t.webhook==='수신'?'✓ 수신':'✗ 미수신'}</span>
+                  </td>
+                  <td style={{padding:'11px 12px',color:C.textSub}}>{t.time}</td>
+                  <td style={{padding:'11px 12px'}}><button onClick={e=>{e.stopPropagation();setSelected(t);}} style={{padding:'4px 10px',borderRadius:6,border:`1px solid ${C.border}`,background:'#fff',cursor:'pointer',fontSize:11,fontWeight:600,color:C.textSub,fontFamily:'Pretendard'}}>상세</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {selected&&(
+        <Drawer title={`트랜잭션 상세 — ${selected.id}`} onClose={()=>setSelected(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div style={{display:'flex',gap:8}}><Badge status={selected.status}/><span style={{fontSize:12,color:selected.webhook==='수신'?C.success:C.error,fontWeight:600}}>웹훅 {selected.webhook}</span></div>
+            {[['거래 ID',selected.id],['TID',selected.tid],['주문번호',selected.orderId],['결제 수단',selected.method],['결제 금액',`₩${selected.amount}`],['처리 시각',selected.time]].map(([k,v])=>(
+              <div key={k} style={{padding:'10px 0',borderBottom:`1px solid ${C.border}`,display:'flex',flexDirection:'column',gap:3}}>
+                <span style={{fontSize:11,color:C.textSub}}>{k}</span>
+                <span style={{fontSize:13,fontWeight:600,color:C.text,fontFamily:k.includes('ID')||k.includes('번호')||k.includes('TID')?'monospace':'inherit'}}>{v}</span>
+              </div>
+            ))}
+            <div style={{background:C.bg,borderRadius:8,padding:12}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.textSub,marginBottom:8}}>웹훅 페이로드</div>
+              <pre style={{fontSize:11,color:C.text,lineHeight:1.6,fontFamily:'monospace',whiteSpace:'pre-wrap'}}{...{}}>{JSON.stringify({resultCode:'0000',resultMsg:'정상처리',mid:'test_mid',orderNumber:selected.orderId,authCode:'****',amount:selected.amount.replace(',','')},null,2)}</pre>
+            </div>
+            {selected.status==='망취소'&&(
+              <button onClick={()=>{setSelected(null);showToast('재승인 요청이 전송되었습니다','info')}} style={{padding:12,borderRadius:8,border:'none',background:C.warn,color:'#fff',cursor:'pointer',fontWeight:700,fontSize:13,fontFamily:'Pretendard'}}>🔄 재승인 요청</button>
+            )}
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+// ──── DASHBOARD PAGE ────
+const chartData=[
+  {date:'04/21',payment:12,auth:28},{date:'04/22',payment:18,auth:35},{date:'04/23',payment:15,auth:30},
+  {date:'04/24',payment:22,auth:41},{date:'04/25',payment:28,auth:52},{date:'04/26',payment:32,auth:58},{date:'04/27',payment:38,auth:62},
+];
+const methodPie=[{name:'신용카드',value:58},{name:'계좌이체',value:22},{name:'카카오페이',value:12},{name:'네이버페이',value:8}];
+const PIE_COLORS=[C.primary,'#6366F1','#F59E0B','#10B981'];
+function DashboardPage(){
+  return(
+    <div style={{animation:'fadeIn 0.4s ease'}}>
+      <HeroBanner icon="📊" title="결제·인증 현황 대시보드" subtitle="실시간 KPI · 일별 트렌드 · 결제 수단 분포 · 상태 모니터링"
+        gradient={`linear-gradient(135deg,#3730A3 0%,${C.primary} 60%,#06B6D4 100%)`}
+        kpis={[{val:'₩12.4M',label:'이번 달 결제'},{val:'312건',label:'승인 완료'},{val:'1,841건',label:'이번 달 인증'},{val:'99.1%',label:'전체 성공률'}]}/>
+      <div style={{maxWidth:1280,margin:'0 auto',padding:'28px 24px',display:'flex',flexDirection:'column',gap:20}}>
+        {/* KPI cards */}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16}}>
+          {[
+            {icon:'💰',label:'오늘 결제 총액',end:'4832000',prefix:'₩',sub:'+12.4% 전일 대비',color:C.primary},
+            {icon:'✅',label:'오늘 승인 건수',end:'38',suffix:'건',sub:'망취소 1건 포함',color:C.success},
+            {icon:'🔐',label:'오늘 인증 건수',end:'142',suffix:'건',sub:'성공률 98.6%',color:'#7C3AED'},
+            {icon:'⚠️',label:'오류 발생 건수',end:'3',suffix:'건',sub:'웹훅 미수신 1건',color:C.warn},
+          ].map((k,i)=>(
+            <div key={i} style={{background:C.surface,borderRadius:14,padding:'20px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)',animation:`fadeInScale 0.5s ease ${i*0.1}s both`}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
+                <div style={{width:40,height:40,borderRadius:10,background:`${k.color}15`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}}>{k.icon}</div>
+                <span style={{fontSize:13,color:C.textSub,fontWeight:600}}>{k.label}</span>
+              </div>
+              <div style={{fontSize:24,fontWeight:800,color:C.text,marginBottom:4}}>
+                <CountUp end={k.end} prefix={k.prefix||''} suffix={k.suffix||''} duration={1000+i*200}/>
+              </div>
+              <div style={{fontSize:12,color:C.textSub}}>{k.sub}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:20}}>
+          {/* Line chart */}
+          <div style={{background:C.surface,borderRadius:14,padding:'22px 24px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+            <h3 style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:20}}>일별 결제·인증 추이 (최근 7일)</h3>
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={chartData} margin={{top:5,right:10,bottom:5,left:0}}>
+                <defs>
+                  <linearGradient id="payGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.primary} stopOpacity={0.2}/>
+                    <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="authGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#7C3AED" stopOpacity={0.2}/>
+                    <stop offset="95%" stopColor="#7C3AED" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                <XAxis dataKey="date" tick={{fontSize:12,fill:C.textSub}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fontSize:12,fill:C.textSub}} axisLine={false} tickLine={false}/>
+                <Tooltip contentStyle={{borderRadius:8,border:`1px solid ${C.border}`,fontSize:13}}/>
+                <Area type="monotone" dataKey="payment" stroke={C.primary} strokeWidth={2} fill="url(#payGrad)" name="결제"/>
+                <Area type="monotone" dataKey="auth" stroke="#7C3AED" strokeWidth={2} fill="url(#authGrad)" name="인증"/>
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+          {/* Pie chart */}
+          <div style={{background:C.surface,borderRadius:14,padding:'22px 24px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+            <h3 style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:20}}>결제 수단 분포</h3>
+            <ResponsiveContainer width="100%" height={160}>
+              <PieChart>
+                <Pie data={methodPie} cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={3} dataKey="value">
+                  {methodPie.map((entry,i)=><Cell key={i} fill={PIE_COLORS[i]}/>)}
+                </Pie>
+                <Tooltip formatter={v=>`${v}%`} contentStyle={{borderRadius:8,border:`1px solid ${C.border}`,fontSize:13}}/>
+              </PieChart>
+            </ResponsiveContainer>
+            <div style={{display:'flex',flexDirection:'column',gap:6}}>
+              {methodPie.map((m,i)=>(
+                <div key={i} style={{display:'flex',alignItems:'center',gap:8,fontSize:12}}>
+                  <div style={{width:10,height:10,borderRadius:2,background:PIE_COLORS[i],flexShrink:0}}/>
+                  <span style={{color:C.textSub,flex:1}}>{m.name}</span>
+                  <span style={{fontWeight:700,color:C.text}}>{m.value}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ──── AUTH PAGE: 본인인증 이력 관리 ────
+const authHistory=[
+  {id:'AUTH-2840',user:'김지수',uid:'USR-3821',method:'PASS',status:'인증성공',date:'2026-04-27 14:23',elapsed:'1.2초',ci:'CI_9f3a8b...'},
+  {id:'AUTH-2839',user:'박민준',uid:'USR-7612',method:'PASS',status:'인증성공',date:'2026-04-27 14:18',elapsed:'0.9초',ci:'CI_8b2c4e...'},
+  {id:'AUTH-2838',user:'이서연',uid:'USR-5509',method:'PASS',status:'처리중',date:'2026-04-27 14:16',elapsed:'-',ci:'-'},
+  {id:'AUTH-2837',user:'최현우',uid:'USR-2244',method:'PASS',status:'실패',date:'2026-04-27 14:10',elapsed:'3.1초',ci:'-'},
+  {id:'AUTH-2836',user:'정유나',uid:'USR-8877',method:'PASS',status:'인증성공',date:'2026-04-27 13:55',elapsed:'1.5초',ci:'CI_7e1f3c...'},
+  {id:'AUTH-2835',user:'강동현',uid:'USR-4411',method:'PASS',status:'인증성공',date:'2026-04-27 13:40',elapsed:'1.1초',ci:'CI_6d8a2b...'},
+];
+function AuthPage({showToast}){
+  const [search,setSearch]=useState('');
+  const [selected,setSelected]=useState(null);
+  const filtered=authHistory.filter(a=>!search||a.user.includes(search)||a.id.includes(search)||a.uid.includes(search));
+  return(
+    <div style={{animation:'fadeIn 0.4s ease'}}>
+      <HeroBanner icon="🛡️" title="본인인증 이력 관리" subtitle="PASS 인증 이력 조회 · CI/DI 매핑 · 세션 타임라인 · 중복 인증 탐지"
+        gradient={`linear-gradient(135deg,#1E3A5F 0%,#1A56DB 60%,#38BDF8 100%)`}
+        kpis={[{val:'1,841건',label:'이번 달 인증'},{val:'98.6%',label:'성공률'},{val:'142건',label:'오늘'},{val:'24건',label:'세션 활성'}]}/>
+      <div style={{maxWidth:1280,margin:'0 auto',padding:'28px 24px'}}>
+        <div style={{background:C.surface,borderRadius:14,padding:'22px 24px',border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:18}}>
+            <div style={{flex:1,position:'relative'}}>
+              <span style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',fontSize:16}}>🔍</span>
+              <input placeholder="이름, 사용자 ID, 인증 ID 검색" value={search} onChange={e=>setSearch(e.target.value)}
+                style={{width:'100%',padding:'10px 12px 10px 40px',border:`1px solid ${C.border}`,borderRadius:10,fontSize:14,fontFamily:'Pretendard',outline:'none'}}
+                onFocus={e=>e.target.style.borderColor=C.primary}
+                onBlur={e=>e.target.style.borderColor=C.border}/>
+            </div>
+            <button onClick={()=>showToast('인증 이력 CSV 내보내기가 시작됩니다','info')} style={{padding:'10px 18px',borderRadius:10,border:`1px solid ${C.border}`,background:'#fff',cursor:'pointer',fontWeight:600,fontSize:13,color:C.textSub,fontFamily:'Pretendard',display:'flex',alignItems:'center',gap:6}}>
+              📥 내보내기
+            </button>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+            <thead>
+              <tr style={{background:C.bg}}>
+                {['인증 ID','사용자','사용자 ID','방식','상태','처리 시간','인증 일시',''].map(h=>(
+                  <th key={h} style={{padding:'10px 12px',textAlign:'left',fontWeight:600,color:C.textSub,fontSize:12}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(a=>(
+                <tr key={a.id} onClick={()=>setSelected(a)} style={{borderTop:`1px solid ${C.border}`,cursor:'pointer',transition:'background 0.15s'}}
+                  onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <td style={{padding:'11px 12px',fontFamily:'monospace',color:C.primary,fontWeight:600}}>{a.id}</td>
+                  <td style={{padding:'11px 12px',fontWeight:600,color:C.text}}>{a.user}</td>
+                  <td style={{padding:'11px 12px',fontFamily:'monospace',color:C.textSub,fontSize:12}}>{a.uid}</td>
+                  <td style={{padding:'11px 12px',color:C.text}}>{a.method}</td>
+                  <td style={{padding:'11px 12px'}}><Badge status={a.status}/></td>
+                  <td style={{padding:'11px 12px',color:a.elapsed==='-'?C.textSub:C.text,fontFamily:'monospace'}}>{a.elapsed}</td>
+                  <td style={{padding:'11px 12px',color:C.textSub,fontSize:12}}>{a.date}</td>
+                  <td style={{padding:'11px 12px'}}><button onClick={e=>{e.stopPropagation();setSelected(a);}} style={{padding:'4px 10px',borderRadius:6,border:`1px solid ${C.border}`,background:'#fff',cursor:'pointer',fontSize:11,fontWeight:600,color:C.textSub,fontFamily:'Pretendard'}}>상세</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {selected&&(
+        <Drawer title={`인증 상세 — ${selected.id}`} onClose={()=>setSelected(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+              <Badge status={selected.status}/>
+              <span style={{fontSize:12,color:C.textSub}}>{selected.date}</span>
+            </div>
+            {[['인증 ID',selected.id],['이름',selected.user],['사용자 ID',selected.uid],['인증 방식',selected.method],['처리 시간',selected.elapsed],['CI값',selected.ci]].map(([k,v])=>(
+              <div key={k} style={{padding:'10px 0',borderBottom:`1px solid ${C.border}`,display:'flex',flexDirection:'column',gap:3}}>
+                <span style={{fontSize:11,color:C.textSub}}>{k}</span>
+                <span style={{fontSize:13,fontWeight:600,color:C.text,fontFamily:['CI값','인증 ID','사용자 ID'].includes(k)?'monospace':'inherit'}}>{v}</span>
+              </div>
+            ))}
+            <div style={{background:C.bg,borderRadius:8,padding:12}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.textSub,marginBottom:8}}>인증 타임라인</div>
+              {[['요청 전송','성공'],['페이로드 암호화','성공'],['PASS 서버 응답','성공'],['콜백 수신','성공'],['DB 저장','성공']].map(([step,res],i)=>(
+                selected.status==='인증성공'&&(
+                  <div key={i} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6,fontSize:12}}>
+                    <span style={{color:C.success}}>✓</span>
+                    <span style={{color:C.text,flex:1}}>{step}</span>
+                    <span style={{color:C.textSub,fontFamily:'monospace',fontSize:11}}>+{(i*0.3).toFixed(1)}s</span>
+                  </div>
+                )
+              ))}
+              {selected.status==='실패'&&<div style={{fontSize:12,color:C.error}}>⚠️ PASS 서버 응답 타임아웃 (3.0s 초과)</div>}
+              {selected.status==='처리중'&&<div style={{fontSize:12,color:C.warn}}>⏳ PASS 앱 인증 대기 중 (30초 타임아웃)</div>}
+            </div>
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+// ──── APP ────
+function App(){
+  const [page,setPage]=useState('main');
+  const [toast,setToast]=useState(null);
+  const showToast=(msg,type='success')=>setToast({msg,type});
+  const pages={
+    main:<MainPage showToast={showToast}/>,
+    payment:<PaymentPage showToast={showToast}/>,
+    webhook:<WebhookPage showToast={showToast}/>,
+    dashboard:<DashboardPage/>,
+    auth:<AuthPage showToast={showToast}/>,
+  };
+  return(
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh',background:C.bg}}>
+      <TopNav page={page} setPage={setPage}/>
+      <main style={{flex:1}}>
+        {pages[page]||pages.main}
+      </main>
+      <footer style={{background:C.surface,borderTop:`1px solid ${C.border}`,padding:'16px 24px',textAlign:'center'}}>
+        <span style={{fontSize:12,color:C.textSub}}>페이게이트 통합 인증 플랫폼 · KG이니시스 · PASS 본인인증 · FastAPI + React 18 · 맞춤 구현 데모</span>
+      </footer>
+      {toast&&<Toast msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
