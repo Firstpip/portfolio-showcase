@@ -787,22 +787,23 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 - **last_failure**: —
 
 #### T8.2 build-runtime 모듈 — runtime 복사 + 임시 디렉토리 관리
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T8.0
 - **requires_test**: yes
-- **파일**: `worker/generate-demo/build-runtime.ts` (신규), `worker/test-build-runtime.ts` (신규)
-- **해야 할 일**:
-  - `prepareWorkspace(stack, slug)` — `/tmp/demo-build-{slug}-{ts}/`에 `worker-runtimes/{stack}/` cp -r (node_modules 포함, --reflink 가능 시 사용)
-  - `runBuild(workspace, basePath)` — env로 BASE 주입 + `npm run build` execFile + stdout/stderr 캡처 + 타임아웃 5분
-  - `collectDist(workspace)` — dist/ 하위 모든 파일을 `{path: string, content: Buffer|string}[]`로 수집
-  - `cleanup(workspace)` — rm -rf 안전하게
-  - 모든 헬퍼는 순수, DB 의존 없음
-- **test_spec**:
-  - [ ] prepareWorkspace 후 임시 dir에 vite.config.ts + node_modules 존재
-  - [ ] runBuild 정상 종료 + dist/ 생성
-  - [ ] collectDist 결과에 index.html 포함 + assets/*.js, assets/*.css 포함
-  - [ ] cleanup 후 임시 dir 사라짐
-  - [ ] runBuild 실패(잘못된 src/) 시 stderr를 throw payload에 포함
+- **파일**: `worker/generate-demo/build-runtime.ts` (4 헬퍼), `worker/test-build-runtime.ts` (4 케이스)
+- **구현 메모**:
+  - **API**: `prepareWorkspace(stack, slug) → Workspace`, `runBuild(ws, basePath, opts?) → BuildResult (ok|err)`, `collectDist(ws) → DistFile[]`, `cleanup(ws) → void`. 모든 헬퍼 DB 의존 0, 순수 입출력.
+  - **prepareWorkspace**: `worker-runtimes/{stack}/` 통째로 `/tmp/demo-build-{sanitizedSlug}-{ts}/` 에 `fs.cp(recursive: true, force: true)` 로 복사. macOS APFS clonefile (CoW) 활용으로 153MB 가 매우 빠름. stack enum (현 시점 'vite-react-ts' 1개) + node_modules 존재 사전 체크 — 없으면 actionable 에러 ("npm install 먼저 실행").
+  - **runBuild**: `spawn('npm', ['run', 'build'])` + cwd=workspace.path + env={...process.env, DEMO_BASE: basePath} + stdout/stderr 캡처 + timeout 5분 (SIGTERM → 5초 후 SIGKILL). 결과 discriminated union: `{ok:true, durationMs, stdout, stderr}` 또는 `{ok:false, code:'BUILD_FAILED'|'TIMEOUT'|'SPAWN_ERROR', message, stdout, stderr, durationMs}`.
+  - **collectDist**: `dist/` 재귀 walk → `DistFile[]` (path 는 dist 기준 POSIX 상대경로, content 는 Buffer 로 binary 안전). 정렬해서 결정성. symlink 무시 (vite 산출물에 거의 없음 + GitHub Tree API 부적합).
+  - **cleanup**: `fs.rm(recursive: true, force: true)`. 실패해도 throw 안 함 (오케스트레이터 다른 정리 막지 않음) — console.warn 만.
+  - **경로 해결**: `import.meta.url` → repo root → `worker-runtimes/{stack}` 절대경로. 워킹 디렉토리 의존 없음.
+- **자동 검증 결과 (2026-04-27, 4/4 통과 / first try)**:
+  - 케이스 A (prepareWorkspace, ~3s): vite.config.ts + node_modules + node_modules/react/package.json 모두 존재
+  - 케이스 B+C (runBuild + collectDist, build 2645ms): dist 3 파일 (index.html, assets/*.js, assets/*.css), DEMO_BASE prefix 정확히 주입, content 가 Buffer
+  - 케이스 D (cleanup): 첫 호출로 path 제거 + 두 번째 cleanup 도 throw 없이 안전
+  - 케이스 E (build failure): src/main.tsx 의도적 파괴 → `BUILD_FAILED` (1129ms) + stderr/stdout 에 에러 단서 (TS error code, 변수명) 포함
+  - prepareWorkspace 가 fs.cp 로 153MB 복사하는데 1~2s 만 걸림 — macOS APFS clonefile 효과. Linux ext4 등에서는 5~10s 예상이지만 어느 쪽이든 vite build (~30~60s) 보다 작은 비중.
 - **last_failure**: —
 
 #### T8.3 신규 generate 프롬프트 — Vite 프로젝트 src/ 트리 생성
@@ -924,10 +925,10 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (T8.1 DONE — extract 가 stack_decision 산출, 6/6 검증 통과 / 보정 1사이클. 다음 T8.2 build-runtime 모듈)
-- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1
+- **마지막 업데이트**: 2026-04-27 (T8.2 DONE — build-runtime 4 헬퍼 + 4/4 검증 first try, build 2.6s. 다음 T8.3 generate-app)
+- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2
 - **진행 중 task**: 없음
-- **다음에 착수 가능**: T8.2 (build-runtime 모듈 — runtime 복사 + 임시 디렉토리 + vite build) — depends_on T8.0 충족
+- **다음에 착수 가능**: T8.3 (신규 generate 프롬프트 — Vite src/ 트리 생성) — depends_on T8.1, T8.2 충족
 - **블로킹 중**: T7.3 (Phase 8 완료 후 재개)
 - **Phase 8 첫 cut 범위**: T8.0~T8.8 (vite-react-ts runtime 1개 + standard demo_mode + 1-click E2E). 후속 T8.9~T8.11은 polish.
 - **Phase 7 배경**: T1.1/T2.3/T2.4의 다단계 UX(paste → 추출 → 편집 → 승인 → 생성)가 사용자 인지 부담 큼. T6.2/T6.3로 extract 정확도 강화 + T4.2 재생성 패널로 사후 교정 가능 → SpecModal/StructuredSpecEditor/ApprovalPanel 폐기, 트리거 1회로 단순화. 위시켓 URL 자동 fetch 통합으로 paste 자체 제거
@@ -979,6 +980,7 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 | 2026-04-27 | T6.2 완료 | extract 프롬프트 N:M 자동 분해. `worker/prompts/extract-spec.md` 에 "N:M 관계 분해 규칙" 섹션 (감지 신호·금지 패턴·올바른 분해+예시) + 품질체크 항목 2개 추가. `worker/shared/validate-spec.ts` 에 `detectPluralRef` 헬퍼 — `_ids` 접미사 또는 's' 끝 ref 거부 (allowlist: address·status·process·class·series). `worker/test-extract-nm.ts` 신규 — 발달센터 회귀(spec_raw 복제) + 합성 3건(clinic_review_tag, study_member_group, ecom_product_category). 자동 검증 4/4 통과: (1) 발달센터 → review_tag {review_id, tag_id} 자동 등장, 보너스 center_therapy_type 분해 (T6.1 수동 패치 불필요화) (2) clinic → review_tag 분해 (3) study → group_member 분해 (study_group 도메인 prefix → group_id 참조) (4) ecom → product_category 분해. 복수형 ref 위반 0건, Sonnet 4회 호출 (cache_read 21K 재사용) |
 | 2026-04-27 | T6.3 완료 | extract 프롬프트 read-only flow tier 분류 개선. `worker/prompts/extract-spec.md` tier 1 정의에 "steps 안에 write step 적어도 하나 필수" 규칙 + read+persist 예외 단락(찜·북마크·별점·알림 등록은 read 처럼 보여도 tier 1 자격) + 절대 금지 패턴(steps 가 전부 검색·둘러보기·필터·조회 같은 읽기 동사로만 구성된 경우 tier 2 강제) + 4단계 결정 절차 + 품질 체크 2항목 추가. `worker/extract-spec.ts` `stripJsonFence` 를 outer-slice(첫 `{`~마지막 `}`) 무조건 적용으로 보강 — 종료 펜스 + trailing 텍스트 케이스 안전망. `worker/test-extract-tier.ts` 신규 — 발달센터 회귀 + 합성 3건(realestate_browse/event_calendar/recipe_browse). 각 케이스 (1) handleExtractQueued ok (2) tier_1 모든 flow write 동사 step ≥1 (3) read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개. 자동 검증 4/4 통과: T6.1 시점 발달센터 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결. 1회차 실패 — Sonnet 이 ```json 펜스 + trailing 텍스트로 응답해 종료 펜스 정규식 미매칭 (realestate) → stripJsonFence outer-slice 무조건 적용, 그리고 분류기 false positive (recipe 의 "재료 다중 입력" 의 `입력`, "작성자 프로필" 의 `작성`) → 단독 `입력` 제거 + `작성(?!자)` 부정선후행. 사용자 위임 승인 |
 | 2026-04-27 | T0.3 완료 | 디자인 토큰 추출 유틸 manual-review 통과 (사용자 승인). `worker/test-extract-tokens.ts` 로 5개 도메인 portfolio-1 (발달센터/핀테크/병원/임원 대시보드/커뮤니티) 검증. NO_LLM=1: 4/5 케이스 100% 일치 + 5번(하드코딩 케이스)은 휴리스틱 실패 → graceful fallback 안착 (throw 0). LLM ON: Sonnet 1회 호출(10s, 37 output 토큰)로 5번 케이스도 100% 매칭 → 전체 5/5 = 100%. 빈 HTML 입력에서도 `_source='fallback'` 으로 안전하게 떨어짐 확인. 데모 생성기 모든 task (T0.1~T6.3) 완료 |
+| 2026-04-27 | T8.2 완료 | build-runtime 4 헬퍼 (`prepareWorkspace`/`runBuild`/`collectDist`/`cleanup`). DB 의존 0, 순수 입출력. fs.cp 로 153MB runtime 통째 복사 (macOS APFS clonefile 활용 1~2s), spawn npm run build + DEMO_BASE env 주입 + 5분 timeout (SIGTERM→5s SIGKILL), dist 재귀 walk Buffer 반환, cleanup idempotent. 자동 검증 4/4 first try: A (workspace + node_modules/react 존재) / B+C (build 2645ms, dist 3 파일, base path 정확 주입, content Buffer) / D (cleanup + 두번째 호출 안전) / E (src 의도 파괴 → BUILD_FAILED + 에러 단서 stderr/stdout 포함). |
 | 2026-04-27 | T8.1 완료 | extract-spec.md 에 "스택 결정 규칙" 섹션 + 스키마/예시/품질체크 갱신, validate-spec.ts 에 stack_decision 검증 (freedom_level enum / demo_mode enum / client_required.{frontend,backend,mobile} 키존재+null|enum / strict+all-null+!workflow-diagram 모순체크). 마이그레이션 20260427183000 으로 demo_status 에 'building' 추가 (총 13 상태). 자동 검증 6/6 통과 (보정 1사이클): 발달센터 → free/mobile-web (실제 공고가 모바일 앱), react_strict → strict/next/spring/standard (Spring Boot 명시 따라 backend 정확 추출), vue_preferred → preferred/vue/standard, mobile_app → strict/flutter/mobile-web+fallback, backend_only → strict/fastapi/admin-dashboard+fallback, nocode_workflow → strict\|preferred\|free/workflow-diagram (노코드 도구는 enum 매핑 안 됨, validator 가 workflow-diagram 예외로 strict+all-null 허용). 1차 3 fail 모두 expected/validator 측 오류였고 LLM 동작은 정확. 토큰: Sonnet 합성 5건 cache_read 24,736 / cache_creation 600~700 (시스템 프롬프트 26K 캐시). chosen_runtime 은 LLM 이 산출 안 함 — T8.2 build-runtime 이 코드로 derive. |
 | 2026-04-27 | T8.0 완료 | worker-runtimes/vite-react-ts/ 셋업 — Vite 5+React 18+TS+Tailwind 3+shadcn/ui+Pretendard, 38 deps (radix primitives 11 + form/zod/sonner/recharts + dev tooling). vite.config.ts 가 DEMO_BASE env 로 base path 동적 주입. tailwind.config.cjs 에 토큰 6개 placeholder (T8.4 가 generate 단계에서 spec.tokens 로 교체). 자동 검증 4/4: build 3.10s (142KB JS+6KB CSS), base path 정확히 prefix, gitignore 가 node_modules/dist/tsbuildinfo 모두 무시, prod-style URL serving 시 Playwright 헤드리스 chromium 으로 React 앱 마운트 + 콘솔 errors 0/warnings 0. 22s install, 153MB node_modules. 사용자 한 번만 `cd worker-runtimes/vite-react-ts && npm install` 필요. |
 | 2026-04-27 | Phase 8 신설 + §0 스코프 변경 | 사용자 의도 — 공고에 클라이언트 요구 스택 명시 시 그것 따르고, 자유면 Claude Code 친화 + 유지보수 최소 공수 스택으로 실제 동작하는 데모. 단일 HTML+CDN 강제 폐기, Vite+React+TS+Tailwind+shadcn/ui 자유 모드 기본. 빌드 SPA + 멀티파일 GitHub Pages 배포. 인프라는 레포 루트 `worker-runtimes/{stack}/` 공유 (Docker는 1인 로컬 워커 + 단순 SPA에 오버킬이라 기각). 데모 시간 5~10분 → 15~25분 허용. T7.3 BLOCKED — 새 빌드 시스템으로 generate 내부가 통째로 교체되므로 T8.8 (standard mode 1-click E2E) 가 사실상 T7.3 의 새 버전. 첫 cut 범위 T8.0~T8.8 (vite-react-ts + standard 만), 후속 T8.9~T8.11 (mobile-web/vue/next/admin-dashboard/workflow-diagram). |
