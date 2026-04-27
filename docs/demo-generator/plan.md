@@ -16,17 +16,32 @@
 
 ## 0. 스코프 확정사항 (변경 시 사용자 승인 필수)
 
+> **2026-04-27 § 0 스코프 변경**: Phase 8 신설로 "단일 HTML + CDN 전용" 정책 폐기. 공고에 명시된 클라이언트 요구 스택을 따르고, 자유면 Claude Code 친화 스택으로 빌드된 SPA를 생성. 데모 시간 5~10분 → 15~25분 허용. 변경 이력은 §10 참조.
+
 - **"실제 동작" 수준**: LocalStorage + 사전 시딩된 샘플 데이터 + 스크립트된 mock (0.8~1.5초 가짜 지연 + 미리 쓴 응답). Supabase 연결 데모 금지.
-- **포트폴리오와의 관계**: 기존 `portfolio-1/` 유지, 별도 `portfolio-demo/`로 분리 생성. portfolio-1은 소개용·portfolio-demo는 조작용.
+- **스택 결정 정책 (Phase 8)**:
+  - 공고에 클라이언트 요구 스택이 **명시(`strict`)** → 그대로 따름. Claude Code 친화도 매우 떨어지면 (Java/JSP 등) demo_mode='admin-dashboard' 폴백.
+  - **선호(`preferred`)** → 따르되 LLM이 chosen_runtime 판단.
+  - **자유(`free`)** → 기본 스택 = **Vite 5 + React 18 + TypeScript + Tailwind 3 + shadcn/ui + Pretendard**. Claude Code 친화도 최상, TS 자체 검증 가능, dist/는 정적 SPA → GitHub Pages 직배포.
+  - extract 단계가 spec_structured.stack_decision (`client_required` / `freedom_level` / `chosen_runtime` / `demo_mode` / `evidence` / `fallback_reason`) 산출.
+- **demo_mode 분기**:
+  - `standard` — 일반 web SPA
+  - `mobile-web` — 모바일 앱 공고 폴백 (375px frame 안에 React)
+  - `admin-dashboard` — 백엔드 only 공고 폴백 (입력 → 결과 시각화)
+  - `workflow-diagram` — 노코드/SaaS 연동 공고 폴백 (시각 step + mock 데이터 흐름)
+- **빌드 + 배포 인프라**:
+  - 레포 루트 `worker-runtimes/{stack}/`에 스택별 runtime (node_modules 포함, .gitignore)을 한 번 install 해 두고, 데모 빌드 시 임시 디렉토리에 cp -r → src/ + tailwind.config + vite.config base 채움 → `npm run build` → dist/ 추출 → GitHub Tree API multi-file push.
+  - Docker 검토 후 기각 (1인 로컬 워커 + 단순 SPA 빌드에 오버킬 + 디버그 부담).
+- **포트폴리오와의 관계**: 기존 `portfolio-1/` 유지, 별도 `portfolio-demo/`로 분리 생성. portfolio-1은 소개용·portfolio-demo는 조작용. 빌드 결과는 `{slug}/portfolio-demo/` 디렉토리에 multi-file로 배포.
 - **구현 스코프**: 공고 내 **모든 업무요소**를 데모에 포함시키되 3티어로 분류.
   - **티어 1 (3~5개)**: 진짜 CRUD·상태 저장·시나리오 완주. 핵심 플로우.
   - **티어 2 (나머지 대부분)**: 화면·컴포넌트·더미데이터까지 구현, 인터랙션은 제한적 (저장 → 성공 토스트만).
   - **티어 3 (구현 보류)**: 데모 홈 체크리스트에 "본 계약 시 구현" 표기만.
 - **타협 트리거**: 공고당 사람 보정 공수가 4시간 초과 예상 시 티어 1 플로우를 3개로 강제 축소.
-- **UI/UX 기반**: 생성하는 데모는 해당 프로젝트의 `portfolio-1/index.html`에서 추출한 디자인 토큰(컬러·폰트·스페이싱·컴포넌트 스타일)을 승계.
-- **실행 환경**: LLM 호출은 **사용자 PC의 로컬 Node 워커**에서 수행. `@anthropic-ai/claude-agent-sdk` + Claude Code Max 구독 OAuth 인증 사용 (`claude login` 필수). Supabase Edge Function은 기존 `delete-portfolios`만 유지; 신규 기능(extract/generate/deploy)은 모두 워커 모듈로 구현.
+- **UI/UX 기반**: 생성하는 데모는 해당 프로젝트의 `portfolio-1/index.html`에서 추출한 디자인 토큰(컬러·폰트·스페이싱·컴포넌트 스타일)을 Tailwind config의 `theme.extend`로 주입해 승계.
+- **실행 환경**: LLM 호출은 **사용자 PC의 로컬 Node 워커**에서 수행. `@anthropic-ai/claude-agent-sdk` + Claude Code Max 구독 OAuth 인증 사용 (`claude login` 필수). Supabase Edge Function은 기존 `delete-portfolios`만 유지; 신규 기능(extract/generate/deploy/build)은 모두 워커 모듈로 구현.
 - **비용 모델**: Claude API per-token 과금 **금지**. Max 구독 정액제로 커버. 사용량 리밋(5시간 롤링) 초과 시 자연 대기 후 재시도.
-- **운영 제약**: 데모 생성은 워커 실행 중일 때만 가능. 대시보드는 워커 오프라인 상태를 노출해야 하고, `demo_status`는 큐 상태(`queued`)와 처리 상태(`generating`)를 구분해 표시.
+- **운영 제약**: 데모 생성은 워커 실행 중일 때만 가능. 대시보드는 워커 오프라인 상태를 노출해야 하고, `demo_status`는 큐 상태(`queued`)와 처리 상태(`generating`)를 구분해 표시. 빌드 시간이 길어진 만큼(15~25분) 진행 라벨에 단계 세분화 필요(빌드 중 등).
 
 ---
 
@@ -701,16 +716,188 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 - **last_failure**: 1차 구현 — confirm 단계 없이 1-click 즉시 큐 진입 → 사용자 지적으로 setConfirmState 래퍼 추가. fintech-mvp 행이 실수로 autorun_queued 됐으나 워커 미실행 상태였고 spec_raw/artifacts 비어있어 demo_status='none' 단순 복귀로 무손실.
 
 #### T7.3 1-click E2E 검증 (실프로젝트)
-- **상태**: `TODO`
-- **depends_on**: T7.2
+- **상태**: `BLOCKED` (Phase 8 완료 후 재개 — generate 내부 파이프라인이 통째로 새 빌드 시스템으로 교체되므로 React 고정 데모로 검증해도 곧 폐기)
+- **depends_on**: T7.2, T8.8
 - **requires_test**: manual-review
-- **해야 할 일**: 기존 프로젝트 1건(wishket_url 보유, spec_raw 비어있음 또는 기존 값 무시) 대상으로 dashboard에서 "🎬 데모 생성" 1회 클릭 → 사용자 추가 액션 0회 → 데모 ready 도달까지 검증.
+- **해야 할 일**: 기존 프로젝트 1건(wishket_url 보유, spec_raw 비어있음 또는 기존 값 무시) 대상으로 dashboard에서 "🎬 데모 생성" 1회 클릭 → 사용자 추가 액션 0회 → 데모 ready 도달까지 검증. **Phase 8 적용 후엔 빌드된 SPA dist/ 가 정상 서빙되는지 + base path 정상 + console error 0 도 함께 확인.**
 - **review_checklist**:
   - [ ] 새 프로젝트(wishket_url만 있음, spec_raw 없음)에 "🎬 데모 생성" 1회 클릭 → 5~10분 이내 ready 도달
   - [ ] 진행 중 라벨이 단계별로 자연스럽게 변화 (가져오기 → 분석 → 생성)
   - [ ] ready 후 portfolio_links에 데모 추가됨 + 클릭 시 정상 페이지
   - [ ] 사용자가 중간에 다른 프로젝트 행 클릭해도 진행 영향 없음 (워커가 atomic 처리)
   - [ ] 실패 시(login 깨짐 시뮬 등) 라벨 "❌ 실패 — 다시 시도"로 전환, 클릭 시 재진입
+
+---
+
+### Phase 8 — 공고 스택 반영 + 빌드 SPA 파이프라인 (스코프 재설계)
+
+> **배경 (2026-04-27)**: §0 단일 HTML/CDN 강제 정책 폐기. 사용자 의도 — 공고에 클라이언트 요구 스택 명시 시 그것 따르고, 자유면 Claude Code 친화 + 유지보수 최소 공수 스택으로 실제 동작하는 데모 생성. 데모 시간 5~10분 → 15~25분 허용.
+>
+> **핵심 변경**: ① extract 가 stack_decision 산출 ② generate 가 Pass A/B/C 단일 HTML 폐기, runtime 복사 + LLM이 src/ 트리 생성 + vite build + dist 추출 ③ deploy 가 단일 파일 push → multi-file Tree API push.
+>
+> **첫 cut 범위**: vite-react-ts runtime 1개 + standard demo_mode 만 구현해 1-click E2E 통과 (T8.0~T8.8). 이후 단계적 추가 (T8.9~T8.11).
+
+#### T8.0 인프라 셋업 — worker-runtimes/vite-react-ts/
+- **상태**: `TODO`
+- **depends_on**: 없음
+- **requires_test**: yes
+- **파일**: `worker-runtimes/vite-react-ts/` 신규 디렉토리 (package.json, vite.config.ts, tailwind.config.js, postcss.config.js, tsconfig.json, src/main.tsx skeleton, src/index.css with Pretendard import + Tailwind directives, .gitignore), `worker-runtimes/.gitignore` (node_modules, dist 제외), 루트 `.gitignore` 업데이트, `worker/package.json`에 `setup-runtimes` 스크립트 추가
+- **해야 할 일**:
+  - Vite 5 + React 18 + TypeScript + Tailwind 3 + shadcn/ui 기본 deps + radix primitives 자주 쓰는 것 (button/dialog/dropdown/input/select/tabs) + lucide-react + react-router-dom + Pretendard CDN import 셋업
+  - vite.config.ts: base path `/portfolio-showcase/{slug}/portfolio-demo/` 동적 주입 가능하도록 env 기반
+  - tailwind.config.js: theme.extend.colors에 primary/secondary/surface/text 토큰 placeholder + radius/fontFamily
+  - npm install 1회 + git에는 node_modules 안 올림
+  - 워커 README에 "최초 1회 `cd worker-runtimes/vite-react-ts && npm install` 필요" 명시
+- **test_spec**:
+  - [ ] `cd worker-runtimes/vite-react-ts && npm install` 후 `npm run build` 정상 (dist/index.html + dist/assets/*.js/*.css 생성)
+  - [ ] dist/index.html에서 base path가 env로 주입된 값으로 치환됨
+  - [ ] node_modules가 git status에 안 보임
+  - [ ] 셋업 직후 dist/index.html을 `python3 -m http.server`로 서빙 시 빈 React 앱이 콘솔 에러 없이 마운트
+- **last_failure**: —
+
+#### T8.1 spec_structured stack_decision 추출
+- **상태**: `TODO`
+- **depends_on**: T8.0
+- **requires_test**: yes
+- **파일**: `worker/prompts/extract-spec.md`, `worker/shared/validate-spec.ts`, `worker/test-extract-stack.ts` (신규), `supabase/migrations/{ts}_demo_status_building.sql` (demo_status에 'building' 추가)
+- **해야 할 일**:
+  - extract-spec.md에 "스택 결정" 섹션 추가 — 공고에서 stack/freedom 신호 추출 규칙, evidence 인용 규칙, chosen_runtime 매핑표(react→vite-react-ts, vue→vite-vue, next→next-static, vanilla→vite-react-ts free, free→vite-react-ts), demo_mode 결정 규칙 (모바일 키워드/백엔드 only/노코드 키워드)
+  - validate-spec.ts에 stack_decision 스키마 검증 추가
+  - 회귀 테스트: 발달센터(free/standard) + 합성 케이스 4건 (react strict / vue preferred / 모바일 앱 / 백엔드 only)
+  - demo_status에 'building' 단계 추가 (생성 단계가 길어진 만큼 분리)
+- **test_spec**:
+  - [ ] 발달센터 spec_raw → stack_decision.freedom_level='free', chosen_runtime='vite-react-ts', demo_mode='standard'
+  - [ ] "React 필수" 공고 → freedom_level='strict', client_required.frontend='react', evidence에 인용
+  - [ ] 모바일 앱 공고 → demo_mode='mobile-web'
+  - [ ] 백엔드 only 공고 → demo_mode='admin-dashboard'
+  - [ ] 노코드 공고 → demo_mode='workflow-diagram'
+  - [ ] 마이그레이션 적용 후 'building' INSERT/UPDATE 가능
+- **last_failure**: —
+
+#### T8.2 build-runtime 모듈 — runtime 복사 + 임시 디렉토리 관리
+- **상태**: `TODO`
+- **depends_on**: T8.0
+- **requires_test**: yes
+- **파일**: `worker/generate-demo/build-runtime.ts` (신규), `worker/test-build-runtime.ts` (신규)
+- **해야 할 일**:
+  - `prepareWorkspace(stack, slug)` — `/tmp/demo-build-{slug}-{ts}/`에 `worker-runtimes/{stack}/` cp -r (node_modules 포함, --reflink 가능 시 사용)
+  - `runBuild(workspace, basePath)` — env로 BASE 주입 + `npm run build` execFile + stdout/stderr 캡처 + 타임아웃 5분
+  - `collectDist(workspace)` — dist/ 하위 모든 파일을 `{path: string, content: Buffer|string}[]`로 수집
+  - `cleanup(workspace)` — rm -rf 안전하게
+  - 모든 헬퍼는 순수, DB 의존 없음
+- **test_spec**:
+  - [ ] prepareWorkspace 후 임시 dir에 vite.config.ts + node_modules 존재
+  - [ ] runBuild 정상 종료 + dist/ 생성
+  - [ ] collectDist 결과에 index.html 포함 + assets/*.js, assets/*.css 포함
+  - [ ] cleanup 후 임시 dir 사라짐
+  - [ ] runBuild 실패(잘못된 src/) 시 stderr를 throw payload에 포함
+- **last_failure**: —
+
+#### T8.3 신규 generate 프롬프트 — Vite 프로젝트 src/ 트리 생성
+- **상태**: `TODO`
+- **depends_on**: T8.1, T8.2
+- **requires_test**: yes
+- **파일**: `worker/prompts/generate-app.md` (신규, Pass A/B/C 폐기 후 단일 매뉴얼), `worker/generate-demo/generate-app.ts` (신규), 기존 `worker/prompts/pass-a-skeleton.md`/`pass-b-section.md`/`worker/generate-demo/skeleton.ts`/`sections.ts`/`assemble.ts` → `worker/generate-demo/_legacy/` 이동(삭제 안 함, 참고용)
+- **해야 할 일**:
+  - 새 프롬프트: Vite+React+TS+Tailwind 가이드 + spec.core_flows → src/pages/{flowId}.tsx + src/App.tsx 라우팅 + tailwind.config 토큰 주입 + LocalStorage store(useStore hook) + shadcn 컴포넌트 사용법 + tier 1/2/3 동작 규칙 (티어 1=실제 CRUD, 티어 2=토스트만, 티어 3=placeholder card)
+  - Claude Agent SDK file-write tool 활용 → LLM이 직접 src/ 트리 작성 (단일 메가 응답 회피)
+  - 출력 검증: 모든 flow가 라우트로 연결됐는지, tailwind config의 토큰이 spec design_brief에서 옴, types 컴파일 OK
+- **test_spec**:
+  - [ ] 발달센터 spec → src/ 트리 생성 후 `tsc --noEmit` 통과
+  - [ ] 모든 core_flows id가 src/pages/에 파일로 존재
+  - [ ] App.tsx에 모든 라우트 등록
+  - [ ] tailwind.config의 primary 색이 design_brief 토큰과 매치
+  - [ ] LocalStorage store 사용 코드(useStore) 존재
+- **last_failure**: —
+
+#### T8.4 디자인 토큰 → tailwind config 매핑
+- **상태**: `TODO`
+- **depends_on**: T8.3
+- **requires_test**: yes
+- **파일**: `worker/generate-demo/tokens-to-tailwind.ts` (신규), `worker/test-tokens-to-tailwind.ts` (신규)
+- **해야 할 일**:
+  - 기존 portfolio-1 토큰 추출(T0.3) 결과 → tailwind.config.js의 theme.extend.colors / borderRadius / fontFamily / spacing 으로 변환
+  - generate-app 단계에서 호출되어 src/와 함께 tailwind.config.js 작성
+- **test_spec**:
+  - [ ] 토큰 6개 → tailwind config 6개 필드 모두 매핑
+  - [ ] 생성된 tailwind.config.js가 vite build 통과
+- **last_failure**: —
+
+#### T8.5 vite build 실행 + dist 검증
+- **상태**: `TODO`
+- **depends_on**: T8.2, T8.3, T8.4
+- **requires_test**: yes
+- **파일**: `worker/generate-demo/validate-dist.ts` (신규)
+- **해야 할 일**:
+  - dist/index.html에 expected base path 들어있는지
+  - dist/assets/ JS/CSS 번들 크기 < 2MB (영업 데모 한도)
+  - dist 안에 외부 절대 URL 0건 (CDN 외)
+  - Playwright headless로 dist/index.html 로드 후 콘솔 에러 0건 검증
+- **test_spec**:
+  - [ ] 발달센터 1건 빌드 → 검증 통과
+  - [ ] 의도적으로 src/main.tsx 깨뜨리고 빌드 실패 시 명확한 에러 메시지
+- **last_failure**: —
+
+#### T8.6 deploy-demo multi-file Tree API push
+- **상태**: `TODO`
+- **depends_on**: T8.5
+- **requires_test**: yes
+- **파일**: `worker/deploy-demo.ts` 확장, `worker/shared/github.ts` writeFiles multi-file 지원 확인, `worker/test-deploy-multifile.ts` (신규)
+- **해야 할 일**:
+  - dist/ 트리 통째로 GitHub Tree API base_tree + multi-file blob push (기존 writeFiles 가 이미 다중 지원하면 wrapper만 작성)
+  - 기존 portfolio-demo/ 디렉토리 안의 파일 모두 idempotent 교체 (없는 파일은 자동 미포함 → tree 재구성으로 처리)
+  - portfolio_links 자동 갱신 (T5.2 upsertDemoLink 재사용)
+- **test_spec**:
+  - [ ] 5개 파일짜리 dist/ push 후 GitHub raw URL 5개 모두 200
+  - [ ] 재배포 시 변하지 않은 파일은 SHA byte-identical (T5.1 패턴)
+  - [ ] portfolio_links 에 Demo 항목 1개만 (중복 없음)
+- **last_failure**: —
+
+#### T8.7 orchestrator 통합 — handleGenQueued 신규 파이프라인
+- **상태**: `TODO`
+- **depends_on**: T8.5, T8.6
+- **requires_test**: yes
+- **파일**: `worker/generate-demo/orchestrator.ts` 수정, `worker/test-orchestrator-v2.ts` (신규)
+- **해야 할 일**:
+  - 기존 step 1~7 (skeleton/sections/assemble/seed) → 신규 step (prepareWorkspace → generate-app → tokens-to-tailwind → runBuild → validate-dist → collectDist → deploy multi-file → upsertDemoLink) 로 교체
+  - demo_status 'generating' → 'building' 단계 분리 (라벨로 사용자에게 빌드 중 표시)
+  - regenerate_scope='all' 동작 유지, 'flow:{id}' 부분 재생성은 일단 'all' 로 강제 (Vite 빌드는 부분 재생성 어려움 — 후속 task로 분리 가능)
+  - tempfile + atomic 교체 패턴 유지 (실패 시 기존 dist 보존)
+- **test_spec**:
+  - [ ] 발달센터 재생성 → 새 dist 배포 + portfolio_links 갱신 + demo_artifacts JSONB에 build 메타 (스택, runtime, build duration, dist file count) 기록
+  - [ ] preflight 실패 시 기존 portfolio-demo/ 보존 + demo_status='gen_failed' (또는 build_failed)
+  - [ ] 'flow:{id}' regenerate_scope 가 'all' 로 처리되는지 (그리고 demo_generation_log 에 명시)
+- **last_failure**: —
+
+#### T8.8 standard mode 1-click E2E 검증
+- **상태**: `TODO`
+- **depends_on**: T8.7
+- **requires_test**: manual-review
+- **해야 할 일**: 신규 후보 1건 (wishket_url 보유, spec_raw 비어있음, free 모드 기대) → dashboard "🎬 데모 생성" 1클릭 → 15~25분 이내 ready + Vite SPA 정상 서빙. 추가로 React strict 공고 1건 (예: "React 필수" 명시 공고)도 같은 방식으로 검증.
+- **review_checklist**:
+  - [ ] free 후보 ready 도달 — 실제 소요시간(분), build 단계 라벨 표시 자연스러움?
+  - [ ] strict 후보 — chosen_runtime이 spec에 기록된 값과 일치
+  - [ ] 배포된 데모 SPA 정상 동작 (라우팅, LocalStorage, 토큰 색상 반영)
+  - [ ] dist/ 번들 크기, 콘솔 에러 0
+  - [ ] portfolio_links 갱신 + 클릭 시 정상 페이지
+
+#### T8.9 후속 — demo_mode='mobile-web' 폴백
+- **상태**: `TODO`
+- **depends_on**: T8.8
+- **requires_test**: yes
+- **해야 할 일**: 모바일 앱 공고 처리 — 375px frame 안에 SPA를 시뮬레이션하는 wrapper layout. generate-app 프롬프트에 mobile-web 모드 분기 추가.
+
+#### T8.10 후속 — vue/next runtime 추가
+- **상태**: `TODO`
+- **depends_on**: T8.8
+- **requires_test**: yes
+- **해야 할 일**: `worker-runtimes/vite-vue/`, `worker-runtimes/next-static/` 추가 + 각 스택용 generate 프롬프트 분기. preferred / strict 케이스에서 chosen_runtime 매핑 활용.
+
+#### T8.11 후속 — admin-dashboard / workflow-diagram 폴백
+- **상태**: `TODO`
+- **depends_on**: T8.8
+- **requires_test**: yes
+- **해야 할 일**: 백엔드 only / 노코드 공고 폴백 템플릿 (공고 입력 → 결과 시각화 / 워크플로우 시각 step). generate-app 프롬프트에 demo_mode 분기 추가.
 
 ---
 
@@ -725,10 +912,12 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (T7.2 DONE — SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + "🎬 데모 생성" 단일 버튼 + confirm 래퍼, 사용자 시각 승인)
+- **마지막 업데이트**: 2026-04-27 (Phase 8 신설 — §0 단일 HTML/CDN 정책 폐기 + 공고 스택 반영 + 빌드 SPA 파이프라인. T7.3 BLOCKED. T8.0~T8.11 등록)
 - **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2
 - **진행 중 task**: 없음
-- **다음에 착수 가능**: T7.3 (1-click E2E 검증, manual-review) — depends_on T7.2 충족
+- **다음에 착수 가능**: T8.0 (인프라 셋업 — worker-runtimes/vite-react-ts/) — depends_on 없음
+- **블로킹 중**: T7.3 (Phase 8 완료 후 재개)
+- **Phase 8 첫 cut 범위**: T8.0~T8.8 (vite-react-ts runtime 1개 + standard demo_mode + 1-click E2E). 후속 T8.9~T8.11은 polish.
 - **Phase 7 배경**: T1.1/T2.3/T2.4의 다단계 UX(paste → 추출 → 편집 → 승인 → 생성)가 사용자 인지 부담 큼. T6.2/T6.3로 extract 정확도 강화 + T4.2 재생성 패널로 사후 교정 가능 → SpecModal/StructuredSpecEditor/ApprovalPanel 폐기, 트리거 1회로 단순화. 위시켓 URL 자동 fetch 통합으로 paste 자체 제거
 - **별도 follow-up (commit 단위)**: dashboard `DEMO_GEN_ENABLED` flag 제거 — 데모 생성기 핵심 파이프라인이 T5.2 + T6.1 로 검증됐으므로 prod 노출 안전
 - **블로커**: 없음
@@ -778,6 +967,7 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 | 2026-04-27 | T6.2 완료 | extract 프롬프트 N:M 자동 분해. `worker/prompts/extract-spec.md` 에 "N:M 관계 분해 규칙" 섹션 (감지 신호·금지 패턴·올바른 분해+예시) + 품질체크 항목 2개 추가. `worker/shared/validate-spec.ts` 에 `detectPluralRef` 헬퍼 — `_ids` 접미사 또는 's' 끝 ref 거부 (allowlist: address·status·process·class·series). `worker/test-extract-nm.ts` 신규 — 발달센터 회귀(spec_raw 복제) + 합성 3건(clinic_review_tag, study_member_group, ecom_product_category). 자동 검증 4/4 통과: (1) 발달센터 → review_tag {review_id, tag_id} 자동 등장, 보너스 center_therapy_type 분해 (T6.1 수동 패치 불필요화) (2) clinic → review_tag 분해 (3) study → group_member 분해 (study_group 도메인 prefix → group_id 참조) (4) ecom → product_category 분해. 복수형 ref 위반 0건, Sonnet 4회 호출 (cache_read 21K 재사용) |
 | 2026-04-27 | T6.3 완료 | extract 프롬프트 read-only flow tier 분류 개선. `worker/prompts/extract-spec.md` tier 1 정의에 "steps 안에 write step 적어도 하나 필수" 규칙 + read+persist 예외 단락(찜·북마크·별점·알림 등록은 read 처럼 보여도 tier 1 자격) + 절대 금지 패턴(steps 가 전부 검색·둘러보기·필터·조회 같은 읽기 동사로만 구성된 경우 tier 2 강제) + 4단계 결정 절차 + 품질 체크 2항목 추가. `worker/extract-spec.ts` `stripJsonFence` 를 outer-slice(첫 `{`~마지막 `}`) 무조건 적용으로 보강 — 종료 펜스 + trailing 텍스트 케이스 안전망. `worker/test-extract-tier.ts` 신규 — 발달센터 회귀 + 합성 3건(realestate_browse/event_calendar/recipe_browse). 각 케이스 (1) handleExtractQueued ok (2) tier_1 모든 flow write 동사 step ≥1 (3) read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개. 자동 검증 4/4 통과: T6.1 시점 발달센터 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결. 1회차 실패 — Sonnet 이 ```json 펜스 + trailing 텍스트로 응답해 종료 펜스 정규식 미매칭 (realestate) → stripJsonFence outer-slice 무조건 적용, 그리고 분류기 false positive (recipe 의 "재료 다중 입력" 의 `입력`, "작성자 프로필" 의 `작성`) → 단독 `입력` 제거 + `작성(?!자)` 부정선후행. 사용자 위임 승인 |
 | 2026-04-27 | T0.3 완료 | 디자인 토큰 추출 유틸 manual-review 통과 (사용자 승인). `worker/test-extract-tokens.ts` 로 5개 도메인 portfolio-1 (발달센터/핀테크/병원/임원 대시보드/커뮤니티) 검증. NO_LLM=1: 4/5 케이스 100% 일치 + 5번(하드코딩 케이스)은 휴리스틱 실패 → graceful fallback 안착 (throw 0). LLM ON: Sonnet 1회 호출(10s, 37 output 토큰)로 5번 케이스도 100% 매칭 → 전체 5/5 = 100%. 빈 HTML 입력에서도 `_source='fallback'` 으로 안전하게 떨어짐 확인. 데모 생성기 모든 task (T0.1~T6.3) 완료 |
+| 2026-04-27 | Phase 8 신설 + §0 스코프 변경 | 사용자 의도 — 공고에 클라이언트 요구 스택 명시 시 그것 따르고, 자유면 Claude Code 친화 + 유지보수 최소 공수 스택으로 실제 동작하는 데모. 단일 HTML+CDN 강제 폐기, Vite+React+TS+Tailwind+shadcn/ui 자유 모드 기본. 빌드 SPA + 멀티파일 GitHub Pages 배포. 인프라는 레포 루트 `worker-runtimes/{stack}/` 공유 (Docker는 1인 로컬 워커 + 단순 SPA에 오버킬이라 기각). 데모 시간 5~10분 → 15~25분 허용. T7.3 BLOCKED — 새 빌드 시스템으로 generate 내부가 통째로 교체되므로 T8.8 (standard mode 1-click E2E) 가 사실상 T7.3 의 새 버전. 첫 cut 범위 T8.0~T8.8 (vite-react-ts + standard 만), 후속 T8.9~T8.11 (mobile-web/vue/next/admin-dashboard/workflow-diagram). |
 | 2026-04-27 | Phase 7 신설 | 사용자 피드백 반영해 데모 생성기 UX 재설계. (a) wishket_projects.wishket_url + wishket-portfolio-system/scripts/fetch-wishket-project.js 인프라가 이미 있는데 dashboard는 수동 paste UI(T1.1)로 구현됐음을 사용자가 지적. (b) 추가로 "구조화 편집기는 LLM이 알아서 하면 되는 거 아닌가"라는 질문 — T6.2/T6.3 프롬프트 강화 + T4.2 재생성 패널로 pre-edit 안전망 redundant. **T7.1** 워커 fetch + auto chain (autorun_queued → fetching → extract → auto-approve → gen → ready 전 단계 자동), **T7.2** dashboard SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + "🎬 데모 생성" 단일 버튼, **T7.3** 1-click E2E 검증. 기존 T1.1/T2.3/T2.4 결과물은 T7.2에서 명시 삭제 (백워드 호환 안 둠) |
 | 2026-04-27 | T7.1 완료 | 워커 자동 파이프라인. (1) `worker/shared/wishket-fetch.ts` — wishket-portfolio-system/scripts/fetch-wishket-project.js 를 child process 호출 (puppeteer 재구현 안 함, DRY). 90s 타임아웃, balanced-brace JSON 추출, `WishketFetchError` 6 코드. (2) `worker/fetch-spec.ts` — `handleAutorunQueued`: atomic claim autorun_queued→fetching → wishket-fetch → spec_raw 저장 + extract_queued chain. 실패는 모두 fetch_failed 전이. (3) `worker/extract-spec.ts` 수정 — extract 성공 시 extract_ready 단계 폐기, gen_queued auto-promote (spec_approved_at=now() + regenerate_scope=null 동시 세팅). (4) `worker/index.ts` 라우터에 autorun_queued 분기. (5) 마이그레이션 20260427072729 — demo_status CHECK 에 autorun_queued/fetching/fetch_failed 3 상태 추가. 5/5 통과 first try: 마이그레이션 OK + URL_INVALID/MISSING_SCRIPT 즉시 throw + 실제 wishket fetch 11.3s/936자 + Sonnet auto-promote 30s/2252 out tokens + spec_approved_at 시각 동기 |
 | 2026-04-27 | T7.2 완료 | dashboard SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + "🎬 데모 생성" 단일 버튼. SpecModal(162L)+StructuredSpecEditor(193L)+ApprovalPanel(82L)+helpers(17L) 합 ~454L 삭제 (sed 라인 범위 일괄 + Edit 잔존 정리). 새 컴포넌트 `DemoTriggerButton`(demo_status 매트릭스 13 분기) + `RegenerationModal`(RegenerationPanel wrapper). 핸들러 4개(handleOpenSpec/SaveSpec/ApproveSpec/StartDemoGen) 삭제, `handleStartAutorun` 신설 (initial: autorun_queued + regenerate_scope=null UPDATE). 정적 검증: JSX 컴파일 OK + 새 식별자 8개 + 삭제 식별자 코드 잔존 0건. **1차 구현 시 confirm 단계 누락** → 사용자 지적("물어보지도 않고 클릭 한 번에 바로 실행")으로 setConfirmState 래퍼 추가 (단계별 소요시간 + Max 사용량 + 워커 필요 명시). 🔁 재생성 버튼은 ↻ 단일 글리프에서 텍스트 라벨 추가 (가시성). 사용자 시각 승인 완료 |
