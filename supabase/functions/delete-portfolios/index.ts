@@ -84,15 +84,22 @@ async function deleteSlug(token: string, slug: string): Promise<{ ok: boolean; r
 
 // ─── DB 헬퍼 ─────────────────────────────────────────────────────────────
 
-const SB_URL = Deno.env.get("SUPABASE_URL") || "";
-const SB_SR  = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-const TABLE  = "wishket_projects";
+const SB_URL  = Deno.env.get("SUPABASE_URL") || "";
+const SB_SR   = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+const SB_ANON = Deno.env.get("SUPABASE_ANON_KEY") || "";
+const TABLE   = "wishket_projects";
 
-async function deleteRow(slug: string): Promise<{ ok: boolean; reason?: string }> {
-  if (!SB_URL || !SB_SR) return { ok: false, reason: "SUPABASE env 미설정" };
+// userJwt가 있으면 그것으로 호출 → audit 트리거가 auth.uid()로 actor 캡처.
+// 없으면 service_role로 fallback (audit는 actor=NULL로 적재됨).
+async function deleteRow(slug: string, userJwt?: string): Promise<{ ok: boolean; reason?: string }> {
+  if (!SB_URL) return { ok: false, reason: "SUPABASE_URL 미설정" };
+  const useUser = !!userJwt && !!SB_ANON;
+  const apikey  = useUser ? SB_ANON : SB_SR;
+  const auth    = useUser ? userJwt!  : SB_SR;
+  if (!apikey || !auth) return { ok: false, reason: "SUPABASE 인증 정보 미설정" };
   const res = await fetch(`${SB_URL}/rest/v1/${TABLE}?slug=eq.${encodeURIComponent(slug)}`, {
     method: "DELETE",
-    headers: { apikey: SB_SR, Authorization: `Bearer ${SB_SR}`, Prefer: "return=minimal" },
+    headers: { apikey, Authorization: `Bearer ${auth}`, Prefer: "return=minimal" },
   });
   if (!res.ok) return { ok: false, reason: `DELETE 실패 ${res.status}` };
   return { ok: true };
@@ -129,7 +136,10 @@ Deno.serve(async (req) => {
   }
 
   const { slug, skip_db } = body;
-  console.log(`[${reqId}] request`, { slug, skip_db });
+  // dashboard에서 supabase.functions.invoke()로 호출 시 자동 첨부되는 user JWT.
+  // audit 트리거가 auth.uid()로 actor를 캡처할 수 있도록 DB DELETE에 그대로 전달.
+  const userJwt = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
+  console.log(`[${reqId}] request`, { slug, skip_db, has_user_jwt: !!userJwt });
 
   if (!slug) {
     return new Response(JSON.stringify({ error: "slug is required", reqId }), { status: 400, headers });
@@ -141,7 +151,7 @@ Deno.serve(async (req) => {
       console.error(`[${reqId}] delete fail`, { slug, reason: fileResult.reason });
       return new Response(JSON.stringify({ slug, deleted: false, db_updated: false, reason: fileResult.reason, reqId }), { headers });
     }
-    const dbResult = skip_db ? { ok: true } : await deleteRow(slug);
+    const dbResult = skip_db ? { ok: true } : await deleteRow(slug, userJwt);
     console.log(`[${reqId}] delete ok`, { slug, db_updated: dbResult.ok });
     return new Response(JSON.stringify({ slug, deleted: true, db_updated: dbResult.ok, reason: dbResult.reason, reqId }), { headers });
   } catch (err) {
