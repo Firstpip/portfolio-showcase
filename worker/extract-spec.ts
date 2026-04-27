@@ -219,23 +219,19 @@ async function appendLog(
 
 /**
  * 모델이 ```json ... ``` 펜스로 감싸 응답하는 경우 대비.
- * 양쪽을 독립적으로 벗긴다 — 한쪽만 있는 불완전한 경우도 복구.
- * 그래도 실패하면 첫 `{`부터 마지막 `}`까지 slice해 최후 구제.
+ * 양쪽을 독립적으로 벗기고, 그 후 첫 `{` ~ 마지막 `}` outer slice 를 항상 적용한다.
+ * Outer slice 는 펜스 잔존(끝부분에 ``` + trailing 텍스트가 붙어 정규식이 못 매칭하는 케이스)
+ * 또는 JSON 뒤에 모델이 덧붙인 잡설을 안전하게 제거한다.
  */
 function stripJsonFence(text: string): string {
   let t = text.trim();
-  // 시작 펜스 제거 (언어 태그 선택적).
   t = t.replace(/^```(?:json|JSON)?\s*\n?/, "");
-  // 끝 펜스 제거.
   t = t.replace(/\n?\s*```\s*$/, "");
   t = t.trim();
-  // `{`로 시작하지 않으면 "JSON 객체 구간"만 잘라낸다.
-  if (!t.startsWith("{")) {
-    const first = t.indexOf("{");
-    const last = t.lastIndexOf("}");
-    if (first !== -1 && last > first) {
-      t = t.slice(first, last + 1);
-    }
+  const first = t.indexOf("{");
+  const last = t.lastIndexOf("}");
+  if (first !== -1 && last > first) {
+    t = t.slice(first, last + 1);
   }
   return t;
 }

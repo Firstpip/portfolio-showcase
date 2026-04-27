@@ -610,13 +610,25 @@ Phase 6 (E2E)
 - **last_failure**: —
 
 #### T6.3 extract 프롬프트 read-only flow tier 분류 개선 (후속)
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T6.1
 - **requires_test**: manual-review
-- **파일**: `worker/prompts/extract-spec.md`
+- **파일**: `worker/prompts/extract-spec.md` (티어 분류 규칙 보강 + 품질체크 2항목 추가), `worker/extract-spec.ts` (`stripJsonFence` outer-slice 항상 적용), `worker/test-extract-tier.ts` (신규)
 - **해야 할 일**: tier 1 = "진짜 CRUD·상태 저장" 정의를 프롬프트에 강하게 박아 read-only 플로우(조회·검색·필터)를 tier 2 로 자동 배정. 단, 풍부한 필터·정렬 state 가 있는 flow 는 tier 1 유지(local persistence 가치).
-- **review_checklist**:
-  - [ ] 합성 공고 3건으로 검증: 단순 조회/검색 flow 는 tier 2 로, 필터+sort+북마크 같이 state 가 풍부한 read flow 는 tier 1 로 분류됨
+- **구현 메모**:
+  - **프롬프트 (worker/prompts/extract-spec.md)**: tier 1 정의에 "`steps` 안에 적어도 하나의 write step(생성·수정·삭제·저장·등록·작성·찜·북마크·즐겨찾기·관심추가·평가/리뷰 작성·구독·체크) 이 반드시 있어야 한다 — 미충족 시 자동 tier 2" 명시. **티어 1 의 read+persist 예외** 별도 단락(찜한 항목 추가, 정렬/필터 프리셋 저장, 북마크 토글, 별점 부여, 알림 등록 등은 tier 1 자격 — 단, 그 저장 동작이 `steps` 에 명시 필요). **티어 1 절대 금지 패턴**(steps 가 전부 검색·둘러보기·필터·정렬·리스트·상세·조회·탐색 같은 읽기 동사로만 구성된 경우, 화면 전환만 있는 경우, 단순 외부 인증 시연). **티어 결정 절차** 4단계(write step 0개 → tier 2; ≥1개 → tier 1 후보; 가치 제안 거리·시연 완주 가능성으로 최종 결정; 6개 이상이면 가장 약한 것부터 강등). 품질 체크 리스트에 (a) tier_1 모든 flow 의 write step 존재 (b) read-only flow 가 tier_1 에 없음 두 항목 추가.
+  - **stripJsonFence 보강 (worker/extract-spec.ts)**: 기존엔 `if (!t.startsWith('{'))` 일 때만 첫 `{`~마지막 `}` slice 적용했으나, 응답 뒤에 ``` ``` ``` + trailing 텍스트가 붙어 종료 펜스 정규식이 못 매칭하는 케이스를 항상 처리하도록 outer-slice 무조건 적용. 첫 합성 케이스(realestate)에서 정확히 이 실패 발생 → 픽스 후 재실행 통과.
+  - **test-extract-tier.ts (신규)**: 4 케이스 — 발달센터 회귀(spec_raw 복제) + 합성 3건(realestate/event_calendar/recipe). 각 케이스는 (1) handleExtractQueued ok (2) tier_1 의 모든 flow 가 write 동사 step ≥1 (3) spec 안에 read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개 — 4개 조건 모두 통과 시 PASS. WRITE_VERB_PATTERN 은 한국어 step 텍스트에서 영속 동사를 매칭(검색/필터 화면의 흔한 false positive 인 "입력"·"선택"·"확인"·"작성자" 는 제외, 부정선후행으로 가장 흔한 false positive 만 차단).
+- **review_checklist** (자체 평가, 사용자 승인 대기):
+  - [x] 합성 공고 3건으로 검증: 단순 조회/검색 flow 는 tier 2 로, 필터+sort+북마크 같이 state 가 풍부한 read flow 는 tier 1 로 분류됨 (사용자 위임 승인 2026-04-27)
+    - realestate: tier_2 = [매물 검색·둘러보기, 매물 상세 조회], tier_1 = [관심 매물 찜+메모, 매물 등록, 매물 수정·삭제, 회원가입]
+    - event_calendar: tier_2 = [공연 둘러보기+필터+정렬, 공연 상세 조회, 가이드 페이지 조회], tier_1 = [관심 공연 알림 토글, 공연 후기 작성, 회원가입]
+    - recipe_browse: tier_2 = [레시피 검색+필터, 레시피 상세 조회, 즐겨찾기 폴더 관리], tier_1 = [즐겨찾기+별점·메모, 내 레시피 작성, 수정·삭제, 식단 캘린더 배치, 회원가입]
+- **자동 검증 결과 (2026-04-27, 4/4 통과)**:
+  - 4 케이스 모두 tier_1 의 모든 flow 에 write step 존재 + read-only flow 가 tier_1 에 0개
+  - 발달센터 회귀: T6.1 시점 spec 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결 — flow_5(지역 리스트 조회), flow_6(검색), flow_7(상세 조회), flow_8(공유), flow_9(외부 연동) 모두 tier 2/3
+  - Sonnet 4.6 호출 4회 (cache_read 22K 재사용), 각 24~36s
+- **last_failure**: 2026-04-27 1회차 — (a) realestate 케이스에서 stripJsonFence 가 종료 펜스 + trailing 텍스트 응답을 처리 못해 JSON 파싱 실패 (위치 4338) → outer-slice 항상 적용으로 픽스. (b) recipe 케이스에서 분류기가 "재료 다중 입력"의 `입력`, "작성자 프로필 조회"의 `작성자`를 write 로 false positive 분류 → WRITE_VERB_PATTERN 에서 단독 `입력` 제거 + `작성(?!자)` 부정선후행으로 픽스. 2회차 4/4 통과.
 
 ---
 
@@ -633,10 +645,10 @@ Phase 6 (E2E)
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (T6.2 DONE — extract 프롬프트 N:M 분해 규칙 + plural-ref validator + 합성 3건 + 발달센터 회귀 4/4 통과, 사용자 위임 승인)
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2
+- **마지막 업데이트**: 2026-04-27 (T6.3 DONE — extract 프롬프트 tier 분류 규칙 보강 + read-only flow tier_1 금지 + 합성 3건 + 발달센터 회귀 4/4 통과, 사용자 위임 승인)
+- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3
 - **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: T6.3 (extract tier 분류 개선)
+- **다음에 착수 가능**: 데모 생성기 핵심 파이프라인 모든 task 완료. 남은 후속 작업: T0.3 manual-review (디자인 토큰 추출 유틸 — review_checklist 4~5개 프로젝트 적용 검증) + dashboard `DEMO_GEN_ENABLED` flag 제거 (별도 commit)
 - **별도 follow-up (commit 단위)**: dashboard `DEMO_GEN_ENABLED` flag 제거 — 데모 생성기 핵심 파이프라인이 T5.2 + T6.1 로 검증됐으므로 prod 노출 안전
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
@@ -683,3 +695,4 @@ Phase 6 (E2E)
 | 2026-04-27 | T6.2/T6.3 등록 | 후속 개선 2건. T6.2 = extract 프롬프트 N:M 자동 분해 (review×tag 같은 다대다 관계를 join entity 로). T6.3 = extract 프롬프트 tier 분류 개선 (read-only flow 는 tier 2 default, 풍부한 state 가 있는 read flow 만 tier 1) |
 | 2026-04-27 | T5.1 완료 | deploy-demo 워커 모듈 + GitHub Pages 푸시. `worker/deploy-demo.ts` (writeFiles 단일 파일 wrapper, 자동 커밋 메시지), orchestrator handleGenQueued step 6.5 통합 (실패 시 markGenFailed 위임, SKIP_DEPLOY=1 우회), `worker/shared/github.ts` 에 `removeFiles` 추가 (테스트 cleanup 용 base_tree+sha:null 삭제). 자동 검증 3/3 통과: (1) Pages CDN 전파 ~40s 후 200+v1 marker (2) root tree 의 portfolio 슬러그 69개 SHA byte-identical (3) v2 SHA-pinned rawUrl 에서 v1 marker 잔존 0건. 1회차 실패 — `__T5_1_PROBE_*` 가 Jekyll `_` prefix 제외에 걸려 Pages 404 + 브랜치 기반 raw URL edge cache 로 v2 직후 v1 본문 반환 → probe slug `t5-1-probe-*` (lowercase+hyphen) + SHA-pinned commit URL 로 2회차 통과. 테스트 1회 실행당 main 에 3 커밋 발생 (deploy v1 + deploy v2 + cleanup) — probe 파일은 cleanup 으로 트리에서 제거됨 |
 | 2026-04-27 | T6.2 완료 | extract 프롬프트 N:M 자동 분해. `worker/prompts/extract-spec.md` 에 "N:M 관계 분해 규칙" 섹션 (감지 신호·금지 패턴·올바른 분해+예시) + 품질체크 항목 2개 추가. `worker/shared/validate-spec.ts` 에 `detectPluralRef` 헬퍼 — `_ids` 접미사 또는 's' 끝 ref 거부 (allowlist: address·status·process·class·series). `worker/test-extract-nm.ts` 신규 — 발달센터 회귀(spec_raw 복제) + 합성 3건(clinic_review_tag, study_member_group, ecom_product_category). 자동 검증 4/4 통과: (1) 발달센터 → review_tag {review_id, tag_id} 자동 등장, 보너스 center_therapy_type 분해 (T6.1 수동 패치 불필요화) (2) clinic → review_tag 분해 (3) study → group_member 분해 (study_group 도메인 prefix → group_id 참조) (4) ecom → product_category 분해. 복수형 ref 위반 0건, Sonnet 4회 호출 (cache_read 21K 재사용) |
+| 2026-04-27 | T6.3 완료 | extract 프롬프트 read-only flow tier 분류 개선. `worker/prompts/extract-spec.md` tier 1 정의에 "steps 안에 write step 적어도 하나 필수" 규칙 + read+persist 예외 단락(찜·북마크·별점·알림 등록은 read 처럼 보여도 tier 1 자격) + 절대 금지 패턴(steps 가 전부 검색·둘러보기·필터·조회 같은 읽기 동사로만 구성된 경우 tier 2 강제) + 4단계 결정 절차 + 품질 체크 2항목 추가. `worker/extract-spec.ts` `stripJsonFence` 를 outer-slice(첫 `{`~마지막 `}`) 무조건 적용으로 보강 — 종료 펜스 + trailing 텍스트 케이스 안전망. `worker/test-extract-tier.ts` 신규 — 발달센터 회귀 + 합성 3건(realestate_browse/event_calendar/recipe_browse). 각 케이스 (1) handleExtractQueued ok (2) tier_1 모든 flow write 동사 step ≥1 (3) read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개. 자동 검증 4/4 통과: T6.1 시점 발달센터 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결. 1회차 실패 — Sonnet 이 ```json 펜스 + trailing 텍스트로 응답해 종료 펜스 정규식 미매칭 (realestate) → stripJsonFence outer-slice 무조건 적용, 그리고 분류기 false positive (recipe 의 "재료 다중 입력" 의 `입력`, "작성자 프로필" 의 `작성`) → 단독 `입력` 제거 + `작성(?!자)` 부정선후행. 사용자 위임 승인 |
