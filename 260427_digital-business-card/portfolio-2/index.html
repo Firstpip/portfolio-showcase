@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CardID 어드민 & NFC 통합 플랫폼 — 구현 데모</title>
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet" />
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; background: #FFF3F0; }
+    #root { display: flex; flex-direction: column; width: 100%; min-height: 100vh; }
+
+    @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes fadeInScale { from { opacity: 0; transform: scale(0.95) } to { opacity: 1; transform: scale(1) } }
+    @keyframes slideInRight { from { opacity: 0; transform: translateX(30px) } to { opacity: 1; transform: translateX(0) } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes ripple { 0% { transform: scale(0); opacity: 0.5 } 100% { transform: scale(4); opacity: 0 } }
+    @keyframes countUp { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+    @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+    @keyframes barGrow { from { width: 0% } to { width: var(--target-width) } }
+    @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); max-height: 0 } to { opacity: 1; transform: translateY(0); max-height: 500px } }
+    @keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
+    @keyframes heroFloat { 0%,100%{ transform:translateY(0) } 50%{ transform:translateY(-4px) } }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #FFF3F0; }
+    ::-webkit-scrollbar-thumb { background: #FFCCBC; border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } = Recharts;
+
+const C = {
+  bg: '#FFF3F0', surface: '#FFFFFF', card: '#FFFFFF',
+  primary: '#FF4B35', secondary: '#FF7043', accent: '#FFB300', accent2: '#FF8F00',
+  text: '#1A0A08', textMid: '#7D3C28', textLight: '#B07060',
+  border: '#FFD5C8', borderMid: '#FFCCB3', success: '#4CAF50', danger: '#E53935', warning: '#FB8C00',
+  gradHero: 'linear-gradient(135deg, #FF4B35 0%, #FF8C42 50%, #FFB300 100%)',
+  gradCard: 'linear-gradient(135deg, #FF4B35, #FF7043)',
+};
+
+const NAV = [
+  { id: 'dashboard', label: '대시보드' },
+  { id: 'nfc-mapping', label: 'NFC/QR 매핑' },
+  { id: 'analytics', label: '통계 분석' },
+  { id: 'user-management', label: '사용자 관리' },
+];
+
+/* ─── Utility ─── */
+function Toast({ msg, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  return <div style={{ position:'fixed', bottom:24, right:24, zIndex:9999, background:C.primary, color:'#fff', padding:'12px 24px', borderRadius:8, fontWeight:700, animation:'slideUp 300ms ease', boxShadow:'0 4px 20px rgba(255,75,53,0.4)', fontSize:13 }}>{msg}</div>;
+}
+
+function Modal({ title, onClose, children, width=520 }) {
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:500, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      <div onClick={onClose} style={{ position:'absolute', inset:0, background:'rgba(0,0,0,0.4)', animation:'fadeIn 200ms ease' }} />
+      <div style={{ position:'relative', width, maxHeight:'88vh', background:C.surface, borderRadius:18, zIndex:501, animation:'fadeInScale 200ms ease', display:'flex', flexDirection:'column', boxShadow:'0 24px 80px rgba(0,0,0,0.15)', border:`1px solid ${C.border}` }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'20px 24px', borderBottom:`1px solid ${C.border}` }}>
+          <h3 style={{ fontSize:18, fontWeight:700, color:C.text }}>{title}</h3>
+          <button onClick={onClose} style={{ background:'none', border:'none', color:C.textMid, fontSize:20, cursor:'pointer' }}>✕</button>
+        </div>
+        <div style={{ padding:24, overflowY:'auto', flex:1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function KpiCard({ title, value, sub, icon, idx, trend }) {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const num = parseInt(String(value).replace(/,/g,''));
+    if (isNaN(num)) { setN(value); return; }
+    let s=0, step=num/50;
+    const t=setInterval(()=>{ s+=step; if(s>=num){ setN(value); clearInterval(t); } else setN(Math.floor(s).toLocaleString()); },24);
+    return ()=>clearInterval(t);
+  }, []);
+  return (
+    <div style={{ background:C.card, borderRadius:16, padding:'20px 22px', boxShadow:'0 4px 20px rgba(255,75,53,0.08)', animation:`slideUp 400ms ease ${idx*80}ms both`, cursor:'pointer', transition:'all 200ms', border:`1px solid ${C.border}` }}
+      onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px) scale(1.02)';e.currentTarget.style.boxShadow='0 12px 32px rgba(255,75,53,0.15)'}}
+      onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 4px 20px rgba(255,75,53,0.08)'}}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+        <div>
+          <p style={{ color:C.textMid, fontSize:12, fontWeight:600, marginBottom:8 }}>{title}</p>
+          <p style={{ color:C.text, fontSize:26, fontWeight:800, letterSpacing:'-0.03em', animation:'countUp 500ms ease' }}>{n}</p>
+          {sub && <p style={{ color:C.textLight, fontSize:11, marginTop:4 }}>{sub}</p>}
+          {trend && <p style={{ color:C.success, fontSize:11, marginTop:4, fontWeight:600 }}>{trend}</p>}
+        </div>
+        <div style={{ width:44, height:44, borderRadius:12, background:`${C.primary}15`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:20 }}>{icon}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Dashboard Page ─── */
+const registrData = [
+  {d:'4/21',u:12},{d:'4/22',u:18},{d:'4/23',u:15},{d:'4/24',u:24},{d:'4/25',u:31},{d:'4/26',u:28},{d:'4/27',u:35}
+];
+const viewData = [
+  {d:'4/21',v:284},{d:'4/22',v:342},{d:'4/23',v:298},{d:'4/24',v:412},{d:'4/25',v:523},{d:'4/26',v:478},{d:'4/27',v:601}
+];
+
+function DashboardPage() {
+  const [toast, setToast] = useState('');
+  const [selectedAlert, setSelectedAlert] = useState(null);
+
+  const alerts = [
+    { id:1, type:'신고', user:'user_89ab', msg:'부적절한 프로필 콘텐츠 신고', time:'5분 전', sev:'high' },
+    { id:2, type:'오류', user:'user_23cd', msg:'NFC 태그 매핑 실패 (UID: A3F2)', time:'12분 전', sev:'medium' },
+    { id:3, type:'가입', user:'user_67ef', msg:'신규 회원 가입 완료', time:'18분 전', sev:'low' },
+    { id:4, type:'만료', user:'user_45gh', msg:'프리미엄 구독 만료 예정 (D-3)', time:'1시간 전', sev:'medium' },
+  ];
+
+  const sevColors = { high:'#E53935', medium:C.warning, low:C.success };
+
+  return (
+    <div style={{ padding:'32px', animation:'fadeIn 300ms ease' }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:16, marginBottom:28 }}>
+        <KpiCard title="전체 가입자" value="2,847" sub="이번 달 +183명" icon="👥" idx={0} trend="▲ 전주 대비 +12%" />
+        <KpiCard title="활성 프로필" value="2,391" sub="전체의 84%" icon="🪪" idx={1} trend="▲ +8 신규 활성" />
+        <KpiCard title="NFC 태그 연동" value="1,024" sub="태그 발급 완료" icon="📡" idx={2} trend="▲ +32 이번 주" />
+        <KpiCard title="오늘 조회수" value="6,184" sub="프로필 합산" icon="👁" idx={3} trend="▲ 어제 대비 +18%" />
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:24 }}>
+        <div style={{ background:C.card, borderRadius:16, padding:22, border:`1px solid ${C.border}`, boxShadow:'0 2px 12px rgba(0,0,0,0.04)' }}>
+          <h3 style={{ color:C.text, fontSize:15, fontWeight:700, marginBottom:18 }}>📈 신규 가입자 추이 (7일)</h3>
+          <div style={{ position:'relative', height:200 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={registrData} margin={{top:4,right:4,left:-24,bottom:4}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#FFD5C8" />
+                <XAxis dataKey="d" tick={{fontSize:11,fill:C.textMid}} />
+                <YAxis tick={{fontSize:11,fill:C.textMid}} />
+                <Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}} />
+                <Line type="monotone" dataKey="u" stroke={C.primary} strokeWidth={2.5} dot={{r:4,fill:C.primary}} name="신규 가입" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div style={{ background:C.card, borderRadius:16, padding:22, border:`1px solid ${C.border}`, boxShadow:'0 2px 12px rgba(0,0,0,0.04)' }}>
+          <h3 style={{ color:C.text, fontSize:15, fontWeight:700, marginBottom:18 }}>📊 프로필 일일 조회수 (7일)</h3>
+          <div style={{ position:'relative', height:200 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={viewData} margin={{top:4,right:4,left:-24,bottom:4}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#FFD5C8" />
+                <XAxis dataKey="d" tick={{fontSize:11,fill:C.textMid}} />
+                <YAxis tick={{fontSize:11,fill:C.textMid}} />
+                <Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}} />
+                <Bar dataKey="v" fill={C.accent} radius={[4,4,0,0]} name="조회수" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      {/* Alerts */}
+      <div style={{ background:C.card, borderRadius:16, padding:22, border:`1px solid ${C.border}`, boxShadow:'0 2px 12px rgba(0,0,0,0.04)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+          <h3 style={{ color:C.text, fontSize:15, fontWeight:700 }}>🔔 최근 알림 & 처리 대기</h3>
+          <span style={{ background:`${C.primary}15`, color:C.primary, padding:'4px 12px', borderRadius:20, fontSize:12, fontWeight:700 }}>{alerts.length}건</span>
+        </div>
+        {alerts.map((a,i)=>(
+          <div key={a.id} onClick={()=>setSelectedAlert(a)}
+            style={{ display:'flex', alignItems:'center', gap:14, padding:'12px 14px', background:C.bg, borderRadius:10, marginBottom:8, cursor:'pointer', border:`1px solid ${C.border}`, transition:'all 200ms', animation:`slideUp 300ms ease ${i*60}ms both` }}
+            onMouseEnter={e=>e.currentTarget.style.background='#FFE8E0'}
+            onMouseLeave={e=>e.currentTarget.style.background=C.bg}>
+            <div style={{ width:8, height:8, borderRadius:'50%', background:sevColors[a.sev], flexShrink:0 }} />
+            <span style={{ background:`${sevColors[a.sev]}22`, color:sevColors[a.sev], padding:'3px 8px', borderRadius:5, fontSize:11, fontWeight:700, flexShrink:0 }}>{a.type}</span>
+            <span style={{ color:C.text, fontSize:13, flex:1 }}>{a.msg}</span>
+            <span style={{ color:C.textLight, fontSize:11, flexShrink:0 }}>{a.time}</span>
+            <span style={{ color:C.textMid, fontSize:12 }}>→</span>
+          </div>
+        ))}
+      </div>
+
+      {selectedAlert && (
+        <Modal title={`알림 처리 — ${selectedAlert.type}`} onClose={()=>setSelectedAlert(null)} width={460}>
+          <p style={{ color:C.textMid, fontSize:13, marginBottom:16 }}>사용자: <strong style={{ color:C.text }}>{selectedAlert.user}</strong></p>
+          <p style={{ color:C.text, fontSize:14, marginBottom:20 }}>{selectedAlert.msg}</p>
+          <div style={{ display:'flex', gap:10 }}>
+            <button onClick={()=>{ setSelectedAlert(null); setToast('처리 완료되었습니다'); }} style={{ flex:1, padding:'11px', background:C.primary, border:'none', borderRadius:9, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer' }}>처리 완료</button>
+            <button onClick={()=>{ setSelectedAlert(null); setToast('넘어가기 처리되었습니다'); }} style={{ flex:1, padding:'11px', background:'transparent', border:`1px solid ${C.border}`, borderRadius:9, color:C.textMid, fontWeight:600, fontSize:13, cursor:'pointer' }}>넘어가기</button>
+          </div>
+        </Modal>
+      )}
+      {toast && <Toast msg={toast} onClose={()=>setToast('')} />}
+    </div>
+  );
+}
+
+/* ─── NFC Mapping Page ─── */
+const INIT_TAGS = [
+  { id:'TAG-001', uid:'A1:B2:C3:D4', user:'김민수', profile:'/@kimminsu', status:'active', mapped:'2026-04-20' },
+  { id:'TAG-002', uid:'E5:F6:G7:H8', user:'이지은', profile:'/@jieun_lee', status:'active', mapped:'2026-04-21' },
+  { id:'TAG-003', uid:'I9:J0:K1:L2', user:'박준혁', profile:'/@junhyuk.p', status:'inactive', mapped:'2026-04-22' },
+  { id:'TAG-004', uid:'M3:N4:O5:P6', user:'최수아', profile:'/@sooa_choi', status:'active', mapped:'2026-04-23' },
+  { id:'TAG-005', uid:'Q7:R8:S9:T0', user:'—', profile:'—', status:'unassigned', mapped:'2026-04-24' },
+  { id:'TAG-006', uid:'U1:V2:W3:X4', user:'정민준', profile:'/@minjun.j', status:'active', mapped:'2026-04-25' },
+];
+
+function NfcPage() {
+  const [tags, setTags] = useState(INIT_TAGS);
+  const [search, setSearch] = useState('');
+  const [modal, setModal] = useState(null); // 'add'|'qr'|{tag}
+  const [addForm, setAddForm] = useState({ uid:'', user:'', profile:'' });
+  const [qrLoading, setQrLoading] = useState(false);
+  const [toast, setToast] = useState('');
+
+  const filtered = tags.filter(t=>
+    t.uid.toLowerCase().includes(search.toLowerCase()) ||
+    t.user.toLowerCase().includes(search.toLowerCase()) ||
+    t.profile.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const STATUS_LABEL = { active:'활성', inactive:'비활성', unassigned:'미할당' };
+  const STATUS_COLOR = { active:C.success, inactive:C.textLight, unassigned:C.warning };
+
+  const handleAdd = () => {
+    if (!addForm.uid) return;
+    setTags(ts=>[...ts, { id:`TAG-00${ts.length+1}`, uid:addForm.uid, user:addForm.user||'—', profile:addForm.profile||'—', status:'active', mapped:new Date().toISOString().slice(0,10) }]);
+    setModal(null); setAddForm({uid:'',user:'',profile:''}); setToast('태그가 등록되었습니다');
+  };
+  const handleQr = () => { setQrLoading(true); setTimeout(()=>{ setQrLoading(false); setToast('QR 코드 이미지가 다운로드됩니다'); setModal(null); }, 1800); };
+  const toggleStatus = tag => { setTags(ts=>ts.map(t=>t.id===tag.id?{...t,status:t.status==='active'?'inactive':'active'}:t)); setToast(`${tag.id} 상태가 변경되었습니다`); };
+
+  return (
+    <div style={{ padding:'32px', animation:'fadeIn 300ms ease' }}>
+      {/* Summary */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:16, marginBottom:24 }}>
+        {[{t:'전체 태그',v:tags.length,ic:'📡'},{t:'활성 태그',v:tags.filter(t=>t.status==='active').length,ic:'✅'},{t:'미할당 태그',v:tags.filter(t=>t.status==='unassigned').length,ic:'⚠️'}].map((k,i)=>(
+          <div key={i} style={{ background:C.card, borderRadius:14, padding:'18px 20px', border:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:16, animation:`slideUp 300ms ease ${i*80}ms both` }}>
+            <div style={{ width:44, height:44, borderRadius:12, background:`${C.primary}15`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:20 }}>{k.ic}</div>
+            <div><p style={{ color:C.textMid, fontSize:12, fontWeight:600 }}>{k.t}</p><p style={{ color:C.text, fontSize:24, fontWeight:800 }}>{k.v}</p></div>
+          </div>
+        ))}
+      </div>
+
+      {/* Table */}
+      <div style={{ background:C.card, borderRadius:16, padding:22, border:`1px solid ${C.border}`, boxShadow:'0 2px 12px rgba(0,0,0,0.04)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18 }}>
+          <h3 style={{ color:C.text, fontSize:15, fontWeight:700 }}>NFC 태그 목록</h3>
+          <div style={{ display:'flex', gap:10 }}>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="UID / 사용자 검색..."
+              style={{ padding:'8px 14px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:13, outline:'none', width:200 }} />
+            <button onClick={()=>setModal('add')}
+              style={{ padding:'8px 18px', background:C.primary, border:'none', borderRadius:8, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer' }}>+ 태그 등록</button>
+          </div>
+        </div>
+
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom:`2px solid ${C.border}` }}>
+                {['태그 ID','UID','매핑 사용자','프로필 URL','상태','등록일','액션'].map(h=>(
+                  <th key={h} style={{ padding:'10px 12px', textAlign:'left', color:C.textMid, fontSize:12, fontWeight:700, letterSpacing:'0.04em' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((t,i)=>(
+                <tr key={t.id} style={{ borderBottom:`1px solid ${C.border}`, transition:'background 150ms', animation:`slideUp 250ms ease ${i*40}ms both` }}
+                  onMouseEnter={e=>e.currentTarget.style.background='#FFE8E0'}
+                  onMouseLeave={e=>e.currentTarget.style.background=''}>
+                  <td style={{ padding:'11px 12px', color:C.primary, fontWeight:700, fontSize:13 }}>{t.id}</td>
+                  <td style={{ padding:'11px 12px', fontFamily:'monospace', color:C.text, fontSize:12 }}>{t.uid}</td>
+                  <td style={{ padding:'11px 12px', color:C.text, fontSize:13 }}>{t.user}</td>
+                  <td style={{ padding:'11px 12px', color:C.primary, fontSize:12 }}>{t.profile}</td>
+                  <td style={{ padding:'11px 12px' }}>
+                    <span style={{ background:`${STATUS_COLOR[t.status]}22`, color:STATUS_COLOR[t.status], padding:'4px 10px', borderRadius:20, fontSize:11, fontWeight:700 }}>{STATUS_LABEL[t.status]}</span>
+                  </td>
+                  <td style={{ padding:'11px 12px', color:C.textMid, fontSize:12 }}>{t.mapped}</td>
+                  <td style={{ padding:'11px 12px' }}>
+                    <div style={{ display:'flex', gap:6 }}>
+                      <button onClick={()=>setModal(t)} style={{ padding:'5px 10px', background:`${C.primary}15`, border:`1px solid ${C.border}`, borderRadius:6, color:C.primary, fontSize:11, cursor:'pointer', fontWeight:600 }}>QR</button>
+                      <button onClick={()=>toggleStatus(t)} style={{ padding:'5px 10px', background:t.status==='active'?'#FFEBE8':'#E8F5E9', border:`1px solid ${C.border}`, borderRadius:6, color:t.status==='active'?C.danger:C.success, fontSize:11, cursor:'pointer', fontWeight:600 }}>
+                        {t.status==='active'?'비활성':'활성'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Add Modal */}
+      {modal==='add' && (
+        <Modal title="NFC 태그 신규 등록" onClose={()=>setModal(null)} width={460}>
+          <div style={{ marginBottom:16 }}>
+            <label style={{ display:'block', color:C.textMid, fontSize:12, fontWeight:700, marginBottom:6 }}>NFC UID *</label>
+            <input value={addForm.uid} onChange={e=>setAddForm(p=>({...p,uid:e.target.value}))} placeholder="예: A1:B2:C3:D4"
+              style={{ width:'100%', padding:'10px 14px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:14, outline:'none', fontFamily:'monospace' }} />
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <label style={{ display:'block', color:C.textMid, fontSize:12, fontWeight:700, marginBottom:6 }}>매핑 사용자 (선택)</label>
+            <input value={addForm.user} onChange={e=>setAddForm(p=>({...p,user:e.target.value}))} placeholder="사용자 이름 또는 ID"
+              style={{ width:'100%', padding:'10px 14px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:14, outline:'none' }} />
+          </div>
+          <div style={{ marginBottom:20 }}>
+            <label style={{ display:'block', color:C.textMid, fontSize:12, fontWeight:700, marginBottom:6 }}>프로필 URL (선택)</label>
+            <input value={addForm.profile} onChange={e=>setAddForm(p=>({...p,profile:e.target.value}))} placeholder="/@username"
+              style={{ width:'100%', padding:'10px 14px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:14, outline:'none' }} />
+          </div>
+          <p style={{ color:C.textLight, fontSize:11, marginBottom:20 }}>태그 스캔 시 Redis에서 프로필 URL을 즉시 조회하여 리다이렉션합니다.</p>
+          <div style={{ display:'flex', gap:10 }}>
+            <button onClick={handleAdd} style={{ flex:1, padding:'11px', background:C.primary, border:'none', borderRadius:9, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer' }}>등록 완료</button>
+            <button onClick={()=>setModal(null)} style={{ flex:1, padding:'11px', background:'transparent', border:`1px solid ${C.border}`, borderRadius:9, color:C.textMid, fontWeight:600, fontSize:13, cursor:'pointer' }}>취소</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* QR Modal */}
+      {modal && typeof modal==='object' && (
+        <Modal title={`QR 코드 생성 — ${modal.id}`} onClose={()=>setModal(null)} width={400}>
+          <div style={{ textAlign:'center', marginBottom:20 }}>
+            {/* QR placeholder */}
+            <div style={{ width:180, height:180, margin:'0 auto', background:`linear-gradient(135deg,#FFE8E0,#FFD5C8)`, borderRadius:12, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', fontSize:48, border:`2px dashed ${C.border}` }}>
+              <div>📷</div>
+              <div style={{ fontSize:10, color:C.textMid, marginTop:8, fontFamily:'monospace' }}>{modal.uid}</div>
+            </div>
+            <p style={{ color:C.textMid, fontSize:12, marginTop:12 }}>URL: cardid.kr/{modal.profile}</p>
+          </div>
+          <p style={{ color:C.textLight, fontSize:11, textAlign:'center', marginBottom:16 }}>Canvas API로 브랜드 로고를 QR 코드에 합성하여 고화질 PNG로 출력합니다.</p>
+          <button onClick={handleQr} style={{ width:'100%', padding:'11px', background:qrLoading?C.textLight:C.primary, border:'none', borderRadius:9, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer' }}>
+            {qrLoading ? '생성 중...' : '💾 QR 이미지 다운로드 (PNG)'}
+          </button>
+        </Modal>
+      )}
+
+      {toast && <Toast msg={toast} onClose={()=>setToast('')} />}
+    </div>
+  );
+}
+
+/* ─── Analytics Page ─── */
+const trafficData = [
+  {name:'직접 접속',value:42,color:'#FF4B35'},{name:'NFC 태그',value:28,color:'#FFB300'},{name:'QR 코드',value:18,color:'#FF7043'},{name:'소셜 공유',value:12,color:'#FF8F00'}
+];
+const deviceData = [
+  {d:'iOS',v:52},{d:'Android',v:31},{d:'Desktop',v:12},{d:'기타',v:5}
+];
+const weeklyData = [
+  {d:'4/21',v:1840},{d:'4/22',v:2120},{d:'4/23',v:1980},{d:'4/24',v:2540},{d:'4/25',v:3180},{d:'4/26',v:2960},{d:'4/27',v:3450}
+];
+
+function AnalyticsPage() {
+  const [range, setRange] = useState('7d');
+  const [toast, setToast] = useState('');
+
+  return (
+    <div style={{ padding:'32px', animation:'fadeIn 300ms ease' }}>
+      {/* Header controls */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:24 }}>
+        <h2 style={{ color:C.text, fontSize:18, fontWeight:800 }}>사용자 분석 대시보드</h2>
+        <div style={{ display:'flex', gap:6, background:C.card, padding:4, borderRadius:10, border:`1px solid ${C.border}` }}>
+          {['7d','30d','90d'].map(r=>(
+            <button key={r} onClick={()=>setRange(r)}
+              style={{ padding:'6px 16px', borderRadius:7, border:'none', background:range===r?C.primary:'transparent', color:range===r?'#fff':C.textMid, fontWeight:range===r?700:400, fontSize:12, cursor:'pointer', transition:'all 200ms' }}>{r}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* KPI row */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:24 }}>
+        {[{t:'총 조회수',v:'18,472',ic:'👁'},{t:'고유 방문자',v:'4,391',ic:'👤'},{t:'평균 체류시간',v:'0:48',ic:'⏱'},{t:'vCard 저장',v:'284',ic:'💾'}].map((k,i)=>(
+          <div key={i} style={{ background:C.card, borderRadius:14, padding:'16px 18px', border:`1px solid ${C.border}`, animation:`slideUp 300ms ease ${i*70}ms both` }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+              <span style={{ color:C.textMid, fontSize:12, fontWeight:600 }}>{k.t}</span>
+              <span style={{ fontSize:18 }}>{k.ic}</span>
+            </div>
+            <p style={{ color:C.text, fontSize:22, fontWeight:800 }}>{k.v}</p>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
+        {/* Line chart */}
+        <div style={{ background:C.card, borderRadius:16, padding:22, border:`1px solid ${C.border}` }}>
+          <h3 style={{ color:C.text, fontSize:14, fontWeight:700, marginBottom:16 }}>📈 일별 조회수 추이</h3>
+          <div style={{ position:'relative', height:200 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={weeklyData} margin={{top:4,right:4,left:-24,bottom:4}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#FFD5C8" />
+                <XAxis dataKey="d" tick={{fontSize:11,fill:C.textMid}} />
+                <YAxis tick={{fontSize:11,fill:C.textMid}} />
+                <Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}} />
+                <Line type="monotone" dataKey="v" stroke={C.primary} strokeWidth={2.5} dot={{r:4,fill:C.primary}} name="조회수" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Pie chart */}
+        <div style={{ background:C.card, borderRadius:16, padding:22, border:`1px solid ${C.border}` }}>
+          <h3 style={{ color:C.text, fontSize:14, fontWeight:700, marginBottom:16 }}>📡 유입 경로 분포</h3>
+          <div style={{ position:'relative', height:200 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={trafficData} cx="45%" cy="50%" outerRadius={80} dataKey="value" label={({name,value})=>`${name} ${value}%`} labelLine={false}>
+                  {trafficData.map((e,i)=><Cell key={i} fill={e.color} />)}
+                </Pie>
+                <Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      {/* Device bar chart */}
+      <div style={{ background:C.card, borderRadius:16, padding:22, border:`1px solid ${C.border}` }}>
+        <h3 style={{ color:C.text, fontSize:14, fontWeight:700, marginBottom:16 }}>📱 디바이스 유형별 접속 비율</h3>
+        <div style={{ position:'relative', height:160 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={deviceData} layout="vertical" margin={{top:4,right:30,left:60,bottom:4}}>
+              <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#FFD5C8" />
+              <XAxis type="number" tick={{fontSize:11,fill:C.textMid}} unit="%" />
+              <YAxis dataKey="d" type="category" tick={{fontSize:12,fill:C.text,fontWeight:600}} />
+              <Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}} formatter={v=>[`${v}%`,'']} />
+              <Bar dataKey="v" radius={[0,6,6,0]} name="비율">
+                {deviceData.map((_,i)=><Cell key={i} fill={i===0?C.primary:i===1?C.secondary:i===2?C.accent:C.textLight} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {toast && <Toast msg={toast} onClose={()=>setToast('')} />}
+    </div>
+  );
+}
+
+/* ─── User Management Page ─── */
+const INIT_USERS = [
+  { id:'U001', name:'김민수', email:'minsu@flowtech.kr', profile:'/@kimminsu', status:'active', joined:'2026-03-15', nfc:2 },
+  { id:'U002', name:'이지은', email:'jieun@designco.kr', profile:'/@jieun_lee', status:'active', joined:'2026-03-18', nfc:1 },
+  { id:'U003', name:'박준혁', email:'junhyuk@startup.io', profile:'/@junhyuk.p', status:'suspended', joined:'2026-03-20', nfc:0 },
+  { id:'U004', name:'최수아', email:'sooa@agency.kr', profile:'/@sooa_choi', status:'active', joined:'2026-03-22', nfc:3 },
+  { id:'U005', name:'정민준', email:'minjun@freelance.kr', profile:'/@minjun.j', status:'active', joined:'2026-03-25', nfc:1 },
+  { id:'U006', name:'한예린', email:'yerin@brand.kr', profile:'/@yerin_han', status:'active', joined:'2026-03-28', nfc:2 },
+  { id:'U007', name:'강도현', email:'dohyun@corp.kr', profile:'/@dohyun.k', status:'reported', joined:'2026-04-02', nfc:1 },
+];
+
+function UserManagementPage() {
+  const [users, setUsers] = useState(INIT_USERS);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [selected, setSelected] = useState(null);
+  const [confirmModal, setConfirmModal] = useState(null);
+  const [toast, setToast] = useState('');
+
+  const STATUS_LABEL = { active:'활성', suspended:'정지', reported:'신고됨' };
+  const STATUS_COLOR = { active:C.success, suspended:C.danger, reported:C.warning };
+
+  const filtered = users.filter(u => {
+    const q = search.toLowerCase();
+    const match = u.name.includes(q) || u.email.includes(q) || u.profile.includes(q);
+    if (!match) return false;
+    if (filter==='all') return true;
+    return u.status===filter;
+  });
+
+  const handleSuspend = u => {
+    setUsers(us=>us.map(x=>x.id===u.id?{...x,status:x.status==='suspended'?'active':'suspended'}:x));
+    setSelected(null); setToast(`${u.name} 계정 상태가 변경되었습니다`);
+  };
+  const handleBlind = u => {
+    setSelected(null); setToast(`${u.name} 프로필이 블라인드 처리되었습니다`);
+  };
+
+  return (
+    <div style={{ padding:'32px', animation:'fadeIn 300ms ease' }}>
+      {/* KPI */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:24 }}>
+        {[{t:'전체 사용자',v:users.length,ic:'👥'},{t:'활성',v:users.filter(u=>u.status==='active').length,ic:'✅'},{t:'정지',v:users.filter(u=>u.status==='suspended').length,ic:'🚫'},{t:'신고 처리',v:users.filter(u=>u.status==='reported').length,ic:'⚠️'}].map((k,i)=>(
+          <div key={i} style={{ background:C.card, borderRadius:14, padding:'16px 18px', border:`1px solid ${C.border}`, animation:`slideUp 300ms ease ${i*70}ms both` }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+              <span style={{ color:C.textMid, fontSize:12, fontWeight:600 }}>{k.t}</span>
+              <span style={{ fontSize:18 }}>{k.ic}</span>
+            </div>
+            <p style={{ color:C.text, fontSize:24, fontWeight:800 }}>{k.v}</p>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ background:C.card, borderRadius:16, padding:22, border:`1px solid ${C.border}`, boxShadow:'0 2px 12px rgba(0,0,0,0.04)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18, flexWrap:'wrap', gap:10 }}>
+          <h3 style={{ color:C.text, fontSize:15, fontWeight:700 }}>사용자 목록</h3>
+          <div style={{ display:'flex', gap:8 }}>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="이름 / 이메일 검색..."
+              style={{ padding:'8px 14px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:13, outline:'none', width:200 }} />
+            <div style={{ display:'flex', background:C.bg, borderRadius:8, border:`1px solid ${C.border}`, overflow:'hidden' }}>
+              {[{id:'all',l:'전체'},{id:'active',l:'활성'},{id:'suspended',l:'정지'},{id:'reported',l:'신고'}].map(f=>(
+                <button key={f.id} onClick={()=>setFilter(f.id)}
+                  style={{ padding:'8px 14px', border:'none', background:filter===f.id?C.primary:'transparent', color:filter===f.id?'#fff':C.textMid, fontSize:12, fontWeight:filter===f.id?700:400, cursor:'pointer', transition:'all 200ms' }}>
+                  {f.l}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom:`2px solid ${C.border}` }}>
+                {['ID','이름','이메일','프로필 URL','NFC','상태','가입일','관리'].map(h=>(
+                  <th key={h} style={{ padding:'10px 12px', textAlign:'left', color:C.textMid, fontSize:12, fontWeight:700 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((u,i)=>(
+                <tr key={u.id} style={{ borderBottom:`1px solid ${C.border}`, cursor:'pointer', transition:'background 150ms', animation:`slideUp 250ms ease ${i*40}ms both` }}
+                  onMouseEnter={e=>e.currentTarget.style.background='#FFE8E0'}
+                  onMouseLeave={e=>e.currentTarget.style.background=''}
+                  onClick={()=>setSelected(u)}>
+                  <td style={{ padding:'11px 12px', color:C.textMid, fontSize:12 }}>{u.id}</td>
+                  <td style={{ padding:'11px 12px', color:C.text, fontWeight:700, fontSize:13 }}>{u.name}</td>
+                  <td style={{ padding:'11px 12px', color:C.textMid, fontSize:12 }}>{u.email}</td>
+                  <td style={{ padding:'11px 12px', color:C.primary, fontSize:12 }}>{u.profile}</td>
+                  <td style={{ padding:'11px 12px', textAlign:'center' }}>
+                    <span style={{ color:u.nfc>0?C.primary:C.textLight, fontWeight:700, fontSize:13 }}>{u.nfc}</span>
+                  </td>
+                  <td style={{ padding:'11px 12px' }}>
+                    <span style={{ background:`${STATUS_COLOR[u.status]}22`, color:STATUS_COLOR[u.status], padding:'4px 10px', borderRadius:20, fontSize:11, fontWeight:700 }}>{STATUS_LABEL[u.status]}</span>
+                  </td>
+                  <td style={{ padding:'11px 12px', color:C.textMid, fontSize:12 }}>{u.joined}</td>
+                  <td style={{ padding:'11px 12px' }} onClick={e=>e.stopPropagation()}>
+                    <div style={{ display:'flex', gap:5 }}>
+                      <button onClick={()=>handleSuspend(u)}
+                        style={{ padding:'5px 10px', background:`${C.danger}15`, border:`1px solid ${C.border}`, borderRadius:6, color:C.danger, fontSize:11, cursor:'pointer', fontWeight:600 }}>
+                        {u.status==='suspended'?'복구':'정지'}
+                      </button>
+                      <button onClick={()=>{ setSelected(u); }}
+                        style={{ padding:'5px 10px', background:`${C.primary}15`, border:`1px solid ${C.border}`, borderRadius:6, color:C.primary, fontSize:11, cursor:'pointer', fontWeight:600 }}>상세</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* User Detail Drawer */}
+      {selected && (
+        <>
+          <div onClick={()=>setSelected(null)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.3)', zIndex:200, animation:'fadeIn 200ms ease' }} />
+          <div style={{ position:'fixed', top:0, right:0, bottom:0, width:420, background:C.surface, boxShadow:'-8px 0 40px rgba(0,0,0,0.15)', zIndex:201, overflowY:'auto', padding:28, animation:'slideInRight 200ms ease' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:24 }}>
+              <h2 style={{ color:C.text, fontSize:18, fontWeight:800 }}>사용자 상세</h2>
+              <button onClick={()=>setSelected(null)} style={{ background:'none', border:'none', color:C.textMid, fontSize:22, cursor:'pointer' }}>✕</button>
+            </div>
+
+            <div style={{ display:'flex', alignItems:'center', gap:14, marginBottom:24, padding:'16px', background:C.bg, borderRadius:12, border:`1px solid ${C.border}` }}>
+              <div style={{ width:52, height:52, borderRadius:'50%', background:`linear-gradient(135deg,${C.primary},${C.secondary})`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:22, color:'#fff', fontWeight:800 }}>{selected.name.charAt(0)}</div>
+              <div>
+                <p style={{ color:C.text, fontWeight:800, fontSize:16 }}>{selected.name}</p>
+                <p style={{ color:C.textMid, fontSize:12, marginTop:2 }}>{selected.email}</p>
+                <span style={{ background:`${STATUS_COLOR[selected.status]}22`, color:STATUS_COLOR[selected.status], padding:'3px 8px', borderRadius:12, fontSize:11, fontWeight:700 }}>{STATUS_LABEL[selected.status]}</span>
+              </div>
+            </div>
+
+            {[['사용자 ID',selected.id],['프로필 URL',selected.profile],['가입일',selected.joined],['NFC 태그 수',`${selected.nfc}개`]].map(([l,v])=>(
+              <div key={l} style={{ display:'flex', justifyContent:'space-between', padding:'11px 0', borderBottom:`1px solid ${C.border}` }}>
+                <span style={{ color:C.textMid, fontSize:13 }}>{l}</span>
+                <span style={{ color:C.text, fontWeight:600, fontSize:13 }}>{v}</span>
+              </div>
+            ))}
+
+            <div style={{ marginTop:16 }}>
+              <p style={{ color:C.textMid, fontSize:12, fontWeight:700, marginBottom:10 }}>관리자 메모</p>
+              <textarea placeholder="관리자 메모를 입력하세요..." rows={3}
+                style={{ width:'100%', padding:'10px 12px', background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:13, resize:'vertical', outline:'none', fontFamily:'inherit' }} />
+            </div>
+
+            <div style={{ display:'flex', flexDirection:'column', gap:10, marginTop:20 }}>
+              <button onClick={()=>handleSuspend(selected)}
+                style={{ width:'100%', padding:'11px', background:selected.status==='suspended'?C.success:C.danger, border:'none', borderRadius:9, color:'#fff', fontWeight:700, fontSize:13, cursor:'pointer' }}>
+                {selected.status==='suspended'?'계정 복구':'계정 정지'}
+              </button>
+              <button onClick={()=>handleBlind(selected)}
+                style={{ width:'100%', padding:'11px', background:'transparent', border:`1px solid ${C.warning}`, borderRadius:9, color:C.warning, fontWeight:700, fontSize:13, cursor:'pointer' }}>
+                프로필 블라인드 처리
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {toast && <Toast msg={toast} onClose={()=>setToast('')} />}
+    </div>
+  );
+}
+
+/* ─── App Root ─── */
+function App() {
+  const [route, setRoute] = useState('dashboard');
+  const [ck, setCk] = useState(0);
+
+  const go = r => { setRoute(r); setCk(k=>k+1); };
+
+  const HERO_INFO = {
+    'dashboard':        { title:'관리자 대시보드', sub:'실시간 서비스 현황과 처리 대기 알림을 모니터링합니다', kpis:[{l:'전체 사용자',v:'2,847'},{l:'오늘 조회',v:'6,184'},{l:'활성 태그',v:'1,024'}] },
+    'nfc-mapping':      { title:'NFC/QR 태그 매핑', sub:'물리적 태그와 사용자 프로필을 연동하고 QR 코드를 생성합니다', kpis:[{l:'등록 태그',v:'1,024'},{l:'활성 태그',v:'891'},{l:'미할당',v:'133'}] },
+    'analytics':        { title:'통계 분석', sub:'프로필 조회, 유입 경로, 디바이스 유형 데이터를 분석합니다', kpis:[{l:'주간 조회',v:'18,472'},{l:'고유 방문자',v:'4,391'},{l:'vCard 저장',v:'284'}] },
+    'user-management':  { title:'사용자 관리', sub:'전체 회원 관리, 신고 처리, 계정 상태 변경 기능을 제공합니다', kpis:[{l:'전체 회원',v:'2,847'},{l:'활성',v:'2,691'},{l:'정지/신고',v:'156'}] },
+  };
+
+  const hero = HERO_INFO[route];
+
+  return (
+    <div style={{ width:'100%', minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column' }}>
+      {/* Global Nav */}
+      <header style={{ position:'sticky', top:0, zIndex:100, background:C.surface, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', height:64, padding:'0 32px', gap:8, flexShrink:0, boxShadow:'0 1px 8px rgba(255,75,53,0.06)' }}>
+        <div onClick={()=>go('dashboard')} style={{ display:'flex', alignItems:'center', gap:8, marginRight:28, cursor:'pointer' }}>
+          <div style={{ width:32, height:32, borderRadius:10, background:C.gradHero, display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, fontWeight:800, color:'#fff' }}>C</div>
+          <span style={{ color:C.text, fontWeight:800, fontSize:17, letterSpacing:'-0.02em' }}>CardID Admin</span>
+        </div>
+        <nav style={{ display:'flex', gap:2 }}>
+          {NAV.map(n=>(
+            <button key={n.id} onClick={()=>go(n.id)}
+              style={{ padding:'7px 16px', borderRadius:8, border:'none', background:route===n.id?`${C.primary}12`:'transparent', color:route===n.id?C.primary:C.textMid, fontWeight:route===n.id?700:400, fontSize:14, cursor:'pointer', transition:'all 200ms' }}>
+              {n.label}
+            </button>
+          ))}
+        </nav>
+        <div style={{ flex:1 }} />
+        <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+          <div style={{ position:'relative', cursor:'pointer' }}>
+            <span style={{ fontSize:20 }}>🔔</span>
+            <span style={{ position:'absolute', top:-4, right:-4, width:16, height:16, borderRadius:'50%', background:C.primary, color:'#fff', fontSize:9, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center' }}>4</span>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 10px', background:C.bg, borderRadius:20, border:`1px solid ${C.border}`, cursor:'pointer' }}>
+            <div style={{ width:26, height:26, borderRadius:'50%', background:C.gradHero, display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, color:'#fff', fontWeight:700 }}>관</div>
+            <span style={{ color:C.text, fontSize:13, fontWeight:600 }}>관리자</span>
+          </div>
+        </div>
+      </header>
+
+      {/* Hero Banner */}
+      <div style={{ background:C.gradHero, padding:'24px 32px', flexShrink:0 }}>
+        <div style={{ maxWidth:1280, margin:'0 auto', display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:16 }}>
+          <div>
+            <h1 style={{ color:'#fff', fontSize:22, fontWeight:800, letterSpacing:'-0.02em' }}>{hero.title}</h1>
+            <p style={{ color:'rgba(255,255,255,0.8)', fontSize:13, marginTop:5 }}>{hero.sub}</p>
+          </div>
+          <div style={{ display:'flex', gap:28 }}>
+            {hero.kpis.map((k,i)=>(
+              <div key={i} style={{ textAlign:'right' }}>
+                <p style={{ color:'#fff', fontSize:20, fontWeight:800 }}>{k.v}</p>
+                <p style={{ color:'rgba(255,255,255,0.75)', fontSize:11, marginTop:2 }}>{k.l}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <main key={ck} style={{ flex:1, overflow:'auto', animation:'fadeIn 250ms ease' }}>
+        {route==='dashboard' && <DashboardPage />}
+        {route==='nfc-mapping' && <NfcPage />}
+        {route==='analytics' && <AnalyticsPage />}
+        {route==='user-management' && <UserManagementPage />}
+      </main>
+
+      {/* Footer */}
+      <footer style={{ background:'#1A0A08', color:'rgba(255,255,255,0.6)', padding:'40px 32px 28px', marginTop:'auto', flexShrink:0 }}>
+        <div style={{ maxWidth:1280, margin:'0 auto', display:'grid', gridTemplateColumns:'2fr 1fr 1fr 1fr', gap:32, marginBottom:32 }}>
+          <div>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12 }}>
+              <div style={{ width:28, height:28, borderRadius:8, background:C.gradHero, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:800, color:'#fff' }}>C</div>
+              <span style={{ color:'#fff', fontWeight:800, fontSize:15 }}>CardID</span>
+            </div>
+            <p style={{ fontSize:12, lineHeight:1.7, maxWidth:200 }}>NFC/QR 기반 디지털 명함 플랫폼 · 통합 관리 시스템을 설계합니다.</p>
+          </div>
+          {[['플랫폼',['대시보드','사용자 관리','NFC 태그','통계']],['개발 스택',['Next.js + FastAPI','PostgreSQL + Redis','AWS S3','Docker']],['문의',['기술 지원','파트너십','API 문서','보안 신고']]].map(([t,ls])=>(
+            <div key={t}><p style={{ color:'rgba(255,255,255,0.9)', fontWeight:700, fontSize:13, marginBottom:12 }}>{t}</p>{ls.map(l=><p key={l} style={{ fontSize:12, marginTop:6, cursor:'pointer' }}>{l}</p>)}</div>
+          ))}
+        </div>
+        <div style={{ borderTop:'1px solid rgba(255,255,255,0.1)', paddingTop:20, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span style={{ fontSize:11 }}>© 2026 CardID Platform · 구현 데모</span>
+          <span style={{ fontSize:11 }}>Next.js + FastAPI + PostgreSQL + Redis + AWS</span>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

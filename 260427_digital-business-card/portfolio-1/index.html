@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CardID 프로필 빌더 — 맞춤 구현 데모</title>
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet" />
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; }
+    #root { display: flex; flex-direction: column; width: 100%; min-height: 100vh; }
+
+    @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes fadeInScale { from { opacity: 0; transform: scale(0.95) } to { opacity: 1; transform: scale(1) } }
+    @keyframes slideInRight { from { opacity: 0; transform: translateX(30px) } to { opacity: 1; transform: translateX(0) } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes ripple { 0% { transform: scale(0); opacity: 0.5 } 100% { transform: scale(4); opacity: 0 } }
+    @keyframes countUp { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+    @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+    @keyframes barGrow { from { width: 0% } to { width: var(--target-width) } }
+    @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); max-height: 0 } to { opacity: 1; transform: translateY(0); max-height: 500px } }
+    @keyframes float { 0%, 100% { transform: translateY(0) } 50% { transform: translateY(-6px) } }
+    @keyframes glow { 0%, 100% { box-shadow: 0 0 10px rgba(0,201,177,0.3) } 50% { box-shadow: 0 0 24px rgba(0,201,177,0.6) } }
+
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: #071020; }
+    ::-webkit-scrollbar-thumb { background: #1E3A5F; border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const C = {
+  bg: '#071020', primary: '#0A1628', secondary: '#1E3A5F',
+  accent: '#00C9B1', accent2: '#00E5D0', surface: '#0F2040',
+  card: '#162845', cardHover: '#1A3255', border: 'rgba(0,201,177,0.15)',
+  text: '#F0F6FF', textMid: '#8BB8D4', textLight: '#4A7699',
+  danger: '#FF6B6B', warning: '#FFB347',
+};
+
+const TABS = [
+  { id: 'editor', label: '프로필 편집' },
+  { id: 'viewer', label: '퍼블릭 뷰어' },
+  { id: 'auth',   label: '로그인' },
+  { id: 'settings', label: '설정' },
+];
+
+const HERO = {
+  editor:  { title: '프로필 빌더', sub: '실시간 미리보기로 나만의 디지털 명함을 완성하세요', kpis: [{l:'활성 링크',v:'6'},{l:'SNS 연결',v:'4'},{l:'마지막 수정',v:'방금 전'}] },
+  viewer:  { title: '퍼블릭 프로필 뷰어', sub: '고유 URL로 누구에게나 공유 가능한 디지털 명함', kpis: [{l:'주간 조회',v:'1,284'},{l:'연락처 저장',v:'47'},{l:'공유 URL',v:'/@kimminsu'}] },
+  auth:    { title: '회원 인증 시스템', sub: 'JWT 이중 토큰 구조 기반 보안 인증 구현', kpis: [{l:'토큰 유효',v:'14:58'},{l:'보안 등급',v:'A+'},{l:'세션 상태',v:'정상'}] },
+  settings:{ title: '계정 설정', sub: 'URL 슬러그, 공개 범위, SNS 링크를 한곳에서 관리', kpis: [{l:'내 URL',v:'/@kimminsu'},{l:'공개 상태',v:'공개'},{l:'SNS 링크',v:'6개'}] },
+};
+
+/* ─── Utility ─── */
+function Toast({ msg, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  return <div style={{ position:'fixed', bottom:24, right:24, zIndex:9999, background:C.accent, color:C.primary, padding:'12px 24px', borderRadius:8, fontWeight:700, animation:'slideUp 300ms ease', boxShadow:`0 4px 20px rgba(0,201,177,0.4)`, fontSize:13 }}>{msg}</div>;
+}
+
+function Modal({ title, onClose, children, width=520 }) {
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:500, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      <div onClick={onClose} style={{ position:'absolute', inset:0, background:'rgba(0,0,0,0.65)', animation:'fadeIn 200ms ease' }} />
+      <div style={{ position:'relative', width, maxHeight:'85vh', background:C.card, borderRadius:16, zIndex:501, animation:'fadeInScale 200ms ease', display:'flex', flexDirection:'column', boxShadow:'0 24px 80px rgba(0,0,0,0.6)', border:`1px solid ${C.border}` }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'20px 24px', borderBottom:`1px solid ${C.border}` }}>
+          <h3 style={{ fontSize:18, fontWeight:700, color:C.text }}>{title}</h3>
+          <button onClick={onClose} style={{ background:'none', border:'none', color:C.textMid, fontSize:20, cursor:'pointer' }}>✕</button>
+        </div>
+        <div style={{ padding:24, overflowY:'auto', flex:1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, value, onChange, placeholder, type='text', rows }) {
+  const common = { width:'100%', padding:'10px 14px', background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, color:C.text, fontSize:14, outline:'none', fontFamily:'inherit', transition:'border-color 200ms' };
+  return (
+    <div style={{ marginBottom:16 }}>
+      <label style={{ display:'block', color:C.textMid, fontSize:12, marginBottom:6, fontWeight:600, letterSpacing:'0.04em' }}>{label}</label>
+      {rows
+        ? <textarea value={value} onChange={e=>onChange(e.target.value)} rows={rows} style={{ ...common, resize:'vertical' }} />
+        : <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={common} />
+      }
+    </div>
+  );
+}
+
+function CountUp({ end }) {
+  const [val, setVal] = useState('0');
+  useEffect(() => {
+    const n = parseInt(String(end).replace(/,/g,''));
+    if (isNaN(n)) { setVal(end); return; }
+    let s = 0, step = n / 50;
+    const t = setInterval(() => { s += step; if (s >= n) { setVal(end); clearInterval(t); } else setVal(Math.floor(s).toLocaleString()); }, 24);
+    return () => clearInterval(t);
+  }, []);
+  return <span style={{ animation:'countUp 400ms ease' }}>{val}</span>;
+}
+
+/* ─── Editor Page ─── */
+const SNS_LIST = ['GitHub','LinkedIn','Instagram','Twitter','YouTube','Portfolio','Facebook','TikTok'];
+const INIT_PROFILE = {
+  name:'김민수', title:'프론트엔드 개발자', company:'플로우테크',
+  phone:'010-1234-5678', email:'minsu@flowtech.kr',
+  bio:'웹 서비스와 사용자 경험을 중요하게 생각하는 개발자입니다. React 기반 프로덕트 개발에 집중합니다.',
+  sns:[
+    { p:'GitHub', u:'github.com/kimminsu', on:true },
+    { p:'LinkedIn', u:'linkedin.com/in/kimminsu', on:true },
+    { p:'Instagram', u:'instagram.com/minsu.dev', on:true },
+    { p:'Portfolio', u:'kimminsu.dev', on:true },
+  ],
+};
+
+function EditorPage() {
+  const [prof, setProf] = useState(INIT_PROFILE);
+  const [toast, setToast] = useState('');
+  const [imgDrag, setImgDrag] = useState(false);
+  const [imgLoading, setImgLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [vcardModal, setVcardModal] = useState(false);
+
+  const up = (k, v) => setProf(p => ({ ...p, [k]: v }));
+  const addSns = () => { if (prof.sns.length >= 8) return; setProf(p => ({ ...p, sns:[...p.sns,{p:'Twitter',u:'',on:true}] })); };
+  const rmSns = i => setProf(p => ({ ...p, sns: p.sns.filter((_,xi)=>xi!==i) }));
+  const upSns = (i,k,v) => setProf(p => ({ ...p, sns: p.sns.map((s,xi)=>xi===i?{...s,[k]:v}:s) }));
+
+  const handleDrop = e => { e.preventDefault(); setImgDrag(false); setImgLoading(true); setTimeout(()=>{ setImgLoading(false); setToast('프로필 이미지가 AWS S3에 업로드되었습니다'); }, 1500); };
+  const handleSave = () => { setSaving(true); setTimeout(()=>{ setSaving(false); setToast('프로필이 저장되었습니다 ✓'); }, 1200); };
+
+  const ICONS = { GitHub:'🐙', LinkedIn:'💼', Instagram:'📸', Twitter:'🐦', YouTube:'▶️', Portfolio:'🌐', Facebook:'📘', TikTok:'🎵' };
+
+  return (
+    <div style={{ display:'flex', flex:1, animation:'fadeIn 300ms ease' }}>
+      {/* Left: Form */}
+      <div style={{ flex:'0 0 460px', overflowY:'auto', padding:'28px 24px', borderRight:`1px solid ${C.border}`, background:C.primary }}>
+        <h3 style={{ color:C.accent, fontSize:11, fontWeight:700, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:20 }}>프로필 정보 입력</h3>
+
+        {/* Image Upload */}
+        <div
+          onDragOver={e=>{e.preventDefault();setImgDrag(true)}}
+          onDragLeave={()=>setImgDrag(false)}
+          onDrop={handleDrop}
+          onClick={()=>handleDrop({preventDefault:()=>{}})}
+          style={{ border:`2px dashed ${imgDrag?C.accent:C.border}`, borderRadius:12, padding:20, textAlign:'center', cursor:'pointer', marginBottom:24, background:imgDrag?'rgba(0,201,177,0.06)':'transparent', transition:'all 200ms' }}>
+          {imgLoading
+            ? (<><div style={{ height:6, background:C.secondary, borderRadius:3, overflow:'hidden', marginBottom:8 }}><div style={{ height:'100%', background:C.accent, borderRadius:3, animation:'barGrow 1.5s ease forwards', '--target-width':'90%' }} /></div><p style={{ color:C.textMid, fontSize:12 }}>S3 업로드 중...</p></>)
+            : (<><div style={{ width:64, height:64, borderRadius:'50%', background:`linear-gradient(135deg,${C.accent}33,${C.secondary})`, margin:'0 auto 10px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:26, border:`2px solid ${C.border}` }}>👤</div><p style={{ color:C.textMid, fontSize:13, fontWeight:600 }}>클릭 또는 드래그&드롭</p><p style={{ color:C.textLight, fontSize:11, marginTop:3 }}>JPG/PNG 최대 5MB · AWS S3 자동 리사이징</p></>)
+          }
+        </div>
+
+        <Field label="이름" value={prof.name} onChange={v=>up('name',v)} placeholder="홍길동" />
+        <Field label="직책" value={prof.title} onChange={v=>up('title',v)} placeholder="소프트웨어 엔지니어" />
+        <Field label="소속 / 회사" value={prof.company} onChange={v=>up('company',v)} placeholder="(주)플로우테크" />
+        <Field label="연락처" value={prof.phone} onChange={v=>up('phone',v)} placeholder="010-0000-0000" />
+        <Field label="이메일" value={prof.email} onChange={v=>up('email',v)} type="email" placeholder="email@domain.com" />
+        <Field label="소개 한 줄" value={prof.bio} onChange={v=>up('bio',v)} rows={3} />
+
+        <div style={{ marginBottom:20 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+            <label style={{ color:C.textMid, fontSize:12, fontWeight:700, letterSpacing:'0.04em' }}>SNS / 외부 링크 ({prof.sns.length}/8)</label>
+            <button onClick={addSns} style={{ background:'transparent', border:`1px solid ${C.accent}`, color:C.accent, padding:'4px 10px', borderRadius:6, cursor:'pointer', fontSize:11, fontWeight:700 }}>+ 추가</button>
+          </div>
+          {prof.sns.map((s,i) => (
+            <div key={i} style={{ display:'flex', gap:6, marginBottom:7, animation:`slideUp 250ms ease ${i*50}ms both` }}>
+              <select value={s.p} onChange={e=>upSns(i,'p',e.target.value)}
+                style={{ flex:'0 0 98px', padding:'8px 6px', background:C.surface, border:`1px solid ${C.border}`, borderRadius:6, color:C.text, fontSize:12, cursor:'pointer' }}>
+                {SNS_LIST.map(pl=><option key={pl}>{pl}</option>)}
+              </select>
+              <input value={s.u} onChange={e=>upSns(i,'u',e.target.value)} placeholder="URL 입력"
+                style={{ flex:1, padding:'8px 10px', background:C.surface, border:`1px solid ${C.border}`, borderRadius:6, color:C.text, fontSize:12, outline:'none' }} />
+              <button onClick={()=>rmSns(i)} style={{ background:'transparent', border:'none', color:C.danger, cursor:'pointer', fontSize:16, paddingTop:2 }}>✕</button>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display:'flex', gap:10, marginBottom:12 }}>
+          <button onClick={handleSave} disabled={saving}
+            style={{ flex:1, padding:'12px', background:saving?C.secondary:`linear-gradient(135deg,${C.accent},#00A896)`, border:'none', borderRadius:10, color:saving?C.textMid:C.primary, fontWeight:700, fontSize:14, cursor:'pointer', transition:'all 200ms' }}>
+            {saving ? '저장 중...' : '💾 프로필 저장'}
+          </button>
+          <button onClick={()=>setVcardModal(true)}
+            style={{ flex:'0 0 auto', padding:'12px 16px', background:C.surface, border:`1px solid ${C.border}`, borderRadius:10, color:C.textMid, fontWeight:600, fontSize:14, cursor:'pointer' }}>
+            vCard
+          </button>
+        </div>
+      </div>
+
+      {/* Right: Preview */}
+      <div style={{ flex:1, overflowY:'auto', padding:'28px 24px', background:C.bg, display:'flex', flexDirection:'column', alignItems:'center' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', width:'100%', maxWidth:380, marginBottom:20 }}>
+          <h3 style={{ color:C.accent, fontSize:11, fontWeight:700, letterSpacing:'0.12em', textTransform:'uppercase' }}>실시간 미리보기</h3>
+          <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:20, padding:'4px 12px', color:C.textMid, fontSize:11, fontWeight:600 }}>📱 모바일 뷰</div>
+        </div>
+
+        {/* Phone mockup */}
+        <div style={{ width:300, background:C.card, borderRadius:30, padding:7, boxShadow:'0 24px 80px rgba(0,0,0,0.7)', border:`2px solid ${C.border}`, animation:'glow 3s ease-in-out infinite' }}>
+          <div style={{ background:C.bg, borderRadius:24, overflow:'hidden' }}>
+            <div style={{ background:C.secondary, padding:'7px 18px 6px', display:'flex', justifyContent:'space-between', fontSize:10, color:C.textMid }}>
+              <span style={{ fontWeight:700 }}>9:41</span>
+              <span style={{ letterSpacing:2 }}>•••</span>
+              <span>📶</span>
+            </div>
+
+            <div style={{ padding:'24px 18px 28px', background:`linear-gradient(180deg,${C.surface} 0%,${C.bg} 100%)` }}>
+              <div style={{ width:72, height:72, borderRadius:'50%', background:`linear-gradient(135deg,${C.accent},#006B5E)`, margin:'0 auto 14px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:30, border:`3px solid rgba(0,201,177,0.5)`, boxShadow:'0 0 20px rgba(0,201,177,0.3)' }}>
+                {prof.name.charAt(0)}
+              </div>
+              <h2 style={{ color:C.text, fontSize:18, fontWeight:800, textAlign:'center', letterSpacing:'-0.02em' }}>{prof.name}</h2>
+              <p style={{ color:C.accent, fontSize:12, textAlign:'center', fontWeight:700, marginTop:4 }}>{prof.title}</p>
+              <p style={{ color:C.textMid, fontSize:11, textAlign:'center', marginTop:3 }}>{prof.company}</p>
+              <p style={{ color:C.textLight, fontSize:10, textAlign:'center', marginTop:10, lineHeight:1.55, padding:'0 6px' }}>{prof.bio}</p>
+
+              <div style={{ display:'flex', gap:6, marginTop:18, justifyContent:'center' }}>
+                {[{ic:'📞',lb:'전화'},{ic:'✉️',lb:'이메일'},{ic:'💾',lb:'저장'}].map(b=>(
+                  <div key={b.lb} style={{ flex:1, background:C.secondary, borderRadius:10, padding:'10px 0', textAlign:'center', cursor:'pointer' }}>
+                    <div style={{ fontSize:16 }}>{b.ic}</div>
+                    <div style={{ color:C.textMid, fontSize:9, marginTop:3 }}>{b.lb}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ marginTop:14 }}>
+                {prof.sns.filter(s=>s.on).slice(0,4).map((s,i)=>(
+                  <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 10px', background:C.secondary, borderRadius:8, marginBottom:6, cursor:'pointer', animation:`slideUp 300ms ease ${i*80}ms both` }}>
+                    <div style={{ width:26, height:26, borderRadius:6, background:C.card, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13 }}>{ICONS[s.p]||'🔗'}</div>
+                    <span style={{ color:C.textMid, fontSize:11, fontWeight:600 }}>{s.p}</span>
+                    <span style={{ marginLeft:'auto', color:C.textLight, fontSize:10 }}>→</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* URL Badge */}
+        <div style={{ marginTop:20, width:'100%', maxWidth:320, background:C.card, borderRadius:10, padding:'11px 14px', border:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:10 }}>
+          <span style={{ color:C.textLight, fontSize:12 }}>🔗</span>
+          <span style={{ color:C.accent, fontSize:12, fontFamily:'monospace', flex:1 }}>cardid.kr/@{prof.name.replace(/\s/g,'').toLowerCase()}</span>
+          <button onClick={()=>setToast('URL이 복사되었습니다')} style={{ background:'transparent', border:`1px solid ${C.border}`, color:C.textMid, padding:'3px 8px', borderRadius:5, cursor:'pointer', fontSize:11 }}>복사</button>
+        </div>
+      </div>
+
+      {/* vCard Modal */}
+      {vcardModal && (
+        <Modal title="vCard 생성 설정" onClose={()=>setVcardModal(false)} width={440}>
+          <p style={{ color:C.textMid, fontSize:13, marginBottom:16 }}>RFC 2426 vCard 3.0 포맷으로 생성합니다. 스마트폰 기본 연락처 앱과 호환됩니다.</p>
+          {[['이름',prof.name],['직책',prof.title],['이메일',prof.email],['전화',prof.phone]].map(([k,v])=>(
+            <div key={k} style={{ display:'flex', justifyContent:'space-between', padding:'9px 0', borderBottom:`1px solid ${C.border}`, fontSize:13 }}>
+              <span style={{ color:C.textMid }}>{k}</span><span style={{ color:C.text, fontWeight:600 }}>{v}</span>
+            </div>
+          ))}
+          <button onClick={()=>{ setVcardModal(false); setToast('김민수.vcf 파일이 다운로드됩니다'); }}
+            style={{ width:'100%', marginTop:20, padding:'12px', background:`linear-gradient(135deg,${C.accent},#00A896)`, border:'none', borderRadius:10, color:C.primary, fontWeight:700, fontSize:14, cursor:'pointer' }}>
+            💾 vCard 다운로드 (.vcf)
+          </button>
+        </Modal>
+      )}
+
+      {toast && <Toast msg={toast} onClose={()=>setToast('')} />}
+    </div>
+  );
+}
+
+/* ─── Viewer Page ─── */
+function ViewerPage() {
+  const [toast, setToast] = useState('');
+  const [vcardLoading, setVcardLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleVcard = () => { setVcardLoading(true); setTimeout(()=>{ setVcardLoading(false); setToast('김민수.vcf 파일이 다운로드됩니다'); }, 1600); };
+  const handleCopy = () => { setCopied(true); setToast('링크가 클립보드에 복사되었습니다'); setTimeout(()=>setCopied(false),2000); };
+
+  return (
+    <div style={{ padding:'32px 24px', animation:'fadeIn 300ms ease', display:'flex', justifyContent:'center', gap:40, flexWrap:'wrap' }}>
+      {/* Phone mockup */}
+      <div style={{ flexShrink:0 }}>
+        <p style={{ color:C.textMid, fontSize:11, textAlign:'center', marginBottom:14, letterSpacing:'0.08em', textTransform:'uppercase', fontWeight:700 }}>공개 URL 접속 시 화면</p>
+        <div style={{ width:270, background:C.card, borderRadius:28, padding:5, boxShadow:'0 28px 80px rgba(0,0,0,0.7)', border:`2px solid ${C.border}`, animation:'float 3s ease-in-out infinite' }}>
+          <div style={{ background:'#071020', borderRadius:24, overflow:'hidden' }}>
+            <div style={{ background:C.secondary, padding:'7px 16px', display:'flex', justifyContent:'space-between', fontSize:9, color:C.textMid }}>
+              <span style={{ fontWeight:700 }}>9:41</span><span>cardid.kr/@kimminsu</span>
+            </div>
+            <div style={{ padding:'22px 16px 26px', background:`linear-gradient(180deg,${C.surface} 0%,${C.bg} 100%)` }}>
+              <div style={{ width:68, height:68, borderRadius:'50%', background:`linear-gradient(135deg,${C.accent},#006B5E)`, margin:'0 auto 12px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:28, border:`3px solid rgba(0,201,177,0.5)`, boxShadow:'0 0 20px rgba(0,201,177,0.3)' }}>김</div>
+              <h2 style={{ color:C.text, fontSize:16, fontWeight:800, textAlign:'center' }}>김민수</h2>
+              <p style={{ color:C.accent, fontSize:11, textAlign:'center', fontWeight:700, marginTop:3 }}>프론트엔드 개발자</p>
+              <p style={{ color:C.textMid, fontSize:10, textAlign:'center', marginTop:2 }}>플로우테크</p>
+              <p style={{ color:C.textLight, fontSize:9, textAlign:'center', marginTop:9, lineHeight:1.5, padding:'0 4px' }}>웹 서비스와 사용자 경험을 중요하게 생각하는 개발자입니다.</p>
+              <div style={{ display:'flex', gap:5, marginTop:14 }}>
+                {['📞','✉️'].map((ic,i)=>(<div key={i} style={{ flex:1, background:C.secondary, borderRadius:8, padding:'8px 0', textAlign:'center', fontSize:14, cursor:'pointer' }}>{ic}</div>))}
+              </div>
+              <button onClick={handleVcard} style={{ width:'100%', marginTop:10, padding:'9px', background:`linear-gradient(135deg,${C.accent},#00A896)`, border:'none', borderRadius:9, color:C.primary, fontWeight:700, fontSize:11, cursor:'pointer' }}>
+                {vcardLoading ? '생성 중...' : '💾 연락처 저장 (.vcf)'}
+              </button>
+              <div style={{ marginTop:12 }}>
+                {['GitHub','LinkedIn','Instagram','Portfolio'].map((s,i)=>(
+                  <div key={s} style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 8px', background:C.secondary, borderRadius:7, marginBottom:5, cursor:'pointer', animation:`slideUp 300ms ease ${i*70}ms both` }}>
+                    <span style={{ fontSize:12 }}>{s==='GitHub'?'🐙':s==='LinkedIn'?'💼':s==='Instagram'?'📸':'🌐'}</span>
+                    <span style={{ color:C.textMid, fontSize:10, fontWeight:600 }}>{s}</span>
+                    <span style={{ marginLeft:'auto', color:C.textLight, fontSize:9 }}>→</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats & Share */}
+      <div style={{ flex:1, minWidth:260, maxWidth:360, display:'flex', flexDirection:'column', gap:16 }}>
+        <div style={{ background:C.card, borderRadius:14, padding:22, border:`1px solid ${C.border}`, animation:'slideInRight 400ms ease' }}>
+          <h3 style={{ color:C.text, fontSize:15, fontWeight:700, marginBottom:16 }}>📊 조회 통계</h3>
+          {[{l:'이번 주 조회',v:'284회',t:'+12%'},{l:'연락처 저장',v:'47회',t:'+8%'},{l:'SNS 클릭',v:'136회',t:'+22%'},{l:'공유 횟수',v:'29회',t:'+5%'}].map((s,i)=>(
+            <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'9px 0', borderBottom:i<3?`1px solid ${C.border}`:'none' }}>
+              <span style={{ color:C.textMid, fontSize:13 }}>{s.l}</span>
+              <div style={{ textAlign:'right' }}><span style={{ color:C.text, fontWeight:700, fontSize:14, marginRight:8 }}>{s.v}</span><span style={{ color:C.accent, fontSize:11 }}>{s.t}</span></div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ background:C.card, borderRadius:14, padding:22, border:`1px solid ${C.border}`, animation:'slideInRight 500ms ease' }}>
+          <h3 style={{ color:C.text, fontSize:15, fontWeight:700, marginBottom:14 }}>🔗 공유 링크</h3>
+          <div style={{ background:C.surface, borderRadius:8, padding:'10px 14px', display:'flex', alignItems:'center', gap:10, marginBottom:12, border:`1px solid ${C.border}` }}>
+            <span style={{ color:C.accent, fontSize:12, fontFamily:'monospace', flex:1 }}>cardid.kr/@kimminsu</span>
+            <button onClick={handleCopy} style={{ background:copied?C.accent:C.secondary, border:`1px solid ${C.border}`, color:copied?C.primary:C.textMid, padding:'4px 10px', borderRadius:5, cursor:'pointer', fontSize:11, fontWeight:700, transition:'all 200ms' }}>{copied?'✓ 복사됨':'복사'}</button>
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            {['QR 코드','SNS 공유','이메일'].map(b=>(
+              <button key={b} onClick={()=>setToast(`${b} 기능 실행`)} style={{ flex:1, padding:'8px 0', background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, color:C.textMid, fontSize:11, cursor:'pointer', fontWeight:500 }}>{b}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ background:C.card, borderRadius:14, padding:22, border:`1px solid ${C.border}`, animation:'slideInRight 600ms ease' }}>
+          <h3 style={{ color:C.text, fontSize:15, fontWeight:700, marginBottom:14 }}>📱 유입 경로</h3>
+          {[{l:'직접 접속',pct:42},{l:'NFC 태그',pct:28},{l:'QR 코드',pct:18},{l:'소셜 공유',pct:12}].map((r,i)=>(
+            <div key={i} style={{ marginBottom:11 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
+                <span style={{ color:C.textMid, fontSize:12 }}>{r.l}</span>
+                <span style={{ color:C.text, fontSize:12, fontWeight:600 }}>{r.pct}%</span>
+              </div>
+              <div style={{ height:5, background:C.secondary, borderRadius:3 }}>
+                <div style={{ height:'100%', borderRadius:3, background:`linear-gradient(90deg,${C.accent},#00A896)`, animation:`barGrow 800ms ease ${i*150}ms both`, '--target-width':`${r.pct}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {toast && <Toast msg={toast} onClose={()=>setToast('')} />}
+    </div>
+  );
+}
+
+/* ─── Auth Page ─── */
+function AuthPage() {
+  const [mode, setMode] = useState('login');
+  const [form, setForm] = useState({ email:'', pw:'', name:'', confirm:'' });
+  const [loading, setLoading] = useState(false);
+  const [toast, setToast] = useState('');
+  const up = (k,v) => setForm(p=>({...p,[k]:v}));
+  const submit = () => { setLoading(true); setTimeout(()=>{ setLoading(false); setToast(mode==='login'?'로그인 성공! 대시보드로 이동합니다.':'회원가입 완료! 이메일 인증을 확인해주세요.'); }, 1500); };
+
+  return (
+    <div style={{ padding:'40px 24px', animation:'fadeIn 300ms ease', display:'flex', justifyContent:'center', gap:40, flexWrap:'wrap' }}>
+      <div style={{ width:380, background:C.card, borderRadius:18, padding:32, border:`1px solid ${C.border}`, boxShadow:'0 8px 40px rgba(0,0,0,0.4)' }}>
+        <div style={{ textAlign:'center', marginBottom:28 }}>
+          <div style={{ width:56, height:56, borderRadius:16, background:`linear-gradient(135deg,${C.accent},#006B5E)`, margin:'0 auto 14px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, fontWeight:800, color:C.primary }}>C</div>
+          <h2 style={{ color:C.text, fontSize:22, fontWeight:800 }}>CardID</h2>
+          <p style={{ color:C.textMid, fontSize:13, marginTop:4 }}>디지털 명함 플랫폼</p>
+        </div>
+        <div style={{ display:'flex', background:C.surface, borderRadius:10, padding:4, marginBottom:24 }}>
+          {[['login','로그인'],['signup','회원가입']].map(([m,l])=>(
+            <button key={m} onClick={()=>setMode(m)} style={{ flex:1, padding:'8px 0', borderRadius:7, border:'none', background:mode===m?C.accent:'transparent', color:mode===m?C.primary:C.textMid, fontWeight:mode===m?700:400, fontSize:13, cursor:'pointer', transition:'all 200ms' }}>{l}</button>
+          ))}
+        </div>
+        {mode==='signup' && <Field label="이름" value={form.name} onChange={v=>up('name',v)} placeholder="홍길동" />}
+        <Field label="이메일" value={form.email} onChange={v=>up('email',v)} type="email" placeholder="email@example.com" />
+        <Field label="비밀번호" value={form.pw} onChange={v=>up('pw',v)} type="password" placeholder="8자 이상 영문+숫자+특수문자" />
+        {mode==='signup' && <Field label="비밀번호 확인" value={form.confirm} onChange={v=>up('confirm',v)} type="password" placeholder="비밀번호를 다시 입력" />}
+        {mode==='login' && <div style={{ textAlign:'right', marginTop:-8, marginBottom:16 }}><span style={{ color:C.accent, fontSize:12, cursor:'pointer' }}>비밀번호 찾기</span></div>}
+        <button onClick={submit} disabled={loading} style={{ width:'100%', padding:13, background:loading?C.secondary:`linear-gradient(135deg,${C.accent},#00A896)`, border:'none', borderRadius:10, color:loading?C.textMid:C.primary, fontWeight:700, fontSize:14, cursor:'pointer', transition:'all 200ms' }}>
+          {loading ? '처리 중...' : mode==='login' ? '로그인' : '회원가입'}
+        </button>
+        <div style={{ textAlign:'center', marginTop:20 }}>
+          <p style={{ color:C.textLight, fontSize:12, marginBottom:10 }}>또는 소셜 계정으로 계속</p>
+          <div style={{ display:'flex', gap:8 }}>
+            {['G Google','K Kakao'].map(s=>(
+              <button key={s} onClick={()=>setToast(`${s.split(' ')[1]} 로그인 연동`)} style={{ flex:1, padding:'9px 0', background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, color:C.textMid, fontSize:12, cursor:'pointer', fontWeight:500 }}>{s}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ width:280, display:'flex', flexDirection:'column', gap:12 }}>
+        <p style={{ color:C.textMid, fontSize:11, fontWeight:700, letterSpacing:'0.1em', textTransform:'uppercase' }}>🔐 보안 아키텍처</p>
+        {[{ic:'🔑',t:'액세스 토큰',d:'15분 유효 · 메모리 저장'},{ic:'🛡',t:'리프레시 토큰',d:'7일 유효 · HttpOnly Cookie'},{ic:'🔄',t:'자동 갱신',d:'Axios 인터셉터 401 감지 재발급'},{ic:'🔒',t:'비밀번호 해싱',d:'bcrypt cost 12 적용'}].map((i,idx)=>(
+          <div key={idx} style={{ background:C.card, borderRadius:12, padding:'14px 16px', border:`1px solid ${C.border}`, animation:`slideUp 400ms ease ${idx*80}ms both`, display:'flex', gap:12, alignItems:'center' }}>
+            <span style={{ fontSize:20 }}>{i.ic}</span>
+            <div><p style={{ color:C.text, fontWeight:600, fontSize:13 }}>{i.t}</p><p style={{ color:C.textMid, fontSize:11, marginTop:2 }}>{i.d}</p></div>
+          </div>
+        ))}
+      </div>
+
+      {toast && <Toast msg={toast} onClose={()=>setToast('')} />}
+    </div>
+  );
+}
+
+/* ─── Settings Page ─── */
+function SettingsPage() {
+  const [slug, setSlug] = useState('kimminsu');
+  const [slugSt, setSlugSt] = useState('available');
+  const [isPublic, setIsPublic] = useState(true);
+  const [theme, setTheme] = useState('dark');
+  const [toast, setToast] = useState('');
+  const [links, setLinks] = useState([
+    {p:'GitHub',u:'github.com/kimminsu',on:true},
+    {p:'LinkedIn',u:'linkedin.com/in/kimminsu',on:true},
+    {p:'Instagram',u:'instagram.com/minsu.dev',on:false},
+    {p:'Portfolio',u:'kimminsu.dev',on:true},
+    {p:'Twitter',u:'twitter.com/minsu_dev',on:true},
+    {p:'YouTube',u:'',on:false},
+  ]);
+  const [pwModal, setPwModal] = useState(false);
+  const [pwForm, setPwForm] = useState({ cur:'', nw:'', cf:'' });
+
+  const handleSlug = v => {
+    setSlug(v); if (!v) return;
+    setSlugSt('checking');
+    setTimeout(()=>setSlugSt(v.length>2 && v!=='taken'?'available':'taken'), 600);
+  };
+  const toggleLink = i => setLinks(ls=>ls.map((l,xi)=>xi===i?{...l,on:!l.on}:l));
+
+  return (
+    <div style={{ padding:'28px 24px', animation:'fadeIn 300ms ease', maxWidth:700, margin:'0 auto' }}>
+      {/* Slug */}
+      <div style={{ background:C.card, borderRadius:14, padding:22, marginBottom:16, border:`1px solid ${C.border}` }}>
+        <h3 style={{ color:C.text, fontSize:15, fontWeight:700, marginBottom:16 }}>🔗 URL 슬러그</h3>
+        <div style={{ display:'flex', gap:0, alignItems:'stretch', marginBottom:8 }}>
+          <span style={{ padding:'10px 14px', background:C.surface, border:`1px solid ${C.border}`, borderRight:'none', borderRadius:'8px 0 0 8px', color:C.textMid, fontSize:13, display:'flex', alignItems:'center' }}>cardid.kr/@</span>
+          <input value={slug} onChange={e=>handleSlug(e.target.value)}
+            style={{ flex:1, padding:'10px 14px', background:C.surface, border:`1px solid ${slugSt==='taken'?C.danger:slugSt==='available'?C.accent:C.border}`, borderRadius:'0 8px 8px 0', color:C.text, fontSize:14, outline:'none', transition:'border-color 200ms' }} />
+        </div>
+        {slugSt==='checking' && <p style={{ color:C.textMid, fontSize:12, animation:'pulse 1s infinite' }}>● 확인 중...</p>}
+        {slugSt==='available' && <p style={{ color:C.accent, fontSize:12 }}>✓ 사용 가능한 URL입니다</p>}
+        {slugSt==='taken' && <p style={{ color:C.danger, fontSize:12 }}>✗ 이미 사용 중인 URL입니다. 다른 이름을 입력해주세요.</p>}
+      </div>
+
+      {/* Privacy */}
+      <div style={{ background:C.card, borderRadius:14, padding:22, marginBottom:16, border:`1px solid ${C.border}` }}>
+        <h3 style={{ color:C.text, fontSize:15, fontWeight:700, marginBottom:16 }}>👁 공개 범위</h3>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+          <div><p style={{ color:C.text, fontWeight:600, fontSize:14 }}>프로필 공개</p><p style={{ color:C.textMid, fontSize:12, marginTop:2 }}>{isPublic?'누구나 링크로 접근 가능':'본인만 확인 가능'}</p></div>
+          <div onClick={()=>setIsPublic(p=>!p)} style={{ width:48, height:26, borderRadius:13, background:isPublic?C.accent:C.secondary, cursor:'pointer', transition:'background 200ms', position:'relative' }}>
+            <div style={{ width:20, height:20, borderRadius:'50%', background:'#fff', position:'absolute', top:3, left:isPublic?'calc(100% - 23px)':3, transition:'left 200ms' }} />
+          </div>
+        </div>
+      </div>
+
+      {/* Theme */}
+      <div style={{ background:C.card, borderRadius:14, padding:22, marginBottom:16, border:`1px solid ${C.border}` }}>
+        <h3 style={{ color:C.text, fontSize:15, fontWeight:700, marginBottom:16 }}>🎨 명함 테마</h3>
+        <div style={{ display:'flex', gap:10 }}>
+          {[{id:'dark',l:'다크',bg:'#071020',ac:'#00C9B1'},{id:'light',l:'라이트',bg:'#F8F9FA',ac:'#0A1628'},{id:'gradient',l:'그라데이션',bg:'linear-gradient(135deg,#0A1628,#1E3A5F)',ac:'#00C9B1'}].map(t=>(
+            <div key={t.id} onClick={()=>setTheme(t.id)} style={{ flex:1, background:t.bg, borderRadius:10, padding:'14px 10px', textAlign:'center', cursor:'pointer', border:`2px solid ${theme===t.id?C.accent:C.border}`, transition:'all 200ms' }}>
+              <div style={{ width:22, height:22, borderRadius:'50%', background:t.ac, margin:'0 auto 7px' }} />
+              <p style={{ color:theme===t.id?C.accent:C.textMid, fontSize:11, fontWeight:600 }}>{t.l}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* SNS Links */}
+      <div style={{ background:C.card, borderRadius:14, padding:22, marginBottom:16, border:`1px solid ${C.border}` }}>
+        <h3 style={{ color:C.text, fontSize:15, fontWeight:700, marginBottom:16 }}>🔗 SNS 링크 관리</h3>
+        {links.map((l,i)=>(
+          <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 12px', background:C.surface, borderRadius:8, marginBottom:7, border:`1px solid ${C.border}` }}>
+            <span style={{ color:C.textLight, cursor:'grab', fontSize:14, padding:'0 2px' }}>⠿</span>
+            <span style={{ color:C.text, fontSize:13, fontWeight:600, flex:'0 0 80px' }}>{l.p}</span>
+            <span style={{ color:C.textMid, fontSize:12, flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{l.u||'URL 미입력'}</span>
+            <div onClick={()=>toggleLink(i)} style={{ width:38, height:21, borderRadius:11, background:l.on?C.accent:C.secondary, cursor:'pointer', position:'relative', transition:'background 200ms', flexShrink:0 }}>
+              <div style={{ width:15, height:15, borderRadius:'50%', background:'#fff', position:'absolute', top:3, left:l.on?'calc(100% - 18px)':3, transition:'left 200ms' }} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Danger Zone */}
+      <div style={{ background:C.card, borderRadius:14, padding:22, marginBottom:20, border:`1px solid rgba(255,107,107,0.2)` }}>
+        <h3 style={{ color:C.danger, fontSize:15, fontWeight:700, marginBottom:14 }}>⚠️ 계정 관리</h3>
+        <div style={{ display:'flex', gap:10 }}>
+          <button onClick={()=>setPwModal(true)} style={{ flex:1, padding:'10px', background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, color:C.textMid, fontSize:13, cursor:'pointer', fontWeight:500 }}>비밀번호 변경</button>
+          <button onClick={()=>setToast('회원 탈퇴 처리를 위해 이메일 인증이 필요합니다')} style={{ flex:1, padding:'10px', background:'transparent', border:`1px solid rgba(255,107,107,0.4)`, borderRadius:8, color:C.danger, fontSize:13, cursor:'pointer', fontWeight:500 }}>회원 탈퇴</button>
+        </div>
+      </div>
+
+      <button onClick={()=>setToast('설정이 저장되었습니다 ✓')} style={{ width:'100%', padding:13, background:`linear-gradient(135deg,${C.accent},#00A896)`, border:'none', borderRadius:10, color:C.primary, fontWeight:700, fontSize:15, cursor:'pointer' }}>✓ 설정 저장</button>
+
+      {pwModal && (
+        <Modal title="비밀번호 변경" onClose={()=>setPwModal(false)} width={420}>
+          <Field label="현재 비밀번호" value={pwForm.cur} onChange={v=>setPwForm(p=>({...p,cur:v}))} type="password" placeholder="현재 비밀번호" />
+          <Field label="새 비밀번호" value={pwForm.nw} onChange={v=>setPwForm(p=>({...p,nw:v}))} type="password" placeholder="8자 이상 영문+숫자+특수문자" />
+          <Field label="비밀번호 확인" value={pwForm.cf} onChange={v=>setPwForm(p=>({...p,cf:v}))} type="password" placeholder="새 비밀번호 재입력" />
+          <button onClick={()=>{ setPwModal(false); setToast('비밀번호가 변경되었습니다'); }} style={{ width:'100%', marginTop:8, padding:'12px', background:`linear-gradient(135deg,${C.accent},#00A896)`, border:'none', borderRadius:10, color:C.primary, fontWeight:700, fontSize:14, cursor:'pointer' }}>변경 완료</button>
+        </Modal>
+      )}
+
+      {toast && <Toast msg={toast} onClose={()=>setToast('')} />}
+    </div>
+  );
+}
+
+/* ─── App Root ─── */
+function App() {
+  const [tab, setTab] = useState('editor');
+  const [ck, setCk] = useState(0);
+  const hero = HERO[tab];
+
+  const go = t => { setTab(t); setCk(k=>k+1); };
+
+  return (
+    <div style={{ width:'100%', minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column' }}>
+      {/* TopNav */}
+      <header style={{ position:'sticky', top:0, zIndex:100, background:C.primary, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', height:56, padding:'0 24px', gap:4, flexShrink:0 }}>
+        <div style={{ marginRight:24, display:'flex', alignItems:'center', gap:8 }}>
+          <div style={{ width:28, height:28, borderRadius:8, background:`linear-gradient(135deg,${C.accent},#006B5E)`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:800, color:C.primary }}>C</div>
+          <span style={{ color:C.text, fontWeight:800, fontSize:16, letterSpacing:'-0.02em' }}>CardID</span>
+        </div>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>go(t.id)}
+            style={{ padding:'6px 14px', borderRadius:8, border:'none', background:tab===t.id?`${C.accent}22`:'transparent', color:tab===t.id?C.accent:C.textMid, fontWeight:tab===t.id?700:400, fontSize:14, cursor:'pointer', transition:'all 200ms' }}>
+            {t.label}
+          </button>
+        ))}
+        <div style={{ flex:1 }} />
+        <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+          <div style={{ color:C.textLight, fontSize:13, cursor:'pointer' }}>🔔</div>
+          <div style={{ width:30, height:30, borderRadius:'50%', background:`linear-gradient(135deg,${C.accent},#006B5E)`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, color:C.primary, fontWeight:700, cursor:'pointer' }}>K</div>
+        </div>
+      </header>
+
+      {/* Hero Banner */}
+      <div style={{ background:`linear-gradient(135deg,${C.secondary} 0%,${C.primary} 100%)`, padding:'22px 32px', borderBottom:`1px solid ${C.border}`, flexShrink:0 }}>
+        <div style={{ maxWidth:1200, margin:'0 auto', display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:16 }}>
+          <div>
+            <h1 style={{ color:C.text, fontSize:21, fontWeight:800, letterSpacing:'-0.02em' }}>{hero.title}</h1>
+            <p style={{ color:C.textMid, fontSize:12, marginTop:5 }}>{hero.sub}</p>
+          </div>
+          <div style={{ display:'flex', gap:28 }}>
+            {hero.kpis.map((k,i)=>(
+              <div key={i} style={{ textAlign:'right' }}>
+                <p style={{ color:C.accent, fontSize:17, fontWeight:800, animation:'countUp 500ms ease' }}><CountUp end={k.v} /></p>
+                <p style={{ color:C.textMid, fontSize:11, marginTop:2 }}>{k.l}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div key={ck} style={{ flex:1, overflow:'auto', animation:'fadeIn 250ms ease' }}>
+        {tab==='editor' && <EditorPage />}
+        {tab==='viewer' && <ViewerPage />}
+        {tab==='auth' && <AuthPage />}
+        {tab==='settings' && <SettingsPage />}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
