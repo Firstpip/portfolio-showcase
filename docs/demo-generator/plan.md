@@ -194,6 +194,10 @@ Phase 5 (Deploy)
             ▼
 Phase 6 (E2E)
   T6.1 (←T5.2)
+            │
+            ▼
+Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
+  T7.1 (←T6.1) ─── T7.2 (←T7.1) ─── T7.3 (←T7.2)
 ```
 
 ---
@@ -643,7 +647,70 @@ Phase 6 (E2E)
 
 ---
 
-## 7. 비기능 요건 & 가드레일
+### Phase 7 — 1-click 자동 파이프라인 (UX 재설계)
+
+> **배경 (2026-04-27 사용자 피드백)**: 데모 생성기 UX가 다단계(공고 paste → 추출 → 구조화 편집 → 승인 → 생성)로 사용자 인지 부담 큼. 위시켓 URL이 이미 DB에 있고(`wishket_projects.wishket_url`) 자동 fetch 인프라(`wishket-portfolio-system/scripts/fetch-wishket-project.js`)도 존재하는데 dashboard는 수동 paste UI로만 구현됨. T6.2/T6.3로 extract 정확도 강화 + T4.2 재생성 패널로 사후 교정 가능 → pre-edit 안전망(SpecModal, StructuredSpecEditor, ApprovalPanel) 폐기하고 트리거 1회 = ready 흐름으로 단순화.
+>
+> **재설계 핵심**: 사용자 액션은 행에 노출된 단일 "🎬 데모 생성" 버튼 클릭 1회. 워커가 fetch → extract → auto-approve → generate → deploy 자동 chain. 결과 마음에 안 들면 기존 재생성 패널(T4.2) 사용.
+
+#### T7.1 워커 자동 파이프라인 (wishket fetch + auto chain)
+- **상태**: `TODO`
+- **depends_on**: T6.1
+- **requires_test**: yes
+- **파일**: `worker/fetch-spec.ts` (신규), `worker/shared/wishket-fetch.ts` (신규, `wishket-portfolio-system/scripts/fetch-wishket-project.js` 로직 포팅), `worker/generate-demo/orchestrator.ts` (`handleAutorunQueued` 추가 + extract→gen 자동 chain), `worker/index.ts` (라우터에 `autorun_queued` 분기 + `extract_ready` 자동 승격), `supabase/migrations/{timestamp}_demo_status_autorun.sql` (CHECK 제약에 `autorun_queued`/`fetching`/`fetch_failed` 추가)
+- **해야 할 일**:
+  1. `worker/shared/wishket-fetch.ts`: puppeteer로 `wishket_url`에서 본문 추출 (`fetch-wishket-project.js`의 `extractProject` 함수 포팅, login 모듈도 함께). 환경변수 `WISHKET_EMAIL`/`WISHKET_PASSWORD`는 `.env.local` 추가.
+  2. `worker/fetch-spec.ts`: `handleAutorunQueued(supabase, projectId)` — atomic claim(`autorun_queued`→`fetching`) → wishket_url 조회 → wishket-fetch 호출 → `spec_raw` 저장 → `demo_status='extract_queued'` 자동 전이 (extract 단계로 chain). 실패 시 `demo_status='fetch_failed'`, `regenerate_scope` 보존(재시도 가능).
+  3. `worker/index.ts` 라우터: `autorun_queued` → `handleAutorunQueued`. `extract_ready` 진입 시 `spec_approved_at = now()` 자동 세팅 + `demo_status='gen_queued'` 자동 승격(auto-approve).
+  4. `supabase/migrations/{ts}_demo_status_autorun.sql`: `demo_status` CHECK 제약에 새 상태 3개 추가. 기존 행 영향 없음.
+  5. spec_raw가 이미 있는 행의 autorun: 기본 fetch 강제 갱신 (URL 변경되거나 공고 갱신 가능성). 향후 옵션 `skip_fetch`로 제어 가능.
+- **test_spec**:
+  - [ ] 마이그레이션 적용 후 새 상태 3개로 INSERT/UPDATE 가능, 기존 상태들도 모두 통과
+  - [ ] wishket_url 있는 테스트 행 → autorun_queued 트리거 → 5분 이내 demo_status='ready' (Realtime 우회 직접 호출 방식)
+  - [ ] wishket_url 무효(존재하지 않는 프로젝트 ID) → fetch_failed 전이, spec_raw NULL 유지, regenerate_scope 보존
+  - [ ] login 환경변수 미설정 → fetch_failed + actionable 에러 메시지
+  - [ ] 자동 chain 검증: fetching → extract_queued → extracting → extract_ready → gen_queued → generating → ready 8단계 모두 atomic 진행 (중간 race condition 0건)
+- **last_failure**: —
+
+#### T7.2 dashboard SpecModal 폐기 + "🎬 데모 생성" 단일 버튼
+- **상태**: `TODO`
+- **depends_on**: T7.1
+- **requires_test**: yes
+- **파일**: `dashboard/index.html`
+- **해야 할 일**:
+  1. **삭제 대상 컴포넌트/핸들러** (T1.1/T2.3/T2.4의 결과물): `SpecModal`, `StructuredSpecEditor`, `ApprovalPanel`, `handleOpenSpec`, `handleSaveSpec`, `handleApproveSpec`, `handleStartDemoGen`, `specProject` state, "📋 공고" 버튼 등. 백워드 호환 위해 남기지 말 것 — 자동화 우선 원칙.
+  2. **새 컴포넌트** `DemoTriggerButton`: ProjectGrid 행에 단 하나의 데모 버튼. 현재 `demo_status`별 라벨/활성:
+     - `none` + `wishket_url` 존재: "🎬 데모 생성" 활성
+     - `none` + `wishket_url` 없음: "🎬 데모 생성" 비활성, tooltip "위시켓 URL을 먼저 입력하세요"
+     - `autorun_queued`/`fetching`: "📥 공고 가져오는 중..." 비활성
+     - `extract_queued`/`extracting`: "🧠 분석 중..." 비활성
+     - `extract_ready`/`gen_queued`/`generating`: "🎨 생성 중..." 비활성
+     - `ready`: 기존 데모 링크 + RegenerationPanel (T4.2 그대로 유지)
+     - `fetch_failed`/`extract_failed`/`failed`: "❌ 실패 — 다시 시도" 활성 (클릭 시 autorun_queued 재트리거)
+  3. **트리거 핸들러** `handleStartAutorun(project)`: `demo_status='autorun_queued'` + `regenerate_scope=null` UPDATE 단순 호출. 모달/confirm 없이 즉시 (실패해도 바로 재시도 가능하므로).
+  4. Realtime 구독 유지 — 진행 상태 변화에 따라 라벨 자동 갱신.
+- **test_spec**:
+  - [ ] wishket_url 있는 행 → "🎬 데모 생성" 활성, 클릭 시 demo_status가 autorun_queued로 변경 (DB 직접 SELECT 검증)
+  - [ ] wishket_url NULL 행 → 버튼 비활성, tooltip 표시 (DOM 속성/aria 검증)
+  - [ ] demo_status 변화에 따라 라벨이 단계별로 갱신 (Realtime 시뮬: 직접 UPDATE 후 UI 반영 확인)
+  - [ ] ready 상태에서 RegenerationPanel(T4.2) 정상 노출 + 동작
+  - [ ] *_failed 상태 → "다시 시도" 클릭 → autorun_queued 재진입
+  - [ ] 삭제된 코드 잔존 0건 (grep `SpecModal|StructuredSpecEditor|ApprovalPanel|handleOpenSpec|handleSaveSpec|handleApproveSpec|specProject`) 모두 매칭 없음
+- **last_failure**: —
+
+#### T7.3 1-click E2E 검증 (실프로젝트)
+- **상태**: `TODO`
+- **depends_on**: T7.2
+- **requires_test**: manual-review
+- **해야 할 일**: 기존 프로젝트 1건(wishket_url 보유, spec_raw 비어있음 또는 기존 값 무시) 대상으로 dashboard에서 "🎬 데모 생성" 1회 클릭 → 사용자 추가 액션 0회 → 데모 ready 도달까지 검증.
+- **review_checklist**:
+  - [ ] 새 프로젝트(wishket_url만 있음, spec_raw 없음)에 "🎬 데모 생성" 1회 클릭 → 5~10분 이내 ready 도달
+  - [ ] 진행 중 라벨이 단계별로 자연스럽게 변화 (가져오기 → 분석 → 생성)
+  - [ ] ready 후 portfolio_links에 데모 추가됨 + 클릭 시 정상 페이지
+  - [ ] 사용자가 중간에 다른 프로젝트 행 클릭해도 진행 영향 없음 (워커가 atomic 처리)
+  - [ ] 실패 시(login 깨짐 시뮬 등) 라벨 "❌ 실패 — 다시 시도"로 전환, 클릭 시 재진입
+
+---
 
 - **비용 모델**: Max 구독 정액제. per-token API 과금 없음. 사용량 리밋(5시간 롤링) 도달 시 워커가 자동 대기 후 재시도.
 - **시크릿 노출 금지**: `GITHUB_TOKEN`, `SUPABASE_SERVICE_ROLE_KEY`는 워커 `.env.local`에만(브라우저/리포에 노출 금지). Claude 인증은 Agent SDK가 `~/.claude/.credentials.json`에서 자동 로드 — 별도 키 관리 불요.
@@ -656,10 +723,11 @@ Phase 6 (E2E)
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (T0.3 DONE — extract-tokens 5개 portfolio-1 검증 + graceful fallback 확인, 사용자 승인. **데모 생성기 모든 task 완료**)
+- **마지막 업데이트**: 2026-04-27 (Phase 7 신설 — 사용자 피드백 반영해 SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + 1-click 자동 파이프라인 재설계. T7.1~T7.3 추가)
 - **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3
 - **진행 중 task**: 없음
-- **다음에 착수 가능**: 데모 생성기 모든 task 완료. 남은 후속 follow-up: dashboard `DEMO_GEN_ENABLED` flag 제거 (별도 commit, demo-task 외부)
+- **다음에 착수 가능**: T7.1 (워커 자동 파이프라인 — wishket fetch + auto chain) — depends_on T6.1 충족
+- **Phase 7 배경**: T1.1/T2.3/T2.4의 다단계 UX(paste → 추출 → 편집 → 승인 → 생성)가 사용자 인지 부담 큼. T6.2/T6.3로 extract 정확도 강화 + T4.2 재생성 패널로 사후 교정 가능 → SpecModal/StructuredSpecEditor/ApprovalPanel 폐기, 트리거 1회로 단순화. 위시켓 URL 자동 fetch 통합으로 paste 자체 제거
 - **별도 follow-up (commit 단위)**: dashboard `DEMO_GEN_ENABLED` flag 제거 — 데모 생성기 핵심 파이프라인이 T5.2 + T6.1 로 검증됐으므로 prod 노출 안전
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
@@ -708,3 +776,4 @@ Phase 6 (E2E)
 | 2026-04-27 | T6.2 완료 | extract 프롬프트 N:M 자동 분해. `worker/prompts/extract-spec.md` 에 "N:M 관계 분해 규칙" 섹션 (감지 신호·금지 패턴·올바른 분해+예시) + 품질체크 항목 2개 추가. `worker/shared/validate-spec.ts` 에 `detectPluralRef` 헬퍼 — `_ids` 접미사 또는 's' 끝 ref 거부 (allowlist: address·status·process·class·series). `worker/test-extract-nm.ts` 신규 — 발달센터 회귀(spec_raw 복제) + 합성 3건(clinic_review_tag, study_member_group, ecom_product_category). 자동 검증 4/4 통과: (1) 발달센터 → review_tag {review_id, tag_id} 자동 등장, 보너스 center_therapy_type 분해 (T6.1 수동 패치 불필요화) (2) clinic → review_tag 분해 (3) study → group_member 분해 (study_group 도메인 prefix → group_id 참조) (4) ecom → product_category 분해. 복수형 ref 위반 0건, Sonnet 4회 호출 (cache_read 21K 재사용) |
 | 2026-04-27 | T6.3 완료 | extract 프롬프트 read-only flow tier 분류 개선. `worker/prompts/extract-spec.md` tier 1 정의에 "steps 안에 write step 적어도 하나 필수" 규칙 + read+persist 예외 단락(찜·북마크·별점·알림 등록은 read 처럼 보여도 tier 1 자격) + 절대 금지 패턴(steps 가 전부 검색·둘러보기·필터·조회 같은 읽기 동사로만 구성된 경우 tier 2 강제) + 4단계 결정 절차 + 품질 체크 2항목 추가. `worker/extract-spec.ts` `stripJsonFence` 를 outer-slice(첫 `{`~마지막 `}`) 무조건 적용으로 보강 — 종료 펜스 + trailing 텍스트 케이스 안전망. `worker/test-extract-tier.ts` 신규 — 발달센터 회귀 + 합성 3건(realestate_browse/event_calendar/recipe_browse). 각 케이스 (1) handleExtractQueued ok (2) tier_1 모든 flow write 동사 step ≥1 (3) read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개. 자동 검증 4/4 통과: T6.1 시점 발달센터 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결. 1회차 실패 — Sonnet 이 ```json 펜스 + trailing 텍스트로 응답해 종료 펜스 정규식 미매칭 (realestate) → stripJsonFence outer-slice 무조건 적용, 그리고 분류기 false positive (recipe 의 "재료 다중 입력" 의 `입력`, "작성자 프로필" 의 `작성`) → 단독 `입력` 제거 + `작성(?!자)` 부정선후행. 사용자 위임 승인 |
 | 2026-04-27 | T0.3 완료 | 디자인 토큰 추출 유틸 manual-review 통과 (사용자 승인). `worker/test-extract-tokens.ts` 로 5개 도메인 portfolio-1 (발달센터/핀테크/병원/임원 대시보드/커뮤니티) 검증. NO_LLM=1: 4/5 케이스 100% 일치 + 5번(하드코딩 케이스)은 휴리스틱 실패 → graceful fallback 안착 (throw 0). LLM ON: Sonnet 1회 호출(10s, 37 output 토큰)로 5번 케이스도 100% 매칭 → 전체 5/5 = 100%. 빈 HTML 입력에서도 `_source='fallback'` 으로 안전하게 떨어짐 확인. 데모 생성기 모든 task (T0.1~T6.3) 완료 |
+| 2026-04-27 | Phase 7 신설 | 사용자 피드백 반영해 데모 생성기 UX 재설계. (a) wishket_projects.wishket_url + wishket-portfolio-system/scripts/fetch-wishket-project.js 인프라가 이미 있는데 dashboard는 수동 paste UI(T1.1)로 구현됐음을 사용자가 지적. (b) 추가로 "구조화 편집기는 LLM이 알아서 하면 되는 거 아닌가"라는 질문 — T6.2/T6.3 프롬프트 강화 + T4.2 재생성 패널로 pre-edit 안전망 redundant. **T7.1** 워커 fetch + auto chain (autorun_queued → fetching → extract → auto-approve → gen → ready 전 단계 자동), **T7.2** dashboard SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + "🎬 데모 생성" 단일 버튼, **T7.3** 1-click E2E 검증. 기존 T1.1/T2.3/T2.4 결과물은 T7.2에서 명시 삭제 (백워드 호환 안 둠) |
