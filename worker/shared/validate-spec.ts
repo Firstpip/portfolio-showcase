@@ -29,6 +29,49 @@ const ALLOWED_FIELD_TYPES = new Set([
 
 const ALLOWED_TIERS = new Set([1, 2, 3]);
 
+// T8.1: spec_structured.stack_decision 검증용 enum 들.
+// LLM 은 chosen_runtime 결정하지 않음 — 코드 (T8.2 build-runtime) 가 client_required + demo_mode 룩업으로 derive.
+const ALLOWED_FREEDOM_LEVELS = new Set(["strict", "preferred", "free"]);
+const ALLOWED_DEMO_MODES = new Set([
+  "standard",
+  "mobile-web",
+  "admin-dashboard",
+  "workflow-diagram",
+]);
+// 공고에서 명시될 수 있는 스택 후보. null 허용 (해당 카테고리가 공고에 등장하지 않으면 null).
+const ALLOWED_FRONTEND_STACKS = new Set([
+  "react",
+  "vue",
+  "svelte",
+  "next",
+  "nuxt",
+  "vanilla",
+  "angular",
+  "jquery",
+]);
+const ALLOWED_BACKEND_STACKS = new Set([
+  "node",
+  "python",
+  "django",
+  "flask",
+  "fastapi",
+  "rails",
+  "spring",
+  "php",
+  "laravel",
+  "go",
+  "dotnet",
+]);
+const ALLOWED_MOBILE_STACKS = new Set([
+  "flutter",
+  "react-native",
+  "swift",
+  "kotlin",
+  "hybrid",
+  "ionic",
+  "cordova",
+]);
+
 // `ref` 필드가 복수형 의미를 가질 수 없도록 차단 (T6.2).
 // `tags: ref`, `category_ids: ref` 처럼 다중 의미를 단수 ref 로 표현하는 패턴을 잡는다.
 // 진짜 다대다는 join entity 로 분해되어야 한다 (extract-spec.md "N:M 분해 규칙").
@@ -259,6 +302,80 @@ export function validateSpecStructured(value: unknown): ValidationResult {
     // reference_portfolio_path는 워커가 채우므로 "존재" 정도만 확인.
     if (typeof brief["reference_portfolio_path"] !== "string") {
       push("design_brief.reference_portfolio_path", "문자열 아님 (빈 문자열이라도 키는 존재해야 함)");
+    }
+  }
+
+  // T8.1: stack_decision (Phase 8). LLM 이 client_required / freedom_level / demo_mode / evidence /
+  // fallback_reason (선택) 만 산출. chosen_runtime 은 코드가 derive (T8.2).
+  const stackDecision = value["stack_decision"];
+  if (!isPlainObject(stackDecision)) {
+    push("stack_decision", "객체 누락 (Phase 8 필수)");
+  } else {
+    // freedom_level
+    const fl = stackDecision["freedom_level"];
+    if (typeof fl !== "string" || !ALLOWED_FREEDOM_LEVELS.has(fl)) {
+      push(
+        "stack_decision.freedom_level",
+        `'strict|preferred|free' 중 하나여야 함, 받은 값: ${JSON.stringify(fl)}`,
+      );
+    }
+    // demo_mode
+    const dm = stackDecision["demo_mode"];
+    if (typeof dm !== "string" || !ALLOWED_DEMO_MODES.has(dm)) {
+      push(
+        "stack_decision.demo_mode",
+        `'standard|mobile-web|admin-dashboard|workflow-diagram' 중 하나여야 함, 받은 값: ${JSON.stringify(dm)}`,
+      );
+    }
+    // evidence — 짧아도 됨 (자유=공고에 명시 없음 표기), 다만 비문자열/빈 금지.
+    if (!isNonEmptyString(stackDecision["evidence"])) {
+      push("stack_decision.evidence", "비어있거나 문자열 아님");
+    }
+    // client_required 객체 + 안의 frontend/backend/mobile (각각 null 또는 enum, 키는 존재 필수).
+    const cr = stackDecision["client_required"];
+    if (!isPlainObject(cr)) {
+      push("stack_decision.client_required", "객체 누락");
+    } else {
+      const checkStackField = (
+        key: string,
+        allowed: Set<string>,
+      ): void => {
+        if (!(key in cr)) {
+          push(`stack_decision.client_required.${key}`, "키 누락 (값이 없으면 null 명시)");
+          return;
+        }
+        const v = cr[key];
+        if (v === null) return; // 명시적 null 허용
+        if (typeof v !== "string" || !allowed.has(v)) {
+          push(
+            `stack_decision.client_required.${key}`,
+            `null 또는 enum 중 하나여야 함, 받은 값: ${JSON.stringify(v)} (허용: ${[...allowed].join("|")})`,
+          );
+        }
+      };
+      checkStackField("frontend", ALLOWED_FRONTEND_STACKS);
+      checkStackField("backend", ALLOWED_BACKEND_STACKS);
+      checkStackField("mobile", ALLOWED_MOBILE_STACKS);
+    }
+    // fallback_reason — 선택. 있으면 string 또는 null. demo_mode 가 standard 가 아닐 때 권장.
+    if ("fallback_reason" in stackDecision) {
+      const fr = stackDecision["fallback_reason"];
+      if (fr !== null && typeof fr !== "string") {
+        push("stack_decision.fallback_reason", "string | null 아님");
+      }
+    }
+    // freedom_level=strict + client_required 가 모두 null 인 경우 모순. 단,
+    // demo_mode='workflow-diagram' (노코드/SaaS 자동화) 는 예외 — Make/Zapier/Airtable
+    // 같은 도구는 frontend/backend/mobile enum 에 매핑되지 않으므로 all null 이 정당.
+    if (fl === "strict" && isPlainObject(cr) && dm !== "workflow-diagram") {
+      const allNull =
+        cr["frontend"] === null && cr["backend"] === null && cr["mobile"] === null;
+      if (allNull) {
+        push(
+          "stack_decision",
+          "freedom_level='strict' 인데 client_required 가 모두 null — strict 면 frontend/backend/mobile 중 적어도 하나는 명시되어야 함 (workflow-diagram demo_mode 는 예외)",
+        );
+      }
     }
   }
 

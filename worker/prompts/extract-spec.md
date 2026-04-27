@@ -61,6 +61,17 @@
   "design_brief": {
     "primary_color_hint": "string",       // 도메인·업종에 맞는 컬러 힌트. 예: "차분한 의료 블루", "따뜻한 베이커리 톤"
     "reference_portfolio_path": ""        // 항상 빈 문자열. 워커가 slug로 채움.
+  },
+  "stack_decision": {
+    "client_required": {
+      "frontend": "react|vue|svelte|next|nuxt|vanilla|angular|jquery|null",   // 공고에 명시된 frontend 스택 (없으면 null)
+      "backend":  "node|python|django|flask|fastapi|rails|spring|php|laravel|go|dotnet|null",
+      "mobile":   "flutter|react-native|swift|kotlin|hybrid|ionic|cordova|null"
+    },
+    "freedom_level": "strict|preferred|free",   // 아래 "스택 결정 규칙" 참조
+    "demo_mode": "standard|mobile-web|admin-dashboard|workflow-diagram",  // 아래 "demo_mode 결정 규칙" 참조
+    "evidence": "string",                       // 공고에서 인용한 1~2 문장. freedom_level='free' 면 "공고에 스택 명시 없음" 같은 짧은 메모도 OK.
+    "fallback_reason": null                     // 선택. demo_mode 가 standard 가 아닐 때 왜 폴백을 골랐는지 한 줄. standard 면 null.
   }
 }
 ```
@@ -145,6 +156,113 @@
 
 ---
 
+## 스택 결정 규칙 (Phase 8 — 필수)
+
+`stack_decision` 은 데모 빌드 단계에서 어떤 runtime 으로 SPA 를 만들지 결정하기 위한 신호. **`chosen_runtime` 은 코드가 결정**하므로 너는 산출하지 마라. 너의 역할:
+
+1. **`client_required.{frontend,backend,mobile}`** — 공고 본문에서 명시된 스택을 enum 으로 매핑. 카테고리에 등장하지 않으면 **반드시 null** (키는 항상 존재).
+2. **`freedom_level`** — 아래 3 단계 중 하나.
+3. **`demo_mode`** — 데모를 어떤 형태로 보여줄지 (아래 결정 규칙).
+4. **`evidence`** — 공고에서 직접 인용한 한두 문장 (스택/freedom 판단 근거). 자유면 "공고에 스택 명시 없음" 같은 메모.
+5. **`fallback_reason`** — `demo_mode` 가 `standard` 가 아닐 때만 한 줄로 이유. `standard` 면 `null`.
+
+### freedom_level 분류
+
+| 레벨 | 정의 | 신호 단어 |
+|---|---|---|
+| `strict` | 클라이언트가 스택을 강제 — 다른 선택 여지 없음 | "필수", "반드시", "강제", "지정", "○○ 만 가능", "○○ 사용해야" |
+| `preferred` | 강한 선호지만 약간의 여지 | "선호", "우선", "권장", "○○ 위주", "○○ 가능자 우대" |
+| `free` | 스택 언급 없음 또는 명시적 자유 | "프레임워크 자유", "스택 무관", "노코드 OK", 또는 스택 카테고리 자체가 공고에 등장하지 않음 |
+
+신호가 모호하면 보수적으로 한 단계 약하게 잡아라 (strict 의심 → preferred, preferred 의심 → free).
+
+### client_required 매핑 가이드
+
+- "Next.js" / "Nextjs" → `frontend: "next"`
+- "React Native" / "RN" → `mobile: "react-native"` (frontend 의 "react" 와 다름)
+- "Vue" / "Vue.js" → `frontend: "vue"`
+- "Nuxt" → `frontend: "nuxt"`
+- "Spring Boot" / "Spring Framework" → `backend: "spring"`
+- "Django" / "장고" → `backend: "django"`
+- "FastAPI" / "Flask" → `backend: "fastapi"` / `"flask"`
+- "Node" / "Express" / "Nest" → `backend: "node"`
+- "PHP" 단독 → `backend: "php"`, "Laravel" → `backend: "laravel"`
+- "iOS / Swift" → `mobile: "swift"`, "Android / Kotlin" → `mobile: "kotlin"`
+- "Flutter" → `mobile: "flutter"`
+- "하이브리드 앱" / "WebView" / "Capacitor" / "Cordova" → `mobile: "hybrid"` (또는 cordova)
+- 단순 HTML/CSS/JS 만 언급 → `frontend: "vanilla"`
+- 카테고리(frontend/backend/mobile) 에 해당 신호 0건 → 그 카테고리 `null`
+
+복수 후보가 한 카테고리에 등장하면 **가장 강하게 명시된 것** 1개만 선택. (예: "React 또는 Vue 가능" → freedom_level=preferred + frontend=null 로 해도 됨, 굳이 하나 고르지 마라)
+
+### demo_mode 결정 규칙
+
+데모는 항상 **브라우저에서 클릭 가능한 SPA**. 공고 형태에 따라 4 가지 폴백 모드:
+
+| demo_mode | 적용 케이스 | fallback_reason 예시 |
+|---|---|---|
+| `standard` | 일반 web 앱 (B2B SaaS, 관리자 페이지, 일반 웹사이트, e-commerce 등) — 데모를 그냥 데스크톱 브라우저에서 보여주면 자연스러움 | null |
+| `mobile-web` | 공고가 **모바일 앱** (iOS/Android/하이브리드/RN/Flutter 등) — 데모는 375px 모바일 frame 안에 SPA 시뮬레이션 | "공고가 모바일 앱이라 375px frame 안에서 SPA 로 시뮬레이션" |
+| `admin-dashboard` | 공고가 **백엔드/AI/데이터 파이프라인 only** — 사용자 visual surface 가 없으므로 "공고 입력 → 결과 시각화" 관리자 대시보드로 흉내 | "백엔드 only 공고라 관리자 대시보드 + 결과 시각화로 시연" |
+| `workflow-diagram` | 공고가 **노코드/SaaS 연동/RPA** (Make·Zapier·Airtable·n8n·Power Automate 등) — 시각적 워크플로우 step + mock 데이터 흐름 | "노코드 SaaS 연동 공고라 워크플로우 다이어그램 + mock 데이터 흐름 시각화" |
+
+판단 우선순위:
+1. **모바일 앱 키워드** (앱·App·iOS·Android·하이브리드·앱스토어·Play Store·푸시·디바이스) 가 공고의 핵심이면 → `mobile-web`
+2. **노코드/SaaS 연동 키워드** (노코드·Make·Zapier·Airtable·n8n·Workflow·자동화·RPA·Power Automate·통합 자동화) 가 공고의 핵심이면 → `workflow-diagram`
+3. **사용자 visual surface 가 명시되지 않음** (예: AI 봇·예측 모델·데이터 파이프라인·OCR 파싱·CAD 분석·API 개발·SDK 연동·크론 잡 only) → `admin-dashboard`
+4. 위에 해당하지 않으면 → `standard`
+
+같은 공고가 여러 모드 후보일 수 있으나, **데모로 보여줄 핵심 가치 제안** 기준 1개만 선택. 예: "관리자 웹 + 모바일 앱" → 둘 다 있지만 미팅 시연 관점에서 모바일이 핵심이면 mobile-web, 관리자가 핵심이면 standard.
+
+### 예시
+
+- 공고: "Next.js 필수, TypeScript, Tailwind. 사내 관리자 페이지 개발."
+  ```jsonc
+  "stack_decision": {
+    "client_required": { "frontend": "next", "backend": null, "mobile": null },
+    "freedom_level": "strict",
+    "demo_mode": "standard",
+    "evidence": "Next.js 필수, TypeScript, Tailwind. 사내 관리자 페이지 개발.",
+    "fallback_reason": null
+  }
+  ```
+
+- 공고: "Flutter 기반 하이브리드 앱. iOS/Android 동시 출시."
+  ```jsonc
+  "stack_decision": {
+    "client_required": { "frontend": null, "backend": null, "mobile": "flutter" },
+    "freedom_level": "strict",
+    "demo_mode": "mobile-web",
+    "evidence": "Flutter 기반 하이브리드 앱. iOS/Android 동시 출시.",
+    "fallback_reason": "공고가 모바일 앱이라 375px frame 안에서 SPA 로 시뮬레이션"
+  }
+  ```
+
+- 공고: "Python FastAPI 로 입찰가 예측 AI 모델 API 개발. 스택 자유, React 우대."
+  ```jsonc
+  "stack_decision": {
+    "client_required": { "frontend": "react", "backend": "fastapi", "mobile": null },
+    "freedom_level": "preferred",
+    "demo_mode": "admin-dashboard",
+    "evidence": "Python FastAPI 로 입찰가 예측 AI 모델 API 개발. (...) React 우대",
+    "fallback_reason": "백엔드/AI 공고라 '입찰 데이터 입력 → 예측가 + 근거 시각화' 관리자 대시보드로 시연"
+  }
+  ```
+
+- 공고: "발달센터 후기 모바일 웹앱. 부모가 후기 작성·검색."
+  ```jsonc
+  "stack_decision": {
+    "client_required": { "frontend": null, "backend": null, "mobile": null },
+    "freedom_level": "free",
+    "demo_mode": "standard",
+    "evidence": "공고에 스택 명시 없음. 일반 web 앱 (모바일 웹) 으로 충분.",
+    "fallback_reason": null
+  }
+  ```
+  (참고: "모바일 웹앱" 은 모바일 앱이 아닌 모바일 친화 web — `mobile-web` 폴백 불필요. 데스크톱 브라우저에서도 자연스럽게 보여지면 `standard`.)
+
+---
+
 ## sample_count 가이드
 
 | 엔티티 성격 | 권장 sample_count |
@@ -178,6 +296,10 @@
 - [ ] **모든 `ref` 필드가 단수 형태인가?** (예: `member_id`, `tag_id`. `members`·`tag_ids` 같은 복수형 ref 금지)
 - [ ] **`tier_1` 의 모든 flow 에 write step 이 적어도 하나 있는가?** (생성/수정/삭제/저장/등록/작성/찜/북마크/즐겨찾기/평가 중 하나)
 - [ ] **`tier_1` 에 read-only flow (`steps` 가 전부 검색·조회·필터·둘러보기) 가 없는가?** 있으면 tier 2 로 내려라.
+- [ ] **`stack_decision` 객체의 5 키(client_required / freedom_level / demo_mode / evidence / fallback_reason) 가 모두 존재하는가?** client_required 안의 frontend/backend/mobile 도 키는 항상 존재 (값이 없으면 명시적 null).
+- [ ] **`freedom_level='strict'` 인데 `client_required` 가 모두 null 인 모순이 없는가?** strict 면 적어도 한 카테고리는 enum.
+- [ ] **`demo_mode != 'standard'` 인 경우 `fallback_reason` 이 null 이 아닌 한 줄로 채워졌는가?** (왜 폴백인지)
+- [ ] **`demo_mode='standard'` 인 경우 `fallback_reason` 이 null 인가?**
 - [ ] JSON이 단일 객체이고, 코드 펜스·설명 문장·trailing comma가 없는가?
 
 ---
@@ -214,6 +336,13 @@
   "design_brief": {
     "primary_color_hint": "차분한 의료 블루 + 민트 액센트",
     "reference_portfolio_path": ""
+  },
+  "stack_decision": {
+    "client_required": { "frontend": null, "backend": null, "mobile": null },
+    "freedom_level": "free",
+    "demo_mode": "standard",
+    "evidence": "공고에 스택 명시 없음. 일반 web 앱.",
+    "fallback_reason": null
   }
 }
 ```

@@ -760,22 +760,30 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 - **last_failure**: —
 
 #### T8.1 spec_structured stack_decision 추출
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T8.0
 - **requires_test**: yes
-- **파일**: `worker/prompts/extract-spec.md`, `worker/shared/validate-spec.ts`, `worker/test-extract-stack.ts` (신규), `supabase/migrations/{ts}_demo_status_building.sql` (demo_status에 'building' 추가)
-- **해야 할 일**:
-  - extract-spec.md에 "스택 결정" 섹션 추가 — 공고에서 stack/freedom 신호 추출 규칙, evidence 인용 규칙, chosen_runtime 매핑표(react→vite-react-ts, vue→vite-vue, next→next-static, vanilla→vite-react-ts free, free→vite-react-ts), demo_mode 결정 규칙 (모바일 키워드/백엔드 only/노코드 키워드)
-  - validate-spec.ts에 stack_decision 스키마 검증 추가
-  - 회귀 테스트: 발달센터(free/standard) + 합성 케이스 4건 (react strict / vue preferred / 모바일 앱 / 백엔드 only)
-  - demo_status에 'building' 단계 추가 (생성 단계가 길어진 만큼 분리)
-- **test_spec**:
-  - [ ] 발달센터 spec_raw → stack_decision.freedom_level='free', chosen_runtime='vite-react-ts', demo_mode='standard'
-  - [ ] "React 필수" 공고 → freedom_level='strict', client_required.frontend='react', evidence에 인용
-  - [ ] 모바일 앱 공고 → demo_mode='mobile-web'
-  - [ ] 백엔드 only 공고 → demo_mode='admin-dashboard'
-  - [ ] 노코드 공고 → demo_mode='workflow-diagram'
-  - [ ] 마이그레이션 적용 후 'building' INSERT/UPDATE 가능
+- **파일**: `worker/prompts/extract-spec.md` (스택 결정 섹션 + 스키마 + 품질체크 + 예시 갱신), `worker/shared/validate-spec.ts` (stack_decision 검증), `worker/test-extract-stack.ts` (신규, 6 케이스), `supabase/migrations/20260427183000_demo_status_building.sql`
+- **구현 메모**:
+  - **chosen_runtime 은 LLM 책임 아님** — 코드(T8.2 build-runtime) 가 client_required + demo_mode 룩업으로 derive. LLM 은 client_required (4 카테고리 enum or null) + freedom_level (strict/preferred/free) + demo_mode (4종) + evidence (공고 인용) + fallback_reason (선택) 만 산출. 디버깅 쉽고 향후 runtime 추가 시 프롬프트 손 안 댐.
+  - **demo_mode 4종**:
+    - `standard` — 일반 web 앱 (B2B SaaS, 관리자, e-commerce)
+    - `mobile-web` — 모바일 앱 공고 폴백 (375px frame 안에 SPA)
+    - `admin-dashboard` — 백엔드/AI/데이터 only 공고 폴백 (입력→결과 시각화)
+    - `workflow-diagram` — 노코드/SaaS 연동 공고 폴백 (시각 step + mock 데이터 흐름)
+  - **enum 매핑 가이드** (extract-spec.md 안에 표로 명시): Next.js→next, RN→react-native(mobile≠frontend), Spring Boot→spring, FastAPI/Flask→fastapi/flask, Flutter→flutter, 단순 HTML→vanilla 등. 카테고리에 신호 0건 → `null` 명시.
+  - **freedom_level 분류 가이드**: strict 신호 ("필수"/"반드시"/"○○만 가능"), preferred ("선호"/"우선"/"우대"), free (스택 미언급 또는 "자유"/"무관"/"노코드 OK"). 신호 모호하면 보수적으로 한 단계 약하게 (strict→preferred, preferred→free).
+  - **마이그레이션 (20260427183000)**: `demo_status` CHECK 제약에 `building` 추가 (총 13 상태). Phase 8 generate 가 두 단계로 분리됨 — `generating` (LLM src/ 트리 생성) + `building` (vite build + dist 추출). 사용 분기는 T8.7 에서 결정.
+  - **validate-spec.ts 추가 검증**: stack_decision 객체 + freedom_level/demo_mode enum + client_required.{frontend,backend,mobile} 키 존재 + null 또는 enum 값 + evidence 비어있지 않음 + (모순 체크) freedom_level=strict + client_required all null 인데 demo_mode != workflow-diagram 이면 reject. workflow-diagram 예외 — 노코드 도구는 enum 매핑 안 됨.
+  - **예시 출력 갱신**: extract-spec.md 끝 예시(orthopedic-clinic) 에 stack_decision 추가 (free/standard/all null/fallback_reason=null).
+- **자동 검증 결과 (2026-04-27, 6/6 통과 / 두 사이클 후)**:
+  - 1차 6회 호출 → 3 PASS / 3 FAIL. 분석:
+    - therapy_regression FAIL — 발달센터 공고가 실제 "안드로이드/iOS 앱 개발" 이라 LLM 이 정확히 mobile-web 분류. 내 expected (standard) 가 틀림. T6.1 시점엔 mobile-web 모드 자체가 없어 standard 처럼 처리됐을 뿐.
+    - react_strict FAIL — spec_raw 에 "백엔드 API 는 별도 팀이 제공 (Spring Boot)" 명시했더니 LLM 이 정확히 backend=spring 추출. 내 expected (backend=null) 가 틀림.
+    - nocode_workflow FAIL — 스키마 검증에서 freedom_level=strict + client_required all null reject. 노코드 공고는 enum 에 없는 도구만 명시되므로 정당한 케이스. validator 의 모순 체크가 너무 엄격.
+  - 보정: validator workflow-diagram 예외 추가 + therapy expected→mobile-web + react_strict expected.backend→spring + nocode_workflow freedom_alts 에 'free' 추가.
+  - 2차 4회 호출 (3 fail 재실행 + nocode 한번 더) → 6/6 PASS. LLM 동작은 모두 정확했음 — 실패 3건 모두 expected/validator 측 오류였음.
+  - 토큰 효율: 합성 5건 모두 cache_read 24,736 / cache_creation 600~700 (시스템 프롬프트 26K 캐시). 발달센터 1차만 cache_creation 26K (캐시 미스, 첫 호출).
 - **last_failure**: —
 
 #### T8.2 build-runtime 모듈 — runtime 복사 + 임시 디렉토리 관리
@@ -916,10 +924,10 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (T8.0 DONE — vite-react-ts runtime 셋업 완료, 22s install + 3s build, 4/4 검증 통과. 다음 T8.1 spec stack_decision 추출)
-- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0
+- **마지막 업데이트**: 2026-04-27 (T8.1 DONE — extract 가 stack_decision 산출, 6/6 검증 통과 / 보정 1사이클. 다음 T8.2 build-runtime 모듈)
+- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1
 - **진행 중 task**: 없음
-- **다음에 착수 가능**: T8.1 (spec_structured stack_decision 추출) — depends_on T8.0 충족
+- **다음에 착수 가능**: T8.2 (build-runtime 모듈 — runtime 복사 + 임시 디렉토리 + vite build) — depends_on T8.0 충족
 - **블로킹 중**: T7.3 (Phase 8 완료 후 재개)
 - **Phase 8 첫 cut 범위**: T8.0~T8.8 (vite-react-ts runtime 1개 + standard demo_mode + 1-click E2E). 후속 T8.9~T8.11은 polish.
 - **Phase 7 배경**: T1.1/T2.3/T2.4의 다단계 UX(paste → 추출 → 편집 → 승인 → 생성)가 사용자 인지 부담 큼. T6.2/T6.3로 extract 정확도 강화 + T4.2 재생성 패널로 사후 교정 가능 → SpecModal/StructuredSpecEditor/ApprovalPanel 폐기, 트리거 1회로 단순화. 위시켓 URL 자동 fetch 통합으로 paste 자체 제거
@@ -971,6 +979,7 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 | 2026-04-27 | T6.2 완료 | extract 프롬프트 N:M 자동 분해. `worker/prompts/extract-spec.md` 에 "N:M 관계 분해 규칙" 섹션 (감지 신호·금지 패턴·올바른 분해+예시) + 품질체크 항목 2개 추가. `worker/shared/validate-spec.ts` 에 `detectPluralRef` 헬퍼 — `_ids` 접미사 또는 's' 끝 ref 거부 (allowlist: address·status·process·class·series). `worker/test-extract-nm.ts` 신규 — 발달센터 회귀(spec_raw 복제) + 합성 3건(clinic_review_tag, study_member_group, ecom_product_category). 자동 검증 4/4 통과: (1) 발달센터 → review_tag {review_id, tag_id} 자동 등장, 보너스 center_therapy_type 분해 (T6.1 수동 패치 불필요화) (2) clinic → review_tag 분해 (3) study → group_member 분해 (study_group 도메인 prefix → group_id 참조) (4) ecom → product_category 분해. 복수형 ref 위반 0건, Sonnet 4회 호출 (cache_read 21K 재사용) |
 | 2026-04-27 | T6.3 완료 | extract 프롬프트 read-only flow tier 분류 개선. `worker/prompts/extract-spec.md` tier 1 정의에 "steps 안에 write step 적어도 하나 필수" 규칙 + read+persist 예외 단락(찜·북마크·별점·알림 등록은 read 처럼 보여도 tier 1 자격) + 절대 금지 패턴(steps 가 전부 검색·둘러보기·필터·조회 같은 읽기 동사로만 구성된 경우 tier 2 강제) + 4단계 결정 절차 + 품질 체크 2항목 추가. `worker/extract-spec.ts` `stripJsonFence` 를 outer-slice(첫 `{`~마지막 `}`) 무조건 적용으로 보강 — 종료 펜스 + trailing 텍스트 케이스 안전망. `worker/test-extract-tier.ts` 신규 — 발달센터 회귀 + 합성 3건(realestate_browse/event_calendar/recipe_browse). 각 케이스 (1) handleExtractQueued ok (2) tier_1 모든 flow write 동사 step ≥1 (3) read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개. 자동 검증 4/4 통과: T6.1 시점 발달센터 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결. 1회차 실패 — Sonnet 이 ```json 펜스 + trailing 텍스트로 응답해 종료 펜스 정규식 미매칭 (realestate) → stripJsonFence outer-slice 무조건 적용, 그리고 분류기 false positive (recipe 의 "재료 다중 입력" 의 `입력`, "작성자 프로필" 의 `작성`) → 단독 `입력` 제거 + `작성(?!자)` 부정선후행. 사용자 위임 승인 |
 | 2026-04-27 | T0.3 완료 | 디자인 토큰 추출 유틸 manual-review 통과 (사용자 승인). `worker/test-extract-tokens.ts` 로 5개 도메인 portfolio-1 (발달센터/핀테크/병원/임원 대시보드/커뮤니티) 검증. NO_LLM=1: 4/5 케이스 100% 일치 + 5번(하드코딩 케이스)은 휴리스틱 실패 → graceful fallback 안착 (throw 0). LLM ON: Sonnet 1회 호출(10s, 37 output 토큰)로 5번 케이스도 100% 매칭 → 전체 5/5 = 100%. 빈 HTML 입력에서도 `_source='fallback'` 으로 안전하게 떨어짐 확인. 데모 생성기 모든 task (T0.1~T6.3) 완료 |
+| 2026-04-27 | T8.1 완료 | extract-spec.md 에 "스택 결정 규칙" 섹션 + 스키마/예시/품질체크 갱신, validate-spec.ts 에 stack_decision 검증 (freedom_level enum / demo_mode enum / client_required.{frontend,backend,mobile} 키존재+null|enum / strict+all-null+!workflow-diagram 모순체크). 마이그레이션 20260427183000 으로 demo_status 에 'building' 추가 (총 13 상태). 자동 검증 6/6 통과 (보정 1사이클): 발달센터 → free/mobile-web (실제 공고가 모바일 앱), react_strict → strict/next/spring/standard (Spring Boot 명시 따라 backend 정확 추출), vue_preferred → preferred/vue/standard, mobile_app → strict/flutter/mobile-web+fallback, backend_only → strict/fastapi/admin-dashboard+fallback, nocode_workflow → strict\|preferred\|free/workflow-diagram (노코드 도구는 enum 매핑 안 됨, validator 가 workflow-diagram 예외로 strict+all-null 허용). 1차 3 fail 모두 expected/validator 측 오류였고 LLM 동작은 정확. 토큰: Sonnet 합성 5건 cache_read 24,736 / cache_creation 600~700 (시스템 프롬프트 26K 캐시). chosen_runtime 은 LLM 이 산출 안 함 — T8.2 build-runtime 이 코드로 derive. |
 | 2026-04-27 | T8.0 완료 | worker-runtimes/vite-react-ts/ 셋업 — Vite 5+React 18+TS+Tailwind 3+shadcn/ui+Pretendard, 38 deps (radix primitives 11 + form/zod/sonner/recharts + dev tooling). vite.config.ts 가 DEMO_BASE env 로 base path 동적 주입. tailwind.config.cjs 에 토큰 6개 placeholder (T8.4 가 generate 단계에서 spec.tokens 로 교체). 자동 검증 4/4: build 3.10s (142KB JS+6KB CSS), base path 정확히 prefix, gitignore 가 node_modules/dist/tsbuildinfo 모두 무시, prod-style URL serving 시 Playwright 헤드리스 chromium 으로 React 앱 마운트 + 콘솔 errors 0/warnings 0. 22s install, 153MB node_modules. 사용자 한 번만 `cd worker-runtimes/vite-react-ts && npm install` 필요. |
 | 2026-04-27 | Phase 8 신설 + §0 스코프 변경 | 사용자 의도 — 공고에 클라이언트 요구 스택 명시 시 그것 따르고, 자유면 Claude Code 친화 + 유지보수 최소 공수 스택으로 실제 동작하는 데모. 단일 HTML+CDN 강제 폐기, Vite+React+TS+Tailwind+shadcn/ui 자유 모드 기본. 빌드 SPA + 멀티파일 GitHub Pages 배포. 인프라는 레포 루트 `worker-runtimes/{stack}/` 공유 (Docker는 1인 로컬 워커 + 단순 SPA에 오버킬이라 기각). 데모 시간 5~10분 → 15~25분 허용. T7.3 BLOCKED — 새 빌드 시스템으로 generate 내부가 통째로 교체되므로 T8.8 (standard mode 1-click E2E) 가 사실상 T7.3 의 새 버전. 첫 cut 범위 T8.0~T8.8 (vite-react-ts + standard 만), 후속 T8.9~T8.11 (mobile-web/vue/next/admin-dashboard/workflow-diagram). |
 | 2026-04-27 | Phase 7 신설 | 사용자 피드백 반영해 데모 생성기 UX 재설계. (a) wishket_projects.wishket_url + wishket-portfolio-system/scripts/fetch-wishket-project.js 인프라가 이미 있는데 dashboard는 수동 paste UI(T1.1)로 구현됐음을 사용자가 지적. (b) 추가로 "구조화 편집기는 LLM이 알아서 하면 되는 거 아닌가"라는 질문 — T6.2/T6.3 프롬프트 강화 + T4.2 재생성 패널로 pre-edit 안전망 redundant. **T7.1** 워커 fetch + auto chain (autorun_queued → fetching → extract → auto-approve → gen → ready 전 단계 자동), **T7.2** dashboard SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + "🎬 데모 생성" 단일 버튼, **T7.3** 1-click E2E 검증. 기존 T1.1/T2.3/T2.4 결과물은 T7.2에서 명시 삭제 (백워드 호환 안 둠) |
