@@ -5,9 +5,13 @@
 //      handleExtractQueued(projectId)를 호출.
 //   2) 이 핸들러는 atomic 전이로 'extracting'을 선점(중복 처리 방지) → spec_raw 조회
 //      → Claude Sonnet 4.6 호출 → JSON 파싱 + 스키마 검증 → spec_structured JSONB 저장
-//      → 'extract_ready'.
+//      → 'gen_queued' 로 자동 전이 (T7.1 auto-approve, T2.4 의 수동 승인 단계 폐기).
 //   3) 어떤 단계든 실패하면 'extract_failed'로 전이하고 demo_generation_log에 사유 기록.
 //      예외는 호출자로 전파하지 않음 (Realtime 핸들러가 죽지 않도록).
+//
+// T7.1 변경: 성공 시 'extract_ready' (사용자 검토 대기) → 'gen_queued' (즉시 생성 chain).
+//   spec_approved_at = now() 자동 세팅. regenerate_scope 는 NULL 유지(전체 생성).
+//   설계 SSOT: docs/demo-generator/plan.md §6 Phase 7 / feedback_demo_generator_ux_automation.md.
 //
 // 프롬프트: worker/prompts/extract-spec.md (system prompt로 로드).
 // 스키마 검증: worker/shared/validate-spec.ts.
@@ -20,7 +24,7 @@ import { runClaude, SONNET } from "./shared/claude.ts";
 import { validateSpecStructured } from "./shared/validate-spec.ts";
 
 type ExtractOutcome =
-  | { ok: true; status: "extract_ready"; reqId: string; duration_ms: number }
+  | { ok: true; status: "gen_queued"; reqId: string; duration_ms: number }
   | { ok: false; status: "extract_failed"; reason: string; reqId?: string };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -128,6 +132,8 @@ export async function handleExtractQueued(
   }
 
   // 5) 저장 + 상태 전이. demo_generation_log에 이번 호출 사용량 append.
+  //    T7.1: extract_ready (수동 승인 대기) 단계 폐기 — 즉시 gen_queued 로 chain.
+  //          spec_approved_at = now() 로 auto-approve. regenerate_scope 는 NULL 유지(전체 생성).
   const logEntry = {
     stage: "extract",
     ts: new Date().toISOString(),
@@ -139,11 +145,14 @@ export async function handleExtractQueued(
     cache_read_input_tokens: claudeResult.cache_read_input_tokens,
   };
   const newLog = await appendLog(supabase, projectId, logEntry);
+  const nowIso = new Date().toISOString();
   const { error: saveErr } = await supabase
     .from("wishket_projects")
     .update({
       spec_structured: parsed,
-      demo_status: "extract_ready",
+      spec_approved_at: nowIso,
+      demo_status: "gen_queued",
+      regenerate_scope: null,
       demo_generation_log: newLog,
     })
     .eq("id", projectId);
@@ -158,11 +167,11 @@ export async function handleExtractQueued(
 
   console.log(
     `[extract:${projectId}] DONE (${claudeResult.duration_ms}ms, ` +
-      `out=${claudeResult.output_tokens} tokens)`,
+      `out=${claudeResult.output_tokens} tokens) → gen_queued`,
   );
   return {
     ok: true,
-    status: "extract_ready",
+    status: "gen_queued",
     reqId: claudeResult.reqId,
     duration_ms: claudeResult.duration_ms,
   };

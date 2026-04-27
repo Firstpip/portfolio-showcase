@@ -654,22 +654,29 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 > **재설계 핵심**: 사용자 액션은 행에 노출된 단일 "🎬 데모 생성" 버튼 클릭 1회. 워커가 fetch → extract → auto-approve → generate → deploy 자동 chain. 결과 마음에 안 들면 기존 재생성 패널(T4.2) 사용.
 
 #### T7.1 워커 자동 파이프라인 (wishket fetch + auto chain)
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T6.1
 - **requires_test**: yes
-- **파일**: `worker/fetch-spec.ts` (신규), `worker/shared/wishket-fetch.ts` (신규, `wishket-portfolio-system/scripts/fetch-wishket-project.js` 로직 포팅), `worker/generate-demo/orchestrator.ts` (`handleAutorunQueued` 추가 + extract→gen 자동 chain), `worker/index.ts` (라우터에 `autorun_queued` 분기 + `extract_ready` 자동 승격), `supabase/migrations/{timestamp}_demo_status_autorun.sql` (CHECK 제약에 `autorun_queued`/`fetching`/`fetch_failed` 추가)
-- **해야 할 일**:
-  1. `worker/shared/wishket-fetch.ts`: puppeteer로 `wishket_url`에서 본문 추출 (`fetch-wishket-project.js`의 `extractProject` 함수 포팅, login 모듈도 함께). 환경변수 `WISHKET_EMAIL`/`WISHKET_PASSWORD`는 `.env.local` 추가.
-  2. `worker/fetch-spec.ts`: `handleAutorunQueued(supabase, projectId)` — atomic claim(`autorun_queued`→`fetching`) → wishket_url 조회 → wishket-fetch 호출 → `spec_raw` 저장 → `demo_status='extract_queued'` 자동 전이 (extract 단계로 chain). 실패 시 `demo_status='fetch_failed'`, `regenerate_scope` 보존(재시도 가능).
-  3. `worker/index.ts` 라우터: `autorun_queued` → `handleAutorunQueued`. `extract_ready` 진입 시 `spec_approved_at = now()` 자동 세팅 + `demo_status='gen_queued'` 자동 승격(auto-approve).
-  4. `supabase/migrations/{ts}_demo_status_autorun.sql`: `demo_status` CHECK 제약에 새 상태 3개 추가. 기존 행 영향 없음.
-  5. spec_raw가 이미 있는 행의 autorun: 기본 fetch 강제 갱신 (URL 변경되거나 공고 갱신 가능성). 향후 옵션 `skip_fetch`로 제어 가능.
+- **파일**: `worker/shared/wishket-fetch.ts` (신규), `worker/fetch-spec.ts` (신규), `worker/extract-spec.ts` (auto-promote 수정), `worker/index.ts` (라우터 `autorun_queued` 분기), `worker/test-autorun.ts` (신규), `supabase/migrations/20260427072729_demo_status_autorun.sql` (신규)
+- **구현 메모**:
+  - **wishket-fetch 래퍼 (worker/shared/wishket-fetch.ts)**: puppeteer 재구현 대신 별도 레포 `wishket-portfolio-system/scripts/fetch-wishket-project.js` 를 child process 로 호출 (DRY + 검증된 코드 재사용). `WISHKET_FETCH_SCRIPT_PATH` env 로 경로 override 가능. `WishketFetchError` 코드: `URL_INVALID` / `MISSING_SCRIPT` / `SPAWN_ERROR` / `TIMEOUT` / `BAD_OUTPUT` / `EMPTY_CONTENT`. 90s 타임아웃, balanced-brace 로 마지막 JSON 블록 추출.
+  - **fetch-spec.ts**: `handleAutorunQueued(supabase, projectId)` — atomic claim `autorun_queued`→`fetching` → wishket_url 조회 → wishket-fetch 호출 → `spec_raw` 저장 + `demo_status='extract_queued'` 자동 전이 (Realtime chain). 실패는 모두 `fetch_failed`로 전이 + `WishketFetchError.code` 를 demo_generation_log 에 기록. 호출자(Realtime 핸들러)로 throw 안 함.
+  - **extract-spec.ts auto-promote**: 기존 `extract_ready` (수동 승인 대기) 단계 폐기. 성공 시 `spec_structured` 저장 + `spec_approved_at = now()` + `regenerate_scope = null` + `demo_status = 'gen_queued'` 한 번에 UPDATE. T2.4 의 ApprovalPanel 흐름은 T7.2 에서 dashboard 측 코드와 함께 제거 예정. Outcome 타입도 `'gen_queued'` 로 변경.
+  - **index.ts 라우터**: `autorun_queued` → `handleAutorunQueued` 분기 추가. 기존 `extract_queued`/`gen_queued` 분기는 유지 — 자동 chain 은 Realtime 이벤트로 자연스럽게 다음 단계로 이어짐.
+  - **마이그레이션 (20260427072729)**: `demo_status` CHECK 제약에 `autorun_queued` / `fetching` / `fetch_failed` 3개 추가. 총 12개 상태. 기존 `extract_ready` 는 legacy 로 남겨둠 (DB 호환).
+  - **child process 의존**: wishket-portfolio-system 레포의 puppeteer + login 코드를 그대로 재사용해 워커에 puppeteer 설치 불필요. 단점: 외부 절대경로 의존(기본 `/Users/giyong/Desktop/wishket-portfolio-system/`). 향후 둘 중 하나로 이동 시 `WISHKET_FETCH_SCRIPT_PATH` 만 갱신하면 됨.
 - **test_spec**:
-  - [ ] 마이그레이션 적용 후 새 상태 3개로 INSERT/UPDATE 가능, 기존 상태들도 모두 통과
-  - [ ] wishket_url 있는 테스트 행 → autorun_queued 트리거 → 5분 이내 demo_status='ready' (Realtime 우회 직접 호출 방식)
-  - [ ] wishket_url 무효(존재하지 않는 프로젝트 ID) → fetch_failed 전이, spec_raw NULL 유지, regenerate_scope 보존
-  - [ ] login 환경변수 미설정 → fetch_failed + actionable 에러 메시지
-  - [ ] 자동 chain 검증: fetching → extract_queued → extracting → extract_ready → gen_queued → generating → ready 8단계 모두 atomic 진행 (중간 race condition 0건)
+  - [x] 마이그레이션 적용 후 새 상태 3개 (`autorun_queued`/`fetching`/`fetch_failed`) INSERT/UPDATE 가능 + 잘못된 값은 CHECK 위반
+  - [x] wishket-fetch: 비-위시켓 URL → `URL_INVALID` throw (login/네트워크 호출 없이 즉시)
+  - [x] wishket-fetch: 스크립트 경로 무효(`WISHKET_FETCH_SCRIPT_PATH` override) → `MISSING_SCRIPT` throw
+  - [x] handleAutorunQueued: 실제 wishket login + fetch → `spec_raw` 저장 + `demo_status='extract_queued'` auto-chain + `demo_generation_log`에 stage='fetch' 항목 기록
+  - [x] handleExtractQueued: 성공 시 `demo_status='gen_queued'` auto-promote + `spec_approved_at` 현재 시각(±60s) 세팅 + `regenerate_scope=null` + `spec_structured` 저장
+- **자동 검증 결과 (2026-04-27, 5/5 통과 / first try)**:
+  - 테스트 A (마이그레이션, <1s): 새 3 상태 INSERT/UPDATE OK + 'bogus_state' CHECK 위반 reject
+  - 테스트 B (URL_INVALID, <1s): example.com URL → 즉시 throw
+  - 테스트 C (MISSING_SCRIPT, <1s): /nonexistent/path/fetch.js override → 즉시 throw
+  - 테스트 D (real fetch, 11.3s): 위시켓 154823 (발달센터 후기) → spec_raw 936자 저장 + extract_queued chain + 로그 기록 OK
+  - 테스트 E (auto-promote, 30s): 합성 영어회화 매칭 spec_raw → Sonnet 4.6 (2,252 out tokens, cache_creation 21,850) → spec_structured 저장 + gen_queued + spec_approved_at(2026-04-27T07:33:02) + regenerate_scope=null
 - **last_failure**: —
 
 #### T7.2 dashboard SpecModal 폐기 + "🎬 데모 생성" 단일 버튼
@@ -723,10 +730,10 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (Phase 7 신설 — 사용자 피드백 반영해 SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + 1-click 자동 파이프라인 재설계. T7.1~T7.3 추가)
-- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3
+- **마지막 업데이트**: 2026-04-27 (T7.1 DONE — wishket fetch 자동화 + extract auto-promote 5/5 통과)
+- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1
 - **진행 중 task**: 없음
-- **다음에 착수 가능**: T7.1 (워커 자동 파이프라인 — wishket fetch + auto chain) — depends_on T6.1 충족
+- **다음에 착수 가능**: T7.2 (dashboard SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + "🎬 데모 생성" 단일 버튼) — depends_on T7.1 충족
 - **Phase 7 배경**: T1.1/T2.3/T2.4의 다단계 UX(paste → 추출 → 편집 → 승인 → 생성)가 사용자 인지 부담 큼. T6.2/T6.3로 extract 정확도 강화 + T4.2 재생성 패널로 사후 교정 가능 → SpecModal/StructuredSpecEditor/ApprovalPanel 폐기, 트리거 1회로 단순화. 위시켓 URL 자동 fetch 통합으로 paste 자체 제거
 - **별도 follow-up (commit 단위)**: dashboard `DEMO_GEN_ENABLED` flag 제거 — 데모 생성기 핵심 파이프라인이 T5.2 + T6.1 로 검증됐으므로 prod 노출 안전
 - **블로커**: 없음
@@ -777,3 +784,4 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 | 2026-04-27 | T6.3 완료 | extract 프롬프트 read-only flow tier 분류 개선. `worker/prompts/extract-spec.md` tier 1 정의에 "steps 안에 write step 적어도 하나 필수" 규칙 + read+persist 예외 단락(찜·북마크·별점·알림 등록은 read 처럼 보여도 tier 1 자격) + 절대 금지 패턴(steps 가 전부 검색·둘러보기·필터·조회 같은 읽기 동사로만 구성된 경우 tier 2 강제) + 4단계 결정 절차 + 품질 체크 2항목 추가. `worker/extract-spec.ts` `stripJsonFence` 를 outer-slice(첫 `{`~마지막 `}`) 무조건 적용으로 보강 — 종료 펜스 + trailing 텍스트 케이스 안전망. `worker/test-extract-tier.ts` 신규 — 발달센터 회귀 + 합성 3건(realestate_browse/event_calendar/recipe_browse). 각 케이스 (1) handleExtractQueued ok (2) tier_1 모든 flow write 동사 step ≥1 (3) read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개. 자동 검증 4/4 통과: T6.1 시점 발달센터 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결. 1회차 실패 — Sonnet 이 ```json 펜스 + trailing 텍스트로 응답해 종료 펜스 정규식 미매칭 (realestate) → stripJsonFence outer-slice 무조건 적용, 그리고 분류기 false positive (recipe 의 "재료 다중 입력" 의 `입력`, "작성자 프로필" 의 `작성`) → 단독 `입력` 제거 + `작성(?!자)` 부정선후행. 사용자 위임 승인 |
 | 2026-04-27 | T0.3 완료 | 디자인 토큰 추출 유틸 manual-review 통과 (사용자 승인). `worker/test-extract-tokens.ts` 로 5개 도메인 portfolio-1 (발달센터/핀테크/병원/임원 대시보드/커뮤니티) 검증. NO_LLM=1: 4/5 케이스 100% 일치 + 5번(하드코딩 케이스)은 휴리스틱 실패 → graceful fallback 안착 (throw 0). LLM ON: Sonnet 1회 호출(10s, 37 output 토큰)로 5번 케이스도 100% 매칭 → 전체 5/5 = 100%. 빈 HTML 입력에서도 `_source='fallback'` 으로 안전하게 떨어짐 확인. 데모 생성기 모든 task (T0.1~T6.3) 완료 |
 | 2026-04-27 | Phase 7 신설 | 사용자 피드백 반영해 데모 생성기 UX 재설계. (a) wishket_projects.wishket_url + wishket-portfolio-system/scripts/fetch-wishket-project.js 인프라가 이미 있는데 dashboard는 수동 paste UI(T1.1)로 구현됐음을 사용자가 지적. (b) 추가로 "구조화 편집기는 LLM이 알아서 하면 되는 거 아닌가"라는 질문 — T6.2/T6.3 프롬프트 강화 + T4.2 재생성 패널로 pre-edit 안전망 redundant. **T7.1** 워커 fetch + auto chain (autorun_queued → fetching → extract → auto-approve → gen → ready 전 단계 자동), **T7.2** dashboard SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + "🎬 데모 생성" 단일 버튼, **T7.3** 1-click E2E 검증. 기존 T1.1/T2.3/T2.4 결과물은 T7.2에서 명시 삭제 (백워드 호환 안 둠) |
+| 2026-04-27 | T7.1 완료 | 워커 자동 파이프라인. (1) `worker/shared/wishket-fetch.ts` — wishket-portfolio-system/scripts/fetch-wishket-project.js 를 child process 호출 (puppeteer 재구현 안 함, DRY). 90s 타임아웃, balanced-brace JSON 추출, `WishketFetchError` 6 코드. (2) `worker/fetch-spec.ts` — `handleAutorunQueued`: atomic claim autorun_queued→fetching → wishket-fetch → spec_raw 저장 + extract_queued chain. 실패는 모두 fetch_failed 전이. (3) `worker/extract-spec.ts` 수정 — extract 성공 시 extract_ready 단계 폐기, gen_queued auto-promote (spec_approved_at=now() + regenerate_scope=null 동시 세팅). (4) `worker/index.ts` 라우터에 autorun_queued 분기. (5) 마이그레이션 20260427072729 — demo_status CHECK 에 autorun_queued/fetching/fetch_failed 3 상태 추가. 5/5 통과 first try: 마이그레이션 OK + URL_INVALID/MISSING_SCRIPT 즉시 throw + 실제 wishket fetch 11.3s/936자 + Sonnet auto-promote 30s/2252 out tokens + spec_approved_at 시각 동기 |

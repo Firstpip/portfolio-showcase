@@ -16,6 +16,7 @@
 import "./shared/env.ts";
 import { supabaseClient } from "./shared/supabase.ts";
 import { verifyAuth } from "./shared/claude.ts";
+import { handleAutorunQueued } from "./fetch-spec.ts";
 import { handleExtractQueued } from "./extract-spec.ts";
 import { handleGenQueued } from "./generate-demo/orchestrator.ts";
 
@@ -61,6 +62,12 @@ async function main() {
         );
         if (!newRow.id) return;
         // 상태별 핸들러 라우팅. 핸들러는 자체적으로 예외를 catch (워커 안정성 우선).
+        // T7.1 자동 chain: autorun_queued → fetching → extract_queued → extracting
+        //   → gen_queued (auto-approve) → generating → ready. 각 단계는 다음 상태를
+        //   세팅해 Realtime 이 다시 깨워 다음 핸들러를 호출하는 구조.
+        if (newRow.demo_status === "autorun_queued") {
+          void handleAutorunQueued(supabase, newRow.id);
+        }
         if (newRow.demo_status === "extract_queued") {
           void handleExtractQueued(supabase, newRow.id);
         }
@@ -68,7 +75,6 @@ async function main() {
           // T4.2: 최초 생성(regenerate_scope=NULL) + 재생성(scope='all'|'flow:<id>') 통합 처리.
           void handleGenQueued(supabase, newRow.id);
         }
-        // TODO(T5.1): deploy 단계는 handleGenQueued 성공 직후 호출 추가
       },
     )
     .subscribe((status) => {
