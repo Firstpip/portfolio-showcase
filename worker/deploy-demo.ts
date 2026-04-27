@@ -95,3 +95,40 @@ export function pagesUrlFor(slug: string): string {
 export function rawUrlFor(slug: string, branch: string = "main"): string {
   return `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${branch}/${slug}/${DEMO_SUBDIR}/index.html`;
 }
+
+// ---------------------------------------------------------------------------
+// T5.2: portfolio_links 자동 갱신 헬퍼.
+
+export type PortfolioLink = { url: string; label: string };
+
+const DEMO_LABEL = "Demo";
+
+/**
+ * 기존 portfolio_links 에 Demo 링크를 idempotent 하게 병합.
+ *
+ * - 기존에 `label === 'Demo'` 또는 같은 URL 인 항목이 있으면 그 자리만 갱신
+ *   (slug 변경·재배포로 URL 이 바뀌어도 중복 안 생김).
+ * - 없으면 끝에 추가 (P1/P2/... 뒤에 Demo 가 붙는 자연스러운 순서).
+ * - prevLinks 가 null/undefined/배열 아님이면 빈 배열로 취급.
+ */
+export function upsertDemoLink(
+  prevLinks: unknown,
+  demoUrl: string,
+): PortfolioLink[] {
+  const prev: PortfolioLink[] = Array.isArray(prevLinks)
+    ? (prevLinks as unknown[]).filter(isPortfolioLink)
+    : [];
+  const filtered = prev.filter(
+    (l) => l.label !== DEMO_LABEL && l.url !== demoUrl,
+  );
+  return [...filtered, { url: demoUrl, label: DEMO_LABEL }];
+}
+
+function isPortfolioLink(v: unknown): v is PortfolioLink {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    typeof (v as { url: unknown }).url === "string" &&
+    typeof (v as { label: unknown }).label === "string"
+  );
+}

@@ -34,7 +34,11 @@ import {
 } from "./sections.ts";
 import { generateSeed, type SeedSpec, type SeedData } from "./seed.ts";
 import { assembleDemo } from "./assemble.ts";
-import { deployDemoToGitHub } from "../deploy-demo.ts";
+import {
+  deployDemoToGitHub,
+  upsertDemoLink,
+  type PortfolioLink,
+} from "../deploy-demo.ts";
 
 // ---------------------------------------------------------------------------
 // 타입
@@ -268,7 +272,7 @@ export async function handleGenQueued(
     .eq("id", projectId)
     .eq("demo_status", "gen_queued")
     .select(
-      "id, slug, spec_structured, regenerate_scope, demo_artifacts",
+      "id, slug, spec_structured, regenerate_scope, demo_artifacts, portfolio_links",
     );
 
   if (claimErr) {
@@ -294,6 +298,7 @@ export async function handleGenQueued(
     spec_structured: unknown;
     regenerate_scope: string | null;
     demo_artifacts: unknown;
+    portfolio_links: unknown;
   };
   console.log(
     `[gen:${projectId}] 선점 OK (slug=${row.slug ?? "?"}, scope=${row.regenerate_scope ?? "all(default)"})`,
@@ -421,6 +426,9 @@ export async function handleGenQueued(
   }
 
   // 7) DB 갱신: demo_artifacts/demo_status='ready'/demo_generated_at + 로그 append.
+  //   T5.2: deploy 성공 시 portfolio_links 에 Demo 링크 idempotent 병합 +
+  //         portfolio_count = links.length 동기화. SKIP_DEPLOY 인 경우 링크 갱신 생략
+  //         (실제로 푸시 안 됐으니 대시보드에 노출되면 broken link).
   const logEntry = {
     stage: "gen",
     ts: new Date().toISOString(),
@@ -431,17 +439,26 @@ export async function handleGenQueued(
     deploy: deployInfo,
   };
   const newLog = await appendLog(supabase, projectId, logEntry);
+  const updatePayload: Record<string, unknown> = {
+    demo_artifacts: result.artifacts,
+    demo_status: "ready",
+    demo_generated_at: new Date().toISOString(),
+    // regenerate_scope 는 다음 클릭 전까지 유지하지 않고 NULL 로 리셋
+    // (현재 상태가 "최신 완료된 것" 이라는 의미를 명확히).
+    regenerate_scope: null,
+    demo_generation_log: newLog,
+  };
+  if (deployInfo) {
+    const newLinks: PortfolioLink[] = upsertDemoLink(
+      row.portfolio_links,
+      deployInfo.pagesUrl,
+    );
+    updatePayload.portfolio_links = newLinks;
+    updatePayload.portfolio_count = newLinks.length;
+  }
   const { error: saveErr } = await supabase
     .from("wishket_projects")
-    .update({
-      demo_artifacts: result.artifacts,
-      demo_status: "ready",
-      demo_generated_at: new Date().toISOString(),
-      // regenerate_scope 는 다음 클릭 전까지 유지하지 않고 NULL 로 리셋
-      // (현재 상태가 "최신 완료된 것" 이라는 의미를 명확히).
-      regenerate_scope: null,
-      demo_generation_log: newLog,
-    })
+    .update(updatePayload)
     .eq("id", projectId);
   if (saveErr) {
     // 파일은 이미 작성됨. DB 만 어긋난 상태 — 다음 회차에 재시도되면 정상화됨.

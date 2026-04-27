@@ -524,14 +524,23 @@ Phase 6 (E2E)
 - **last_failure**: 2026-04-27 1회차 — (a) probe slug `__T5_1_PROBE_*` 가 Jekyll `_` prefix 제외 규칙에 걸려 Pages 404 (29 retry × 4s 후 실패), (b) 브랜치 기반 `r1.rawUrl` edge cache 로 v2 푸시 직후 v1 본문 반환. probe slug 를 `t5-1-probe-*` 로 변경 + 검증 (3) 을 SHA-pinned commit URL 로 전환해 2회차 통과. 프로덕션 운영 슬러그(`[0-9]{6}_kebab`)는 영향 없음.
 
 #### T5.2 portfolio_links 자동 갱신
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T5.1
 - **requires_test**: yes
-- **파일**: `worker/deploy-demo.ts` 내 DB 업데이트 블록
+- **파일**: `worker/deploy-demo.ts` (`upsertDemoLink` 헬퍼 + `PortfolioLink` 타입), `worker/generate-demo/orchestrator.ts` (step 7 통합), `worker/test-portfolio-links.ts`
 - **해야 할 일**: 배포 성공 시 `portfolio_links`에 `{url, label: "Demo"}` append (중복 방지), `portfolio_count` 증가, `demo_status = ready`, `demo_generated_at = now()`.
+- **구현 메모**:
+  - `upsertDemoLink(prevLinks, demoUrl)` 순수 함수 (deploy-demo.ts) — `label === 'Demo'` 또는 같은 URL 인 항목을 제거 후 끝에 새 Demo 엔트리 추가. null/undefined/잘못된 모양 항목은 빈 배열 취급. slug 변경 케이스도 idempotent.
+  - orchestrator.ts step 7: claim SELECT 에 `portfolio_links` 추가 → `deployInfo` 가 truthy 일 때만 `updatePayload.portfolio_links = upsertDemoLink(...)` + `portfolio_count = links.length`. SKIP_DEPLOY=1 인 경우 푸시 안 됐으니 링크 갱신도 생략(broken link 방지).
+  - 같은 demoUrl 로 재호출 시 중복 안 생기고 count 도 변동 없음 — 재생성/재배포가 어떤 빈도로 일어나도 안전.
 - **test_spec**:
-  - [ ] 최초 배포 후 대시보드 "Demo" 링크 노출
-  - [ ] 재배포 시 링크 중복 생성 없음
+  - [x] 최초 배포 후 대시보드 "Demo" 링크 노출 — probe 행 `[P1]` 시작 → upsertDemoLink 적용 → SELECT 결과 `[P1, Demo]`, count=2, Demo URL 정확
+  - [x] 재배포 시 링크 중복 생성 없음 — 사전 `[P1, P2, Demo]` 상태에서 같은 demoUrl 로 재적용 → count=3 유지, Demo 항목 1개. 이어서 slug 변경 시 다른 demoUrl 로 재적용 → 기존 Demo 가 새 URL 로 갱신, count=3 유지, Demo 1개.
+- **자동 검증 결과 (2026-04-27, 16/16 통과)**:
+  - 단위(upsertDemoLink) 6 케이스: 빈 배열, [P1] 추가, 같은 URL idempotent, slug 변경 갱신, null/undefined 방어, 잘못된 모양 항목 필터
+  - 통합(probe 행 + UPDATE + SELECT) 7 어서션 (count·길이·Demo 개수·URL·P1 보존)
+  - 정적 wiring 검증 4: orchestrator.ts 가 import + 호출 + portfolio_links/portfolio_count 갱신 코드 보유
+- **last_failure**: —
 
 ---
 
@@ -564,10 +573,10 @@ Phase 6 (E2E)
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (T5.1 DONE — deploy-demo 워커 모듈 + GitHub Pages 푸시)
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1
+- **마지막 업데이트**: 2026-04-27 (T5.2 DONE — portfolio_links 자동 갱신)
+- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2
 - **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: T5.2 (T5.1 DONE, portfolio_links 자동 갱신)
+- **다음에 착수 가능**: T6.1 (E2E — 실제 프로젝트 1건으로 전 과정 실행)
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
@@ -608,4 +617,5 @@ Phase 6 (E2E)
 | 2026-04-25 | T4.1 완료 | 루트 `preview-demo.sh` 추가 — node/npm 의존 없이 python3 http.server + macOS `open`으로 단일 명령 프리뷰. 인자 형태 4종(latest/project_slug/dir/file), 환경변수 `PREVIEW_PORT`·`PREVIEW_NO_OPEN`. 자동 검증 2/2 통과: 단일 명령으로 서버 부팅+open 호출(stub으로 URL 인자 검증), HTTP 200+올바른 HTML 서빙, 정적 서버라 핵 리로드 불필요 |
 | 2026-04-27 | T4.2 완료 | 재생성 UI + 워커 gen_queued 오케스트레이터. 마이그레이션(regenerate_scope TEXT/CHECK + demo_artifacts JSONB), `worker/generate-demo/orchestrator.ts`(순수 `runGenerationPipeline` + DB래퍼 `handleGenQueued`: atomic claim→파이프라인→tempfile+rename atomic 교체→artifacts/ready/generated_at 갱신, 실패 시 HTML/artifacts 보존), 대시보드 `RegenerationPanel`(전체+flow별 버튼·confirm 단계·Max 5h 리밋 안내), 워커 라우터에 gen_queued 분기 추가. 자동 검증 3/3 통과: (1) partial=flow_patient_signup만 재호출 시 다른 2개 flow 코드 byte-identical(reqId 840aab08→962ab0d6, stages=sections+assemble만) (2) atomic gen_queued→generating 1행→0행으로 중복 선점 방지 (3) preflight 실패 시 사전 HTML 149B byte-identical 보존+demo_artifacts/generated_at NULL 유지 |
 | 2026-04-27 | T4.3 완료 | 수동 수정 워크플로우 문서 (`docs/demo-generator/manual-edit-guide.md`). 생성 HTML 구조 지도(CDN/CSS vars/TOKENS/initDemoStore/FlowPlaceholder 디스패처/Pass C 인라인 마커)와 안전·금지 영역, "어디 가서 고쳐야 하나" 결정 트리, 재생성 시 직접 편집이 휘발되는 메커니즘(부분 재생성도 assembleDemo가 HTML을 처음부터 재생성하므로 100% 사라짐 — `demo_artifacts`가 SSOT), 미팅 직전 비상 수정 체크리스트, 안티패턴 정리. requires_test=no라 자동 검증 없음 |
+| 2026-04-27 | T5.2 완료 | portfolio_links 자동 갱신 (worker/deploy-demo.ts upsertDemoLink + worker/generate-demo/orchestrator.ts step 7 + test-portfolio-links.ts). 순수 헬퍼 `upsertDemoLink(prevLinks, demoUrl)`로 `label==='Demo'` 또는 같은 URL 항목 제거 후 끝에 추가 → 재배포·slug 변경 모두 idempotent. orchestrator 의 atomic claim SELECT 에 portfolio_links 추가, deployInfo truthy 시 updatePayload 에 portfolio_links/portfolio_count 동시 세팅 (SKIP_DEPLOY=1 은 푸시 안 됐으니 링크 갱신도 생략). 자동 검증 16/16 통과: 단위 6 케이스(빈 배열·[P1] 추가·재배포·slug 변경·null·잘못된 항목) + 통합 [P1] → [P1, Demo] count=2 + 재배포 [P1,P2,Demo] count=3 유지·Demo 1개 + slug 변경 시 URL 갱신·중복 0 + orchestrator wiring 정적 검증(import/호출/portfolio_links·count 갱신) |
 | 2026-04-27 | T5.1 완료 | deploy-demo 워커 모듈 + GitHub Pages 푸시. `worker/deploy-demo.ts` (writeFiles 단일 파일 wrapper, 자동 커밋 메시지), orchestrator handleGenQueued step 6.5 통합 (실패 시 markGenFailed 위임, SKIP_DEPLOY=1 우회), `worker/shared/github.ts` 에 `removeFiles` 추가 (테스트 cleanup 용 base_tree+sha:null 삭제). 자동 검증 3/3 통과: (1) Pages CDN 전파 ~40s 후 200+v1 marker (2) root tree 의 portfolio 슬러그 69개 SHA byte-identical (3) v2 SHA-pinned rawUrl 에서 v1 marker 잔존 0건. 1회차 실패 — `__T5_1_PROBE_*` 가 Jekyll `_` prefix 제외에 걸려 Pages 404 + 브랜치 기반 raw URL edge cache 로 v2 직후 v1 본문 반환 → probe slug `t5-1-probe-*` (lowercase+hyphen) + SHA-pinned commit URL 로 2회차 통과. 테스트 1회 실행당 main 에 3 커밋 발생 (deploy v1 + deploy v2 + cleanup) — probe 파일은 cleanup 으로 트리에서 제거됨 |
