@@ -240,14 +240,25 @@ Phase 6 (E2E)
 - **last_failure**: —
 
 #### T0.3 디자인 토큰 추출 유틸
-- **상태**: `NEEDS_TEST`
+- **상태**: `DONE`
 - **depends_on**: (없음)
 - **requires_test**: manual-review
-- **파일**: `worker/shared/extract-tokens.ts`
+- **파일**: `worker/shared/extract-tokens.ts`, `worker/test-extract-tokens.ts`
 - **해야 할 일**: portfolio-1 HTML을 받아 `{ primary, secondary, surface, text, radius, fontFamily, spacingScale }` 를 추출하는 함수. 1차는 정규식 + tailwind 클래스 휴리스틱으로 시도, 실패 시 Sonnet에 위임(fallback).
-- **review_checklist**:
-  - [ ] 기존 4~5개 프로젝트 portfolio-1에 적용 시 컬러값이 실제 사용색과 ≥ 80% 일치
-  - [ ] 추출 실패 시 기본 토큰 세트(중립 팔레트)로 graceful fallback
+- **구현 메모**:
+  - 휴리스틱 1차: `const C = {p:'#...', surf:'#...', txt:'#...'}` 단축키 JS 객체 + `const C = {primary, surface, text, ...}` 긴키 JS 객체 + `:root { --primary: ...; }` CSS custom properties 3 형태 모두 cover (`KEY_ALIASES` 매핑). `extractFontFamily`/`extractRadius`/`extractSpacingScale`는 빈도 집계.
+  - 휴리스틱 충분성: `pairs`에서 primary/surface/text 중 ≥2 매칭 시 LLM 호출 생략.
+  - LLM 폴백 (`allowLLMFallback: true` 기본): HTML 상단 12KB만 Sonnet 4.6으로 보내 `{primary, secondary, surface, text}` 4 hex 추출. JSON 한 줄 강제 + 펜스 응답 방어.
+  - graceful fallback: LLM 실패/비활성/HTML 비어있음 등 어떤 경로에서도 throw 없이 중립 팔레트(#4F46E5/#06B6D4/#FFFFFF/#0F172A)로 안착. `_source` 필드로 추출 경로 추적.
+- **자동 검증 결과 (2026-04-27, 5/5 케이스)**:
+  - 도메인 다양성: 발달센터(단축키 JS) / 핀테크(긴키 JS) / 병원(긴키 JS) / 임원 대시보드(CSS vars) / 커뮤니티(하드코딩) — 5건
+  - **NO_LLM=1 모드** (휴리스틱 only): 1~4번 100% 매칭 (3/3 each), 5번은 휴리스틱 실패 → fallback 안착 (의도된 어려운 케이스, throw 0). 평균 4/5 = 80% 임계 충족
+  - **LLM ON 모드**: 5/5 모두 100% 매칭. 5번 케이스 LLM 폴백이 `#2563EB/#FFFFFF/#1A1A2E` 정확 추출 (Sonnet 4.6, 10s, output 37 토큰)
+  - **graceful fallback**: 빈 HTML(`<html><body>nothing</body></html>`) → `_source='fallback'`, throw 0, primary=#4F46E5 (중립). LLM 폴백 비활성 + 휴리스틱 실패도 동일 경로로 fallback 안착
+- **review_checklist** (자체 평가, 사용자 승인 대기):
+  - [x] 기존 4~5개 프로젝트 portfolio-1 적용 시 컬러값이 실제 사용색과 ≥ 80% 일치 — NO_LLM 4/5 (80%) + LLM ON 5/5 (100%) 둘 다 임계 통과 (사용자 승인 2026-04-27)
+  - [x] 추출 실패 시 기본 토큰 세트(중립 팔레트)로 graceful fallback — 빈 HTML, 휴리스틱 실패+LLM off, LLM 호출 실패 catch 등 모든 실패 경로에서 throw 0 + `_source='fallback'` (사용자 승인 2026-04-27)
+- **last_failure**: —
 
 ---
 
@@ -645,10 +656,10 @@ Phase 6 (E2E)
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (T6.3 DONE — extract 프롬프트 tier 분류 규칙 보강 + read-only flow tier_1 금지 + 합성 3건 + 발달센터 회귀 4/4 통과, 사용자 위임 승인)
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3
-- **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: 데모 생성기 핵심 파이프라인 모든 task 완료. 남은 후속 작업: T0.3 manual-review (디자인 토큰 추출 유틸 — review_checklist 4~5개 프로젝트 적용 검증) + dashboard `DEMO_GEN_ENABLED` flag 제거 (별도 commit)
+- **마지막 업데이트**: 2026-04-27 (T0.3 DONE — extract-tokens 5개 portfolio-1 검증 + graceful fallback 확인, 사용자 승인. **데모 생성기 모든 task 완료**)
+- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3
+- **진행 중 task**: 없음
+- **다음에 착수 가능**: 데모 생성기 모든 task 완료. 남은 후속 follow-up: dashboard `DEMO_GEN_ENABLED` flag 제거 (별도 commit, demo-task 외부)
 - **별도 follow-up (commit 단위)**: dashboard `DEMO_GEN_ENABLED` flag 제거 — 데모 생성기 핵심 파이프라인이 T5.2 + T6.1 로 검증됐으므로 prod 노출 안전
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
@@ -696,3 +707,4 @@ Phase 6 (E2E)
 | 2026-04-27 | T5.1 완료 | deploy-demo 워커 모듈 + GitHub Pages 푸시. `worker/deploy-demo.ts` (writeFiles 단일 파일 wrapper, 자동 커밋 메시지), orchestrator handleGenQueued step 6.5 통합 (실패 시 markGenFailed 위임, SKIP_DEPLOY=1 우회), `worker/shared/github.ts` 에 `removeFiles` 추가 (테스트 cleanup 용 base_tree+sha:null 삭제). 자동 검증 3/3 통과: (1) Pages CDN 전파 ~40s 후 200+v1 marker (2) root tree 의 portfolio 슬러그 69개 SHA byte-identical (3) v2 SHA-pinned rawUrl 에서 v1 marker 잔존 0건. 1회차 실패 — `__T5_1_PROBE_*` 가 Jekyll `_` prefix 제외에 걸려 Pages 404 + 브랜치 기반 raw URL edge cache 로 v2 직후 v1 본문 반환 → probe slug `t5-1-probe-*` (lowercase+hyphen) + SHA-pinned commit URL 로 2회차 통과. 테스트 1회 실행당 main 에 3 커밋 발생 (deploy v1 + deploy v2 + cleanup) — probe 파일은 cleanup 으로 트리에서 제거됨 |
 | 2026-04-27 | T6.2 완료 | extract 프롬프트 N:M 자동 분해. `worker/prompts/extract-spec.md` 에 "N:M 관계 분해 규칙" 섹션 (감지 신호·금지 패턴·올바른 분해+예시) + 품질체크 항목 2개 추가. `worker/shared/validate-spec.ts` 에 `detectPluralRef` 헬퍼 — `_ids` 접미사 또는 's' 끝 ref 거부 (allowlist: address·status·process·class·series). `worker/test-extract-nm.ts` 신규 — 발달센터 회귀(spec_raw 복제) + 합성 3건(clinic_review_tag, study_member_group, ecom_product_category). 자동 검증 4/4 통과: (1) 발달센터 → review_tag {review_id, tag_id} 자동 등장, 보너스 center_therapy_type 분해 (T6.1 수동 패치 불필요화) (2) clinic → review_tag 분해 (3) study → group_member 분해 (study_group 도메인 prefix → group_id 참조) (4) ecom → product_category 분해. 복수형 ref 위반 0건, Sonnet 4회 호출 (cache_read 21K 재사용) |
 | 2026-04-27 | T6.3 완료 | extract 프롬프트 read-only flow tier 분류 개선. `worker/prompts/extract-spec.md` tier 1 정의에 "steps 안에 write step 적어도 하나 필수" 규칙 + read+persist 예외 단락(찜·북마크·별점·알림 등록은 read 처럼 보여도 tier 1 자격) + 절대 금지 패턴(steps 가 전부 검색·둘러보기·필터·조회 같은 읽기 동사로만 구성된 경우 tier 2 강제) + 4단계 결정 절차 + 품질 체크 2항목 추가. `worker/extract-spec.ts` `stripJsonFence` 를 outer-slice(첫 `{`~마지막 `}`) 무조건 적용으로 보강 — 종료 펜스 + trailing 텍스트 케이스 안전망. `worker/test-extract-tier.ts` 신규 — 발달센터 회귀 + 합성 3건(realestate_browse/event_calendar/recipe_browse). 각 케이스 (1) handleExtractQueued ok (2) tier_1 모든 flow write 동사 step ≥1 (3) read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개. 자동 검증 4/4 통과: T6.1 시점 발달센터 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결. 1회차 실패 — Sonnet 이 ```json 펜스 + trailing 텍스트로 응답해 종료 펜스 정규식 미매칭 (realestate) → stripJsonFence outer-slice 무조건 적용, 그리고 분류기 false positive (recipe 의 "재료 다중 입력" 의 `입력`, "작성자 프로필" 의 `작성`) → 단독 `입력` 제거 + `작성(?!자)` 부정선후행. 사용자 위임 승인 |
+| 2026-04-27 | T0.3 완료 | 디자인 토큰 추출 유틸 manual-review 통과 (사용자 승인). `worker/test-extract-tokens.ts` 로 5개 도메인 portfolio-1 (발달센터/핀테크/병원/임원 대시보드/커뮤니티) 검증. NO_LLM=1: 4/5 케이스 100% 일치 + 5번(하드코딩 케이스)은 휴리스틱 실패 → graceful fallback 안착 (throw 0). LLM ON: Sonnet 1회 호출(10s, 37 output 토큰)로 5번 케이스도 100% 매칭 → 전체 5/5 = 100%. 빈 HTML 입력에서도 `_source='fallback'` 으로 안전하게 떨어짐 확인. 데모 생성기 모든 task (T0.1~T6.3) 완료 |
