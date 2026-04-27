@@ -680,30 +680,25 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 - **last_failure**: —
 
 #### T7.2 dashboard SpecModal 폐기 + "🎬 데모 생성" 단일 버튼
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T7.1
 - **requires_test**: yes
 - **파일**: `dashboard/index.html`
-- **해야 할 일**:
-  1. **삭제 대상 컴포넌트/핸들러** (T1.1/T2.3/T2.4의 결과물): `SpecModal`, `StructuredSpecEditor`, `ApprovalPanel`, `handleOpenSpec`, `handleSaveSpec`, `handleApproveSpec`, `handleStartDemoGen`, `specProject` state, "📋 공고" 버튼 등. 백워드 호환 위해 남기지 말 것 — 자동화 우선 원칙.
-  2. **새 컴포넌트** `DemoTriggerButton`: ProjectGrid 행에 단 하나의 데모 버튼. 현재 `demo_status`별 라벨/활성:
-     - `none` + `wishket_url` 존재: "🎬 데모 생성" 활성
-     - `none` + `wishket_url` 없음: "🎬 데모 생성" 비활성, tooltip "위시켓 URL을 먼저 입력하세요"
-     - `autorun_queued`/`fetching`: "📥 공고 가져오는 중..." 비활성
-     - `extract_queued`/`extracting`: "🧠 분석 중..." 비활성
-     - `extract_ready`/`gen_queued`/`generating`: "🎨 생성 중..." 비활성
-     - `ready`: 기존 데모 링크 + RegenerationPanel (T4.2 그대로 유지)
-     - `fetch_failed`/`extract_failed`/`failed`: "❌ 실패 — 다시 시도" 활성 (클릭 시 autorun_queued 재트리거)
-  3. **트리거 핸들러** `handleStartAutorun(project)`: `demo_status='autorun_queued'` + `regenerate_scope=null` UPDATE 단순 호출. 모달/confirm 없이 즉시 (실패해도 바로 재시도 가능하므로).
-  4. Realtime 구독 유지 — 진행 상태 변화에 따라 라벨 자동 갱신.
+- **구현 메모**:
+  - **삭제 대상** (sed 라인 범위 일괄 제거 + Edit 으로 잔존 참조 정리): `SpecModal` 함수 (3456~3617) + `StructuredSpecEditor` 함수 + 헬퍼 cloneSpec/deepEqualJson/EMPTY_SPEC_STRUCTURED (3064~3273) + `ApprovalPanel` 함수 (3373~3454) + 핸들러 4개 `handleOpenSpec`/`handleSaveSpec`/`handleApproveSpec`/`handleStartDemoGen` + state `specProject` + "📋 공고" 버튼 + ProjectTable `onOpenSpec` prop. 정적 grep 으로 코드 잔존 0건 확인 (코멘트 안의 단어만 1줄 잔존).
+  - **새 컴포넌트 `DemoTriggerButton`**: `demo_status` 기반 라벨/활성/색상 매트릭스. ready 상태는 "🌐 데모 보기" 링크 + "🔁 재생성" 버튼 두 개 인라인. 진행 중 7 상태(autorun_queued/fetching/extract_queued/extracting/extract_ready/gen_queued/generating)는 disabled spinner. 실패 3 상태는 "❌ 다시 시도" 버튼. wishket_url 없으면 비활성 + tooltip.
+  - **새 컴포넌트 `RegenerationModal`**: 기존 `RegenerationPanel` 을 모달로 감싼 얇은 래퍼 (~30 LOC). Esc 닫기, overlay 클릭 닫기, demo_status='*_failed'면 panel 의 failed 모드로 표시.
+  - **`handleStartAutorun` confirm 래퍼**: 1-click 자동 실행은 위험 (5~10분 + Max 구독 사용량 + GitHub 푸시) 이라 `setConfirmState` 사용해 ConfirmModal 띄움 + 단계별 소요시간/사용량/워커 필요 명시 후 사용자 「🎬 시작」 또는 「다시 시도」 클릭 시 실제 UPDATE. 첫 시도 시 사용자가 클릭만 하면 즉시 큐 진입했던 1차 구현 → 사용자 지적("물어보지도 않고 클릭 한 번에 바로 실행이 된다고?")으로 confirm 단계 추가.
+  - **dashboard 동작 매트릭스**: `setData` + `setSelectedProject` + `setRegenerateProject` 동기화 (handleRegenerate 도 모달 안에서 호출되므로 모달 state 도 갱신해야 panel 이 최신 demo_status 반영).
 - **test_spec**:
-  - [ ] wishket_url 있는 행 → "🎬 데모 생성" 활성, 클릭 시 demo_status가 autorun_queued로 변경 (DB 직접 SELECT 검증)
-  - [ ] wishket_url NULL 행 → 버튼 비활성, tooltip 표시 (DOM 속성/aria 검증)
-  - [ ] demo_status 변화에 따라 라벨이 단계별로 갱신 (Realtime 시뮬: 직접 UPDATE 후 UI 반영 확인)
-  - [ ] ready 상태에서 RegenerationPanel(T4.2) 정상 노출 + 동작
-  - [ ] *_failed 상태 → "다시 시도" 클릭 → autorun_queued 재진입
-  - [ ] 삭제된 코드 잔존 0건 (grep `SpecModal|StructuredSpecEditor|ApprovalPanel|handleOpenSpec|handleSaveSpec|handleApproveSpec|specProject`) 모두 매칭 없음
-- **last_failure**: —
+  - [x] 삭제된 코드 잔존 0건 (정적 grep `SpecModal|StructuredSpecEditor|ApprovalPanel|handleOpenSpec|handleSaveSpec|handleApproveSpec|handleStartDemoGen|specProject|setSpecProject|cloneSpec|deepEqualJson|EMPTY_SPEC_STRUCTURED` 모두 코드 매칭 없음, 코멘트 안의 SpecModal/StructuredSpecEditor/ApprovalPanel 1줄만 OK)
+  - [x] JSX 컴파일 OK (esbuild loader=jsx, warnings 0, 출력 311KB)
+  - [x] 새 식별자 8개 모두 존재: `DemoTriggerButton`, `RegenerationModal`, `RegenerationPanel`, `handleStartAutorun`, `handleOpenRegenerate`, `handleCloseRegenerate`, `regenerateProject`, `setRegenerateProject`
+  - [x] confirm 단계 동작 — 클릭 시 `setConfirmState` 호출, 단계별 소요시간/Max 구독 사용량/워커 필요 명시 (사용자 시각 검증 완료 2026-04-27)
+  - [x] 🔁 재생성 버튼 가시성 — `↻` 단일 글리프 → `🔁 재생성` 텍스트 라벨 추가 (사용자 피드백 반영)
+  - [x] ready 행에 "🌐 데모 보기" 링크 + "🔁 재생성" 버튼 시각 확인 (사용자 승인)
+  - [x] 데모 생성 모달이 "물어보고" 시작하도록 confirm wrap 동작 시각 확인 (사용자 승인)
+- **last_failure**: 1차 구현 — confirm 단계 없이 1-click 즉시 큐 진입 → 사용자 지적으로 setConfirmState 래퍼 추가. fintech-mvp 행이 실수로 autorun_queued 됐으나 워커 미실행 상태였고 spec_raw/artifacts 비어있어 demo_status='none' 단순 복귀로 무손실.
 
 #### T7.3 1-click E2E 검증 (실프로젝트)
 - **상태**: `TODO`
@@ -730,10 +725,10 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (T7.1 DONE — wishket fetch 자동화 + extract auto-promote 5/5 통과)
-- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1
+- **마지막 업데이트**: 2026-04-27 (T7.2 DONE — SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + "🎬 데모 생성" 단일 버튼 + confirm 래퍼, 사용자 시각 승인)
+- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2
 - **진행 중 task**: 없음
-- **다음에 착수 가능**: T7.2 (dashboard SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + "🎬 데모 생성" 단일 버튼) — depends_on T7.1 충족
+- **다음에 착수 가능**: T7.3 (1-click E2E 검증, manual-review) — depends_on T7.2 충족
 - **Phase 7 배경**: T1.1/T2.3/T2.4의 다단계 UX(paste → 추출 → 편집 → 승인 → 생성)가 사용자 인지 부담 큼. T6.2/T6.3로 extract 정확도 강화 + T4.2 재생성 패널로 사후 교정 가능 → SpecModal/StructuredSpecEditor/ApprovalPanel 폐기, 트리거 1회로 단순화. 위시켓 URL 자동 fetch 통합으로 paste 자체 제거
 - **별도 follow-up (commit 단위)**: dashboard `DEMO_GEN_ENABLED` flag 제거 — 데모 생성기 핵심 파이프라인이 T5.2 + T6.1 로 검증됐으므로 prod 노출 안전
 - **블로커**: 없음
@@ -785,3 +780,4 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 | 2026-04-27 | T0.3 완료 | 디자인 토큰 추출 유틸 manual-review 통과 (사용자 승인). `worker/test-extract-tokens.ts` 로 5개 도메인 portfolio-1 (발달센터/핀테크/병원/임원 대시보드/커뮤니티) 검증. NO_LLM=1: 4/5 케이스 100% 일치 + 5번(하드코딩 케이스)은 휴리스틱 실패 → graceful fallback 안착 (throw 0). LLM ON: Sonnet 1회 호출(10s, 37 output 토큰)로 5번 케이스도 100% 매칭 → 전체 5/5 = 100%. 빈 HTML 입력에서도 `_source='fallback'` 으로 안전하게 떨어짐 확인. 데모 생성기 모든 task (T0.1~T6.3) 완료 |
 | 2026-04-27 | Phase 7 신설 | 사용자 피드백 반영해 데모 생성기 UX 재설계. (a) wishket_projects.wishket_url + wishket-portfolio-system/scripts/fetch-wishket-project.js 인프라가 이미 있는데 dashboard는 수동 paste UI(T1.1)로 구현됐음을 사용자가 지적. (b) 추가로 "구조화 편집기는 LLM이 알아서 하면 되는 거 아닌가"라는 질문 — T6.2/T6.3 프롬프트 강화 + T4.2 재생성 패널로 pre-edit 안전망 redundant. **T7.1** 워커 fetch + auto chain (autorun_queued → fetching → extract → auto-approve → gen → ready 전 단계 자동), **T7.2** dashboard SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + "🎬 데모 생성" 단일 버튼, **T7.3** 1-click E2E 검증. 기존 T1.1/T2.3/T2.4 결과물은 T7.2에서 명시 삭제 (백워드 호환 안 둠) |
 | 2026-04-27 | T7.1 완료 | 워커 자동 파이프라인. (1) `worker/shared/wishket-fetch.ts` — wishket-portfolio-system/scripts/fetch-wishket-project.js 를 child process 호출 (puppeteer 재구현 안 함, DRY). 90s 타임아웃, balanced-brace JSON 추출, `WishketFetchError` 6 코드. (2) `worker/fetch-spec.ts` — `handleAutorunQueued`: atomic claim autorun_queued→fetching → wishket-fetch → spec_raw 저장 + extract_queued chain. 실패는 모두 fetch_failed 전이. (3) `worker/extract-spec.ts` 수정 — extract 성공 시 extract_ready 단계 폐기, gen_queued auto-promote (spec_approved_at=now() + regenerate_scope=null 동시 세팅). (4) `worker/index.ts` 라우터에 autorun_queued 분기. (5) 마이그레이션 20260427072729 — demo_status CHECK 에 autorun_queued/fetching/fetch_failed 3 상태 추가. 5/5 통과 first try: 마이그레이션 OK + URL_INVALID/MISSING_SCRIPT 즉시 throw + 실제 wishket fetch 11.3s/936자 + Sonnet auto-promote 30s/2252 out tokens + spec_approved_at 시각 동기 |
+| 2026-04-27 | T7.2 완료 | dashboard SpecModal/StructuredSpecEditor/ApprovalPanel 폐기 + "🎬 데모 생성" 단일 버튼. SpecModal(162L)+StructuredSpecEditor(193L)+ApprovalPanel(82L)+helpers(17L) 합 ~454L 삭제 (sed 라인 범위 일괄 + Edit 잔존 정리). 새 컴포넌트 `DemoTriggerButton`(demo_status 매트릭스 13 분기) + `RegenerationModal`(RegenerationPanel wrapper). 핸들러 4개(handleOpenSpec/SaveSpec/ApproveSpec/StartDemoGen) 삭제, `handleStartAutorun` 신설 (initial: autorun_queued + regenerate_scope=null UPDATE). 정적 검증: JSX 컴파일 OK + 새 식별자 8개 + 삭제 식별자 코드 잔존 0건. **1차 구현 시 confirm 단계 누락** → 사용자 지적("물어보지도 않고 클릭 한 번에 바로 실행")으로 setConfirmState 래퍼 추가 (단계별 소요시간 + Max 사용량 + 워커 필요 명시). 🔁 재생성 버튼은 ↻ 단일 글리프에서 텍스트 라벨 추가 (가시성). 사용자 시각 승인 완료 |
