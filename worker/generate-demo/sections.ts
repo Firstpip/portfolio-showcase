@@ -443,20 +443,47 @@ export function validateFlowComponent(
 
 /**
  * 문자열 `needle` 이 코드 내 "사용자 가시 텍스트"로 등장하는지 판단.
- * 기준을 완화해 JSX 텍스트 노드 · 문자열 리터럴 · attribute 값 중 하나면 통과.
- *   - 긴 문자열(2자 이상 공백 혹은 8자 이상)이면 단순 substring 으로도 충분한 판정.
- *   - 짧거나 한 단어면 문자열 리터럴 컨텍스트(따옴표/백틱 주변)를 요구.
+ *
+ * 검증 단계 (relaxation 순서):
+ *   1) 전체 substring 또는 공백 정규화 후 substring (가장 엄격)
+ *   2) needle 안에 따옴표(' " `) 로 묶인 부분문자열이 있으면 그것을 권위 있는 UI 라벨로 보고
+ *      모두 코드 안에 등장하는지 확인 (예: "센터 상세에서 '후기 전체 보기' 선택" → '후기 전체 보기' 만 검사).
+ *   3) 토큰 분할 fallback: 공백/괄호/구두점으로 나눈 의미 토큰(한글 2자+ / 영문 3자+) 중 50% 이상이
+ *      코드 안에 등장하면 통과. step 표현이 자연어 narration("탭"·"확인"·"…에서") 인 경우 풀어준다.
+ *
+ * 의도: validator 가 React 컴포넌트의 자연스러운 라벨링을 거부하지 않도록.
+ *   엄격한 substring 만으로는 "검색창 탭"·"…에서 '...' 선택" 같은 메타-언어 step 이 모두 fail.
+ *   tier 별 동작 검증(setStore/toast/placeholder 문구)은 별도라, step 매칭은 "최소한 flow 의
+ *   주요 텍스트 요소가 코드에 흔적으로 남아있는지" 정도면 충분.
  */
 function containsVisibleText(code: string, needle: string): boolean {
   const n = needle.trim();
   if (n.length === 0) return true;
 
-  // 1) JSX text node: >...{needle}...< 같은 케이스는 substring 이면 걸린다.
+  // 1) 직접 substring (공백 정규화 포함).
   if (code.includes(n)) return true;
-
-  // 2) 일부 공백 변형(개행·2-space 등)을 정규화해 재확인.
   const squash = (s: string) => s.replace(/\s+/g, " ").trim();
-  return squash(code).includes(squash(n));
+  if (squash(code).includes(squash(n))) return true;
+
+  // 2) 따옴표로 묶인 UI 라벨 추출. 있으면 그것을 권위 있는 needle 로 사용.
+  const quoteRegex = /['"`]([^'"`]+)['"`]/g;
+  const quoted: string[] = [];
+  for (const m of n.matchAll(quoteRegex)) {
+    const q = m[1].trim();
+    if (q.length >= 2) quoted.push(q);
+  }
+  if (quoted.length > 0) {
+    return quoted.every((q) => code.includes(q) || squash(code).includes(squash(q)));
+  }
+
+  // 3) 토큰 fallback. 공백·괄호·구두점으로 분할 후, 한글 2자+ 또는 영문 3자+ 만 의미 토큰으로 간주.
+  const rawTokens = n.split(/[\s()\[\]{}「」『』\-,/·:;~!?·]+/).filter((t) => t.length >= 2);
+  const meaningful = rawTokens.filter((t) =>
+    /[가-힣]/.test(t) ? t.length >= 2 : t.length >= 3,
+  );
+  if (meaningful.length === 0) return false;
+  const matched = meaningful.filter((t) => code.includes(t)).length;
+  return matched / meaningful.length >= 0.5;
 }
 
 /**
