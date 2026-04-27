@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>공공입찰 정보 검색 &amp; 구독 SaaS — 맞춤 구현 데모</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif; color: #111827; background: #F9FAFB; }
+    #root { display: flex; flex-direction: column; width: 100%; min-height: 100vh; }
+
+    @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes fadeInScale { from { opacity: 0; transform: scale(0.95) } to { opacity: 1; transform: scale(1) } }
+    @keyframes slideInRight { from { opacity: 0; transform: translateX(30px) } to { opacity: 1; transform: translateX(0) } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes ripple { 0% { transform: scale(0); opacity: 0.5 } 100% { transform: scale(4); opacity: 0 } }
+    @keyframes countUp { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+    @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+    @keyframes barGrow { from { width: 0% } to { width: var(--target-width) } }
+    @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); max-height: 0 } to { opacity: 1; transform: translateY(0); max-height: 500px } }
+
+    .shimmer-box {
+      background: linear-gradient(90deg, #F1F5F9 25%, #E2E8F0 50%, #F1F5F9 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: 8px;
+    }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #F1F5F9; }
+    ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+    input, select, textarea { font-family: 'Pretendard', sans-serif; }
+    button { font-family: 'Pretendard', sans-serif; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+    const { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, ComposedChart } = Recharts;
+
+    // ─── 디자인 토큰 ───
+    const C = {
+      primary: '#1E40AF',
+      primaryHover: '#1D3A9E',
+      accent: '#3B82F6',
+      accentLight: '#EFF6FF',
+      bg: '#F9FAFB',
+      surface: '#FFFFFF',
+      text: '#111827',
+      textLight: '#6B7280',
+      border: '#E5E7EB',
+      borderLight: '#F3F4F6',
+      success: '#10B981',
+      successLight: '#ECFDF5',
+      warning: '#F59E0B',
+      warningLight: '#FFFBEB',
+      error: '#EF4444',
+      errorLight: '#FEF2F2',
+      purple: '#7C3AED',
+    };
+
+    // ─── 더미 데이터 ───
+    const BIDS = [
+      { id: 1, title: '한국도로공사 서울외곽순환도로 유지보수 공사', org: '한국도로공사', type: '건설', amount: '2,450,000,000', deadline: '2026-05-08', status: '진행중', region: '경기', rate: '87.3%', files: 3 },
+      { id: 2, title: '행정안전부 통합업무시스템 고도화 구축', org: '행정안전부', type: 'IT', amount: '890,000,000', deadline: '2026-05-12', status: '진행중', region: '서울', rate: '92.1%', files: 5 },
+      { id: 3, title: '서울시 공공자전거 운영 관리 시스템 유지보수', org: '서울특별시', type: 'IT', amount: '320,000,000', deadline: '2026-05-15', status: '진행중', region: '서울', rate: '85.6%', files: 2 },
+      { id: 4, title: '국방부 훈련장 시설물 보수 공사', org: '국방부', type: '건설', amount: '1,780,000,000', deadline: '2026-05-20', status: '대기', region: '충남', rate: '-', files: 4 },
+      { id: 5, title: '부산항만공사 항만 CCTV 시스템 구축', org: '부산항만공사', type: '전기/통신', amount: '560,000,000', deadline: '2026-05-22', status: '진행중', region: '부산', rate: '89.4%', files: 3 },
+      { id: 6, title: '한국전력공사 스마트미터 검침 솔루션 개발', org: '한국전력공사', type: 'IT', amount: '1,200,000,000', deadline: '2026-05-28', status: '진행중', region: '전북', rate: '91.7%', files: 6 },
+      { id: 7, title: '인천국제공항공사 터미널 냉난방 설비 교체', org: '인천국제공항공사', type: '기계', amount: '3,120,000,000', deadline: '2026-06-03', status: '대기', region: '인천', rate: '-', files: 2 },
+      { id: 8, title: '국토교통부 스마트시티 플랫폼 2단계 고도화', org: '국토교통부', type: 'IT', amount: '2,800,000,000', deadline: '2026-06-10', status: '진행중', region: '세종', rate: '88.9%', files: 7 },
+    ];
+
+    const ANALYSIS_LINE = [
+      { month: '11월', 건설: 156, IT: 89, 전기통신: 45 },
+      { month: '12월', 건설: 142, IT: 103, 전기통신: 52 },
+      { month: '1월', 건설: 98, IT: 87, 전기통신: 38 },
+      { month: '2월', 건설: 120, IT: 115, 전기통신: 61 },
+      { month: '3월', 건설: 178, IT: 142, 전기통신: 73 },
+      { month: '4월', 건설: 195, IT: 168, 전기통신: 82 },
+    ];
+
+    const ANALYSIS_BAR = [
+      { type: '건설공사', avg: 88.4, high: 94.2, low: 72.1 },
+      { type: 'IT시스템', avg: 91.2, high: 97.5, low: 78.3 },
+      { type: '전기·통신', avg: 86.7, high: 93.8, low: 69.4 },
+      { type: '기계설비', avg: 84.3, high: 91.2, low: 71.8 },
+      { type: '환경·위생', avg: 89.1, high: 95.4, low: 74.6 },
+    ];
+
+    const PIE_DATA = [
+      { name: '서울·경기', value: 34, color: '#1E40AF' },
+      { name: '부산·경남', value: 18, color: '#3B82F6' },
+      { name: '대구·경북', value: 14, color: '#60A5FA' },
+      { name: '인천', value: 11, color: '#93C5FD' },
+      { name: '기타', value: 23, color: '#BFDBFE' },
+    ];
+
+    const RECENT_RESULTS = [
+      { title: '서울시 AI 교통신호 제어시스템 구축', winner: '(주)에스티시스템', rate: '91.8%', amount: '1,234,000,000', date: '2026-04-25' },
+      { title: '행안부 사이버보안 취약점 점검', winner: '(주)시큐리티원', rate: '94.3%', amount: '456,000,000', date: '2026-04-24' },
+      { title: '한국철도공사 역사 시설물 유지관리', winner: '(주)코레일테크', rate: '87.2%', amount: '2,890,000,000', date: '2026-04-23' },
+      { title: '환경부 대기측정망 운영 관리', winner: '(주)에어코리아', rate: '89.6%', amount: '780,000,000', date: '2026-04-22' },
+    ];
+
+    const PLANS = [
+      { id: 'free', name: '무료', price: 0, period: '무료', features: ['최근 3개월 공고 조회', '기본 검색 (키워드만)', '일 10건 조회 제한', '공고 상세 기본 정보'], color: '#6B7280', badge: null },
+      { id: 'basic', name: '베이직', price: 29000, period: '월 29,000원', features: ['1년 전 공고 조회', '다중 조건 필터 검색', '무제한 조회', '낙찰 결과 분석 (기본)', '공고 스크랩 100건'], color: C.primary, badge: '인기' },
+      { id: 'pro', name: '프로', price: 79000, period: '월 79,000원', features: ['전체 기간 공고 조회', '다중 조건 필터 검색', '무제한 조회', '낙찰 분석 + 추천 금액', '공고 스크랩 무제한', '알림 자동화 무제한'], color: C.purple, badge: '추천' },
+    ];
+
+    const PAY_HISTORY = [
+      { date: '2026-04-01', plan: '베이직', amount: '29,000', status: '결제완료', method: '신한카드 ****1234' },
+      { date: '2026-03-01', plan: '베이직', amount: '29,000', status: '결제완료', method: '신한카드 ****1234' },
+      { date: '2026-02-01', plan: '베이직', amount: '29,000', status: '결제완료', method: '신한카드 ****1234' },
+      { date: '2026-01-01', plan: '무료', amount: '0', status: '없음', method: '-' },
+    ];
+
+    // ─── 공통 컴포넌트 ───
+    function Badge({ children, color = C.primary, bg }) {
+      return (
+        <span style={{ display: 'inline-block', padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: bg || color + '18', color }}>
+          {children}
+        </span>
+      );
+    }
+
+    function Toast({ message, onClose }) {
+      useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+      return (
+        <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999, background: '#1F2937', color: '#fff', padding: '12px 20px', borderRadius: 10, boxShadow: '0 4px 20px rgba(0,0,0,0.25)', animation: 'slideUp 300ms ease', display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+          <span style={{ fontSize: 16 }}>✓</span> {message}
+        </div>
+      );
+    }
+
+    function Modal({ title, onClose, children, width = 560 }) {
+      return (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', animation: 'fadeIn 200ms ease' }} />
+          <div style={{ position: 'relative', width, maxHeight: '85vh', background: '#fff', borderRadius: 16, zIndex: 501, animation: 'fadeInScale 200ms ease', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.18)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 24px', borderBottom: `1px solid ${C.border}` }}>
+              <h3 style={{ fontSize: 18, fontWeight: 700 }}>{title}</h3>
+              <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, color: C.textLight, lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ padding: 24, overflowY: 'auto', flex: 1 }}>{children}</div>
+          </div>
+        </div>
+      );
+    }
+
+    function Drawer({ item, onClose }) {
+      if (!item) return null;
+      return (
+        <>
+          <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 200, animation: 'fadeIn 200ms ease' }} />
+          <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 500, background: '#fff', boxShadow: '-8px 0 40px rgba(0,0,0,0.12)', zIndex: 201, overflowY: 'auto', animation: 'slideInRight 200ms ease' }}>
+            <div style={{ padding: '20px 24px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700 }}>공고 상세</h3>
+              <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, color: C.textLight }}>✕</button>
+            </div>
+            <div style={{ padding: 24 }}>
+              <div style={{ background: C.accentLight, borderRadius: 12, padding: '16px 20px', marginBottom: 20 }}>
+                <h4 style={{ fontSize: 15, fontWeight: 700, color: C.primary, marginBottom: 8, lineHeight: 1.5 }}>{item.title}</h4>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <Badge color={C.primary}>{item.type}</Badge>
+                  <Badge color={item.status === '진행중' ? C.success : C.warning}>{item.status}</Badge>
+                  <Badge color={C.textLight}>{item.region}</Badge>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+                {[
+                  { label: '발주기관', value: item.org },
+                  { label: '입찰금액', value: item.amount + '원' },
+                  { label: '마감일', value: item.deadline },
+                  { label: '투찰률(추정)', value: item.rate },
+                  { label: '첨부파일', value: item.files + '개' },
+                  { label: '지역', value: item.region },
+                ].map(({ label, value }) => (
+                  <div key={label} style={{ background: C.bg, borderRadius: 8, padding: '10px 14px' }}>
+                    <div style={{ fontSize: 11, color: C.textLight, marginBottom: 3 }}>{label}</div>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: C.text }}>AI 추천 투찰 금액 구간</div>
+                <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '14px 16px' }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: '#059669', marginBottom: 4 }}>
+                    {Math.round(parseInt(item.amount.replace(/,/g, '')) * 0.876 / 10000000) * 10000000 === 0 ? '분석중' :
+                      (Math.round(parseInt(item.amount.replace(/,/g, '')) * 0.876 / 1000000) * 1000000).toLocaleString() + '원'}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#6B7280' }}>유사 공고 기반 추천 범위 · 낙찰 확률 82%</div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button style={{ flex: 1, padding: '11px 0', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: 14, transition: 'all 200ms' }}
+                  onClick={() => { onClose(); }}>스크랩 등록</button>
+                <button style={{ flex: 1, padding: '11px 0', background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 8, fontWeight: 600, fontSize: 14 }}>첨부파일 다운로드</button>
+              </div>
+            </div>
+          </div>
+        </>
+      );
+    }
+
+    // ─── 카운트업 ───
+    function CountUp({ end, duration = 1200, suffix = '' }) {
+      const [val, setVal] = useState(0);
+      useEffect(() => {
+        let start = 0; const step = end / (duration / 16);
+        const timer = setInterval(() => {
+          start += step;
+          if (start >= end) { setVal(end); clearInterval(timer); }
+          else setVal(Math.floor(start));
+        }, 16);
+        return () => clearInterval(timer);
+      }, [end]);
+      return <span style={{ animation: 'countUp 400ms ease' }}>{val.toLocaleString()}{suffix}</span>;
+    }
+
+    // ─── 공고 검색 페이지 ───
+    function SearchPage({ onDrawer }) {
+      const [filters, setFilters] = useState({ region: '', type: '', keyword: '' });
+      const [filtered, setFiltered] = useState(BIDS);
+
+      const handleFilter = () => {
+        setFiltered(BIDS.filter(b =>
+          (!filters.region || b.region.includes(filters.region)) &&
+          (!filters.type || b.type.includes(filters.type)) &&
+          (!filters.keyword || b.title.includes(filters.keyword))
+        ));
+      };
+
+      return (
+        <div style={{ animation: 'fadeIn 300ms ease' }}>
+          {/* 필터 패널 */}
+          <div style={{ background: '#fff', borderRadius: 16, padding: '20px 24px', marginBottom: 20, boxShadow: '0 2px 8px rgba(0,0,0,0.06)', border: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14, color: C.text }}>검색 조건</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr 120px', gap: 12 }}>
+              <select value={filters.region} onChange={e => setFilters({...filters, region: e.target.value})}
+                style={{ padding: '9px 12px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, background: '#fff', color: C.text }}>
+                <option value="">전체 지역</option>
+                {['서울', '부산', '인천', '경기', '세종', '충남', '전북'].map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+              <select value={filters.type} onChange={e => setFilters({...filters, type: e.target.value})}
+                style={{ padding: '9px 12px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, background: '#fff', color: C.text }}>
+                <option value="">전체 업종</option>
+                {['건설', 'IT', '전기/통신', '기계', '환경'].map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <input value={filters.keyword} onChange={e => setFilters({...filters, keyword: e.target.value})}
+                placeholder="공고명, 발주기관 키워드 검색..."
+                style={{ padding: '9px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14 }} />
+              <button onClick={handleFilter}
+                style={{ background: C.primary, color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: 14, transition: 'all 200ms' }}>
+                검색
+              </button>
+            </div>
+          </div>
+
+          {/* 리스트 헤더 */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div style={{ fontSize: 14, color: C.textLight }}>총 <strong style={{ color: C.text }}>{filtered.length}</strong>건 검색됨</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {['마감순', '금액순', '적합도순'].map(s => (
+                <button key={s} style={{ padding: '6px 12px', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, background: s === '마감순' ? C.accentLight : '#fff', color: s === '마감순' ? C.primary : C.textLight, fontWeight: s === '마감순' ? 600 : 400 }}>{s}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* 공고 테이블 */}
+          <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.06)', border: `1px solid ${C.border}`, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: C.bg, borderBottom: `1px solid ${C.border}` }}>
+                  {['공고명', '발주기관', '업종', '입찰금액', '마감일', '상태', ''].map((h, i) => (
+                    <th key={i} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 600, color: C.textLight, whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((bid, i) => (
+                  <tr key={bid.id} onClick={() => onDrawer(bid)}
+                    style={{ borderBottom: `1px solid ${C.borderLight}`, cursor: 'pointer', transition: 'background 150ms', animation: `slideUp 400ms ease ${i * 60}ms both` }}
+                    onMouseEnter={e => e.currentTarget.style.background = C.accentLight}
+                    onMouseLeave={e => e.currentTarget.style.background = '#fff'}>
+                    <td style={{ padding: '14px 16px' }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, maxWidth: 280 }}>{bid.title}</div>
+                      <div style={{ fontSize: 11, color: C.textLight, marginTop: 2 }}>투찰률 추정 {bid.rate}</div>
+                    </td>
+                    <td style={{ padding: '14px 16px', fontSize: 13, color: C.textLight, whiteSpace: 'nowrap' }}>{bid.org.replace('(주)', '').replace('공사', '').replace('부', '부').substring(0, 8)}</td>
+                    <td style={{ padding: '14px 16px' }}><Badge color={C.primary}>{bid.type}</Badge></td>
+                    <td style={{ padding: '14px 16px', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{bid.amount}원</td>
+                    <td style={{ padding: '14px 16px', fontSize: 13, color: C.textLight, whiteSpace: 'nowrap' }}>{bid.deadline}</td>
+                    <td style={{ padding: '14px 16px' }}>
+                      <Badge color={bid.status === '진행중' ? C.success : C.warning}>{bid.status}</Badge>
+                    </td>
+                    <td style={{ padding: '14px 16px' }}>
+                      <button onClick={e => { e.stopPropagation(); onDrawer(bid); }}
+                        style={{ padding: '6px 12px', background: C.accentLight, border: 'none', borderRadius: 6, fontSize: 12, color: C.primary, fontWeight: 600 }}>
+                        상세 →
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── 낙찰 분석 페이지 ───
+    function DashboardPage() {
+      return (
+        <div style={{ animation: 'fadeIn 300ms ease' }}>
+          {/* KPI 카드 */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+            {[
+              { label: '오늘 개찰 건수', value: 47, suffix: '건', icon: '📋', color: C.primary },
+              { label: '평균 투찰률', value: 89, suffix: '%', icon: '📊', color: C.success },
+              { label: '이번달 신규 공고', value: 1284, suffix: '건', icon: '🔔', color: C.warning },
+              { label: '평균 낙찰금액', value: 8, suffix: '억', icon: '💰', color: C.purple },
+            ].map(({ label, value, suffix, icon, color }, i) => (
+              <div key={label} style={{ background: '#fff', borderRadius: 16, padding: '20px 22px', boxShadow: '0 4px 16px rgba(0,0,0,0.08)', border: `1px solid ${C.border}`, animation: `slideUp 400ms ease ${i * 80}ms both` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, color: C.textLight, fontWeight: 600 }}>{label}</div>
+                  <div style={{ fontSize: 22 }}>{icon}</div>
+                </div>
+                <div style={{ fontSize: 28, fontWeight: 800, color }}>
+                  <CountUp end={value} suffix={suffix} />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* 차트 2열 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 20, marginBottom: 20 }}>
+            {/* 월별 공고/낙찰 추이 */}
+            <div style={{ background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 4px 16px rgba(0,0,0,0.08)', border: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 20 }}>업종별 공고 추이 (최근 6개월)</div>
+              <ResponsiveContainer width="100%" height={220}>
+                <AreaChart data={ANALYSIS_LINE} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorIT" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={C.primary} stopOpacity={0.2}/>
+                      <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="colorBuild" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={C.success} stopOpacity={0.2}/>
+                      <stop offset="95%" stopColor={C.success} stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12, fill: C.textLight }} />
+                  <YAxis tick={{ fontSize: 12, fill: C.textLight }} />
+                  <Tooltip contentStyle={{ fontSize: 13, borderRadius: 8 }} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Area type="monotone" dataKey="건설" stroke={C.success} fill="url(#colorBuild)" strokeWidth={2} name="건설" />
+                  <Area type="monotone" dataKey="IT" stroke={C.primary} fill="url(#colorIT)" strokeWidth={2} name="IT시스템" />
+                  <Area type="monotone" dataKey="전기통신" stroke={C.warning} fill="none" strokeWidth={2} strokeDasharray="4 4" name="전기·통신" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* 지역 분포 */}
+            <div style={{ background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 4px 16px rgba(0,0,0,0.08)', border: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 20 }}>지역별 공고 분포</div>
+              <ResponsiveContainer width="100%" height={180}>
+                <PieChart>
+                  <Pie data={PIE_DATA} cx="50%" cy="50%" outerRadius={70} innerRadius={40} dataKey="value" label={({ name, value }) => `${name} ${value}%`} labelLine={false} style={{ fontSize: 10 }}>
+                    {PIE_DATA.map((entry, index) => <Cell key={index} fill={entry.color} />)}
+                  </Pie>
+                  <Tooltip formatter={(v) => v + '%'} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 8 }}>
+                {PIE_DATA.map(d => (
+                  <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: C.textLight }}>
+                    <div style={{ width: 8, height: 8, borderRadius: 2, background: d.color }} />
+                    {d.name}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 업종별 투찰률 + 최근 낙찰 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+            <div style={{ background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 4px 16px rgba(0,0,0,0.08)', border: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 20 }}>업종별 평균 투찰률 (%)</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={ANALYSIS_BAR} margin={{ top: 0, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                  <XAxis dataKey="type" tick={{ fontSize: 11, fill: C.textLight }} />
+                  <YAxis domain={[60, 100]} tick={{ fontSize: 11, fill: C.textLight }} />
+                  <Tooltip contentStyle={{ fontSize: 13, borderRadius: 8 }} />
+                  <Bar dataKey="avg" name="평균" fill={C.primary} radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="high" name="최고" fill={C.success} radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div style={{ background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 4px 16px rgba(0,0,0,0.08)', border: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>최근 낙찰 결과</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {RECENT_RESULTS.map((r, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 12px', background: C.bg, borderRadius: 10, cursor: 'pointer', transition: 'background 150ms' }}
+                    onMouseEnter={e => e.currentTarget.style.background = C.accentLight}
+                    onMouseLeave={e => e.currentTarget.style.background = C.bg}>
+                    <div style={{ fontSize: 12, color: '#fff', background: C.primary, borderRadius: 6, padding: '4px 8px', fontWeight: 700, whiteSpace: 'nowrap' }}>{r.rate}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2, lineHeight: 1.4 }}>{r.title}</div>
+                      <div style={{ fontSize: 11, color: C.textLight }}>{r.winner} · {r.date}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── 구독 관리 페이지 ───
+    function SubscriptionPage({ onToast }) {
+      const [upgradeModal, setUpgradeModal] = useState(null);
+
+      return (
+        <div style={{ animation: 'fadeIn 300ms ease' }}>
+          {/* 현재 구독 상태 */}
+          <div style={{ background: `linear-gradient(135deg, ${C.primary}, #3B82F6)`, borderRadius: 16, padding: '24px 28px', marginBottom: 24, color: '#fff' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ fontSize: 13, opacity: 0.8, marginBottom: 6 }}>현재 구독 플랜</div>
+                <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 4 }}>베이직</div>
+                <div style={{ fontSize: 14, opacity: 0.85 }}>월 29,000원 · 다음 결제일: 2026-05-01</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ background: 'rgba(255,255,255,0.2)', borderRadius: 10, padding: '12px 20px', marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>이번달 공고 조회</div>
+                  <div style={{ fontSize: 22, fontWeight: 800 }}>847건</div>
+                </div>
+                <button onClick={() => setUpgradeModal({ plan: PLANS[2] })}
+                  style={{ background: '#fff', color: C.primary, border: 'none', borderRadius: 8, padding: '9px 18px', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                  프로로 업그레이드 ↑
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 플랜 선택 */}
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>구독 플랜 비교</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 28 }}>
+            {PLANS.map((plan, i) => (
+              <div key={plan.id} style={{ background: '#fff', borderRadius: 16, padding: '24px 20px', border: plan.id === 'basic' ? `2px solid ${C.primary}` : `1px solid ${C.border}`, boxShadow: plan.id === 'basic' ? `0 8px 24px ${C.primary}20` : '0 2px 8px rgba(0,0,0,0.06)', position: 'relative', animation: `slideUp 400ms ease ${i * 100}ms both` }}>
+                {plan.badge && (
+                  <div style={{ position: 'absolute', top: -10, right: 20, background: plan.color, color: '#fff', borderRadius: 999, padding: '4px 12px', fontSize: 11, fontWeight: 700 }}>
+                    {plan.badge}
+                  </div>
+                )}
+                <div style={{ fontSize: 20, fontWeight: 800, color: plan.color, marginBottom: 6 }}>{plan.name}</div>
+                <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 4 }}>{plan.price === 0 ? '무료' : plan.price.toLocaleString() + '원'}</div>
+                <div style={{ fontSize: 12, color: C.textLight, marginBottom: 20 }}>{plan.period}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+                  {plan.features.map(f => (
+                    <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                      <span style={{ color: C.success, fontSize: 14 }}>✓</span>
+                      {f}
+                    </div>
+                  ))}
+                </div>
+                {plan.id === 'basic' ? (
+                  <button style={{ width: '100%', padding: '10px 0', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: 14 }}>
+                    현재 플랜
+                  </button>
+                ) : (
+                  <button onClick={() => setUpgradeModal({ plan })}
+                    style={{ width: '100%', padding: '10px 0', background: plan.id === 'free' ? C.bg : plan.color, color: plan.id === 'free' ? C.textLight : '#fff', border: plan.id === 'free' ? `1px solid ${C.border}` : 'none', borderRadius: 8, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
+                    {plan.id === 'free' ? '다운그레이드' : '업그레이드'}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* 결제 내역 */}
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>결제 내역</div>
+          <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.06)', border: `1px solid ${C.border}`, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: C.bg }}>
+                  {['결제일', '플랜', '결제금액', '결제수단', '상태'].map(h => (
+                    <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontSize: 12, color: C.textLight, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {PAY_HISTORY.map((p, i) => (
+                  <tr key={i} style={{ borderBottom: `1px solid ${C.borderLight}` }}>
+                    <td style={{ padding: '13px 16px', fontSize: 13, color: C.textLight }}>{p.date}</td>
+                    <td style={{ padding: '13px 16px', fontSize: 13, fontWeight: 600 }}>{p.plan}</td>
+                    <td style={{ padding: '13px 16px', fontSize: 13, fontWeight: 700, color: p.amount === '0' ? C.textLight : C.text }}>{p.amount === '0' ? '-' : p.amount + '원'}</td>
+                    <td style={{ padding: '13px 16px', fontSize: 12, color: C.textLight }}>{p.method}</td>
+                    <td style={{ padding: '13px 16px' }}>
+                      <Badge color={p.status === '결제완료' ? C.success : C.textLight}>{p.status}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {upgradeModal && (
+            <Modal title={`${upgradeModal.plan.name} 플랜 업그레이드`} onClose={() => setUpgradeModal(null)}>
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ background: C.accentLight, borderRadius: 10, padding: '16px 20px', marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, color: C.textLight, marginBottom: 4 }}>변경 플랜</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: upgradeModal.plan.color }}>{upgradeModal.plan.name}</div>
+                  <div style={{ fontSize: 14, color: C.text, marginTop: 2 }}>{upgradeModal.plan.period}</div>
+                </div>
+                <div style={{ fontSize: 13, color: C.text, marginBottom: 12 }}>결제 수단</div>
+                <div style={{ border: `2px solid ${C.primary}`, borderRadius: 10, padding: '14px 16px', marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>신한카드 ****1234</div>
+                  <div style={{ fontSize: 12, color: C.textLight }}>등록된 카드로 정기 결제</div>
+                </div>
+              </div>
+              <button onClick={() => { setUpgradeModal(null); onToast('업그레이드 신청이 완료되었습니다!'); }}
+                style={{ width: '100%', padding: '13px 0', background: upgradeModal.plan.color, color: '#fff', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: 15, cursor: 'pointer' }}>
+                업그레이드 확인
+              </button>
+            </Modal>
+          )}
+        </div>
+      );
+    }
+
+    // ─── 회원 가입 페이지 ───
+    function AuthPage({ onToast }) {
+      const [mode, setMode] = useState('login');
+      const [form, setForm] = useState({ email: '', password: '', company: '', biz: '' });
+
+      return (
+        <div style={{ animation: 'fadeIn 300ms ease', display: 'flex', justifyContent: 'center', paddingTop: 20 }}>
+          <div style={{ width: 460, background: '#fff', borderRadius: 20, boxShadow: '0 8px 32px rgba(0,0,0,0.10)', border: `1px solid ${C.border}`, overflow: 'hidden' }}>
+            {/* 탭 */}
+            <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}` }}>
+              {[{ id: 'login', label: '로그인' }, { id: 'signup', label: '기업 회원가입' }].map(t => (
+                <button key={t.id} onClick={() => setMode(t.id)}
+                  style={{ flex: 1, padding: '16px 0', background: 'none', border: 'none', fontSize: 15, fontWeight: mode === t.id ? 700 : 400, color: mode === t.id ? C.primary : C.textLight, borderBottom: mode === t.id ? `3px solid ${C.primary}` : '3px solid transparent', transition: 'all 200ms', cursor: 'pointer' }}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ padding: '28px 32px' }}>
+              {mode === 'login' ? (
+                <div style={{ animation: 'fadeIn 300ms ease' }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 6 }}>다시 오셨군요!</div>
+                  <div style={{ fontSize: 14, color: C.textLight, marginBottom: 28 }}>로그인하여 입찰 정보를 확인하세요.</div>
+                  {[
+                    { label: '이메일', type: 'email', key: 'email', placeholder: 'company@example.com' },
+                    { label: '비밀번호', type: 'password', key: 'password', placeholder: '비밀번호를 입력하세요' },
+                  ].map(f => (
+                    <div key={f.key} style={{ marginBottom: 16 }}>
+                      <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{f.label}</label>
+                      <input type={f.type} placeholder={f.placeholder} value={form[f.key]} onChange={e => setForm({...form, [f.key]: e.target.value})}
+                        style={{ width: '100%', padding: '11px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, outline: 'none' }} />
+                    </div>
+                  ))}
+                  <button onClick={() => onToast('로그인이 완료되었습니다!')}
+                    style={{ width: '100%', padding: '13px 0', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, color: '#fff', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: 15, cursor: 'pointer', marginTop: 8 }}>
+                    로그인
+                  </button>
+                  <div style={{ textAlign: 'center', marginTop: 16, fontSize: 13, color: C.textLight }}>
+                    <span style={{ cursor: 'pointer', color: C.primary, fontWeight: 600 }}>비밀번호를 잊으셨나요?</span>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ animation: 'fadeIn 300ms ease' }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 6 }}>기업 회원 등록</div>
+                  <div style={{ fontSize: 14, color: C.textLight, marginBottom: 24 }}>사업자번호로 기업 인증 후 무료 이용 가능합니다.</div>
+                  {[
+                    { label: '기업명', type: 'text', key: 'company', placeholder: '(주)엔터프라이즈' },
+                    { label: '사업자번호', type: 'text', key: 'biz', placeholder: '000-00-00000' },
+                    { label: '이메일', type: 'email', key: 'email', placeholder: 'company@example.com' },
+                    { label: '비밀번호', type: 'password', key: 'password', placeholder: '8자 이상' },
+                  ].map(f => (
+                    <div key={f.key} style={{ marginBottom: 14 }}>
+                      <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{f.label}</label>
+                      <input type={f.type} placeholder={f.placeholder} value={form[f.key]} onChange={e => setForm({...form, [f.key]: e.target.value})}
+                        style={{ width: '100%', padding: '11px 14px', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14 }} />
+                    </div>
+                  ))}
+                  <button onClick={() => onToast('회원가입이 완료되었습니다! 이메일을 확인하세요.')}
+                    style={{ width: '100%', padding: '13px 0', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, color: '#fff', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: 15, cursor: 'pointer', marginTop: 8 }}>
+                    무료로 시작하기
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── 스켈레톤 ───
+    function Skeleton() {
+      return (
+        <div style={{ padding: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 24 }}>
+            {[...Array(4)].map((_,i) => <div key={i} className="shimmer-box" style={{ height: 100 }} />)}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 20 }}>
+            <div className="shimmer-box" style={{ height: 260 }} />
+            <div className="shimmer-box" style={{ height: 260 }} />
+          </div>
+        </div>
+      );
+    }
+
+    // ─── 히어로 배너 ───
+    const HERO_META = {
+      main: { title: '공고 검색', subtitle: '다중 조건으로 공공입찰 공고를 검색합니다', kpis: [{ label: '오늘 등록', value: '147건' }, { label: '진행중', value: '1,284건' }, { label: '마감 D-7', value: '89건' }] },
+      dashboard: { title: '낙찰 분석', subtitle: '투찰/낙찰 데이터를 시각화하여 입찰 전략을 수립합니다', kpis: [{ label: '분석 공고', value: '48,201건' }, { label: '평균 투찰률', value: '89.1%' }, { label: '업종 분류', value: '23개' }] },
+      subscription: { title: '구독 관리', subtitle: '구독 플랜과 결제 내역을 관리합니다', kpis: [{ label: '현재 플랜', value: '베이직' }, { label: '조회 횟수', value: '847건' }, { label: '스크랩', value: '34건' }] },
+      auth: { title: '회원 가입', subtitle: '기업 회원으로 가입하고 무료로 시작하세요', kpis: [{ label: '가입 기업', value: '2,180+' }, { label: '무료 체험', value: '30일' }, { label: '구독사', value: '847개사' }] },
+    };
+
+    // ─── 메인 앱 ───
+    function App() {
+      const [tab, setTab] = useState('main');
+      const [drawer, setDrawer] = useState(null);
+      const [toast, setToast] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [contentKey, setContentKey] = useState(0);
+
+      useEffect(() => { setTimeout(() => setLoading(false), 1200); }, []);
+
+      const handleTab = (t) => { setTab(t); setContentKey(k => k+1); };
+      const showToast = (msg) => { setToast(msg); };
+
+      const TABS = [
+        { id: 'main', label: '공고 검색' },
+        { id: 'dashboard', label: '낙찰 분석' },
+        { id: 'subscription', label: '구독 관리' },
+        { id: 'auth', label: '회원 가입' },
+      ];
+
+      const hero = HERO_META[tab];
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', width: '100%', minHeight: '100vh', background: C.bg }}>
+          {/* 상단 네비 */}
+          <header style={{ position: 'sticky', top: 0, zIndex: 100, background: '#fff', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', height: 58, padding: '0 28px', gap: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 20 }}>
+              <div style={{ width: 28, height: 28, background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ fontSize: 14 }}>📋</span>
+              </div>
+              <span style={{ fontSize: 15, fontWeight: 800, color: C.primary }}>BidScope</span>
+            </div>
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => handleTab(t.id)}
+                style={{ padding: '8px 16px', background: 'none', border: 'none', fontSize: 14, fontWeight: tab === t.id ? 700 : 400, color: tab === t.id ? C.primary : C.textLight, borderBottom: tab === t.id ? `2px solid ${C.primary}` : '2px solid transparent', transition: 'all 200ms', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {t.label}
+              </button>
+            ))}
+            <div style={{ flex: 1 }} />
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <button style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.textLight }}>🔍</button>
+              <button style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.textLight, position: 'relative' }}>
+                🔔
+                <span style={{ position: 'absolute', top: -2, right: -2, width: 8, height: 8, background: C.error, borderRadius: '50%' }} />
+              </button>
+              <div style={{ width: 32, height: 32, borderRadius: '50%', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+                <span style={{ fontSize: 14, color: '#fff', fontWeight: 700 }}>김</span>
+              </div>
+            </div>
+          </header>
+
+          {/* 히어로 배너 */}
+          <div style={{ background: `linear-gradient(135deg, ${C.primary} 0%, #2563EB 50%, ${C.accent} 100%)`, padding: '28px 32px', color: '#fff' }}>
+            <div style={{ maxWidth: 1200, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
+              <div>
+                <h1 style={{ fontSize: 26, fontWeight: 800, marginBottom: 6 }}>{hero.title}</h1>
+                <p style={{ fontSize: 14, opacity: 0.85 }}>{hero.subtitle}</p>
+              </div>
+              <div style={{ display: 'flex', gap: 24 }}>
+                {hero.kpis.map(k => (
+                  <div key={k.label} style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 20, fontWeight: 800 }}>{k.value}</div>
+                    <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>{k.label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 콘텐츠 */}
+          <main style={{ flex: 1, maxWidth: 1200, width: '100%', margin: '0 auto', padding: '24px 32px', boxSizing: 'border-box', alignSelf: 'stretch' }}>
+            {loading ? <Skeleton /> : (
+              <div key={contentKey} style={{ animation: 'fadeIn 300ms ease' }}>
+                {tab === 'main' && <SearchPage onDrawer={setDrawer} />}
+                {tab === 'dashboard' && <DashboardPage />}
+                {tab === 'subscription' && <SubscriptionPage onToast={showToast} />}
+                {tab === 'auth' && <AuthPage onToast={showToast} />}
+              </div>
+            )}
+          </main>
+
+          {drawer && <Drawer item={drawer} onClose={() => setDrawer(null)} />}
+          {toast && <Toast message={toast} onClose={() => setToast(null)} />}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
