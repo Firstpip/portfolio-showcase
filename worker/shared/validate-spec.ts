@@ -29,6 +29,30 @@ const ALLOWED_FIELD_TYPES = new Set([
 
 const ALLOWED_TIERS = new Set([1, 2, 3]);
 
+// `ref` 필드가 복수형 의미를 가질 수 없도록 차단 (T6.2).
+// `tags: ref`, `category_ids: ref` 처럼 다중 의미를 단수 ref 로 표현하는 패턴을 잡는다.
+// 진짜 다대다는 join entity 로 분해되어야 한다 (extract-spec.md "N:M 분해 규칙").
+//
+// 단, 도메인에 따라 이름이 's' 로 끝나지만 본질적으로 단수인 ref 가 가끔 나타날 수 있다 (예: address).
+// 그런 경우는 아래 allowlist 로 풀어준다 — 보수적으로 시작하고 false positive 발견 시 추가.
+const SINGULAR_S_REF_ALLOWLIST = new Set<string>([
+  "address",
+  "status",
+  "process",
+  "class",
+  "series",
+]);
+
+function detectPluralRef(fieldName: string, fieldType: string): "ids_suffix" | "plural_s" | null {
+  if (fieldType !== "ref") return null;
+  if (/_ids$/i.test(fieldName)) return "ids_suffix";
+  if (/s$/i.test(fieldName) && !/_id$/i.test(fieldName)) {
+    if (SINGULAR_S_REF_ALLOWLIST.has(fieldName.toLowerCase())) return null;
+    return "plural_s";
+  }
+  return null;
+}
+
 export function validateSpecStructured(value: unknown): ValidationResult {
   const errors: string[] = [];
   const push = (path: string, reason: string): void => {
@@ -134,6 +158,21 @@ export function validateSpecStructured(value: unknown): ValidationResult {
           if (!isNonEmptyString(f["name"])) push(`${fp}.name`, "비어있거나 문자열 아님");
           if (typeof f["type"] !== "string" || !ALLOWED_FIELD_TYPES.has(f["type"])) {
             push(`${fp}.type`, `허용 외 타입: ${String(f["type"])}`);
+          }
+          // T6.2: 복수형 ref 거부 — N:M 은 join entity 로 분해해야 함.
+          if (typeof f["name"] === "string" && typeof f["type"] === "string") {
+            const plural = detectPluralRef(f["name"], f["type"]);
+            if (plural === "ids_suffix") {
+              push(
+                `${fp}`,
+                `'${f["name"]}: ref' 는 _ids 복수 접미사 — 단수 ref 로 다중 의미 표현 금지. join entity 로 분해 (예: ${String(f["name"]).replace(/_ids$/, "")}_link).`,
+              );
+            } else if (plural === "plural_s") {
+              push(
+                `${fp}`,
+                `'${f["name"]}: ref' 는 복수형 명사 — N:M 은 단수 ref 두 개를 가진 join entity 로 분해.`,
+              );
+            }
           }
         });
       }

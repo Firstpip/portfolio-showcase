@@ -88,6 +88,49 @@
 
 ---
 
+## N:M (다대다) 관계 분해 규칙 (필수)
+
+데이터 모델에 다대다 관계가 있으면 **반드시 별도의 join entity 로 분해**하라. 단수 ref 필드 하나로 다중 의미를 표현하지 마라. 스키마에는 array 타입이 없으므로 "ref 배열" 같은 우회는 불가능하다.
+
+**N:M 감지 신호** (공고에 다음 중 하나라도 있으면 N:M 가능성을 의심하라):
+- 명시적 표현: "복수 선택", "여러 개", "다중 선택", "복수 태그", "여러 카테고리", "복수 옵션", "n개 이상", "동시에 여러"
+- 다대다 자연어: "리뷰에 태그를 여러 개 달 수 있다", "한 상품이 여러 카테고리에 속함", "사용자는 여러 그룹에 가입", "강의에 여러 학생 등록"
+- 양쪽 다 독립 엔티티이고 양방향 다수: post ↔ tag, member ↔ group, product ↔ category, course ↔ student, doctor ↔ specialty
+
+**금지 패턴** (이렇게 출력하면 schema 위반):
+- `{"name": "tags", "type": "ref"}` — 복수 명사 + 단수 ref ❌
+- `{"name": "category_ids", "type": "ref"}` — `_ids` 복수 접미사 + 단수 ref ❌
+- `{"name": "members", "type": "ref"}` — 복수형 + 단수 ref ❌
+
+**올바른 분해 패턴**:
+- 새 join entity 신설:
+  - 이름: 의미가 통하는 영어 snake_case (`review_tag`, `member_group`, `product_category`, `enrollment`, `doctor_specialty`)
+  - 필드: `<entityA>_id: ref` + `<entityB>_id: ref` (둘 다 단수형 + 단수 ref). 필요하면 `created_at: datetime` 같은 보조 필드도 OK.
+  - sample_count: 양 엔티티 곱의 5~30% 정도 (현실적 매칭률; 예: review 60 × tag 12 라면 review_tag 100~150)
+- 양쪽 엔티티 자체에는 상대방 ref 두지 않음 (join 통해서만 연결)
+- core_flows[].data_entities 에 **join entity 도 포함**시켜라 (예: `["review", "tag", "review_tag"]`)
+
+**예시** — 공고: "리뷰 작성 시 태그를 여러 개 달 수 있음 (시설 좋음/친절/주차 편함 등)"
+
+올바른 추출:
+
+```jsonc
+{
+  "data_entities": [
+    { "name": "review", "fields": [{"name":"author_id","type":"ref"},{"name":"body","type":"text"}], "sample_count": 60 },
+    { "name": "tag", "fields": [{"name":"label","type":"string"}], "sample_count": 12 },
+    { "name": "review_tag",
+      "fields": [{"name":"review_id","type":"ref"},{"name":"tag_id","type":"ref"}],
+      "sample_count": 130 }
+  ],
+  "core_flows": [
+    { "id": "flow_x", "title": "후기 작성", "data_entities": ["review", "tag", "review_tag"], ... }
+  ]
+}
+```
+
+---
+
 ## sample_count 가이드
 
 | 엔티티 성격 | 권장 sample_count |
@@ -117,6 +160,8 @@
 - [ ] 모든 `core_flows[].id`가 `tier_assignment` 세 배열 중 정확히 한 곳에 있는가?
 - [ ] `out_of_scope`가 빈 배열이 아닌가?
 - [ ] `data_entities[].name`이 `core_flows[].data_entities[]`에서 참조하는 모든 이름을 포함하는가?
+- [ ] **N:M 관계가 있다면 join entity 로 분해되어 있는가?** (`tags: ref`, `category_ids: ref` 같은 복수 ref 절대 금지)
+- [ ] **모든 `ref` 필드가 단수 형태인가?** (예: `member_id`, `tag_id`. `members`·`tag_ids` 같은 복수형 ref 금지)
 - [ ] JSON이 단일 객체이고, 코드 펜스·설명 문장·trailing comma가 없는가?
 
 ---

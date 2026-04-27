@@ -587,14 +587,27 @@ Phase 6 (E2E)
   - dashboard `DEMO_GEN_ENABLED` flag 제거 (별도 commit) — `dashboard/index.html` 89~102 라인 + 4713/4945 사용처
 
 #### T6.2 extract 프롬프트 N:M 관계 자동 분해 (후속)
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T6.1
 - **requires_test**: manual-review
-- **파일**: `worker/prompts/extract-spec.md`, `worker/extract-spec.ts` (validate-spec 보강 가능)
+- **파일**: `worker/prompts/extract-spec.md` (N:M 분해 규칙 섹션 + 품질체크 항목 추가), `worker/shared/validate-spec.ts` (`detectPluralRef` + 필드 검증), `worker/test-extract-nm.ts` (신규)
 - **해야 할 일**: 공고 본문에 "복수 선택"·"여러 개"·"다중" 같은 신호가 있을 때 extract 가 N:M 을 별도 join entity 로 분해해 출력하도록 프롬프트 개선. 또는 spec validator 가 N:M 패턴을 자동 감지해 join entity 를 합성.
-- **review_checklist**:
-  - [ ] 합성 공고 3건(N:M 패턴 포함) 으로 extract 실행 시 모두 join entity 생성됨
-  - [ ] T6.1 회귀: 발달센터 공고로 extract 시 review_tag 가 자동 등장
+- **구현 메모**:
+  - **프롬프트 (worker/prompts/extract-spec.md)**: "## N:M (다대다) 관계 분해 규칙 (필수)" 섹션 신설 — 감지 신호 (복수 선택·여러 개·다중·n개 이상·양방향 다수 자연어), 금지 패턴 (`tags: ref`·`*_ids: ref`·`복수명사: ref`), 올바른 분해 (단수 ref 두 개 + 의미 있는 join entity 이름 + sample_count 가이드 + flow 의 data_entities 에 join entity 도 포함). 예시 1개 (review × tag → review_tag). 품질 체크 리스트에 N:M 분해 + 단수 ref 두 항목 추가.
+  - **validator (worker/shared/validate-spec.ts)**: `detectPluralRef(name, type)` 헬퍼 — `_ids` 접미사 또는 's' 로 끝나면서 `_id` 가 아닌 ref 필드를 거부. 단, `address`·`status`·`process`·`class`·`series` 는 도메인상 단수 가능성 있어 allowlist. 위반 시 actionable 메시지 (어떻게 분해하라).
+  - **test-extract-nm.ts (신규)**: 4 케이스 — 발달센터 회귀 (DB의 spec_raw 복제) + 합성 3건 (clinic_review_tag, study_member_group, ecom_product_category). 각 케이스마다 INSERT → handleExtractQueued → SELECT spec_structured → 평가 (≥1 join entity (두 `_id` ref 필드 + flow 에서 참조) + 복수형 ref 위반 0건) → DELETE. 도메인 prefix 가 붙은 엔티티 이름 (group_id ↔ study_group) 때문에 stem 매칭이 false-negative 되기 쉬워 endpoint 존재 검사는 informational only.
+- **review_checklist** (자체 평가):
+  - [x] **합성 공고 3건(N:M 패턴 포함) 으로 extract 실행 시 모두 join entity 생성됨**
+    - clinic_review_tag → `review_tag` {review_id, tag_id} 분해 OK
+    - study_member_group → `group_member` {group_id, user_id} 분해 OK (study_group 가 group_id 로 참조됨 — 도메인 prefix 변형이라 conventional)
+    - ecom_product_category → `product_category` {product_id, category_id} 분해 OK
+  - [x] **T6.1 회귀: 발달센터 공고로 extract 시 review_tag 가 자동 등장**
+    - `review_tag` {review_id, tag_id} 자동 등장 + 보너스로 `center_therapy_type` (center × therapy_type) 도 추가 분해됨. T6.1 에서 수동 패치했던 join entity 가 prompt-only 로 등장.
+- **자동 검증 결과 (2026-04-27, 4/4 통과)**:
+  - 4 케이스 모두 schema 통과 + ≥1 valid join entity + 복수형 ref 위반 0건
+  - Sonnet 4.6 호출 4회 (cache_read 2~3회차 ~21K 재사용), 각 26~36s
+  - prompt 길이 ~520 라인 → 추가 후 ~580 라인 (cache 유지)
+- **last_failure**: —
 
 #### T6.3 extract 프롬프트 read-only flow tier 분류 개선 (후속)
 - **상태**: `TODO`
@@ -620,10 +633,10 @@ Phase 6 (E2E)
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (T6.1 DONE — E2E 검증 + 시스템 개선 3건 발견. T6.2/T6.3 후속 task 등록)
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1
+- **마지막 업데이트**: 2026-04-27 (T6.2 DONE — extract 프롬프트 N:M 분해 규칙 + plural-ref validator + 합성 3건 + 발달센터 회귀 4/4 통과, 사용자 위임 승인)
+- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2
 - **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: T6.2 (extract N:M 자동 분해), T6.3 (extract tier 분류 개선)
+- **다음에 착수 가능**: T6.3 (extract tier 분류 개선)
 - **별도 follow-up (commit 단위)**: dashboard `DEMO_GEN_ENABLED` flag 제거 — 데모 생성기 핵심 파이프라인이 T5.2 + T6.1 로 검증됐으므로 prod 노출 안전
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
@@ -669,3 +682,4 @@ Phase 6 (E2E)
 | 2026-04-27 | T6.1 완료 | E2E 검증 (260423_therapy-center-app, 위시켓 154823 발달센터 후기 앱 MVP 공고 936자). wishket-portfolio-system 의 fetch-wishket-project.js 로 본문 자동 수집 → handleExtractQueued (Sonnet 4.6, 29.2s) → 8 core_flows 추출 → handleGenQueued (Opus 4.7 × skeleton+seed+8 sections+assemble, 마지막 성공 run wall-clock 합산 782s) → 159KB HTML 생성. Playwright headless 검증: 콘솔 에러 0, 라우팅 3/3, 시드 7 entity / 37KB, reload 영속성, 9/9 공고 기능 매칭. 누적 토큰 in 195 / out 268,957 / cache_read 640,654 / cache_creation 286,544 (Max 정액제 ₩0). 발견 3건의 시스템 개선: (a) extract 프롬프트 N:M 관계 단수 ref 모델링 → 본 검증은 spec 수동 패치(review_tag join), 후속 T6.2 (b) sections validator step verbatim 매칭 너무 엄격 → containsVisibleText 를 quoted-substring + token threshold 로 영구 완화 (worker/generate-demo/sections.ts) (c) extract 가 read-only flow 를 tier 1 로 분류 → 본 검증은 spec 수동 패치(flow_2/flow_4 tier 2), 후속 T6.3. 별도 ops: GITHUB_TOKEN 휘발(T5.1 이후 다른 세션이 클리어), deploy 단계만 SKIP — T5.1+T5.2 별도 검증으로 deploy 자체는 안전 |
 | 2026-04-27 | T6.2/T6.3 등록 | 후속 개선 2건. T6.2 = extract 프롬프트 N:M 자동 분해 (review×tag 같은 다대다 관계를 join entity 로). T6.3 = extract 프롬프트 tier 분류 개선 (read-only flow 는 tier 2 default, 풍부한 state 가 있는 read flow 만 tier 1) |
 | 2026-04-27 | T5.1 완료 | deploy-demo 워커 모듈 + GitHub Pages 푸시. `worker/deploy-demo.ts` (writeFiles 단일 파일 wrapper, 자동 커밋 메시지), orchestrator handleGenQueued step 6.5 통합 (실패 시 markGenFailed 위임, SKIP_DEPLOY=1 우회), `worker/shared/github.ts` 에 `removeFiles` 추가 (테스트 cleanup 용 base_tree+sha:null 삭제). 자동 검증 3/3 통과: (1) Pages CDN 전파 ~40s 후 200+v1 marker (2) root tree 의 portfolio 슬러그 69개 SHA byte-identical (3) v2 SHA-pinned rawUrl 에서 v1 marker 잔존 0건. 1회차 실패 — `__T5_1_PROBE_*` 가 Jekyll `_` prefix 제외에 걸려 Pages 404 + 브랜치 기반 raw URL edge cache 로 v2 직후 v1 본문 반환 → probe slug `t5-1-probe-*` (lowercase+hyphen) + SHA-pinned commit URL 로 2회차 통과. 테스트 1회 실행당 main 에 3 커밋 발생 (deploy v1 + deploy v2 + cleanup) — probe 파일은 cleanup 으로 트리에서 제거됨 |
+| 2026-04-27 | T6.2 완료 | extract 프롬프트 N:M 자동 분해. `worker/prompts/extract-spec.md` 에 "N:M 관계 분해 규칙" 섹션 (감지 신호·금지 패턴·올바른 분해+예시) + 품질체크 항목 2개 추가. `worker/shared/validate-spec.ts` 에 `detectPluralRef` 헬퍼 — `_ids` 접미사 또는 's' 끝 ref 거부 (allowlist: address·status·process·class·series). `worker/test-extract-nm.ts` 신규 — 발달센터 회귀(spec_raw 복제) + 합성 3건(clinic_review_tag, study_member_group, ecom_product_category). 자동 검증 4/4 통과: (1) 발달센터 → review_tag {review_id, tag_id} 자동 등장, 보너스 center_therapy_type 분해 (T6.1 수동 패치 불필요화) (2) clinic → review_tag 분해 (3) study → group_member 분해 (study_group 도메인 prefix → group_id 참조) (4) ecom → product_category 분해. 복수형 ref 위반 0건, Sonnet 4회 호출 (cache_read 21K 재사용) |
