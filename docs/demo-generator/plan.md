@@ -499,15 +499,29 @@ Phase 6 (E2E)
 ### Phase 5 — Deploy
 
 #### T5.1 deploy-demo 워커 모듈
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T4.2
 - **requires_test**: yes
-- **파일**: `worker/deploy-demo.ts` (`worker/shared/github.ts`의 `writeFiles` 사용)
+- **파일**: `worker/deploy-demo.ts` + `worker/test-deploy-demo.ts` + `worker/shared/github.ts` (`removeFiles` 추가) + `worker/generate-demo/orchestrator.ts` (handleGenQueued step 6.5 통합)
 - **해야 할 일**: Pass C 통합 직후 같은 워커 프로세스 안에서 호출. `{project_slug}/portfolio-demo/index.html` 단일 커밋. 커밋 메시지 자동 생성.
+- **구현 메모**:
+  - `deployDemoToGitHub(token, slug, html)` — pure 함수. `writeFiles` 로 base_tree 위에 단일 파일 추가 → 다른 portfolio-N 디렉터리는 건드리지 않음. 커밋 메시지 자동 생성 (`deploy(demo): <slug> portfolio-demo (NK)`).
+  - orchestrator 통합: `handleGenQueued` step 6 (로컬 파일 atomic write) 직후 step 6.5 로 deploy 호출. 실패 시 `markGenFailed(reason, "deploy")` 위임 → `demo_artifacts` 미저장이라 다음 재생성은 LLM 부터 다시. T6.1 에서 부분 재배포 별도 task 신설 가능.
+  - `SKIP_DEPLOY=1` 환경변수: 푸시 생략 + 로컬 파일만 ready (개발/테스트 모드). 토큰 미설정 + SKIP_DEPLOY 미설정 → markGenFailed.
+  - `removeFiles` (github.ts 신규): base_tree + `sha:null` 로 단일 blob 삭제. 부모 dir 자동 collapse. 테스트 정리·향후 롤백용.
+  - SHA-pinned raw URL 검증: 브랜치 기반 `raw.githubusercontent.com/.../main/...` 은 ~5분 edge cache 라 v2 푸시 직후 v1 본문이 반환됨 (1회차 실패 원인). `https://raw.githubusercontent.com/<owner>/<repo>/<commitSha>/<path>` immutable URL 사용해 우회.
+  - probe slug prefix: `t5-1-probe-` (lowercase + hyphen). `__T5_1_PROBE_*` 같은 `_` prefix 는 Jekyll 이 자동 제외해 Pages 404 (1회차 다른 실패 원인). 실제 운영 슬러그는 `[0-9]{6}_kebab` 형식이라 Jekyll 통과.
 - **test_spec**:
-  - [ ] 푸시 후 GitHub Pages URL에서 200 응답 (전파 시간 감안 60초 대기)
-  - [ ] 기존 portfolio-1/2/3 건들지 않음
-  - [ ] 재배포 시 같은 경로 덮어쓰기 동작
+  - [x] 푸시 후 GitHub Pages URL 에서 200 응답 — Jekyll 빌드 + CDN 전파 ~40s 후 200 + MARKER_V1 본문 일치
+  - [x] 기존 portfolio-1/2/3 건들지 않음 — root tree 의 `[0-9]{6}_*` 슬러그 69개 SHA byte-identical 확인 (commit 전후 비교)
+  - [x] 재배포 시 같은 경로 덮어쓰기 동작 — v1/v2 commitSha 다름 + SHA-pinned rawUrl 에서 v2 marker 만 잔존 (v1 marker 0건)
+- **자동 검증 결과 (2026-04-27, 3/3 통과)**:
+  - probe slug `t5-1-probe-1777251186469`, main remote 에 3 커밋 발생 후 cleanup
+  - v1 commit `e2694bd0` (245B, 3132ms), v2 commit `4d21dd5c` (245B, 2848ms), cleanup commit `5161fe36`
+  - Pages CDN 전파: 약 40s (10 retry × 4s 후 200)
+  - portfolio 슬러그 69개 SHA 모두 byte-identical (재배포 영향 0)
+  - v2 SHA-pinned rawUrl 에서 v1 marker 잔존 0건 (overwrite 정상)
+- **last_failure**: 2026-04-27 1회차 — (a) probe slug `__T5_1_PROBE_*` 가 Jekyll `_` prefix 제외 규칙에 걸려 Pages 404 (29 retry × 4s 후 실패), (b) 브랜치 기반 `r1.rawUrl` edge cache 로 v2 푸시 직후 v1 본문 반환. probe slug 를 `t5-1-probe-*` 로 변경 + 검증 (3) 을 SHA-pinned commit URL 로 전환해 2회차 통과. 프로덕션 운영 슬러그(`[0-9]{6}_kebab`)는 영향 없음.
 
 #### T5.2 portfolio_links 자동 갱신
 - **상태**: `TODO`
@@ -550,10 +564,10 @@ Phase 6 (E2E)
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-04-27 (T4.3 DONE — 수동 수정 워크플로우 문서)
-- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3
+- **마지막 업데이트**: 2026-04-27 (T5.1 DONE — deploy-demo 워커 모듈 + GitHub Pages 푸시)
+- **완료된 task**: T0.1, T0.2, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1
 - **진행 중 task**: T0.3 (manual-review 대기)
-- **다음에 착수 가능**: T5.1 (T4.2 DONE, deploy-demo 워커 모듈)
+- **다음에 착수 가능**: T5.2 (T5.1 DONE, portfolio_links 자동 갱신)
 - **블로커**: 없음
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
@@ -594,3 +608,4 @@ Phase 6 (E2E)
 | 2026-04-25 | T4.1 완료 | 루트 `preview-demo.sh` 추가 — node/npm 의존 없이 python3 http.server + macOS `open`으로 단일 명령 프리뷰. 인자 형태 4종(latest/project_slug/dir/file), 환경변수 `PREVIEW_PORT`·`PREVIEW_NO_OPEN`. 자동 검증 2/2 통과: 단일 명령으로 서버 부팅+open 호출(stub으로 URL 인자 검증), HTTP 200+올바른 HTML 서빙, 정적 서버라 핵 리로드 불필요 |
 | 2026-04-27 | T4.2 완료 | 재생성 UI + 워커 gen_queued 오케스트레이터. 마이그레이션(regenerate_scope TEXT/CHECK + demo_artifacts JSONB), `worker/generate-demo/orchestrator.ts`(순수 `runGenerationPipeline` + DB래퍼 `handleGenQueued`: atomic claim→파이프라인→tempfile+rename atomic 교체→artifacts/ready/generated_at 갱신, 실패 시 HTML/artifacts 보존), 대시보드 `RegenerationPanel`(전체+flow별 버튼·confirm 단계·Max 5h 리밋 안내), 워커 라우터에 gen_queued 분기 추가. 자동 검증 3/3 통과: (1) partial=flow_patient_signup만 재호출 시 다른 2개 flow 코드 byte-identical(reqId 840aab08→962ab0d6, stages=sections+assemble만) (2) atomic gen_queued→generating 1행→0행으로 중복 선점 방지 (3) preflight 실패 시 사전 HTML 149B byte-identical 보존+demo_artifacts/generated_at NULL 유지 |
 | 2026-04-27 | T4.3 완료 | 수동 수정 워크플로우 문서 (`docs/demo-generator/manual-edit-guide.md`). 생성 HTML 구조 지도(CDN/CSS vars/TOKENS/initDemoStore/FlowPlaceholder 디스패처/Pass C 인라인 마커)와 안전·금지 영역, "어디 가서 고쳐야 하나" 결정 트리, 재생성 시 직접 편집이 휘발되는 메커니즘(부분 재생성도 assembleDemo가 HTML을 처음부터 재생성하므로 100% 사라짐 — `demo_artifacts`가 SSOT), 미팅 직전 비상 수정 체크리스트, 안티패턴 정리. requires_test=no라 자동 검증 없음 |
+| 2026-04-27 | T5.1 완료 | deploy-demo 워커 모듈 + GitHub Pages 푸시. `worker/deploy-demo.ts` (writeFiles 단일 파일 wrapper, 자동 커밋 메시지), orchestrator handleGenQueued step 6.5 통합 (실패 시 markGenFailed 위임, SKIP_DEPLOY=1 우회), `worker/shared/github.ts` 에 `removeFiles` 추가 (테스트 cleanup 용 base_tree+sha:null 삭제). 자동 검증 3/3 통과: (1) Pages CDN 전파 ~40s 후 200+v1 marker (2) root tree 의 portfolio 슬러그 69개 SHA byte-identical (3) v2 SHA-pinned rawUrl 에서 v1 marker 잔존 0건. 1회차 실패 — `__T5_1_PROBE_*` 가 Jekyll `_` prefix 제외에 걸려 Pages 404 + 브랜치 기반 raw URL edge cache 로 v2 직후 v1 본문 반환 → probe slug `t5-1-probe-*` (lowercase+hyphen) + SHA-pinned commit URL 로 2회차 통과. 테스트 1회 실행당 main 에 3 커밋 발생 (deploy v1 + deploy v2 + cleanup) — probe 파일은 cleanup 으로 트리에서 제거됨 |

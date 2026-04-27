@@ -140,6 +140,66 @@ export async function commitAndPush(
 }
 
 /**
+ * 여러 경로를 단일 커밋으로 삭제 (테스트 정리·롤백용).
+ *
+ * GitHub Tree API는 base_tree 위에서 `sha: null` 항목으로 파일 삭제를 표현.
+ * 단일 blob 만 지정해도 부모 디렉터리가 비면 Git 자체가 트리를 collapse 한다.
+ *
+ * 주의: 이 함수는 `mode: "100644"` 단일 파일 blob 만 삭제한다. 디렉터리
+ * 통째 삭제는 `delete-portfolios/index.ts` 의 root tree 재구성 방식이 적합.
+ */
+export async function removeFiles(
+  token: string,
+  paths: string[],
+  message: string,
+  branch: string = DEFAULT_BRANCH,
+  maxRetries = 5,
+): Promise<CommitResult> {
+  if (paths.length === 0) return { ok: false, reason: "paths 비어있음" };
+  let lastErr: CommitResult = { ok: false, reason: "initial state" };
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const head = await getHeadInfo(token, branch);
+    if (!head) return { ok: false, reason: "HEAD 조회 실패" };
+
+    const body = {
+      base_tree: head.rootTreeSha,
+      tree: paths.map((path) => ({
+        path,
+        mode: "100644",
+        type: "blob",
+        sha: null as null,
+      })),
+    };
+    const treeRes = await ghFetch(token, `/git/trees`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    if (!treeRes.ok) {
+      return { ok: false, reason: `삭제 트리 생성 실패 (${treeRes.status})` };
+    }
+    const newTreeSha = ((await treeRes.json()) as { sha: string }).sha;
+
+    const result = await commitAndPush(
+      token,
+      newTreeSha,
+      head.commitSha,
+      message,
+      branch,
+    );
+    if (result.ok || !result.conflict) return result;
+
+    lastErr = result;
+    await new Promise((r) =>
+      setTimeout(r, 500 * 2 ** (attempt - 1) + Math.random() * 300)
+    );
+  }
+  return {
+    ok: false,
+    reason: `재시도 ${maxRetries}회 후에도 충돌: ${lastErr.reason}`,
+  };
+}
+
+/**
  * 여러 파일을 단일 원자적 커밋으로 쓴다. ref-update 충돌(HTTP 422) 시
  * 지수 백오프 + 지터로 재시도. delete-portfolios와 동일한 방식.
  */

@@ -34,6 +34,7 @@ import {
 } from "./sections.ts";
 import { generateSeed, type SeedSpec, type SeedData } from "./seed.ts";
 import { assembleDemo } from "./assemble.ts";
+import { deployDemoToGitHub } from "../deploy-demo.ts";
 
 // ---------------------------------------------------------------------------
 // 타입
@@ -374,6 +375,51 @@ export async function handleGenQueued(
     );
   }
 
+  // 6.5) GitHub Pages 배포 (T5.1).
+  //   - SKIP_DEPLOY=1 이면 로컬 파일만 작성하고 푸시 생략 (개발/테스트 모드).
+  //   - 실패 시 markGenFailed 위임 — demo_artifacts 는 저장되지 않으므로 다음
+  //     "재생성"은 LLM 부터 다시 돈다. T6.1 에서 부분 재배포 별도 task 신설 예정.
+  let deployInfo:
+    | { commitSha: string; pagesUrl: string; duration_ms: number }
+    | null = null;
+  const skipDeploy = process.env.SKIP_DEPLOY === "1";
+  if (skipDeploy) {
+    console.log(
+      `[gen:${projectId}] SKIP_DEPLOY=1 — GitHub 푸시 생략, 로컬 파일만 ready`,
+    );
+  } else {
+    const githubToken = process.env.GITHUB_TOKEN;
+    if (!githubToken) {
+      return await markGenFailed(
+        supabase,
+        projectId,
+        "GITHUB_TOKEN 미설정 (SKIP_DEPLOY=1 로 푸시 우회 가능)",
+        "deploy",
+      );
+    }
+    const deployRes = await deployDemoToGitHub(
+      githubToken,
+      row.slug,
+      result.html,
+    );
+    if (!deployRes.ok) {
+      return await markGenFailed(
+        supabase,
+        projectId,
+        `deploy: ${deployRes.reason}`,
+        "deploy",
+      );
+    }
+    deployInfo = {
+      commitSha: deployRes.commitSha,
+      pagesUrl: deployRes.pagesUrl,
+      duration_ms: deployRes.duration_ms,
+    };
+    console.log(
+      `[gen:${projectId}] deploy OK — ${deployInfo.pagesUrl} (commit=${deployInfo.commitSha.slice(0, 8)}, ${deployInfo.duration_ms}ms)`,
+    );
+  }
+
   // 7) DB 갱신: demo_artifacts/demo_status='ready'/demo_generated_at + 로그 append.
   const logEntry = {
     stage: "gen",
@@ -382,6 +428,7 @@ export async function handleGenQueued(
     duration_ms: result.duration_ms,
     size_bytes: result.size_bytes,
     stages_run: result.stages,
+    deploy: deployInfo,
   };
   const newLog = await appendLog(supabase, projectId, logEntry);
   const { error: saveErr } = await supabase
