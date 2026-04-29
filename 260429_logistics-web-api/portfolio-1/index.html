@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>물류 고객 포털 — 맞춤 구현 데모</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+  <style>
+    @keyframes fadeIn { from { opacity:0 } to { opacity:1 } }
+    @keyframes slideInUp { from { transform:translateY(16px); opacity:0 } to { transform:translateY(0); opacity:1 } }
+    @keyframes slideInLeft { from { transform:translateX(-16px); opacity:0 } to { transform:translateX(0); opacity:1 } }
+    @keyframes slideInRight { from { transform:translateX(16px); opacity:0 } to { transform:translateX(0); opacity:1 } }
+    @keyframes scaleIn { from { transform:scale(0.94); opacity:0 } to { transform:scale(1); opacity:1 } }
+    @keyframes pulse { 0%,100%{ opacity:1 } 50%{ opacity:.45 } }
+    @keyframes spin { from{ transform:rotate(0deg) } to{ transform:rotate(360deg) } }
+    @keyframes shimmer { 0%{ background-position:-400px 0 } 100%{ background-position:400px 0 } }
+    @keyframes badgePop { 0%{ transform:scale(.8) } 60%{ transform:scale(1.12) } 100%{ transform:scale(1) } }
+    @keyframes toastIn { from{ transform:translateY(80px); opacity:0 } to{ transform:translateY(0); opacity:1 } }
+    @keyframes progressFill { from{ width:0 } to{ width:var(--w) } }
+    @keyframes dotBlink { 0%,100%{ opacity:1 } 50%{ opacity:.2 } }
+    @keyframes fadeInScale { from { opacity:0; transform:scale(0.93) } to { opacity:1; transform:scale(1) } }
+    @keyframes slideUp { from { opacity:0; transform:translateY(22px) } to { opacity:1; transform:translateY(0) } }
+    @keyframes ripple { from { transform:scale(0); opacity:0.5 } to { transform:scale(4); opacity:0 } }
+    @keyframes countUp { from { opacity:0; transform:translateY(10px) } to { opacity:1; transform:translateY(0) } }
+    @keyframes barGrow { from { width:0 } to { width:100% } }
+    @keyframes slideDown { from { opacity:0; transform:translateY(-16px) } to { opacity:1; transform:translateY(0) } }
+    *, *::before, *::after { box-sizing:border-box; margin:0; padding:0 }
+    html, body { width:100%; height:100%; font-family:'Pretendard',-apple-system,sans-serif; overflow:hidden }
+    #root { display:flex; width:100%; height:100vh; overflow:hidden }
+    ::-webkit-scrollbar { width:5px }
+    ::-webkit-scrollbar-track { background:transparent }
+    ::-webkit-scrollbar-thumb { background:#334155; border-radius:3px }
+    button { cursor:pointer; border:none; background:none; font-family:inherit }
+    input, select, textarea { font-family:inherit }
+    .fade-in { animation:fadeIn .3s ease }
+    .slide-up { animation:slideInUp .35s ease both }
+    .slide-right { animation:slideInRight .3s ease }
+    .scale-in { animation:scaleIn .25s ease }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* CountUp animation for KPI numbers */
+function CountUp({ end, suffix = '' }) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    let cur = 0;
+    const step = Math.max(1, Math.ceil(end / 25));
+    const timer = setInterval(() => {
+      cur = Math.min(cur + step, end);
+      setVal(cur);
+      if (cur >= end) clearInterval(timer);
+    }, 40);
+    return () => clearInterval(timer);
+  }, [end]);
+  return `${val}${suffix}`;
+}
+
+/* Stagger animation helper */
+const stagger = i => ({ animationDelay: `${i * 0.07}s`, animationFillMode: 'both' });
+const { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = Recharts;
+
+/* ── Design Tokens ── */
+const C = {
+  sidebar: '#0D1B2A',
+  sidebarHover: 'rgba(255,255,255,.07)',
+  sidebarActive: '#1D4ED8',
+  sidebarText: '#94A3B8',
+  sidebarTextActive: '#FFFFFF',
+  bg: '#F1F5F9',
+  surface: '#FFFFFF',
+  border: '#E2E8F0',
+  borderDark: '#CBD5E1',
+  primary: '#1D4ED8',
+  primaryLight: '#EFF6FF',
+  primaryDark: '#1E3A8A',
+  text: '#0F172A',
+  textSub: '#475569',
+  muted: '#94A3B8',
+  success: '#059669',
+  successBg: '#D1FAE5',
+  warning: '#D97706',
+  warningBg: '#FEF3C7',
+  error: '#DC2626',
+  errorBg: '#FEE2E2',
+  info: '#0891B2',
+  infoBg: '#E0F2FE',
+  purple: '#7C3AED',
+  purpleBg: '#F3E8FF',
+};
+
+const STATUS_COLORS = {
+  '접수': { text: C.info, bg: C.infoBg },
+  '처리중': { text: C.purple, bg: C.purpleBg },
+  '배송중': { text: C.warning, bg: C.warningBg },
+  '완료': { text: C.success, bg: C.successBg },
+  '지연': { text: C.error, bg: C.errorBg },
+};
+
+const CUST_STATUS = {
+  '활성': { text: C.success, bg: C.successBg },
+  '경고': { text: C.warning, bg: C.warningBg },
+  '비활성': { text: C.muted, bg: '#F1F5F9' },
+};
+
+/* ── Mock Data ── */
+const INIT_ORDERS = [
+  { id:'WO-2042', company:'한빛물산', product:'의류 박스 220개', status:'배송중', address:'서울 강남구 테헤란로 152', date:'2026-04-28', weight:'142kg', carrier:'CJ대한통운', trackNo:'CJ-82841920', memo:'' },
+  { id:'WO-2041', company:'그린바이오', product:'건강식품 세트 85개', status:'완료', address:'경기 성남시 분당구 판교역로 166', date:'2026-04-27', weight:'38kg', carrier:'롯데택배', trackNo:'LT-29184752', memo:'' },
+  { id:'WO-2040', company:'미래테크', product:'IT 장비 30박스', status:'지연', address:'부산 해운대구 센텀중앙로 79', date:'2026-04-26', weight:'210kg', carrier:'CJ대한통운', trackNo:'CJ-82751940', memo:'배송 지연 확인 필요' },
+  { id:'WO-2039', company:'서울유통', product:'식품류 150박스', status:'접수', address:'서울 송파구 올림픽로 300', date:'2026-04-26', weight:'380kg', carrier:'-', trackNo:'-', memo:'' },
+  { id:'WO-2038', company:'한빛물산', product:'소형가전 45개', status:'처리중', address:'서울 강남구 테헤란로 152', date:'2026-04-25', weight:'67kg', carrier:'-', trackNo:'-', memo:'' },
+  { id:'WO-2037', company:'글로벌무역', product:'수입품 원자재 60박스', status:'완료', address:'인천 연수구 컨벤시아대로 165', date:'2026-04-24', weight:'520kg', carrier:'CJ대한통운', trackNo:'CJ-82618390', memo:'' },
+  { id:'WO-2036', company:'그린바이오', product:'냉동식품 120개', status:'배송중', address:'경기 성남시 분당구 판교역로 166', date:'2026-04-24', weight:'156kg', carrier:'롯데택배', trackNo:'LT-29018473', memo:'' },
+  { id:'WO-2035', company:'동아상사', product:'사무용품 200세트', status:'완료', address:'대전 유성구 엑스포로 170', date:'2026-04-23', weight:'89kg', carrier:'한진택배', trackNo:'HJ-57302948', memo:'고객사 요청 완료 확인' },
+  { id:'WO-2034', company:'서울유통', product:'냉장음료 300박스', status:'완료', address:'서울 송파구 올림픽로 300', date:'2026-04-22', weight:'420kg', carrier:'CJ대한통운', trackNo:'CJ-82501823', memo:'' },
+  { id:'WO-2033', company:'동아상사', product:'생활용품 80박스', status:'지연', address:'대전 유성구 엑스포로 170', date:'2026-04-21', weight:'112kg', carrier:'한진택배', trackNo:'HJ-57198372', memo:'주소 확인 중' },
+];
+
+const INIT_CUSTOMERS = [
+  { id:'C001', name:'한빛물산', email:'logistics@hanbit.co.kr', status:'활성', apiKey:'pk_8f2a...9d1e', packiyoId:'HB-0041', orders:42, lastLogin:'2026-04-28', phone:'02-3456-7890' },
+  { id:'C002', name:'그린바이오', email:'ops@greenbio.com', status:'활성', apiKey:'pk_3e7b...2f8a', packiyoId:'GB-0082', orders:31, lastLogin:'2026-04-27', phone:'031-987-6543' },
+  { id:'C003', name:'미래테크', email:'supply@mtech.co.kr', status:'경고', apiKey:'pk_1c9d...7b3f', packiyoId:'MT-0019', orders:18, lastLogin:'2026-04-25', phone:'02-2345-6789' },
+  { id:'C004', name:'서울유통', email:'admin@seoulyut.com', status:'활성', apiKey:'pk_4a6e...5c2d', packiyoId:'SY-0057', orders:27, lastLogin:'2026-04-28', phone:'02-1234-5678' },
+  { id:'C005', name:'글로벌무역', email:'trade@globaltrade.kr', status:'비활성', apiKey:'pk_9b2c...1f7a', packiyoId:'GT-0033', orders:12, lastLogin:'2026-04-20', phone:'032-876-5432' },
+  { id:'C006', name:'동아상사', email:'logistics@donga.co.kr', status:'활성', apiKey:'pk_7d1e...8a4b', packiyoId:'DA-0075', orders:35, lastLogin:'2026-04-26', phone:'042-765-4321' },
+];
+
+const DAILY = [
+  { date:'4/22', 접수:8, 배송중:12, 완료:15 },
+  { date:'4/23', 접수:11, 배송중:9, 완료:18 },
+  { date:'4/24', 접수:14, 배송중:11, 완료:12 },
+  { date:'4/25', 접수:7, 배송중:14, 완료:20 },
+  { date:'4/26', 접수:12, 배송중:8, 완료:16 },
+  { date:'4/27', 접수:9, 배송중:13, 완료:14 },
+  { date:'4/28', 접수:16, 배송중:7, 완료:11 },
+];
+
+const PIE_DATA = [
+  { name:'완료', value:91, color:'#059669' },
+  { name:'배송중', value:38, color:'#D97706' },
+  { name:'처리중', value:24, color:'#7C3AED' },
+  { name:'접수', value:15, color:'#0891B2' },
+  { name:'지연', value:13, color:'#DC2626' },
+];
+
+const NAV_ITEMS = [
+  { id:'dashboard', label:'대시보드', icon:'▣' },
+  { id:'analytics', label:'통계 분석', icon:'◉' },
+  { id:'orders', label:'주문 목록', icon:'≡' },
+  { id:'detail', label:'주문 상세', icon:'◈' },
+  { id:'customers', label:'고객사 관리', icon:'◎' },
+];
+
+/* ── Shared UI ── */
+function StatusBadge({ status, config }) {
+  const cfg = config[status] || { text:'#64748B', bg:'#F1F5F9' };
+  return (
+    <span style={{
+      display:'inline-flex', alignItems:'center', gap:4,
+      padding:'3px 10px', borderRadius:20, fontSize:12, fontWeight:600,
+      color:cfg.text, background:cfg.bg, animation:'badgePop .3s ease',
+    }}>{status}</span>
+  );
+}
+
+function Toast({ msg, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return ()=>clearTimeout(t); }, []);
+  return (
+    <div style={{
+      position:'fixed', bottom:24, left:'50%', transform:'translateX(-50%)',
+      background:'#0F172A', color:'#fff', padding:'12px 20px', borderRadius:10,
+      fontSize:14, fontWeight:500, zIndex:9999, animation:'toastIn .3s ease',
+      display:'flex', alignItems:'center', gap:8, minWidth:200, maxWidth:400,
+    }}>
+      <span style={{color:'#4ADE80'}}>✓</span> {msg}
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, width=520 }) {
+  return (
+    <div style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,.45)', zIndex:1000,
+      display:'flex', alignItems:'center', justifyContent:'center', animation:'fadeIn .2s ease',
+    }} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={{
+        background:C.surface, borderRadius:14, width, maxWidth:'90vw', maxHeight:'85vh',
+        overflow:'auto', animation:'scaleIn .25s ease', boxShadow:'0 20px 60px rgba(0,0,0,.2)',
+      }}>
+        <div style={{
+          padding:'20px 24px', borderBottom:`1px solid ${C.border}`,
+          display:'flex', alignItems:'center', justifyContent:'space-between', position:'sticky', top:0, background:C.surface, zIndex:1,
+        }}>
+          <h3 style={{fontSize:17, fontWeight:700, color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{fontSize:20, color:C.muted, padding:'2px 6px', borderRadius:6, transition:'all .15s'}}
+            onMouseEnter={e=>e.target.style.background='#F1F5F9'} onMouseLeave={e=>e.target.style.background='none'}>×</button>
+        </div>
+        <div style={{padding:'20px 24px'}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function FormField({ label, children, required }) {
+  return (
+    <div style={{marginBottom:16}}>
+      <label style={{display:'block', fontSize:13, fontWeight:600, color:C.textSub, marginBottom:6}}>
+        {label}{required&&<span style={{color:C.error, marginLeft:2}}>*</span>}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+function Input({ value, onChange, placeholder, type='text', style={} }) {
+  return (
+    <input type={type} value={value} onChange={onChange} placeholder={placeholder}
+      style={{
+        width:'100%', padding:'9px 12px', borderRadius:8, border:`1.5px solid ${C.border}`,
+        fontSize:14, color:C.text, background:C.surface, outline:'none', transition:'border .15s', ...style,
+      }}
+      onFocus={e=>e.target.style.border=`1.5px solid ${C.primary}`}
+      onBlur={e=>e.target.style.border=`1.5px solid ${C.border}`}
+    />
+  );
+}
+
+function Select({ value, onChange, options, style={} }) {
+  return (
+    <select value={value} onChange={onChange}
+      style={{
+        width:'100%', padding:'9px 12px', borderRadius:8, border:`1.5px solid ${C.border}`,
+        fontSize:14, color:C.text, background:C.surface, outline:'none', ...style,
+      }}>
+      {options.map(o => <option key={o.value||o} value={o.value||o}>{o.label||o}</option>)}
+    </select>
+  );
+}
+
+function KpiCard({ label, value, sub, color, icon, delay=0 }) {
+  return (
+    <div style={{
+      background:C.surface, borderRadius:12, padding:'20px 22px',
+      border:`1px solid ${C.border}`, animation:`slideInUp .4s ease ${delay}s both`,
+      flex:1, minWidth:0,
+    }}>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12}}>
+        <span style={{fontSize:13, fontWeight:600, color:C.textSub}}>{label}</span>
+        <div style={{width:36, height:36, borderRadius:10, background:`${color}18`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:16}}>{icon}</div>
+      </div>
+      <div style={{fontSize:28, fontWeight:800, color:C.text, letterSpacing:'-0.5px'}}>{value}</div>
+      {sub && <div style={{fontSize:12, color:C.muted, marginTop:4}}>{sub}</div>}
+    </div>
+  );
+}
+
+/* ── Pages ── */
+function DashboardPage({ orders, onViewOrder }) {
+  const total = orders.length;
+  const transit = orders.filter(o=>o.status==='배송중').length;
+  const done = orders.filter(o=>o.status==='완료').length;
+  const delayed = orders.filter(o=>o.status==='지연').length;
+
+  return (
+    <div style={{animation:'fadeIn .3s ease'}}>
+      <div style={{display:'flex', gap:16, marginBottom:24, flexWrap:'wrap'}}>
+        <KpiCard label="총 주문 건수" value={`${total}건`} sub="이번 달 누적" color={C.primary} icon="📦" delay={0} />
+        <KpiCard label="배송 중" value={`${transit}건`} sub="현재 운송 중" color={C.warning} icon="🚚" delay={0.05} />
+        <KpiCard label="완료" value={`${done}건`} sub="정상 완료" color={C.success} icon="✅" delay={0.1} />
+        <KpiCard label="지연" value={`${delayed}건`} sub="확인 필요" color={C.error} icon="⚠️" delay={0.15} />
+      </div>
+
+      <div style={{display:'grid', gridTemplateColumns:'1fr 320px', gap:16, marginBottom:24}}>
+        <div style={{background:C.surface, borderRadius:12, padding:'20px 22px', border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:15, fontWeight:700, color:C.text, marginBottom:16}}>일별 주문 현황</div>
+          <div style={{height:220}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={DAILY} margin={{top:4, right:8, left:-20, bottom:0}}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis dataKey="date" tick={{fontSize:12, fill:C.muted}} />
+                <YAxis tick={{fontSize:12, fill:C.muted}} />
+                <Tooltip contentStyle={{borderRadius:8, border:`1px solid ${C.border}`, fontSize:13}} />
+                <Legend wrapperStyle={{fontSize:12}} />
+                <Bar dataKey="접수" fill={C.info} radius={[4,4,0,0]} />
+                <Bar dataKey="배송중" fill={C.warning} radius={[4,4,0,0]} />
+                <Bar dataKey="완료" fill={C.success} radius={[4,4,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{background:C.surface, borderRadius:12, padding:'20px 22px', border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:15, fontWeight:700, color:C.text, marginBottom:16}}>배송 상태 분포</div>
+          <div style={{height:160}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={PIE_DATA} cx="50%" cy="50%" innerRadius={44} outerRadius={72} paddingAngle={2} dataKey="value">
+                  {PIE_DATA.map((e,i) => <Cell key={i} fill={e.color} />)}
+                </Pie>
+                <Tooltip contentStyle={{borderRadius:8, border:`1px solid ${C.border}`, fontSize:12}} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{display:'flex', flexDirection:'column', gap:6, marginTop:8}}>
+            {PIE_DATA.map(d => (
+              <div key={d.name} style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
+                <div style={{display:'flex', alignItems:'center', gap:6}}>
+                  <div style={{width:10, height:10, borderRadius:2, background:d.color}} />
+                  <span style={{fontSize:12, color:C.textSub}}>{d.name}</span>
+                </div>
+                <span style={{fontSize:12, fontWeight:700, color:C.text}}>{d.value}건</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{background:C.surface, borderRadius:12, border:`1px solid ${C.border}`}}>
+        <div style={{padding:'16px 20px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between'}}>
+          <span style={{fontSize:15, fontWeight:700, color:C.text}}>최근 주문</span>
+          <span style={{fontSize:13, color:C.primary, fontWeight:600, cursor:'pointer'}}>전체 보기 →</span>
+        </div>
+        <table style={{width:'100%', borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:'#F8FAFC'}}>
+              {['주문번호','고객사','상품명','상태','배송지','날짜'].map(h => (
+                <th key={h} style={{padding:'10px 16px', textAlign:'left', fontSize:12, fontWeight:700, color:C.muted, borderBottom:`1px solid ${C.border}`}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {orders.slice(0,5).map(o => (
+              <tr key={o.id} onClick={()=>onViewOrder(o)} style={{cursor:'pointer', transition:'background .15s'}}
+                onMouseEnter={e=>e.currentTarget.style.background='#F8FAFC'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'12px 16px', fontSize:13, fontWeight:700, color:C.primary}}>{o.id}</td>
+                <td style={{padding:'12px 16px', fontSize:13, color:C.text}}>{o.company}</td>
+                <td style={{padding:'12px 16px', fontSize:13, color:C.textSub, maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{o.product}</td>
+                <td style={{padding:'12px 16px'}}><StatusBadge status={o.status} config={STATUS_COLORS} /></td>
+                <td style={{padding:'12px 16px', fontSize:12, color:C.muted, maxWidth:140, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{o.address}</td>
+                <td style={{padding:'12px 16px', fontSize:12, color:C.muted}}>{o.date}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsPage() {
+  const [period, setPeriod] = useState('7일');
+  const PERIODS = ['7일','14일','30일'];
+
+  const extData = [
+    ...DAILY,
+    { date:'4/15', 접수:10, 배송중:8, 완료:14 },
+    { date:'4/16', 접수:13, 배송중:11, 완료:9 },
+    { date:'4/17', 접수:6, 배송중:15, 완료:17 },
+    { date:'4/18', 접수:9, 배송중:10, 완료:13 },
+    { date:'4/19', 접수:11, 배송중:7, 완료:16 },
+    { date:'4/20', 접수:8, 배송중:12, 완료:11 },
+    { date:'4/21', 접수:14, 배송중:9, 완료:18 },
+  ];
+
+  const data = period==='7일' ? DAILY : period==='14일' ? extData.slice(0,14) : extData;
+
+  return (
+    <div style={{animation:'fadeIn .3s ease'}}>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20}}>
+        <h2 style={{fontSize:18, fontWeight:700, color:C.text}}>통계 분석</h2>
+        <div style={{display:'flex', gap:6}}>
+          {PERIODS.map(p => (
+            <button key={p} onClick={()=>setPeriod(p)} style={{
+              padding:'7px 16px', borderRadius:8, fontSize:13, fontWeight:600,
+              background:period===p ? C.primary : C.surface,
+              color:period===p ? '#fff' : C.textSub,
+              border:`1.5px solid ${period===p ? C.primary : C.border}`,
+              transition:'all .2s',
+            }}>{p}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{display:'grid', gap:16, marginBottom:16}}>
+        <div style={{background:C.surface, borderRadius:12, padding:'22px 24px', border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:15, fontWeight:700, color:C.text, marginBottom:16}}>일별 주문량 추이</div>
+          <div style={{height:240}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={data} margin={{top:4, right:8, left:-20, bottom:0}}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis dataKey="date" tick={{fontSize:12, fill:C.muted}} />
+                <YAxis tick={{fontSize:12, fill:C.muted}} />
+                <Tooltip contentStyle={{borderRadius:8, border:`1px solid ${C.border}`, fontSize:13}} />
+                <Legend wrapperStyle={{fontSize:12}} />
+                <Line type="monotone" dataKey="접수" stroke={C.info} strokeWidth={2.5} dot={{r:3}} />
+                <Line type="monotone" dataKey="배송중" stroke={C.warning} strokeWidth={2.5} dot={{r:3}} />
+                <Line type="monotone" dataKey="완료" stroke={C.success} strokeWidth={2.5} dot={{r:3}} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
+        <div style={{background:C.surface, borderRadius:12, padding:'22px 24px', border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:15, fontWeight:700, color:C.text, marginBottom:16}}>주간 고객사별 주문량</div>
+          <div style={{height:200}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={[
+                { name:'한빛물산', count:42 },
+                { name:'그린바이오', count:31 },
+                { name:'서울유통', count:27 },
+                { name:'동아상사', count:35 },
+                { name:'미래테크', count:18 },
+              ]} layout="vertical" margin={{top:0, right:8, left:20, bottom:0}}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} horizontal={false} />
+                <XAxis type="number" tick={{fontSize:12, fill:C.muted}} />
+                <YAxis type="category" dataKey="name" tick={{fontSize:12, fill:C.muted}} width={60} />
+                <Tooltip contentStyle={{borderRadius:8, border:`1px solid ${C.border}`, fontSize:12}} />
+                <Bar dataKey="count" fill={C.primary} radius={[0,4,4,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{background:C.surface, borderRadius:12, padding:'22px 24px', border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:15, fontWeight:700, color:C.text, marginBottom:16}}>배송 상태 비율</div>
+          <div style={{height:140}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={PIE_DATA} cx="50%" cy="50%" outerRadius={62} paddingAngle={2} dataKey="value">
+                  {PIE_DATA.map((e,i) => <Cell key={i} fill={e.color} />)}
+                </Pie>
+                <Tooltip contentStyle={{borderRadius:8, border:`1px solid ${C.border}`, fontSize:12}} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{display:'flex', flexWrap:'wrap', gap:'6px 14px', marginTop:8}}>
+            {PIE_DATA.map(d => (
+              <div key={d.name} style={{display:'flex', alignItems:'center', gap:4}}>
+                <div style={{width:8, height:8, borderRadius:2, background:d.color}} />
+                <span style={{fontSize:11, color:C.textSub}}>{d.name} <strong>{d.value}건</strong></span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OrderListPage({ orders, onViewOrder }) {
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('전체');
+  const STATUSES = ['전체','접수','처리중','배송중','완료','지연'];
+
+  const filtered = orders.filter(o => {
+    const matchStatus = statusFilter==='전체' || o.status===statusFilter;
+    const matchSearch = !search || o.id.includes(search) || o.company.includes(search) || o.product.includes(search);
+    return matchStatus && matchSearch;
+  });
+
+  return (
+    <div style={{animation:'fadeIn .3s ease'}}>
+      <div style={{display:'flex', gap:12, marginBottom:16, flexWrap:'wrap', alignItems:'center'}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)}
+          placeholder="주문번호, 고객사, 상품명 검색..."
+          style={{
+            flex:1, minWidth:200, padding:'9px 14px', borderRadius:9, border:`1.5px solid ${C.border}`,
+            fontSize:14, color:C.text, outline:'none',
+          }}
+          onFocus={e=>e.target.style.border=`1.5px solid ${C.primary}`}
+          onBlur={e=>e.target.style.border=`1.5px solid ${C.border}`}
+        />
+        <div style={{display:'flex', gap:6}}>
+          {STATUSES.map(s => (
+            <button key={s} onClick={()=>setStatusFilter(s)} style={{
+              padding:'7px 13px', borderRadius:8, fontSize:12, fontWeight:600,
+              background:statusFilter===s ? C.primary : C.surface,
+              color:statusFilter===s ? '#fff' : C.textSub,
+              border:`1.5px solid ${statusFilter===s ? C.primary : C.border}`,
+              transition:'all .2s',
+            }}>{s}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, overflow:'hidden'}}>
+        <div style={{padding:'14px 20px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between'}}>
+          <span style={{fontSize:14, fontWeight:700, color:C.text}}>주문 목록</span>
+          <span style={{fontSize:13, color:C.muted}}>{filtered.length}건</span>
+        </div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%', borderCollapse:'collapse', minWidth:700}}>
+            <thead>
+              <tr style={{background:'#F8FAFC'}}>
+                {['주문번호','고객사','상품명','상태','배송지','무게','날짜','택배사'].map(h => (
+                  <th key={h} style={{padding:'11px 16px', textAlign:'left', fontSize:12, fontWeight:700, color:C.muted, borderBottom:`1px solid ${C.border}`, whiteSpace:'nowrap'}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(o => (
+                <tr key={o.id} onClick={()=>onViewOrder(o)} style={{cursor:'pointer', transition:'background .15s', borderBottom:`1px solid ${C.border}`}}
+                  onMouseEnter={e=>e.currentTarget.style.background='#F8FAFC'}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <td style={{padding:'12px 16px', fontSize:13, fontWeight:700, color:C.primary, whiteSpace:'nowrap'}}>{o.id}</td>
+                  <td style={{padding:'12px 16px', fontSize:13, color:C.text, whiteSpace:'nowrap'}}>{o.company}</td>
+                  <td style={{padding:'12px 16px', fontSize:13, color:C.textSub, maxWidth:160, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{o.product}</td>
+                  <td style={{padding:'12px 16px', whiteSpace:'nowrap'}}><StatusBadge status={o.status} config={STATUS_COLORS} /></td>
+                  <td style={{padding:'12px 16px', fontSize:12, color:C.muted, maxWidth:160, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{o.address}</td>
+                  <td style={{padding:'12px 16px', fontSize:12, color:C.muted, whiteSpace:'nowrap'}}>{o.weight}</td>
+                  <td style={{padding:'12px 16px', fontSize:12, color:C.muted, whiteSpace:'nowrap'}}>{o.date}</td>
+                  <td style={{padding:'12px 16px', fontSize:12, color:o.carrier==='-'?C.muted:C.text, whiteSpace:'nowrap'}}>{o.carrier}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {filtered.length===0 && (
+          <div style={{textAlign:'center', padding:'48px 20px', color:C.muted, fontSize:14}}>
+            <div style={{fontSize:32, marginBottom:8}}>📭</div>
+            검색 결과가 없습니다
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OrderDetailPage({ orders, selectedOrder, onSelectOrder, onUpdateOrder, onToast }) {
+  const order = selectedOrder || orders[0];
+  const [editMode, setEditMode] = useState(false);
+  const [editAddr, setEditAddr] = useState(order?.address || '');
+  const [editMemo, setEditMemo] = useState(order?.memo || '');
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    if (order) { setEditAddr(order.address); setEditMemo(order.memo || ''); setEditMode(false); }
+  }, [order?.id]);
+
+  if (!order) return <div style={{textAlign:'center', padding:60, color:C.muted}}>주문을 선택해 주세요.</div>;
+
+  const handleSave = () => {
+    setSending(true);
+    setTimeout(() => {
+      setSending(false);
+      setEditMode(false);
+      onUpdateOrder({ ...order, address: editAddr, memo: editMemo });
+      onToast('배송지 정보가 Packiyo API를 통해 업데이트되었습니다.');
+    }, 1200);
+  };
+
+  const statusList = ['접수','처리중','배송중','완료','지연'];
+
+  return (
+    <div style={{animation:'fadeIn .3s ease'}}>
+      <div style={{display:'flex', gap:12, marginBottom:20}}>
+        <div style={{flex:'0 0 220px'}}>
+          <div style={{background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, overflow:'hidden'}}>
+            <div style={{padding:'14px 16px', borderBottom:`1px solid ${C.border}`, fontSize:13, fontWeight:700, color:C.text}}>최근 주문</div>
+            <div style={{maxHeight:320, overflowY:'auto'}}>
+              {orders.slice(0,8).map(o => (
+                <div key={o.id} onClick={()=>onSelectOrder(o)} style={{
+                  padding:'11px 16px', cursor:'pointer', borderBottom:`1px solid ${C.border}`,
+                  background:o.id===order.id?C.primaryLight:'transparent', transition:'background .15s',
+                }}
+                  onMouseEnter={e=>{ if(o.id!==order.id) e.currentTarget.style.background='#F8FAFC'; }}
+                  onMouseLeave={e=>{ e.currentTarget.style.background=o.id===order.id?C.primaryLight:'transparent'; }}>
+                  <div style={{fontSize:12, fontWeight:700, color:o.id===order.id?C.primary:C.text}}>{o.id}</div>
+                  <div style={{fontSize:11, color:C.muted, marginTop:2}}>{o.company} · {o.date}</div>
+                  <div style={{marginTop:4}}><StatusBadge status={o.status} config={STATUS_COLORS} /></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{flex:1}}>
+          <div style={{background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, padding:'24px 28px'}}>
+            <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20}}>
+              <div>
+                <div style={{fontSize:20, fontWeight:800, color:C.text}}>{order.id}</div>
+                <div style={{fontSize:14, color:C.muted, marginTop:2}}>{order.company} · 등록일 {order.date}</div>
+              </div>
+              <div style={{display:'flex', gap:8, alignItems:'center'}}>
+                <StatusBadge status={order.status} config={STATUS_COLORS} />
+                {!editMode && (
+                  <button onClick={()=>setEditMode(true)} style={{
+                    padding:'7px 16px', borderRadius:8, fontSize:13, fontWeight:600,
+                    background:C.primary, color:'#fff', transition:'all .2s',
+                  }}
+                    onMouseEnter={e=>e.target.style.background=C.primaryDark}
+                    onMouseLeave={e=>e.target.style.background=C.primary}>
+                    배송지 수정
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginBottom:20}}>
+              {[
+                { label:'상품명', value:order.product },
+                { label:'무게', value:order.weight },
+                { label:'택배사', value:order.carrier },
+                { label:'운송장 번호', value:order.trackNo },
+              ].map(f => (
+                <div key={f.label} style={{background:C.bg, borderRadius:9, padding:'14px 16px'}}>
+                  <div style={{fontSize:12, fontWeight:600, color:C.muted, marginBottom:4}}>{f.label}</div>
+                  <div style={{fontSize:14, fontWeight:600, color:C.text}}>{f.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{borderTop:`1px solid ${C.border}`, paddingTop:20}}>
+              <div style={{fontSize:14, fontWeight:700, color:C.text, marginBottom:12}}>배송지 정보</div>
+              {editMode ? (
+                <div>
+                  <FormField label="배송지 주소" required>
+                    <Input value={editAddr} onChange={e=>setEditAddr(e.target.value)} placeholder="배송지 주소 입력" />
+                  </FormField>
+                  <FormField label="관리자 메모">
+                    <textarea value={editMemo} onChange={e=>setEditMemo(e.target.value)}
+                      placeholder="메모 입력..."
+                      style={{
+                        width:'100%', padding:'9px 12px', borderRadius:8, border:`1.5px solid ${C.border}`,
+                        fontSize:14, color:C.text, background:C.surface, outline:'none', resize:'vertical', minHeight:80,
+                      }}
+                      onFocus={e=>e.target.style.border=`1.5px solid ${C.primary}`}
+                      onBlur={e=>e.target.style.border=`1.5px solid ${C.border}`}
+                    />
+                  </FormField>
+                  <div style={{display:'flex', gap:8, justifyContent:'flex-end'}}>
+                    <button onClick={()=>setEditMode(false)} style={{
+                      padding:'8px 18px', borderRadius:8, fontSize:13, fontWeight:600,
+                      border:`1.5px solid ${C.border}`, color:C.textSub, background:C.surface,
+                    }}>취소</button>
+                    <button onClick={handleSave} disabled={sending} style={{
+                      padding:'8px 18px', borderRadius:8, fontSize:13, fontWeight:600,
+                      background:sending?C.muted:C.success, color:'#fff', transition:'all .2s',
+                    }}>
+                      {sending ? <span style={{animation:'pulse 1s infinite'}}>Packiyo API 전송 중...</span> : 'Packiyo API 업데이트'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div style={{background:C.bg, borderRadius:9, padding:'14px 16px', marginBottom:12}}>
+                    <div style={{fontSize:12, fontWeight:600, color:C.muted, marginBottom:4}}>현재 배송지</div>
+                    <div style={{fontSize:14, color:C.text}}>{order.address}</div>
+                  </div>
+                  {order.memo && (
+                    <div style={{background:'#FEF3C7', borderRadius:9, padding:'12px 16px', border:'1px solid #FDE68A'}}>
+                      <div style={{fontSize:12, fontWeight:600, color:C.warning, marginBottom:4}}>관리자 메모</div>
+                      <div style={{fontSize:13, color:'#92400E'}}>{order.memo}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div style={{borderTop:`1px solid ${C.border}`, paddingTop:20, marginTop:20}}>
+              <div style={{fontSize:14, fontWeight:700, color:C.text, marginBottom:12}}>배송 단계</div>
+              <div style={{display:'flex', alignItems:'center', gap:0}}>
+                {statusList.map((s, i) => {
+                  const idx = statusList.indexOf(order.status);
+                  const done = i < idx;
+                  const active = i === idx;
+                  return (
+                    <React.Fragment key={s}>
+                      <div style={{display:'flex', flexDirection:'column', alignItems:'center'}}>
+                        <div style={{
+                          width:32, height:32, borderRadius:'50%', border:`2px solid ${active||done ? C.primary : C.border}`,
+                          background:done ? C.primary : active ? C.primaryLight : C.surface,
+                          display:'flex', alignItems:'center', justifyContent:'center', fontSize:12,
+                          color:done ? '#fff' : active ? C.primary : C.muted, fontWeight:700,
+                        }}>{done ? '✓' : i+1}</div>
+                        <div style={{fontSize:10, color:active?C.primary:C.muted, marginTop:4, fontWeight:active?700:400}}>{s}</div>
+                      </div>
+                      {i<statusList.length-1 && <div style={{flex:1, height:2, background:done?C.primary:C.border, margin:'0 4px', marginBottom:14}} />}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CustomerPage({ customers, onUpdateCustomers, onToast }) {
+  const [custs, setCusts] = useState(customers);
+  const [search, setSearch] = useState('');
+  const [modal, setModal] = useState(null);
+  const [editData, setEditData] = useState({});
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+
+  const filtered = custs.filter(c =>
+    !search || c.name.includes(search) || c.email.includes(search) || c.id.includes(search)
+  );
+
+  const openCreate = () => {
+    setEditData({ name:'', email:'', phone:'', packiyoId:'', status:'활성' });
+    setModal('create');
+  };
+
+  const openEdit = c => {
+    setEditData({ ...c });
+    setModal('edit');
+  };
+
+  const handleCreate = () => {
+    if (!editData.name || !editData.email) return;
+    const newC = { ...editData, id:`C00${custs.length+1}`, apiKey:`pk_new...${Math.random().toString(36).slice(2,6)}`, orders:0, lastLogin:'-' };
+    setCusts([...custs, newC]);
+    setModal(null);
+    onToast(`${editData.name} 고객사 계정이 생성되었습니다.`);
+  };
+
+  const handleEdit = () => {
+    setCusts(custs.map(c => c.id===editData.id ? editData : c));
+    setModal(null);
+    onToast('고객사 정보가 수정되었습니다.');
+  };
+
+  const handleDelete = id => {
+    setCusts(custs.filter(c=>c.id!==id));
+    setDeleteConfirm(null);
+    onToast('고객사 계정이 비활성화 처리되었습니다.');
+  };
+
+  const EF = ({label, value, placeholder, type='text'}) => (
+    <FormField label={label}>
+      <Input value={value} onChange={e=>setEditData({...editData, [label.replace(/\s/g,'').toLowerCase()]:e.target.value})} placeholder={placeholder} type={type} />
+    </FormField>
+  );
+
+  return (
+    <div style={{animation:'fadeIn .3s ease'}}>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="고객사명, 이메일 검색..."
+          style={{
+            width:280, padding:'9px 14px', borderRadius:9, border:`1.5px solid ${C.border}`,
+            fontSize:14, color:C.text, outline:'none',
+          }}
+          onFocus={e=>e.target.style.border=`1.5px solid ${C.primary}`}
+          onBlur={e=>e.target.style.border=`1.5px solid ${C.border}`}
+        />
+        <button onClick={openCreate} style={{
+          padding:'9px 20px', borderRadius:9, fontSize:13, fontWeight:700,
+          background:C.primary, color:'#fff', transition:'all .2s',
+          display:'flex', alignItems:'center', gap:6,
+        }}
+          onMouseEnter={e=>e.currentTarget.style.background=C.primaryDark}
+          onMouseLeave={e=>e.currentTarget.style.background=C.primary}>
+          + 고객사 추가
+        </button>
+      </div>
+
+      <div style={{background:C.surface, borderRadius:12, border:`1px solid ${C.border}`, overflow:'hidden'}}>
+        <table style={{width:'100%', borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:'#F8FAFC'}}>
+              {['ID','고객사명','이메일','Packiyo ID','상태','주문건수','최근 로그인','작업'].map(h => (
+                <th key={h} style={{padding:'11px 16px', textAlign:'left', fontSize:12, fontWeight:700, color:C.muted, borderBottom:`1px solid ${C.border}`, whiteSpace:'nowrap'}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(c => (
+              <tr key={c.id} style={{borderBottom:`1px solid ${C.border}`, transition:'background .15s'}}
+                onMouseEnter={e=>e.currentTarget.style.background='#F8FAFC'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'12px 16px', fontSize:12, fontWeight:700, color:C.muted}}>{c.id}</td>
+                <td style={{padding:'12px 16px', fontSize:14, fontWeight:700, color:C.text}}>{c.name}</td>
+                <td style={{padding:'12px 16px', fontSize:13, color:C.textSub}}>{c.email}</td>
+                <td style={{padding:'12px 16px'}}>
+                  <code style={{fontSize:12, background:C.bg, padding:'3px 8px', borderRadius:6, color:C.primary}}>{c.packiyoId}</code>
+                </td>
+                <td style={{padding:'12px 16px'}}><StatusBadge status={c.status} config={CUST_STATUS} /></td>
+                <td style={{padding:'12px 16px', fontSize:13, fontWeight:700, color:C.text}}>{c.orders}건</td>
+                <td style={{padding:'12px 16px', fontSize:12, color:C.muted}}>{c.lastLogin}</td>
+                <td style={{padding:'12px 16px'}}>
+                  <div style={{display:'flex', gap:6}}>
+                    <button onClick={()=>openEdit(c)} style={{
+                      padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600,
+                      border:`1.5px solid ${C.primary}`, color:C.primary, background:'transparent', transition:'all .15s',
+                    }}
+                      onMouseEnter={e=>{e.target.style.background=C.primaryLight}}
+                      onMouseLeave={e=>{e.target.style.background='transparent'}}>수정</button>
+                    <button onClick={()=>setDeleteConfirm(c.id)} style={{
+                      padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600,
+                      border:`1.5px solid ${C.error}`, color:C.error, background:'transparent', transition:'all .15s',
+                    }}
+                      onMouseEnter={e=>{e.target.style.background=C.errorBg}}
+                      onMouseLeave={e=>{e.target.style.background='transparent'}}>비활성화</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {modal==='create' && (
+        <Modal title="고객사 계정 생성" onClose={()=>setModal(null)}>
+          <FormField label="고객사명" required>
+            <Input value={editData.name} onChange={e=>setEditData({...editData,name:e.target.value})} placeholder="(주)한빛물산" />
+          </FormField>
+          <FormField label="이메일" required>
+            <Input value={editData.email} onChange={e=>setEditData({...editData,email:e.target.value})} placeholder="ops@company.com" type="email" />
+          </FormField>
+          <FormField label="연락처">
+            <Input value={editData.phone||''} onChange={e=>setEditData({...editData,phone:e.target.value})} placeholder="02-1234-5678" />
+          </FormField>
+          <FormField label="Packiyo 연동 ID" required>
+            <Input value={editData.packiyoId||''} onChange={e=>setEditData({...editData,packiyoId:e.target.value})} placeholder="예: HB-0041" />
+          </FormField>
+          <FormField label="상태">
+            <Select value={editData.status||'활성'} onChange={e=>setEditData({...editData,status:e.target.value})} options={['활성','경고','비활성']} />
+          </FormField>
+          <div style={{display:'flex', gap:8, justifyContent:'flex-end', marginTop:8}}>
+            <button onClick={()=>setModal(null)} style={{padding:'9px 20px', borderRadius:8, fontSize:14, fontWeight:600, border:`1.5px solid ${C.border}`, color:C.textSub, background:C.surface}}>취소</button>
+            <button onClick={handleCreate} style={{padding:'9px 20px', borderRadius:8, fontSize:14, fontWeight:600, background:C.primary, color:'#fff'}}>생성</button>
+          </div>
+        </Modal>
+      )}
+
+      {modal==='edit' && (
+        <Modal title="고객사 정보 수정" onClose={()=>setModal(null)}>
+          <FormField label="고객사명">
+            <Input value={editData.name} onChange={e=>setEditData({...editData,name:e.target.value})} />
+          </FormField>
+          <FormField label="이메일">
+            <Input value={editData.email} onChange={e=>setEditData({...editData,email:e.target.value})} type="email" />
+          </FormField>
+          <FormField label="연락처">
+            <Input value={editData.phone||''} onChange={e=>setEditData({...editData,phone:e.target.value})} />
+          </FormField>
+          <FormField label="Packiyo 연동 ID">
+            <Input value={editData.packiyoId} onChange={e=>setEditData({...editData,packiyoId:e.target.value})} />
+          </FormField>
+          <FormField label="상태">
+            <Select value={editData.status} onChange={e=>setEditData({...editData,status:e.target.value})} options={['활성','경고','비활성']} />
+          </FormField>
+          <div style={{display:'flex', gap:8, justifyContent:'flex-end', marginTop:8}}>
+            <button onClick={()=>setModal(null)} style={{padding:'9px 20px', borderRadius:8, fontSize:14, fontWeight:600, border:`1.5px solid ${C.border}`, color:C.textSub, background:C.surface}}>취소</button>
+            <button onClick={handleEdit} style={{padding:'9px 20px', borderRadius:8, fontSize:14, fontWeight:600, background:C.success, color:'#fff'}}>저장</button>
+          </div>
+        </Modal>
+      )}
+
+      {deleteConfirm && (
+        <Modal title="고객사 비활성화 확인" onClose={()=>setDeleteConfirm(null)} width={400}>
+          <div style={{textAlign:'center', padding:'8px 0 20px'}}>
+            <div style={{fontSize:40, marginBottom:12}}>⚠️</div>
+            <div style={{fontSize:15, color:C.text, fontWeight:600, marginBottom:8}}>정말 비활성화하시겠습니까?</div>
+            <div style={{fontSize:13, color:C.muted}}>해당 고객사의 Packiyo API 연동이 즉시 중단됩니다.</div>
+          </div>
+          <div style={{display:'flex', gap:8, justifyContent:'center'}}>
+            <button onClick={()=>setDeleteConfirm(null)} style={{padding:'9px 24px', borderRadius:8, fontSize:14, fontWeight:600, border:`1.5px solid ${C.border}`, color:C.textSub, background:C.surface}}>취소</button>
+            <button onClick={()=>handleDelete(deleteConfirm)} style={{padding:'9px 24px', borderRadius:8, fontSize:14, fontWeight:600, background:C.error, color:'#fff'}}>비활성화</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ── App ── */
+function App() {
+  const [page, setPage] = useState('dashboard');
+  const [orders, setOrders] = useState(INIT_ORDERS);
+  const [customers] = useState(INIT_CUSTOMERS);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const showToast = msg => setToast(msg);
+
+  const navTo = id => setPage(id);
+
+  const handleViewOrder = o => {
+    setSelectedOrder(o);
+    setPage('detail');
+  };
+
+  const handleUpdateOrder = updated => {
+    setOrders(orders.map(o => o.id===updated.id ? updated : o));
+    setSelectedOrder(updated);
+  };
+
+  const PAGE_TITLES = {
+    dashboard: '주문 현황 대시보드',
+    analytics: '통계 분석',
+    orders: '주문 목록',
+    detail: '주문 상세',
+    customers: '고객사 관리',
+  };
+
+  return (
+    <div style={{ display:'flex', width:'100%', height:'100vh', overflow:'hidden' }}>
+      {/* Sidebar */}
+      <aside style={{
+        width:240, background:C.sidebar, display:'flex', flexDirection:'column',
+        flexShrink:0, zIndex:10, boxShadow:'2px 0 12px rgba(0,0,0,.15)',
+      }}>
+        {/* Logo */}
+        <div style={{padding:'24px 20px 20px', borderBottom:'1px solid rgba(255,255,255,.08)'}}>
+          <div style={{display:'flex', alignItems:'center', gap:10}}>
+            <div style={{width:34, height:34, borderRadius:9, background:C.primary, display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, fontWeight:800, color:'#fff'}}>L</div>
+            <div>
+              <div style={{fontSize:15, fontWeight:800, color:'#fff', letterSpacing:'-0.3px'}}>LogiPort</div>
+              <div style={{fontSize:11, color:C.sidebarText, marginTop:1}}>물류 고객 포털</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Nav */}
+        <nav style={{flex:1, padding:'12px 10px', overflowY:'auto'}}>
+          <div style={{fontSize:11, fontWeight:700, color:'rgba(148,163,184,.5)', padding:'4px 12px', marginBottom:6, letterSpacing:'0.5px'}}>MENU</div>
+          {NAV_ITEMS.map(item => {
+            const active = page===item.id;
+            return (
+              <button key={item.id} onClick={()=>navTo(item.id)}
+                style={{
+                  width:'100%', display:'flex', alignItems:'center', gap:10,
+                  padding:'10px 12px', borderRadius:9, marginBottom:3,
+                  background:active ? C.primary : 'transparent',
+                  color:active ? C.sidebarTextActive : C.sidebarText,
+                  fontSize:14, fontWeight:active?700:500, textAlign:'left',
+                  transition:'all .2s', border:'none', cursor:'pointer',
+                }}
+                onMouseEnter={e=>{ if(!active) e.currentTarget.style.background=C.sidebarHover; }}
+                onMouseLeave={e=>{ if(!active) e.currentTarget.style.background='transparent'; }}>
+                <span style={{fontSize:14, opacity:active?1:0.7}}>{item.icon}</span>
+                <span>{item.label}</span>
+                {item.id==='orders' && <span style={{marginLeft:'auto', background:'rgba(255,255,255,.15)', borderRadius:10, padding:'1px 8px', fontSize:11, fontWeight:700, color:'#fff'}}>{orders.filter(o=>o.status==='지연').length}</span>}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* User */}
+        <div style={{padding:'14px 16px', borderTop:'1px solid rgba(255,255,255,.08)', display:'flex', alignItems:'center', gap:10}}>
+          <div style={{width:34, height:34, borderRadius:'50%', background:'linear-gradient(135deg,#3B82F6,#8B5CF6)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:700, color:'#fff', flexShrink:0}}>관</div>
+          <div style={{flex:1, minWidth:0}}>
+            <div style={{fontSize:13, fontWeight:700, color:'#fff', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>관리자</div>
+            <div style={{fontSize:11, color:C.sidebarText}}>admin@logiport.kr</div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <div style={{ flex:1, display:'flex', flexDirection:'column', minWidth:0 }}>
+        {/* TopBar */}
+        <header style={{
+          height:60, background:C.surface, borderBottom:`1px solid ${C.border}`,
+          display:'flex', alignItems:'center', padding:'0 24px', gap:12, flexShrink:0,
+          boxShadow:'0 1px 4px rgba(0,0,0,.05)',
+        }}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:16, fontWeight:800, color:C.text}}>{PAGE_TITLES[page]}</div>
+            <div style={{fontSize:12, color:C.muted}}>Packiyo OMS 연동 중 · 2026-04-29 기준</div>
+          </div>
+          <div style={{display:'flex', alignItems:'center', gap:8}}>
+            <div style={{
+              display:'flex', alignItems:'center', gap:6, padding:'6px 14px',
+              background:C.successBg, borderRadius:8, fontSize:12, fontWeight:600, color:C.success,
+            }}>
+              <div style={{width:7, height:7, borderRadius:'50%', background:C.success, animation:'pulse 1.5s infinite'}} />
+              Packiyo 연결됨
+            </div>
+            <div style={{width:36, height:36, borderRadius:'50%', background:'linear-gradient(135deg,#3B82F6,#8B5CF6)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:700, color:'#fff', cursor:'pointer'}}>관</div>
+          </div>
+        </header>
+
+        {/* Content */}
+        <main style={{flex:1, overflow:'auto', padding:24, background:C.bg}}>
+          {page==='dashboard' && <DashboardPage orders={orders} onViewOrder={handleViewOrder} />}
+          {page==='analytics' && <AnalyticsPage />}
+          {page==='orders' && <OrderListPage orders={orders} onViewOrder={handleViewOrder} />}
+          {page==='detail' && <OrderDetailPage orders={orders} selectedOrder={selectedOrder} onSelectOrder={o=>{setSelectedOrder(o)}} onUpdateOrder={handleUpdateOrder} onToast={showToast} />}
+          {page==='customers' && <CustomerPage customers={customers} onToast={showToast} />}
+        </main>
+      </div>
+
+      {toast && <Toast msg={toast} onClose={()=>setToast(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
