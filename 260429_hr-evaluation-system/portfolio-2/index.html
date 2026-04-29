@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>인사평정 분석 플랫폼 — 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; min-height:100vh; font-family:'Pretendard',sans-serif; background:#F0F9FF; }
+#root { display:flex; flex-direction:column; width:100%; min-height:100vh; }
+
+@keyframes fadeIn { from{opacity:0}to{opacity:1} }
+@keyframes fadeInScale { from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)} }
+@keyframes slideInRight { from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)} }
+@keyframes slideUp { from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)} }
+@keyframes ripple { 0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0} }
+@keyframes countUp { from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)} }
+@keyframes shimmer { 0%{background-position:-200% 0}100%{background-position:200% 0} }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.5} }
+@keyframes barGrow { from{width:0%}to{width:var(--target-width)} }
+@keyframes slideDown { from{opacity:0;transform:translateY(-10px);max-height:0}to{opacity:1;transform:translateY(0);max-height:500px} }
+@keyframes spin { to{transform:rotate(360deg)} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, ComposedChart, Area } = Recharts;
+
+const C = {
+  primary:'#0EA5E9', secondary:'#0F4C75', accent:'#06B6D4',
+  bg:'#F0F9FF', surface:'#FFFFFF', border:'#E0F2FE',
+  text:'#0C1B33', textSub:'#475569', textLight:'#94A3B8',
+  success:'#10B981', warning:'#F59E0B', danger:'#EF4444',
+  gradient:'linear-gradient(135deg, #0EA5E9 0%, #0F4C75 100%)',
+  gradientAlt:'linear-gradient(135deg, #06B6D4 0%, #0EA5E9 100%)',
+};
+
+function CountUp({ end, duration=1200, suffix='' }) {
+  const [val, setVal] = useState(0);
+  useEffect(()=>{
+    let s=0; const step=end/(duration/16);
+    const t=setInterval(()=>{ s+=step; if(s>=end){setVal(end);clearInterval(t);}else setVal(Math.floor(s)); },16);
+    return()=>clearInterval(t);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({ message, onClose }) {
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return (
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:'linear-gradient(135deg,#0EA5E9,#0F4C75)',color:'#fff',padding:'12px 20px',borderRadius:12,animation:'slideUp 300ms ease',boxShadow:'0 8px 24px rgba(14,165,233,0.35)',fontSize:14,display:'flex',alignItems:'center',gap:8}}>
+      ✓ {message}
+    </div>
+  );
+}
+
+function Drawer({ item, onClose }) {
+  return (
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:200,animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:460,background:C.surface,boxShadow:'-8px 0 40px rgba(0,0,0,0.12)',zIndex:201,overflowY:'auto',padding:28,animation:'slideInRight 220ms ease'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
+          <h3 style={{fontSize:18,fontWeight:800,color:C.text,letterSpacing:'-0.02em'}}>{item.title||item.name}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSub,width:32,height:32,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:6}}>✕</button>
+        </div>
+        {item.drawerContent}
+        <div style={{marginTop:20,display:'flex',gap:10}}>
+          <button onClick={onClose} style={{flex:1,padding:'10px',borderRadius:10,border:'none',background:C.gradient,color:'#fff',cursor:'pointer',fontSize:14,fontWeight:600}}>확인</button>
+          <button onClick={onClose} style={{padding:'10px 16px',borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,cursor:'pointer',fontSize:14,color:C.textSub}}>닫기</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+const TREND_DATA = [
+  {year:'2021',avg:74.2,top:92.1,bottom:55.3},{year:'2022',avg:76.8,top:93.0,bottom:57.1},
+  {year:'2023',avg:78.5,top:94.2,bottom:58.8},{year:'2024',avg:81.2,top:95.8,bottom:61.0},
+  {year:'2025',avg:83.7,top:97.1,bottom:63.4},
+];
+
+const DEPT_DATA = [
+  {dept:'개발팀',score:84.2,rank:1},{dept:'인사총무팀',score:82.8,rank:2},
+  {dept:'경영전략팀',score:81.5,rank:3},{dept:'재무회계팀',score:79.3,rank:4},
+  {dept:'마케팅팀',score:77.1,rank:5},{dept:'영업팀',score:74.6,rank:6},
+];
+
+const RANKING = [
+  {rank:1,name:'이상호',dept:'개발팀',grade:'팀장',score:97.1,prev:1,change:0},
+  {rank:2,name:'강현우',dept:'재무회계팀',grade:'부장',score:95.3,prev:3,change:1},
+  {rank:3,name:'신재원',dept:'경영전략본부',grade:'이사',score:93.8,prev:2,change:-1},
+  {rank:4,name:'김민준',dept:'개발팀',grade:'과장',score:91.2,prev:5,change:1},
+  {rank:5,name:'최예린',dept:'재무회계팀',grade:'차장',score:89.7,prev:4,change:-1},
+  {rank:6,name:'윤수빈',dept:'인사총무팀',grade:'사원',score:88.4,prev:7,change:1},
+  {rank:7,name:'박서준',dept:'개발팀',grade:'사원',score:85.9,prev:6,change:-1},
+  {rank:8,name:'강동원',dept:'경영전략팀',grade:'부장',score:84.5,prev:9,change:1},
+];
+
+const COMPARE_EMPLOYEES = [
+  {id:1,name:'김민준',dept:'개발팀',grade:'과장',data:[{year:'2021',score:74},{year:'2022',score:78},{year:'2023',score:82},{year:'2024',score:86},{year:'2025',score:91.2}]},
+  {id:2,name:'이지은',dept:'마케팅팀',grade:'대리',data:[{year:'2021',score:68},{year:'2022',score:72},{year:'2023',score:75},{year:'2024',score:79},{year:'2025',score:83}]},
+  {id:3,name:'박서준',dept:'개발팀',grade:'사원',data:[{year:'2021',score:60},{year:'2022',score:67},{year:'2023',score:73},{year:'2024',score:78},{year:'2025',score:85.9}]},
+];
+
+const REPORT_TEMPLATES = [
+  {id:1,name:'전체 평정 결과 보고서',desc:'전 임직원 평정 결과 종합 분석 및 통계',pages:28,icon:'📊',status:'생성 가능'},
+  {id:2,name:'부서별 성과 비교 보고서',desc:'부서 단위 평균 점수 및 순위 비교',pages:14,icon:'🏢',status:'생성 가능'},
+  {id:3,name:'개인별 평정 결과 카드',desc:'개인 평정 결과 요약 (A4 1장 형식)',pages:76,icon:'👤',status:'생성 가능'},
+  {id:4,name:'승진 서열명부',desc:'직급별 종합 점수 기준 서열 목록',pages:8,icon:'🥇',status:'생성 가능'},
+];
+
+const TABS = [
+  {id:'home',label:'대시보드'},{id:'comparison',label:'연도별 비교'},
+  {id:'report',label:'보고서 생성'},{id:'excel',label:'엑셀 관리'},{id:'analytics',label:'상세 분석'},
+];
+
+const HERO_META = {
+  home:{title:'종합 분석 대시보드',desc:'2025년 인사평정 결과 실시간 현황',kpis:[{l:'전체 평균점수',v:83.7,s:'점'},{l:'평정 완료율',v:92,s:'%'},{l:'전년比 상승',v:2.5,s:'점'}]},
+  comparison:{title:'연도별 평정 비교 조회',desc:'개인·부서별 다년도 추이 분석',kpis:[{l:'분석 기간',v:5,s:'개년'},{l:'비교 대상',v:76,s:'명'},{l:'최고 상승폭',v:17.2,s:'점'}]},
+  report:{title:'결과 보고서 자동 생성',desc:'서식 자동 완성 · PDF 변환 지원',kpis:[{l:'템플릿',v:4,s:'종'},{l:'생성된 보고서',v:12,s:'건'},{l:'평균 생성시간',v:18,s:'초'}]},
+  excel:{title:'엑셀 I/O 및 데이터 관리',desc:'대용량 데이터 일괄 처리 지원',kpis:[{l:'업로드 처리',v:2400,s:'행'},{l:'다운로드',v:18,s:'건'},{l:'오류 감지율',v:99.8,s:'%'}]},
+  analytics:{title:'상세 분석',desc:'순위·등급·분포 상세 분석',kpis:[{l:'전체 순위',v:76,s:'명'},{l:'S등급',v:8,s:'명'},{l:'평균 이상',v:52,s:'명'}]},
+};
+
+// ──────────── 대시보드 ────────────
+function HomePage({ setDrawer }) {
+  const [loading, setLoading] = useState(true);
+  useEffect(()=>{const t=setTimeout(()=>setLoading(false),1300);return()=>clearTimeout(t);},[]);
+  if(loading) return (
+    <div style={{padding:'24px',display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+      {[...Array(6)].map((_,i)=>(
+        <div key={i} style={{height:160,borderRadius:16,background:'linear-gradient(90deg,#E0F2FE 25%,#BAE6FD 50%,#E0F2FE 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>
+      ))}
+    </div>
+  );
+  return (
+    <div key="home" style={{animation:'fadeIn 350ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:24}}>
+        {DEPT_DATA.slice(0,3).map((d,i)=>(
+          <div key={d.dept} onClick={()=>setDrawer({title:d.dept,drawerContent:<DeptDetail dept={d}/>})}
+            style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.08)',cursor:'pointer',animation:`slideUp 400ms ease ${i*80}ms both`,transition:'all 220ms'}}
+            onMouseEnter={ev=>{ev.currentTarget.style.transform='scale(1.02)';ev.currentTarget.style.boxShadow='0 8px 24px rgba(14,165,233,0.15)';}}
+            onMouseLeave={ev=>{ev.currentTarget.style.transform='scale(1)';ev.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,0.08)';}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+              <div style={{fontSize:15,fontWeight:700,color:C.text}}>{d.dept}</div>
+              <div style={{width:28,height:28,borderRadius:'50%',background:C.gradient,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:800,color:'#fff'}}>#{d.rank}</div>
+            </div>
+            <div style={{fontSize:32,fontWeight:800,color:C.primary,letterSpacing:'-0.02em',marginBottom:8}}>
+              <CountUp end={Math.floor(d.score*10)/10} suffix="점"/>
+            </div>
+            <div style={{height:6,borderRadius:999,background:'#E0F2FE',overflow:'hidden'}}>
+              <div style={{height:'100%',borderRadius:999,background:C.gradient,'--target-width':`${d.score}%`,width:`${d.score}%`,animation:'barGrow 1000ms ease 300ms both'}}/>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:24}}>
+        <div style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>전체 평균 점수 추이 (5개년)</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <ComposedChart data={TREND_DATA}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E0F2FE"/>
+              <XAxis dataKey="year" tick={{fontSize:12,fill:C.textSub}} axisLine={false} tickLine={false}/>
+              <YAxis domain={[50,100]} tick={{fontSize:11,fill:C.textSub}} axisLine={false} tickLine={false}/>
+              <Tooltip contentStyle={{borderRadius:10,border:'none',boxShadow:'0 4px 16px rgba(0,0,0,0.1)',fontSize:13}}/>
+              <Area type="monotone" dataKey="avg" fill="#E0F2FE" stroke={C.primary} strokeWidth={2} name="평균점수"/>
+              <Line type="monotone" dataKey="top" stroke={C.success} strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="상위"/>
+              <Line type="monotone" dataKey="bottom" stroke={C.textLight} strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="하위"/>
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>부서별 종합 점수</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={DEPT_DATA} layout="vertical">
+              <CartesianGrid strokeDasharray="3 3" stroke="#E0F2FE" horizontal={false}/>
+              <XAxis type="number" domain={[60,100]} tick={{fontSize:11,fill:C.textSub}} axisLine={false} tickLine={false}/>
+              <YAxis type="category" dataKey="dept" tick={{fontSize:12,fill:C.textSub}} axisLine={false} tickLine={false} width={70}/>
+              <Tooltip contentStyle={{borderRadius:10,border:'none',boxShadow:'0 4px 16px rgba(0,0,0,0.1)',fontSize:13}}/>
+              <Bar dataKey="score" fill={C.primary} radius={[0,6,6,0]} name="종합점수"/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text}}>상위 랭킹 TOP 5</div>
+          <span style={{fontSize:12,color:C.primary,cursor:'pointer'}}>전체 순위 보기 →</span>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:12}}>
+          {RANKING.slice(0,5).map((r,i)=>(
+            <div key={r.rank} onClick={()=>setDrawer({title:r.name,drawerContent:<PersonDetail person={r}/>})}
+              style={{background:`linear-gradient(135deg, ${i===0?'#FEF3C7':'#F0F9FF'} 0%, ${i===0?'#FDE68A':'#E0F2FE'} 100%)`,borderRadius:12,padding:16,cursor:'pointer',animation:`slideUp 400ms ease ${i*70}ms both`,transition:'all 200ms',border:`1px solid ${i===0?'#FCD34D':C.border}`}}
+              onMouseEnter={ev=>{ev.currentTarget.style.transform='scale(1.03)';}}
+              onMouseLeave={ev=>{ev.currentTarget.style.transform='scale(1)';}}>
+              <div style={{fontSize:20,fontWeight:800,color:i===0?'#D97706':C.textSub,marginBottom:6}}>#{r.rank}</div>
+              <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:2}}>{r.name}</div>
+              <div style={{fontSize:11,color:C.textSub,marginBottom:8}}>{r.dept}</div>
+              <div style={{fontSize:18,fontWeight:800,color:C.primary}}>{r.score}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeptDetail({ dept }) {
+  return (
+    <div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
+        {[['종합 순위',`#${dept.rank}`],['평균 점수',`${dept.score}점`],['전년비','+2.1점'],['인원수','18명']].map(([k,v])=>(
+          <div key={k} style={{background:'#F0F9FF',borderRadius:10,padding:'12px 14px'}}>
+            <div style={{fontSize:11,color:C.textSub,marginBottom:4}}>{k}</div>
+            <div style={{fontSize:18,fontWeight:700,color:C.primary}}>{v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{fontSize:14,fontWeight:600,color:C.text,marginBottom:10}}>연도별 점수 추이</div>
+      <ResponsiveContainer width="100%" height={140}>
+        <LineChart data={TREND_DATA}>
+          <XAxis dataKey="year" tick={{fontSize:11,fill:C.textSub}} axisLine={false} tickLine={false}/>
+          <YAxis domain={[60,100]} tick={{fontSize:10,fill:C.textSub}} axisLine={false} tickLine={false}/>
+          <Tooltip contentStyle={{borderRadius:8,fontSize:12}}/>
+          <Line type="monotone" dataKey="avg" stroke={C.primary} strokeWidth={2} dot={{r:4,fill:C.primary}}/>
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function PersonDetail({ person }) {
+  return (
+    <div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:20}}>
+        {[['부서',person.dept],['직급',person.grade],['종합 순위',`#${person.rank}`],['종합 점수',`${person.score}점`],['전년순위',`#${person.prev}`],['순위변동',person.change===0?'유지':person.change>0?`↑${person.change}위`:`↓${Math.abs(person.change)}위`]].map(([k,v])=>(
+          <div key={k} style={{background:'#F0F9FF',borderRadius:8,padding:'10px 12px'}}>
+            <div style={{fontSize:11,color:C.textSub,marginBottom:4}}>{k}</div>
+            <div style={{fontSize:14,fontWeight:700,color:C.text}}>{v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{fontSize:14,fontWeight:600,color:C.text,marginBottom:10}}>항목별 점수 분포</div>
+      {[['업무 전문성',9.2],['업무 성과',8.8],['협업 능력',9.1],['조직 문화 기여',8.5]].map(([label,score])=>(
+        <div key={label} style={{marginBottom:10}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:4,fontSize:13}}>
+            <span style={{color:C.textSub}}>{label}</span>
+            <span style={{fontWeight:700,color:C.primary}}>{score}/10</span>
+          </div>
+          <div style={{height:6,borderRadius:999,background:'#E0F2FE'}}>
+            <div style={{height:'100%',borderRadius:999,background:C.gradient,'--target-width':`${score*10}%`,width:`${score*10}%`,animation:'barGrow 800ms ease both'}}/>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ──────────── 연도별 비교 ────────────
+function ComparisonPage({ setDrawer }) {
+  const [yearFrom, setYearFrom] = useState('2021');
+  const [yearTo, setYearTo] = useState('2025');
+  const [selected, setSelected] = useState(null);
+
+  const merged = COMPARE_EMPLOYEES[0].data.map(d=>({
+    year:d.year,
+    [COMPARE_EMPLOYEES[0].name]:COMPARE_EMPLOYEES[0].data.find(x=>x.year===d.year)?.score,
+    [COMPARE_EMPLOYEES[1].name]:COMPARE_EMPLOYEES[1].data.find(x=>x.year===d.year)?.score,
+    [COMPARE_EMPLOYEES[2].name]:COMPARE_EMPLOYEES[2].data.find(x=>x.year===d.year)?.score,
+  })).filter(d=>d.year>=yearFrom && d.year<=yearTo);
+
+  const COLORS = [C.primary, C.accent, C.success];
+
+  return (
+    <div key="comparison" style={{animation:'fadeIn 350ms ease'}}>
+      <div style={{display:'flex',gap:12,alignItems:'center',marginBottom:20,background:C.surface,borderRadius:12,padding:16,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+        <span style={{fontSize:14,fontWeight:600,color:C.text}}>비교 기간</span>
+        <select value={yearFrom} onChange={e=>setYearFrom(e.target.value)}
+          style={{padding:'7px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,background:'#F0F9FF',color:C.text}}>
+          {['2021','2022','2023','2024','2025'].map(y=><option key={y}>{y}</option>)}
+        </select>
+        <span style={{color:C.textSub}}>~</span>
+        <select value={yearTo} onChange={e=>setYearTo(e.target.value)}
+          style={{padding:'7px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,background:'#F0F9FF',color:C.text}}>
+          {['2021','2022','2023','2024','2025'].map(y=><option key={y}>{y}</option>)}
+        </select>
+        <span style={{fontSize:13,color:C.textSub,marginLeft:12}}>부서:</span>
+        <select style={{padding:'7px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,background:'#F0F9FF',color:C.text}}>
+          {['전체','개발팀','마케팅팀','재무회계팀','영업팀'].map(d=><option key={d}>{d}</option>)}
+        </select>
+      </div>
+      <div style={{background:C.surface,borderRadius:16,padding:24,marginBottom:20,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+        <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>개인별 평정 점수 추이 비교</div>
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={merged}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E0F2FE"/>
+            <XAxis dataKey="year" tick={{fontSize:12,fill:C.textSub}} axisLine={false} tickLine={false}/>
+            <YAxis domain={[55,100]} tick={{fontSize:11,fill:C.textSub}} axisLine={false} tickLine={false}/>
+            <Tooltip contentStyle={{borderRadius:10,border:'none',boxShadow:'0 4px 16px rgba(0,0,0,0.1)',fontSize:13}}/>
+            <Legend wrapperStyle={{fontSize:13}}/>
+            {COMPARE_EMPLOYEES.map((e,i)=>(
+              <Line key={e.name} type="monotone" dataKey={e.name} stroke={COLORS[i]} strokeWidth={2.5} dot={{r:5,fill:COLORS[i]}} activeDot={{r:7}}/>
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div style={{background:C.surface,borderRadius:16,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,fontSize:15,fontWeight:700,color:C.text}}>연도별 점수 테이블</div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{background:'#F0F9FF',borderBottom:`1px solid ${C.border}`}}>
+                <th style={{padding:'12px 16px',textAlign:'left',fontSize:12,fontWeight:700,color:C.textSub}}>이름 / 연도</th>
+                {['2021','2022','2023','2024','2025'].filter(y=>y>=yearFrom&&y<=yearTo).map(y=>(
+                  <th key={y} style={{padding:'12px 16px',textAlign:'center',fontSize:12,fontWeight:700,color:C.textSub}}>{y}년</th>
+                ))}
+                <th style={{padding:'12px 16px',textAlign:'center',fontSize:12,fontWeight:700,color:C.textSub}}>변화</th>
+              </tr>
+            </thead>
+            <tbody>
+              {COMPARE_EMPLOYEES.map((e,idx)=>{
+                const filtered=e.data.filter(d=>d.year>=yearFrom&&d.year<=yearTo);
+                const diff=filtered.length>1?filtered[filtered.length-1].score-filtered[0].score:0;
+                return (
+                  <tr key={e.id} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms',animation:`slideUp 300ms ease ${idx*80}ms both`}}
+                    onClick={()=>setDrawer({title:e.name,drawerContent:<PersonDetail person={{...e,...RANKING[idx]}}/>})}
+                    onMouseEnter={ev=>{ev.currentTarget.style.background='#F0F9FF';}}
+                    onMouseLeave={ev=>{ev.currentTarget.style.background='transparent';}}>
+                    <td style={{padding:'13px 16px'}}>
+                      <div style={{fontWeight:700,color:C.text,fontSize:14}}>{e.name}</div>
+                      <div style={{fontSize:12,color:C.textSub}}>{e.dept} · {e.grade}</div>
+                    </td>
+                    {filtered.map(d=>(
+                      <td key={d.year} style={{padding:'13px 16px',textAlign:'center',fontSize:14,fontWeight:600,color:C.text}}>{d.score}</td>
+                    ))}
+                    <td style={{padding:'13px 16px',textAlign:'center'}}>
+                      <span style={{background:diff>=0?'#D1FAE5':'#FEE2E2',color:diff>=0?C.success:C.danger,padding:'2px 10px',borderRadius:999,fontSize:12,fontWeight:700}}>
+                        {diff>=0?'+':''}{diff.toFixed(1)}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ──────────── 보고서 생성 ────────────
+function ReportPage({ toast }) {
+  const [generating, setGenerating] = useState(null);
+  const [progress, setProgress] = useState(0);
+  const [done, setDone] = useState({});
+
+  function startGenerate(id) {
+    setGenerating(id); setProgress(0);
+    let p=0;
+    const t=setInterval(()=>{
+      p+=Math.random()*20+5;
+      if(p>=100){ setProgress(100); clearInterval(t); setTimeout(()=>{setGenerating(null);setDone(d=>({...d,[id]:true}));toast('보고서 생성이 완료되었습니다.');},400); }
+      else setProgress(Math.min(p,99));
+    },300);
+  }
+
+  return (
+    <div key="report" style={{animation:'fadeIn 350ms ease'}}>
+      {generating && (
+        <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.4)',animation:'fadeIn 200ms ease'}}/>
+          <div style={{position:'relative',background:C.surface,borderRadius:20,padding:'40px 48px',width:400,textAlign:'center',animation:'fadeInScale 220ms ease',boxShadow:'0 20px 60px rgba(0,0,0,0.2)'}}>
+            <div style={{fontSize:40,marginBottom:16}}>📄</div>
+            <div style={{fontSize:18,fontWeight:800,color:C.text,marginBottom:8}}>보고서 생성 중...</div>
+            <div style={{fontSize:13,color:C.textSub,marginBottom:24}}>데이터 집계 및 PDF 렌더링 중입니다</div>
+            <div style={{height:8,borderRadius:999,background:'#E0F2FE',overflow:'hidden',marginBottom:12}}>
+              <div style={{height:'100%',borderRadius:999,background:C.gradient,width:`${progress}%`,transition:'width 300ms ease'}}/>
+            </div>
+            <div style={{fontSize:14,fontWeight:700,color:C.primary}}>{Math.floor(progress)}%</div>
+          </div>
+        </div>
+      )}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:16}}>
+        {REPORT_TEMPLATES.map((r,i)=>(
+          <div key={r.id} style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.06)',animation:`slideUp 400ms ease ${i*80}ms both`,transition:'all 220ms'}}
+            onMouseEnter={ev=>{ev.currentTarget.style.transform='translateY(-2px)';ev.currentTarget.style.boxShadow='0 8px 24px rgba(14,165,233,0.12)';}}
+            onMouseLeave={ev=>{ev.currentTarget.style.transform='translateY(0)';ev.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,0.06)';}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16}}>
+              <div style={{fontSize:32}}>{r.icon}</div>
+              {done[r.id] && <span style={{background:'#D1FAE5',color:C.success,padding:'2px 10px',borderRadius:999,fontSize:12,fontWeight:600}}>생성 완료</span>}
+            </div>
+            <div style={{fontSize:16,fontWeight:800,color:C.text,marginBottom:6}}>{r.name}</div>
+            <div style={{fontSize:13,color:C.textSub,marginBottom:16,lineHeight:1.6}}>{r.desc}</div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+              <span style={{fontSize:12,color:C.textLight}}>예상 {r.pages}페이지</span>
+              <span style={{background:'#F0F9FF',color:C.primary,padding:'2px 8px',borderRadius:6,fontSize:12,fontWeight:600}}>{r.status}</span>
+            </div>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={()=>startGenerate(r.id)}
+                style={{flex:1,padding:'10px',borderRadius:10,border:'none',background:done[r.id]?C.success:C.gradient,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:700,transition:'all 200ms'}}>
+                {done[r.id]?'재생성':'PDF 생성'}
+              </button>
+              {done[r.id] && (
+                <button onClick={()=>toast('다운로드가 시작되었습니다.')} style={{padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,background:C.surface,cursor:'pointer',fontSize:13,color:C.textSub,transition:'all 200ms'}}
+                  onMouseEnter={ev=>{ev.target.style.borderColor=C.primary;ev.target.style.color=C.primary;}}
+                  onMouseLeave={ev=>{ev.target.style.borderColor=C.border;ev.target.style.color=C.textSub;}}>
+                  ↓
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{marginTop:20,background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+        <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>최근 생성 이력</div>
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {[
+            {name:'전체 평정 결과 보고서',date:'2025-04-28 14:32',size:'2.4 MB',user:'관리자 김철수'},
+            {name:'부서별 성과 비교 보고서',date:'2025-04-27 09:15',size:'1.1 MB',user:'관리자 김철수'},
+            {name:'승진 서열명부',date:'2025-04-25 17:50',size:'0.8 MB',user:'관리자 김철수'},
+          ].map((h,i)=>(
+            <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'12px 16px',background:'#F8FFFE',borderRadius:10,border:`1px solid ${C.border}`,animation:`slideUp 300ms ease ${i*60}ms both`}}>
+              <div>
+                <div style={{fontSize:14,fontWeight:600,color:C.text}}>{h.name}</div>
+                <div style={{fontSize:12,color:C.textSub,marginTop:2}}>{h.date} · {h.user}</div>
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:10}}>
+                <span style={{fontSize:12,color:C.textLight}}>{h.size}</span>
+                <button onClick={()=>toast('다운로드가 시작되었습니다.')} style={{padding:'5px 12px',borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,cursor:'pointer',fontSize:12,color:C.textSub,transition:'all 150ms'}}
+                  onMouseEnter={ev=>{ev.target.style.borderColor=C.primary;ev.target.style.color=C.primary;}}
+                  onMouseLeave={ev=>{ev.target.style.borderColor=C.border;ev.target.style.color=C.textSub;}}>
+                  다운로드
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ──────────── 엑셀 관리 ────────────
+function ExcelPage({ toast }) {
+  const [uploading, setUploading] = useState(false);
+  const [uploadDone, setUploadDone] = useState(false);
+  const [uploadFile, setUploadFile] = useState(null);
+  const [errors, setErrors] = useState([]);
+  const [dragOver, setDragOver] = useState(false);
+  const [downloadLoading, setDownloadLoading] = useState(false);
+
+  function simulateUpload(name) {
+    setUploadFile(name); setUploading(true); setUploadDone(false); setErrors([]);
+    setTimeout(()=>{
+      setUploading(false); setUploadDone(true);
+      setErrors([{row:12,col:'부서',msg:'존재하지 않는 부서명 "IT본부"'},{row:35,col:'직급',msg:'직급 코드 오류 "3level"'}]);
+      toast('파일 파싱 완료 — 오류 2건 감지');
+    },2000);
+  }
+
+  function handleDownload() {
+    setDownloadLoading(true);
+    setTimeout(()=>{ setDownloadLoading(false); toast('엑셀 파일 다운로드가 시작되었습니다.'); },1800);
+  }
+
+  return (
+    <div key="excel" style={{animation:'fadeIn 350ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+        {/* 업로드 */}
+        <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>📤 데이터 업로드</div>
+          <div
+            onDragOver={e=>{e.preventDefault();setDragOver(true);}}
+            onDragLeave={()=>setDragOver(false)}
+            onDrop={e=>{e.preventDefault();setDragOver(false);const f=e.dataTransfer.files[0];if(f)simulateUpload(f.name);}}
+            onClick={()=>simulateUpload('평정대상자_2025.xlsx')}
+            style={{border:`2px dashed ${dragOver?C.primary:C.border}`,borderRadius:12,padding:'32px 20px',textAlign:'center',cursor:'pointer',transition:'all 200ms',background:dragOver?'#F0F9FF':'transparent'}}>
+            <div style={{fontSize:36,marginBottom:12}}>📎</div>
+            <div style={{fontSize:14,fontWeight:600,color:C.text,marginBottom:6}}>파일을 드래그하거나 클릭하여 업로드</div>
+            <div style={{fontSize:12,color:C.textLight}}>.xlsx, .xls 파일 지원 · 최대 50MB</div>
+          </div>
+          {uploading && (
+            <div style={{marginTop:16,padding:14,background:'#F0F9FF',borderRadius:10}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+                <div style={{width:18,height:18,borderRadius:'50%',border:`2px solid ${C.primary}`,borderTopColor:'transparent',animation:'spin 800ms linear infinite'}}/>
+                <span style={{fontSize:13,color:C.textSub}}>{uploadFile} 파싱 중...</span>
+              </div>
+              <div style={{height:4,borderRadius:999,background:'#E0F2FE',overflow:'hidden'}}>
+                <div style={{height:'100%',borderRadius:999,background:C.gradient,width:'60%',animation:'barGrow 2s ease both'}}/>
+              </div>
+            </div>
+          )}
+          {uploadDone && (
+            <div style={{marginTop:16}}>
+              <div style={{background:'#D1FAE5',borderRadius:8,padding:'10px 14px',fontSize:13,color:C.success,marginBottom:10}}>
+                ✓ {uploadFile} — 2,400행 처리 완료
+              </div>
+              {errors.length>0 && (
+                <div>
+                  <div style={{fontSize:13,fontWeight:600,color:C.danger,marginBottom:8}}>오류 {errors.length}건 감지</div>
+                  {errors.map((e,i)=>(
+                    <div key={i} style={{background:'#FFF1F1',borderRadius:8,padding:'8px 12px',marginBottom:6,fontSize:12}}>
+                      <span style={{color:C.danger,fontWeight:600}}>행 {e.row} · {e.col}:</span> <span style={{color:C.text}}>{e.msg}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {/* 다운로드 */}
+        <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>📥 결과 내보내기</div>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:8}}>연도</label>
+            <select style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,background:'#F0F9FF',color:C.text}}>
+              <option>2025년</option><option>2024년</option><option>2023년</option>
+            </select>
+          </div>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:8}}>부서</label>
+            <select style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,background:'#F0F9FF',color:C.text}}>
+              <option>전체 부서</option><option>개발팀</option><option>마케팅팀</option><option>재무회계팀</option>
+            </select>
+          </div>
+          <div style={{marginBottom:20}}>
+            <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:8}}>포함 데이터</label>
+            {['평정 점수','순위 정보','가감점 내역','평정자 정보'].map(opt=>(
+              <label key={opt} style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,cursor:'pointer',fontSize:13,color:C.text}}>
+                <input type="checkbox" defaultChecked style={{accentColor:C.primary}}/> {opt}
+              </label>
+            ))}
+          </div>
+          <button onClick={handleDownload} disabled={downloadLoading}
+            style={{width:'100%',padding:'11px',borderRadius:10,border:'none',background:downloadLoading?C.textLight:C.gradient,color:'#fff',cursor:downloadLoading?'not-allowed':'pointer',fontSize:14,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+            {downloadLoading
+              ? <><div style={{width:16,height:16,borderRadius:'50%',border:'2px solid rgba(255,255,255,0.4)',borderTopColor:'#fff',animation:'spin 800ms linear infinite'}}/> 생성 중...</>
+              : '엑셀 다운로드'}
+          </button>
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+        <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>최근 처리 이력</div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{borderBottom:`1px solid ${C.border}`}}>
+            {['파일명','종류','처리 행수','오류','처리 일시','처리자'].map(h=>(
+              <th key={h} style={{padding:'10px 12px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textSub}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {[
+              {name:'평정대상자_2025.xlsx',type:'업로드',rows:2400,errors:2,date:'2025-04-29',user:'관리자'},
+              {name:'평정결과_2025_개발팀.xlsx',type:'다운로드',rows:18,errors:0,date:'2025-04-28',user:'이상호'},
+              {name:'평정항목_2025.xlsx',type:'업로드',rows:12,errors:0,date:'2025-04-26',user:'관리자'},
+            ].map((r,i)=>(
+              <tr key={i} style={{borderBottom:`1px solid ${C.border}`,transition:'background 150ms',animation:`slideUp 300ms ease ${i*70}ms both`}}
+                onMouseEnter={ev=>ev.currentTarget.style.background='#F0F9FF'}
+                onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+                <td style={{padding:'12px',fontSize:13,fontWeight:600,color:C.text}}>{r.name}</td>
+                <td style={{padding:'12px'}}>
+                  <span style={{background:r.type==='업로드'?'#EFF6FF':'#F0FDF4',color:r.type==='업로드'?C.primary:C.success,padding:'2px 8px',borderRadius:6,fontSize:12,fontWeight:600}}>{r.type}</span>
+                </td>
+                <td style={{padding:'12px',fontSize:13,color:C.textSub}}>{r.rows.toLocaleString()}행</td>
+                <td style={{padding:'12px'}}>
+                  {r.errors>0
+                    ? <span style={{background:'#FEE2E2',color:C.danger,padding:'2px 8px',borderRadius:6,fontSize:12,fontWeight:600}}>{r.errors}건</span>
+                    : <span style={{background:'#D1FAE5',color:C.success,padding:'2px 8px',borderRadius:6,fontSize:12,fontWeight:600}}>없음</span>}
+                </td>
+                <td style={{padding:'12px',fontSize:12,color:C.textLight}}>{r.date}</td>
+                <td style={{padding:'12px',fontSize:13,color:C.textSub}}>{r.user}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ──────────── 상세 분석 ────────────
+function AnalyticsPage({ setDrawer }) {
+  const GRADE_DATA = [{name:'S',count:8,color:'#F59E0B'},{name:'A',count:22,color:'#10B981'},{name:'B',count:31,color:'#0EA5E9'},{name:'C',count:12,color:'#94A3B8'},{name:'D',count:3,color:'#EF4444'}];
+  const total = GRADE_DATA.reduce((a,b)=>a+b.count,0);
+  return (
+    <div key="analytics" style={{animation:'fadeIn 350ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+        <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:20}}>등급별 분포</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart>
+              <Pie data={GRADE_DATA} cx="50%" cy="50%" outerRadius={80} dataKey="count" paddingAngle={3}>
+                {GRADE_DATA.map((g,i)=><Cell key={i} fill={g.color}/>)}
+              </Pie>
+              <Tooltip contentStyle={{borderRadius:10,border:'none',fontSize:13}}/>
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{display:'flex',justifyContent:'center',gap:12,flexWrap:'wrap',marginTop:8}}>
+            {GRADE_DATA.map(g=>(
+              <div key={g.name} style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:C.textSub}}>
+                <div style={{width:10,height:10,borderRadius:2,background:g.color}}/>{g.name}등급 {g.count}명
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>등급 비율</div>
+          {GRADE_DATA.map(g=>(
+            <div key={g.name} style={{marginBottom:12}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:5,fontSize:13}}>
+                <span style={{fontWeight:600,color:g.color}}>{g.name}등급</span>
+                <span style={{color:C.textSub}}>{g.count}명 ({(g.count/total*100).toFixed(0)}%)</span>
+              </div>
+              <div style={{height:7,borderRadius:999,background:'#E0F2FE'}}>
+                <div style={{height:'100%',borderRadius:999,background:g.color,'--target-width':`${g.count/total*100}%`,width:`${g.count/total*100}%`,animation:`barGrow 1000ms ease ${GRADE_DATA.indexOf(g)*100}ms both`}}/>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:16,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text}}>전체 순위</div>
+          <div style={{display:'flex',gap:8}}>
+            <select style={{padding:'5px 10px',borderRadius:6,border:`1px solid ${C.border}`,fontSize:12,background:'#F0F9FF',color:C.text}}>
+              <option>전체 등급</option><option>S등급</option><option>A등급</option>
+            </select>
+            <select style={{padding:'5px 10px',borderRadius:6,border:`1px solid ${C.border}`,fontSize:12,background:'#F0F9FF',color:C.text}}>
+              <option>전체 부서</option><option>개발팀</option>
+            </select>
+          </div>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{background:'#F0F9FF',borderBottom:`1px solid ${C.border}`}}>
+            {['순위','이름','부서','직급','종합점수','등급','순위변동'].map(h=>(
+              <th key={h} style={{padding:'11px 16px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textSub}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {RANKING.map((r,i)=>{
+              const grade = r.score>=95?'S':r.score>=88?'A':r.score>=80?'B':'C';
+              const gradeColor = r.score>=95?'#F59E0B':r.score>=88?C.success:r.score>=80?C.primary:C.textSub;
+              return (
+                <tr key={r.rank} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms',animation:`slideUp 300ms ease ${i*60}ms both`}}
+                  onClick={()=>setDrawer({title:r.name,drawerContent:<PersonDetail person={r}/>})}
+                  onMouseEnter={ev=>ev.currentTarget.style.background='#F0F9FF'}
+                  onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+                  <td style={{padding:'13px 16px',fontSize:14,fontWeight:800,color:r.rank<=3?'#F59E0B':C.textSub}}>#{r.rank}</td>
+                  <td style={{padding:'13px 16px',fontSize:14,fontWeight:600,color:C.text}}>{r.name}</td>
+                  <td style={{padding:'13px 16px',fontSize:13,color:C.textSub}}>{r.dept}</td>
+                  <td style={{padding:'13px 16px',fontSize:13,color:C.textSub}}>{r.grade}</td>
+                  <td style={{padding:'13px 16px',fontSize:15,fontWeight:700,color:C.primary}}>{r.score}</td>
+                  <td style={{padding:'13px 16px'}}>
+                    <span style={{background:`${gradeColor}22`,color:gradeColor,padding:'2px 10px',borderRadius:999,fontSize:13,fontWeight:700}}>{grade}</span>
+                  </td>
+                  <td style={{padding:'13px 16px'}}>
+                    <span style={{color:r.change===0?C.textLight:r.change>0?C.success:C.danger,fontSize:13,fontWeight:600}}>
+                      {r.change===0?'—':r.change>0?`↑${r.change}`:` ↓${Math.abs(r.change)}`}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ──────────── 메인 앱 ────────────
+function App() {
+  const [tab, setTab] = useState('home');
+  const [drawer, setDrawer] = useState(null);
+  const [toast, setToast] = useState(null);
+  const showToast = msg => setToast(msg);
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh',background:C.bg}}>
+      {/* 상단 수평 네비 */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:4,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginRight:16}}>
+          <div style={{width:28,height:28,borderRadius:8,background:C.gradient,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:800,color:'#fff'}}>HR</div>
+          <span style={{fontSize:14,fontWeight:800,color:C.text,letterSpacing:'-0.02em'}}>HR Analytics</span>
+        </div>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{padding:'6px 14px',borderRadius:8,border:'none',background:tab===t.id?'#EFF6FF':'transparent',color:tab===t.id?C.primary:C.textSub,cursor:'pointer',fontSize:13,fontWeight:tab===t.id?700:400,transition:'all 150ms'}}>
+            {t.label}
+          </button>
+        ))}
+        <div style={{flex:1}}/>
+        <div style={{display:'flex',alignItems:'center',gap:6,background:'#F0F9FF',borderRadius:8,padding:'5px 12px',marginRight:8}}>
+          <span style={{fontSize:12,color:C.textSub}}>🔍</span>
+          <input placeholder="검색..." style={{border:'none',background:'transparent',fontSize:12,outline:'none',width:100,color:C.text}}/>
+        </div>
+        <div style={{position:'relative',marginRight:4}}>
+          <div style={{width:32,height:32,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,cursor:'pointer',color:C.textSub}}>🔔</div>
+          <div style={{position:'absolute',top:4,right:4,width:8,height:8,borderRadius:'50%',background:C.danger}}/>
+        </div>
+        <div style={{width:32,height:32,borderRadius:'50%',background:C.gradient,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:'#fff',cursor:'pointer'}}>김</div>
+      </header>
+
+      {/* 히어로 배너 */}
+      <div style={{background:C.gradient,padding:'28px 32px',color:'#fff',animation:'fadeIn 300ms ease'}}>
+        <h1 style={{fontSize:24,fontWeight:800,letterSpacing:'-0.02em',marginBottom:6}}>{HERO_META[tab].title}</h1>
+        <p style={{fontSize:13,opacity:0.85,marginBottom:18}}>{HERO_META[tab].desc}</p>
+        <div style={{display:'flex',gap:32}}>
+          {HERO_META[tab].kpis.map((k,i)=>(
+            <div key={k.l} style={{animation:`slideUp 400ms ease ${i*80}ms both`}}>
+              <div style={{fontSize:26,fontWeight:800,letterSpacing:'-0.02em'}}><CountUp end={k.v} suffix={k.s}/></div>
+              <div style={{fontSize:11,opacity:0.8,marginTop:2}}>{k.l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 콘텐츠 */}
+      <main style={{flex:1,padding:'24px 32px'}}>
+        {tab==='home' && <HomePage setDrawer={setDrawer}/>}
+        {tab==='comparison' && <ComparisonPage setDrawer={setDrawer}/>}
+        {tab==='report' && <ReportPage toast={showToast}/>}
+        {tab==='excel' && <ExcelPage toast={showToast}/>}
+        {tab==='analytics' && <AnalyticsPage setDrawer={setDrawer}/>}
+      </main>
+
+      {drawer && <Drawer item={drawer} onClose={()=>setDrawer(null)}/>}
+      {toast && <Toast message={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

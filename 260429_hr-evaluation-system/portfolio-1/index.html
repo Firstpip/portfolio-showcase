@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>인사평정 워크플로우 시스템 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; font-family:'Pretendard',sans-serif; background:#F1F5F9; }
+#root { display:flex; width:100%; height:100vh; overflow:hidden; }
+
+@keyframes fadeIn { from { opacity:0 } to { opacity:1 } }
+@keyframes fadeInScale { from { opacity:0; transform:scale(0.95) } to { opacity:1; transform:scale(1) } }
+@keyframes slideInRight { from { opacity:0; transform:translateX(30px) } to { opacity:1; transform:translateX(0) } }
+@keyframes slideUp { from { opacity:0; transform:translateY(20px) } to { opacity:1; transform:translateY(0) } }
+@keyframes ripple { 0% { transform:scale(0); opacity:0.5 } 100% { transform:scale(4); opacity:0 } }
+@keyframes countUp { from { opacity:0; transform:translateY(10px) } to { opacity:1; transform:translateY(0) } }
+@keyframes shimmer { 0% { background-position:-200% 0 } 100% { background-position:200% 0 } }
+@keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.5 } }
+@keyframes barGrow { from { width:0% } to { width:var(--target-width) } }
+@keyframes slideDown { from { opacity:0; transform:translateY(-10px); max-height:0 } to { opacity:1; transform:translateY(0); max-height:500px } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend } = Recharts;
+
+const C = {
+  primary: '#2563EB', secondary: '#1E3A5F', accent: '#38BDF8',
+  bg: '#F1F5F9', surface: '#FFFFFF', border: '#E2E8F0',
+  text: '#0F172A', textSub: '#64748B', textLight: '#94A3B8',
+  success: '#10B981', warning: '#F59E0B', danger: '#EF4444',
+  sidebar: '#1E293B', sidebarActive: '#2563EB', sidebarText: '#CBD5E1',
+};
+
+function CountUp({ end, duration=1200, suffix='' }) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    let start=0; const step=end/(duration/16);
+    const timer = setInterval(() => {
+      start+=step;
+      if(start>=end){ setVal(end); clearInterval(timer); }
+      else setVal(Math.floor(start));
+    },16);
+    return ()=>clearInterval(timer);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({ message, onClose }) {
+  useEffect(()=>{ const t=setTimeout(onClose,3000); return()=>clearTimeout(t); },[]);
+  return (
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:C.secondary,color:'#fff',padding:'12px 20px',borderRadius:8,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.25)',fontSize:14,display:'flex',alignItems:'center',gap:8}}>
+      <span>✓</span> {message}
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, width=600 }) {
+  return (
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.45)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:C.surface,borderRadius:12,zIndex:501,animation:'fadeInScale 220ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.18)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'18px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:700,color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSub,lineHeight:1}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+const DEPT_COMPLETION = [
+  {dept:'경영전략팀',rate:88,total:8,done:7},{dept:'인사총무팀',rate:100,total:6,done:6},
+  {dept:'재무회계팀',rate:75,total:8,done:6},{dept:'마케팅팀',rate:62,total:13,done:8},
+  {dept:'개발팀',rate:90,total:20,done:18},{dept:'영업팀',rate:55,total:18,done:10},
+];
+
+const EMPLOYEES = [
+  {id:1,name:'김민준',dept:'개발팀',grade:'과장',status:'완료',score:87.5,reviewer:'이상호 팀장',type:'1차'},
+  {id:2,name:'이지은',dept:'마케팅팀',grade:'대리',status:'진행중',score:null,reviewer:'박선영 팀장',type:'1차'},
+  {id:3,name:'박서준',dept:'개발팀',grade:'사원',status:'미시작',score:null,reviewer:'이상호 팀장',type:'다면'},
+  {id:4,name:'최예린',dept:'재무회계팀',grade:'차장',status:'완료',score:91.2,reviewer:'강현우 부장',type:'2차'},
+  {id:5,name:'정하늘',dept:'영업팀',grade:'대리',status:'진행중',score:null,reviewer:'오민석 팀장',type:'1차'},
+  {id:6,name:'강동원',dept:'경영전략팀',grade:'부장',status:'완료',score:79.0,reviewer:'신재원 이사',type:'2차'},
+  {id:7,name:'윤수빈',dept:'인사총무팀',grade:'사원',status:'완료',score:82.3,reviewer:'한지수 팀장',type:'다면'},
+  {id:8,name:'임도현',dept:'개발팀',grade:'과장',status:'미시작',score:null,reviewer:'이상호 팀장',type:'1차'},
+];
+
+const CRITERIA = [
+  {id:1,name:'업무 전문성',weight:30,desc:'직무 관련 전문 지식 및 기술 보유 정도',active:true,max:10},
+  {id:2,name:'업무 성과',weight:35,desc:'목표 대비 실제 업무 달성 수준',active:true,max:10},
+  {id:3,name:'협업 능력',weight:20,desc:'팀원과의 커뮤니케이션 및 협력 정도',active:true,max:10},
+  {id:4,name:'조직 문화 기여',weight:15,desc:'기업 가치 공유 및 조직 분위기 기여',active:true,max:10},
+  {id:5,name:'리더십',weight:0,desc:'팀 목표 방향 제시 및 구성원 동기 부여',active:false,max:10},
+];
+
+const ORG_DATA = [
+  {id:1,name:'본부장 신재원',grade:'이사',dept:'경영전략본부',level:0,evaluatees:3,role:'2차 평정자'},
+  {id:2,name:'강현우',grade:'부장',dept:'재무회계팀',level:1,evaluatees:7,role:'1차 평정자'},
+  {id:3,name:'이상호',grade:'팀장',dept:'개발팀',level:1,evaluatees:18,role:'1차 평정자'},
+  {id:4,name:'박선영',grade:'팀장',dept:'마케팅팀',level:1,evaluatees:12,role:'1차 평정자'},
+  {id:5,name:'오민석',grade:'팀장',dept:'영업팀',level:1,evaluatees:17,role:'1차 평정자'},
+  {id:6,name:'한지수',grade:'팀장',dept:'인사총무팀',level:1,evaluatees:5,role:'다면 평정자'},
+];
+
+const USERS = [
+  {id:1,name:'관리자 김철수',email:'admin@company.com',role:'시스템관리자',dept:'-',lastLogin:'2025-04-29 09:12'},
+  {id:2,name:'이상호',email:'lsh@company.com',role:'중간관리자',dept:'개발팀',lastLogin:'2025-04-29 08:50'},
+  {id:3,name:'박선영',email:'psy@company.com',role:'중간관리자',dept:'마케팅팀',lastLogin:'2025-04-28 17:32'},
+  {id:4,name:'김민준',email:'kmj@company.com',role:'일반사용자',dept:'개발팀',lastLogin:'2025-04-29 09:01'},
+  {id:5,name:'이지은',email:'lje@company.com',role:'일반사용자',dept:'마케팅팀',lastLogin:'2025-04-28 16:20'},
+];
+
+const MENU = [
+  {id:'dashboard',label:'대시보드',icon:'⊞'},
+  {id:'evaluation',label:'평정 입력',icon:'✏'},
+  {id:'organization',label:'조직 관리',icon:'🏢'},
+  {id:'criteria',label:'평가 항목',icon:'☰'},
+  {id:'settings',label:'권한 설정',icon:'⚙'},
+];
+
+const STATUS_COLORS = { '완료':'#10B981','진행중':'#F59E0B','미시작':'#94A3B8' };
+const STATUS_BG = { '완료':'#D1FAE5','진행중':'#FEF3C7','미시작':'#F1F5F9' };
+
+// ──────────── 대시보드 ────────────
+function DashboardPage() {
+  const [loading, setLoading] = useState(true);
+  useEffect(()=>{ const t=setTimeout(()=>setLoading(false),1200); return()=>clearTimeout(t); },[]);
+  if(loading) return (
+    <div style={{padding:24,display:'flex',flexDirection:'column',gap:16}}>
+      {[...Array(4)].map((_,i)=>(
+        <div key={i} style={{height:100,borderRadius:12,background:'linear-gradient(90deg,#E2E8F0 25%,#CBD5E1 50%,#E2E8F0 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>
+      ))}
+    </div>
+  );
+  const kpis = [
+    {label:'전체 평정 진행률',value:72,suffix:'%',desc:'목표: 100%',color:C.primary},
+    {label:'완료된 평정',value:55,suffix:'건',desc:'전체 76건 중',color:C.success},
+    {label:'미제출 인원',value:21,suffix:'명',desc:'마감 D-7 기준',color:C.warning},
+    {label:'마감일까지',value:7,suffix:'일',desc:'2025년 5월 6일',color:C.danger},
+  ];
+  return (
+    <div key="dashboard" style={{animation:'fadeIn 350ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:20,marginBottom:28}}>
+        {kpis.map((k,i)=>(
+          <div key={k.label} style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',animation:`slideUp 400ms ease ${i*80}ms both`}}>
+            <div style={{fontSize:13,color:C.textSub,marginBottom:8}}>{k.label}</div>
+            <div style={{fontSize:32,fontWeight:700,color:k.color,letterSpacing:'-0.02em'}}>
+              <CountUp end={k.value} suffix={k.suffix}/>
+            </div>
+            <div style={{fontSize:12,color:C.textLight,marginTop:4}}>{k.desc}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 380px',gap:20,marginBottom:28}}>
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <div style={{fontSize:16,fontWeight:600,marginBottom:20,color:C.text}}>부서별 평정 완료율</div>
+          <ResponsiveContainer width="100%" height={240}>
+            <BarChart data={DEPT_COMPLETION} margin={{top:0,right:16,left:-10,bottom:0}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9"/>
+              <XAxis dataKey="dept" tick={{fontSize:12,fill:C.textSub}} axisLine={false} tickLine={false}/>
+              <YAxis domain={[0,100]} tick={{fontSize:11,fill:C.textSub}} axisLine={false} tickLine={false}/>
+              <Tooltip contentStyle={{borderRadius:8,border:'none',boxShadow:'0 4px 12px rgba(0,0,0,0.1)',fontSize:13}}/>
+              <Bar dataKey="rate" fill={C.primary} radius={[6,6,0,0]} name="완료율(%)"/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <div style={{fontSize:16,fontWeight:600,marginBottom:20,color:C.text}}>평정 유형별 현황</div>
+          <ResponsiveContainer width="100%" height={180}>
+            <PieChart>
+              <Pie data={[{name:'1차',value:38},{name:'2차',value:24},{name:'다면',value:14}]} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="value">
+                <Cell fill={C.primary}/><Cell fill={C.accent}/><Cell fill={C.success}/>
+              </Pie>
+              <Tooltip contentStyle={{borderRadius:8,border:'none',fontSize:13}}/>
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{display:'flex',justifyContent:'center',gap:16,marginTop:8}}>
+            {[['1차평정',C.primary],['2차평정',C.accent],['다면평정',C.success]].map(([l,c])=>(
+              <div key={l} style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:C.textSub}}>
+                <div style={{width:10,height:10,borderRadius:2,background:c}}/>
+                {l}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <div style={{fontSize:16,fontWeight:600,color:C.text}}>최근 평정 활동</div>
+          <span style={{fontSize:12,color:C.primary,cursor:'pointer'}}>전체 보기 →</span>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{borderBottom:`1px solid ${C.border}`}}>
+              {['피평정자','부서','직급','평정 유형','상태','담당 평정자'].map(h=>(
+                <th key={h} style={{padding:'10px 12px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textSub}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {EMPLOYEES.slice(0,5).map((e,i)=>(
+              <tr key={e.id} style={{borderBottom:`1px solid ${C.border}`,animation:`slideUp 300ms ease ${i*50}ms both`,transition:'background 150ms'}}
+                onMouseEnter={ev=>ev.currentTarget.style.background='#F8FAFF'}
+                onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+                <td style={{padding:'12px',fontSize:14,fontWeight:600,color:C.text}}>{e.name}</td>
+                <td style={{padding:'12px',fontSize:13,color:C.textSub}}>{e.dept}</td>
+                <td style={{padding:'12px',fontSize:13,color:C.textSub}}>{e.grade}</td>
+                <td style={{padding:'12px',fontSize:13}}>
+                  <span style={{background:'#EFF6FF',color:C.primary,padding:'2px 8px',borderRadius:4,fontSize:12,fontWeight:500}}>{e.type}</span>
+                </td>
+                <td style={{padding:'12px'}}>
+                  <span style={{background:STATUS_BG[e.status],color:STATUS_COLORS[e.status],padding:'2px 10px',borderRadius:999,fontSize:12,fontWeight:600}}>{e.status}</span>
+                </td>
+                <td style={{padding:'12px',fontSize:13,color:C.textSub}}>{e.reviewer}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ──────────── 평정 입력 ────────────
+function EvaluationPage({ toast }) {
+  const [selected, setSelected] = useState(null);
+  const [filter, setFilter] = useState({ dept:'전체', status:'전체' });
+  const [scores, setScores] = useState({});
+  const [submitted, setSubmitted] = useState({});
+
+  const filtered = EMPLOYEES.filter(e =>
+    (filter.dept==='전체' || e.dept===filter.dept) &&
+    (filter.status==='전체' || e.status===filter.status)
+  );
+
+  const calcAvg = () => {
+    const vals = CRITERIA.filter(c=>c.active).map(c=>Number(scores[c.id]||0));
+    return vals.reduce((a,b)=>a+b,0)/vals.length||0;
+  };
+
+  function handleSubmit() {
+    const avg = calcAvg();
+    if(avg===0){ toast('점수를 입력해주세요.'); return; }
+    setSubmitted(s=>({...s,[selected.id]:true}));
+    setSelected(null);
+    setScores({});
+    toast(`${selected.name}님의 평정이 제출되었습니다.`);
+  }
+
+  return (
+    <div key="evaluation" style={{animation:'fadeIn 350ms ease'}}>
+      {selected && (
+        <Modal title={`${selected.name} — ${selected.type} 평정 입력`} onClose={()=>{setSelected(null);setScores({});}}>
+          <div style={{marginBottom:16,padding:'12px 16px',background:'#F8FAFF',borderRadius:8,display:'flex',gap:24,fontSize:13}}>
+            <span><b style={{color:C.textSub}}>부서:</b> {selected.dept}</span>
+            <span><b style={{color:C.textSub}}>직급:</b> {selected.grade}</span>
+            <span><b style={{color:C.textSub}}>평정 유형:</b> {selected.type}</span>
+          </div>
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:14,fontWeight:600,color:C.text,marginBottom:12}}>항목별 점수 입력 (0~10점)</div>
+            {CRITERIA.filter(c=>c.active).map(c=>(
+              <div key={c.id} style={{marginBottom:16}}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+                  <span style={{fontSize:14,color:C.text,fontWeight:500}}>{c.name}</span>
+                  <span style={{fontSize:12,color:C.textSub}}>가중치 {c.weight}%</span>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:12}}>
+                  <input type="range" min="0" max="10" step="0.5" value={scores[c.id]||0}
+                    onChange={e=>setScores(s=>({...s,[c.id]:e.target.value}))}
+                    style={{flex:1,accentColor:C.primary}}/>
+                  <div style={{width:48,height:36,borderRadius:6,border:`1.5px solid ${C.border}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,fontWeight:700,color:C.primary,background:C.surface}}>
+                    {scores[c.id]||0}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{background:'#EFF6FF',borderRadius:8,padding:'14px 16px',marginBottom:20,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span style={{fontSize:14,fontWeight:600,color:C.primary}}>실시간 평균 점수</span>
+            <span style={{fontSize:24,fontWeight:700,color:C.primary}}>{calcAvg().toFixed(1)}<span style={{fontSize:14}}> / 10</span></span>
+          </div>
+          <div style={{display:'flex',gap:12,justifyContent:'flex-end'}}>
+            <button onClick={()=>{setSelected(null);setScores({});}} style={{padding:'10px 20px',borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,cursor:'pointer',fontSize:14,color:C.textSub}}>취소</button>
+            <button onClick={handleSubmit} disabled={calcAvg()===0} style={{padding:'10px 24px',borderRadius:8,border:'none',background:calcAvg()===0?C.border:C.primary,color:'#fff',cursor:calcAvg()===0?'not-allowed':'pointer',fontSize:14,fontWeight:600}}>평정 제출</button>
+          </div>
+        </Modal>
+      )}
+      <div style={{display:'flex',gap:12,marginBottom:20,alignItems:'center',flexWrap:'wrap'}}>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <span style={{fontSize:13,color:C.textSub}}>부서</span>
+          <select value={filter.dept} onChange={e=>setFilter(f=>({...f,dept:e.target.value}))}
+            style={{padding:'6px 12px',borderRadius:6,border:`1px solid ${C.border}`,fontSize:13,background:C.surface,color:C.text}}>
+            {['전체','개발팀','마케팅팀','재무회계팀','영업팀','경영전략팀','인사총무팀'].map(d=><option key={d}>{d}</option>)}
+          </select>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <span style={{fontSize:13,color:C.textSub}}>상태</span>
+          <select value={filter.status} onChange={e=>setFilter(f=>({...f,status:e.target.value}))}
+            style={{padding:'6px 12px',borderRadius:6,border:`1px solid ${C.border}`,fontSize:13,background:C.surface,color:C.text}}>
+            {['전체','완료','진행중','미시작'].map(s=><option key={s}>{s}</option>)}
+          </select>
+        </div>
+        <span style={{fontSize:13,color:C.textSub,marginLeft:'auto'}}>총 {filtered.length}명</span>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{borderBottom:`1.5px solid ${C.border}`,background:'#F8FAFF'}}>
+              {['피평정자','부서','직급','평정 유형','상태','담당 평정자','종합점수','액션'].map(h=>(
+                <th key={h} style={{padding:'12px 16px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textSub}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((e,i)=>(
+              <tr key={e.id} style={{borderBottom:`1px solid ${C.border}`,animation:`slideUp 300ms ease ${i*40}ms both`,cursor:'pointer',transition:'background 150ms'}}
+                onClick={()=>setSelected(e)}
+                onMouseEnter={ev=>ev.currentTarget.style.background='#F8FAFF'}
+                onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+                <td style={{padding:'13px 16px',fontSize:14,fontWeight:600,color:C.text}}>{e.name}</td>
+                <td style={{padding:'13px 16px',fontSize:13,color:C.textSub}}>{e.dept}</td>
+                <td style={{padding:'13px 16px',fontSize:13,color:C.textSub}}>{e.grade}</td>
+                <td style={{padding:'13px 16px'}}>
+                  <span style={{background:'#EFF6FF',color:C.primary,padding:'2px 8px',borderRadius:4,fontSize:12,fontWeight:500}}>{e.type}</span>
+                </td>
+                <td style={{padding:'13px 16px'}}>
+                  <span style={{background:STATUS_BG[submitted[e.id]?'완료':e.status],color:STATUS_COLORS[submitted[e.id]?'완료':e.status],padding:'2px 10px',borderRadius:999,fontSize:12,fontWeight:600}}>
+                    {submitted[e.id]?'완료':e.status}
+                  </span>
+                </td>
+                <td style={{padding:'13px 16px',fontSize:13,color:C.textSub}}>{e.reviewer}</td>
+                <td style={{padding:'13px 16px',fontSize:14,fontWeight:700,color:e.score?C.primary:C.textLight}}>
+                  {submitted[e.id]?'88.0':e.score?e.score:'-'}
+                </td>
+                <td style={{padding:'13px 16px'}}>
+                  <button onClick={ev=>{ev.stopPropagation();setSelected(e);}}
+                    style={{padding:'5px 14px',borderRadius:6,border:`1px solid ${C.primary}`,background:'transparent',color:C.primary,cursor:'pointer',fontSize:12,fontWeight:600,transition:'all 150ms'}}
+                    onMouseEnter={ev=>{ev.target.style.background=C.primary;ev.target.style.color='#fff';}}
+                    onMouseLeave={ev=>{ev.target.style.background='transparent';ev.target.style.color=C.primary;}}>
+                    평정 입력
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ──────────── 조직 관리 ────────────
+function OrganizationPage({ toast }) {
+  const [detail, setDetail] = useState(null);
+  const [mapModal, setMapModal] = useState(false);
+
+  return (
+    <div key="organization" style={{animation:'fadeIn 350ms ease'}}>
+      {detail && (
+        <Modal title={`${detail.name} — 평정자 상세`} onClose={()=>setDetail(null)} width={520}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              {[['이름',detail.name],['직급',detail.grade],['부서',detail.dept],['역할',detail.role],['담당 피평정자',`${detail.evaluatees}명`]].map(([k,v])=>(
+                <div key={k} style={{background:'#F8FAFF',borderRadius:8,padding:'12px 14px'}}>
+                  <div style={{fontSize:11,color:C.textSub,marginBottom:4}}>{k}</div>
+                  <div style={{fontSize:14,fontWeight:600,color:C.text}}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <div style={{fontSize:14,fontWeight:600,color:C.text,marginBottom:10}}>담당 피평정자 목록</div>
+              {EMPLOYEES.filter((_,i)=>i%2===0).slice(0,3).map(e=>(
+                <div key={e.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 12px',borderRadius:6,background:C.bg,marginBottom:6}}>
+                  <span style={{fontSize:13,fontWeight:500}}>{e.name} ({e.dept})</span>
+                  <span style={{background:STATUS_BG[e.status],color:STATUS_COLORS[e.status],padding:'2px 8px',borderRadius:999,fontSize:11,fontWeight:600}}>{e.status}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{display:'flex',gap:10,justifyContent:'flex-end',paddingTop:4}}>
+              <button onClick={()=>{setDetail(null);toast('매핑 정보가 수정되었습니다.');}} style={{padding:'8px 20px',borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600}}>저장</button>
+              <button onClick={()=>setDetail(null)} style={{padding:'8px 16px',borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,cursor:'pointer',fontSize:13,color:C.textSub}}>닫기</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {mapModal && (
+        <Modal title="평정자-피평정자 매핑 설정" onClose={()=>setMapModal(false)}>
+          <div style={{marginBottom:16,fontSize:13,color:C.textSub}}>평정자와 피평정자를 연결합니다. 1차/2차/다면 유형별로 개별 설정합니다.</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,marginBottom:8,color:C.text}}>평정자 선택</div>
+              <select style={{width:'100%',padding:'8px 12px',borderRadius:6,border:`1px solid ${C.border}`,fontSize:13}}>
+                {ORG_DATA.filter(o=>o.role.includes('평정자')).map(o=><option key={o.id}>{o.name} ({o.dept})</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,marginBottom:8,color:C.text}}>평정 유형</div>
+              <select style={{width:'100%',padding:'8px 12px',borderRadius:6,border:`1px solid ${C.border}`,fontSize:13}}>
+                <option>1차 평정</option><option>2차 평정</option><option>다면 평정</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <div style={{fontSize:13,fontWeight:600,marginBottom:8,color:C.text}}>피평정자 선택 (복수)</div>
+            <div style={{border:`1px solid ${C.border}`,borderRadius:8,padding:12,maxHeight:200,overflowY:'auto'}}>
+              {EMPLOYEES.map(e=>(
+                <label key={e.id} style={{display:'flex',alignItems:'center',gap:8,padding:'6px 4px',cursor:'pointer',borderRadius:4,transition:'background 100ms'}}
+                  onMouseEnter={ev=>ev.currentTarget.style.background='#F8FAFF'}
+                  onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+                  <input type="checkbox" defaultChecked={e.id%2===0} style={{accentColor:C.primary}}/>
+                  <span style={{fontSize:13}}>{e.name}</span>
+                  <span style={{fontSize:12,color:C.textSub}}>({e.dept} · {e.grade})</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div style={{display:'flex',justifyContent:'flex-end',gap:10,marginTop:20}}>
+            <button onClick={()=>setMapModal(false)} style={{padding:'8px 16px',borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,cursor:'pointer',fontSize:13,color:C.textSub}}>취소</button>
+            <button onClick={()=>{setMapModal(false);toast('매핑이 저장되었습니다.');}} style={{padding:'8px 20px',borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600}}>저장</button>
+          </div>
+        </Modal>
+      )}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div style={{display:'flex',gap:12}}>
+          <div style={{background:C.surface,borderRadius:8,padding:'10px 16px',fontSize:13,color:C.text,boxShadow:'0 1px 3px rgba(0,0,0,0.06)'}}>
+            전체 평정자 <b style={{color:C.primary}}>{ORG_DATA.length}명</b>
+          </div>
+          <div style={{background:C.surface,borderRadius:8,padding:'10px 16px',fontSize:13,color:C.text,boxShadow:'0 1px 3px rgba(0,0,0,0.06)'}}>
+            1차 평정자 <b style={{color:C.success}}>4명</b>
+          </div>
+          <div style={{background:C.surface,borderRadius:8,padding:'10px 16px',fontSize:13,color:C.text,boxShadow:'0 1px 3px rgba(0,0,0,0.06)'}}>
+            다면 평정자 <b style={{color:C.accent}}>1명</b>
+          </div>
+        </div>
+        <button onClick={()=>setMapModal(true)} style={{padding:'10px 20px',borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600,boxShadow:'0 2px 6px rgba(37,99,235,0.3)'}}>
+          + 매핑 설정
+        </button>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{borderBottom:`1.5px solid ${C.border}`,background:'#F8FAFF'}}>
+              {['이름','직급','부서','역할','담당 피평정자','상세'].map(h=>(
+                <th key={h} style={{padding:'12px 16px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textSub}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {ORG_DATA.map((o,i)=>(
+              <tr key={o.id} style={{borderBottom:`1px solid ${C.border}`,animation:`slideUp 300ms ease ${i*60}ms both`,cursor:'pointer',transition:'background 150ms'}}
+                onClick={()=>setDetail(o)}
+                onMouseEnter={ev=>ev.currentTarget.style.background='#F8FAFF'}
+                onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+                <td style={{padding:'13px 16px',fontSize:14,fontWeight:600,color:C.text}}>{o.name}</td>
+                <td style={{padding:'13px 16px',fontSize:13,color:C.textSub}}>{o.grade}</td>
+                <td style={{padding:'13px 16px',fontSize:13,color:C.textSub}}>{o.dept}</td>
+                <td style={{padding:'13px 16px'}}>
+                  <span style={{background:'#F0F9FF',color:'#0EA5E9',padding:'2px 8px',borderRadius:4,fontSize:12,fontWeight:500}}>{o.role}</span>
+                </td>
+                <td style={{padding:'13px 16px',fontSize:13,fontWeight:600,color:C.text}}>{o.evaluatees}명</td>
+                <td style={{padding:'13px 16px'}}>
+                  <button onClick={ev=>{ev.stopPropagation();setDetail(o);}}
+                    style={{padding:'4px 12px',borderRadius:6,border:`1px solid ${C.border}`,background:'transparent',color:C.textSub,cursor:'pointer',fontSize:12,transition:'all 150ms'}}
+                    onMouseEnter={ev=>{ev.target.style.borderColor=C.primary;ev.target.style.color=C.primary;}}
+                    onMouseLeave={ev=>{ev.target.style.borderColor=C.border;ev.target.style.color=C.textSub;}}>
+                    상세
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ──────────── 평가 항목 ────────────
+function CriteriaPage({ toast }) {
+  const [items, setItems] = useState(CRITERIA);
+  const [addModal, setAddModal] = useState(false);
+  const [editItem, setEditItem] = useState(null);
+  const [newItem, setNewItem] = useState({name:'',weight:'',desc:''});
+
+  const totalWeight = items.filter(i=>i.active).reduce((a,b)=>a+(b.weight||0),0);
+
+  function handleAdd() {
+    if(!newItem.name||!newItem.weight){ toast('항목명과 가중치를 입력해주세요.'); return; }
+    if(totalWeight+Number(newItem.weight)>100){ toast('가중치 합계가 100%를 초과합니다.'); return; }
+    setItems(prev=>[...prev,{id:Date.now(),name:newItem.name,weight:Number(newItem.weight),desc:newItem.desc,active:true,max:10}]);
+    setAddModal(false); setNewItem({name:'',weight:'',desc:''}); toast('평가 항목이 추가되었습니다.');
+  }
+
+  function toggleActive(id) {
+    setItems(prev=>prev.map(i=>i.id===id?{...i,active:!i.active}:i));
+    toast('항목 활성화 상태가 변경되었습니다.');
+  }
+
+  return (
+    <div key="criteria" style={{animation:'fadeIn 350ms ease'}}>
+      {(addModal||editItem) && (
+        <Modal title={editItem?'항목 수정':'평가 항목 추가'} onClose={()=>{setAddModal(false);setEditItem(null);}}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div>
+              <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>항목명 *</label>
+              <input value={editItem?editItem.name:newItem.name} onChange={e=>editItem?setEditItem({...editItem,name:e.target.value}):setNewItem(n=>({...n,name:e.target.value}))}
+                style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:14,outline:'none'}} placeholder="항목명 입력"/>
+            </div>
+            <div>
+              <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>가중치(%) *</label>
+              <input type="number" min="1" max="100" value={editItem?editItem.weight:newItem.weight} onChange={e=>editItem?setEditItem({...editItem,weight:Number(e.target.value)}):setNewItem(n=>({...n,weight:e.target.value}))}
+                style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:14,outline:'none'}} placeholder="예: 30"/>
+            </div>
+            <div>
+              <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>설명</label>
+              <textarea value={editItem?editItem.desc:newItem.desc} onChange={e=>editItem?setEditItem({...editItem,desc:e.target.value}):setNewItem(n=>({...n,desc:e.target.value}))}
+                rows={3} style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:14,outline:'none',resize:'vertical'}} placeholder="항목 설명"/>
+            </div>
+            <div style={{background: totalWeight>95?'#FEF2F2':'#F0FDF4',borderRadius:8,padding:'10px 14px',fontSize:13}}>
+              현재 가중치 합계: <b style={{color:totalWeight>95?C.danger:C.success}}>{totalWeight}%</b>
+            </div>
+            <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+              <button onClick={()=>{setAddModal(false);setEditItem(null);}} style={{padding:'9px 16px',borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,cursor:'pointer',fontSize:13,color:C.textSub}}>취소</button>
+              <button onClick={()=>{
+                if(editItem){
+                  setItems(prev=>prev.map(i=>i.id===editItem.id?editItem:i));
+                  setEditItem(null); toast('항목이 수정되었습니다.');
+                } else handleAdd();
+              }} style={{padding:'9px 20px',borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600}}>저장</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div style={{display:'flex',alignItems:'center',gap:16}}>
+          <div style={{background:totalWeight===100?'#D1FAE5':'#FEF3C7',borderRadius:8,padding:'8px 16px',fontSize:13,fontWeight:600,color:totalWeight===100?C.success:C.warning}}>
+            가중치 합계: {totalWeight}% {totalWeight===100?'✓ 완성':'⚠ 미완성'}
+          </div>
+          <div style={{fontSize:13,color:C.textSub}}>활성 항목 {items.filter(i=>i.active).length}개</div>
+        </div>
+        <button onClick={()=>setAddModal(true)} style={{padding:'10px 20px',borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600}}>
+          + 항목 추가
+        </button>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{borderBottom:`1.5px solid ${C.border}`,background:'#F8FAFF'}}>
+              {['항목명','가중치','설명','배점(최대)','상태','액션'].map(h=>(
+                <th key={h} style={{padding:'12px 16px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textSub}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((c,i)=>(
+              <tr key={c.id} style={{borderBottom:`1px solid ${C.border}`,opacity:c.active?1:0.5,animation:`slideUp 300ms ease ${i*50}ms both`,transition:'background 150ms'}}
+                onMouseEnter={ev=>ev.currentTarget.style.background='#F8FAFF'}
+                onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+                <td style={{padding:'13px 16px',fontSize:14,fontWeight:600,color:C.text}}>{c.name}</td>
+                <td style={{padding:'13px 16px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <div style={{width:60,height:6,borderRadius:999,background:'#E2E8F0',overflow:'hidden'}}>
+                      <div style={{height:'100%',borderRadius:999,background:C.primary,'--target-width':`${c.weight}%`,width:`${c.weight}%`,animation:'barGrow 800ms ease both'}}/>
+                    </div>
+                    <span style={{fontSize:13,fontWeight:700,color:C.primary}}>{c.weight}%</span>
+                  </div>
+                </td>
+                <td style={{padding:'13px 16px',fontSize:13,color:C.textSub,maxWidth:240}}>{c.desc}</td>
+                <td style={{padding:'13px 16px',fontSize:13,fontWeight:600,color:C.text}}>{c.max}점</td>
+                <td style={{padding:'13px 16px'}}>
+                  <span style={{background:c.active?'#D1FAE5':'#F1F5F9',color:c.active?C.success:C.textSub,padding:'2px 10px',borderRadius:999,fontSize:12,fontWeight:600}}>{c.active?'활성':'비활성'}</span>
+                </td>
+                <td style={{padding:'13px 16px'}}>
+                  <div style={{display:'flex',gap:6}}>
+                    <button onClick={()=>setEditItem(c)} style={{padding:'4px 10px',borderRadius:6,border:`1px solid ${C.border}`,background:'transparent',color:C.textSub,cursor:'pointer',fontSize:12}}>수정</button>
+                    <button onClick={()=>toggleActive(c.id)} style={{padding:'4px 10px',borderRadius:6,border:`1px solid ${c.active?C.warning:C.success}`,background:'transparent',color:c.active?C.warning:C.success,cursor:'pointer',fontSize:12}}>{c.active?'비활성':'활성화'}</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ──────────── 권한 설정 ────────────
+function SettingsPage({ toast }) {
+  const [users, setUsers] = useState(USERS);
+  const [addModal, setAddModal] = useState(false);
+  const [detailUser, setDetailUser] = useState(null);
+  const [newUser, setNewUser] = useState({name:'',email:'',role:'일반사용자',dept:''});
+
+  function handleAddUser() {
+    if(!newUser.name||!newUser.email){ toast('이름과 이메일을 입력해주세요.'); return; }
+    setUsers(prev=>[...prev,{id:Date.now(),...newUser,lastLogin:'-'}]);
+    setAddModal(false); setNewUser({name:'',email:'',role:'일반사용자',dept:''});
+    toast('사용자가 추가되었습니다.');
+  }
+
+  return (
+    <div key="settings" style={{animation:'fadeIn 350ms ease'}}>
+      {addModal && (
+        <Modal title="사용자 추가" onClose={()=>setAddModal(false)} width={480}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            {[['이름 *','text','name','홍길동'],['이메일 *','email','email','user@company.com'],['부서','text','dept','개발팀']].map(([label,type,field,ph])=>(
+              <div key={field}>
+                <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>{label}</label>
+                <input type={type} value={newUser[field]} onChange={e=>setNewUser(n=>({...n,[field]:e.target.value}))}
+                  style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:14,outline:'none'}} placeholder={ph}/>
+              </div>
+            ))}
+            <div>
+              <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>권한 등급</label>
+              <select value={newUser.role} onChange={e=>setNewUser(n=>({...n,role:e.target.value}))}
+                style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:14,background:C.surface}}>
+                <option>시스템관리자</option><option>중간관리자</option><option>일반사용자</option>
+              </select>
+            </div>
+            <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:4}}>
+              <button onClick={()=>setAddModal(false)} style={{padding:'9px 16px',borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,cursor:'pointer',fontSize:13,color:C.textSub}}>취소</button>
+              <button onClick={handleAddUser} style={{padding:'9px 20px',borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600}}>추가</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {detailUser && (
+        <Modal title={`${detailUser.name} — 권한 상세`} onClose={()=>setDetailUser(null)} width={480}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {[['이름',detailUser.name],['이메일',detailUser.email],['부서',detailUser.dept||'-'],['권한 등급',detailUser.role],['최근 로그인',detailUser.lastLogin]].map(([k,v])=>(
+              <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'10px 12px',borderRadius:8,background:'#F8FAFF'}}>
+                <span style={{fontSize:13,color:C.textSub}}>{k}</span>
+                <span style={{fontSize:14,fontWeight:600,color:C.text}}>{v}</span>
+              </div>
+            ))}
+            <div style={{marginTop:8}}>
+              <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:8}}>접근 가능 메뉴</div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                {(detailUser.role==='시스템관리자'?['대시보드','평정 입력','조직 관리','평가 항목','권한 설정']:
+                  detailUser.role==='중간관리자'?['대시보드','평정 입력','조직 관리']:['대시보드','평정 입력']).map(m=>(
+                  <span key={m} style={{background:'#EFF6FF',color:C.primary,padding:'4px 10px',borderRadius:6,fontSize:12,fontWeight:500}}>{m}</span>
+                ))}
+              </div>
+            </div>
+            <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}>
+              <button onClick={()=>{setDetailUser(null);toast('권한이 수정되었습니다.');}} style={{padding:'8px 20px',borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600}}>수정 저장</button>
+              <button onClick={()=>setDetailUser(null)} style={{padding:'8px 16px',borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,cursor:'pointer',fontSize:13,color:C.textSub}}>닫기</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div style={{display:'flex',gap:12}}>
+          {['시스템관리자','중간관리자','일반사용자'].map(r=>(
+            <div key={r} style={{background:C.surface,borderRadius:8,padding:'8px 16px',fontSize:13,boxShadow:'0 1px 3px rgba(0,0,0,0.06)'}}>
+              {r} <b style={{color:C.primary}}>{users.filter(u=>u.role===r).length}명</b>
+            </div>
+          ))}
+        </div>
+        <button onClick={()=>setAddModal(true)} style={{padding:'10px 20px',borderRadius:8,border:'none',background:C.primary,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600}}>
+          + 사용자 추가
+        </button>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{borderBottom:`1.5px solid ${C.border}`,background:'#F8FAFF'}}>
+              {['이름','이메일','부서','권한 등급','최근 로그인','액션'].map(h=>(
+                <th key={h} style={{padding:'12px 16px',textAlign:'left',fontSize:12,fontWeight:600,color:C.textSub}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {users.map((u,i)=>(
+              <tr key={u.id} style={{borderBottom:`1px solid ${C.border}`,animation:`slideUp 300ms ease ${i*60}ms both`,cursor:'pointer',transition:'background 150ms'}}
+                onClick={()=>setDetailUser(u)}
+                onMouseEnter={ev=>ev.currentTarget.style.background='#F8FAFF'}
+                onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
+                <td style={{padding:'13px 16px',fontSize:14,fontWeight:600,color:C.text}}>{u.name}</td>
+                <td style={{padding:'13px 16px',fontSize:13,color:C.textSub}}>{u.email}</td>
+                <td style={{padding:'13px 16px',fontSize:13,color:C.textSub}}>{u.dept||'-'}</td>
+                <td style={{padding:'13px 16px'}}>
+                  <span style={{background:u.role==='시스템관리자'?'#FEF3C7':u.role==='중간관리자'?'#EFF6FF':'#F0FDF4',color:u.role==='시스템관리자'?C.warning:u.role==='중간관리자'?C.primary:C.success,padding:'2px 10px',borderRadius:999,fontSize:12,fontWeight:600}}>{u.role}</span>
+                </td>
+                <td style={{padding:'13px 16px',fontSize:12,color:C.textLight}}>{u.lastLogin}</td>
+                <td style={{padding:'13px 16px'}}>
+                  <button onClick={ev=>{ev.stopPropagation();setDetailUser(u);}} style={{padding:'4px 10px',borderRadius:6,border:`1px solid ${C.border}`,background:'transparent',color:C.textSub,cursor:'pointer',fontSize:12}}>상세</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ──────────── 메인 앱 ────────────
+function App() {
+  const [page, setPage] = useState('dashboard');
+  const [toast, setToast] = useState(null);
+  const showToast = msg => setToast(msg);
+
+  const PAGE_TITLES = {
+    dashboard:'통합 평정 대시보드', evaluation:'평정 입력 및 점수 산출',
+    organization:'조직 구조 및 권한 관리', criteria:'평가 항목 관리', settings:'권한 설정',
+  };
+
+  return (
+    <div style={{display:'flex',width:'100%',height:'100vh',overflow:'hidden'}}>
+      {/* 사이드바 */}
+      <aside style={{width:260,background:C.sidebar,flexShrink:0,display:'flex',flexDirection:'column',zIndex:10}}>
+        <div style={{padding:'24px 20px 20px',borderBottom:'1px solid rgba(255,255,255,0.08)'}}>
+          <div style={{fontSize:13,fontWeight:700,color:'#38BDF8',letterSpacing:'0.05em',marginBottom:4}}>EVAL-HR</div>
+          <div style={{fontSize:16,fontWeight:700,color:'#F8FAFC',lineHeight:1.3}}>인사평정</div>
+          <div style={{fontSize:11,color:'#94A3B8',marginTop:2}}>워크플로우 시스템</div>
+        </div>
+        <div style={{padding:'16px 12px',flex:1,overflowY:'auto'}}>
+          <div style={{fontSize:11,fontWeight:600,color:'#475569',letterSpacing:'0.08em',padding:'0 8px',marginBottom:8}}>메인 메뉴</div>
+          {MENU.map(m=>(
+            <button key={m.id} onClick={()=>setPage(m.id)}
+              style={{width:'100%',display:'flex',alignItems:'center',gap:10,padding:'10px 12px',borderRadius:8,border:'none',background:page===m.id?C.sidebarActive:'transparent',color:page===m.id?'#FFFFFF':C.sidebarText,cursor:'pointer',fontSize:14,fontWeight:page===m.id?600:400,marginBottom:2,transition:'all 150ms',textAlign:'left'}}>
+              <span style={{fontSize:16}}>{m.icon}</span>
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <div style={{padding:'16px 20px',borderTop:'1px solid rgba(255,255,255,0.08)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <div style={{width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#2563EB,#38BDF8)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,fontWeight:700,color:'#fff'}}>관</div>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,color:'#F8FAFC'}}>김철수</div>
+              <div style={{fontSize:11,color:'#94A3B8'}}>시스템관리자</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+      {/* 메인 영역 */}
+      <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <div style={{height:56,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',padding:'0 24px',gap:16,flexShrink:0}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:18,fontWeight:700,color:C.text,letterSpacing:'-0.01em'}}>{PAGE_TITLES[page]}</div>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:8,padding:'5px 14px',borderRadius:20,background:'#FEF3C7',fontSize:12,fontWeight:600,color:'#D97706'}}>
+            ⏰ 마감 D-7
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:4,background:'#F1F5F9',borderRadius:6,padding:'6px 12px'}}>
+            <span style={{fontSize:13,color:C.textSub}}>🔍</span>
+            <input placeholder="검색..." style={{border:'none',background:'transparent',fontSize:13,outline:'none',width:120,color:C.text}}/>
+          </div>
+          <div style={{width:34,height:34,borderRadius:'50%',background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:'#fff',cursor:'pointer'}}>김</div>
+        </div>
+        <main style={{flex:1,overflow:'auto',padding:24,background:C.bg}}>
+          {page==='dashboard' && <DashboardPage/>}
+          {page==='evaluation' && <EvaluationPage toast={showToast}/>}
+          {page==='organization' && <OrganizationPage toast={showToast}/>}
+          {page==='criteria' && <CriteriaPage toast={showToast}/>}
+          {page==='settings' && <SettingsPage toast={showToast}/>}
+        </main>
+      </div>
+      {toast && <Toast message={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
