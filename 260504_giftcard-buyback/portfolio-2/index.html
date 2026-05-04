@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>핀캐시 프로 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;min-height:100%;font-family:'Pretendard',sans-serif;background:#0B1120;color:#F1F5F9;}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh;}
+
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes barGrow{from{width:0%}to{width:var(--target-width)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px);max-height:0}to{opacity:1;transform:translateY(0);max-height:500px}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback}=React;
+const {AreaChart,Area,BarChart,Bar,LineChart,Line,PieChart,Pie,Cell,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,Legend}=Recharts;
+
+// ─── Design tokens (dark) ───
+const C={
+  bg:'#0B1120',
+  surface:'#162032',
+  surfaceHigh:'#1E2D45',
+  border:'rgba(255,255,255,0.08)',
+  borderAccent:'rgba(56,189,248,0.3)',
+  primary:'#38BDF8',
+  primaryDark:'#0284C7',
+  accent:'#818CF8',
+  success:'#34D399',
+  warning:'#FBBF24',
+  danger:'#F87171',
+  purple:'#A78BFA',
+  text:'#F1F5F9',
+  textSub:'#94A3B8',
+  textMuted:'#4B5563',
+  grad1:'linear-gradient(135deg,#0F172A,#1E3A5F)',
+  grad2:'linear-gradient(135deg,#1E1B4B,#312E81)',
+  grad3:'linear-gradient(135deg,#0C4A6E,#0369A1)',
+  grad4:'linear-gradient(135deg,#14532D,#166534)',
+};
+
+// ─── Mock data ───
+const VOUCHER_RATES=[
+  {name:'백화점상품권',rate:89,vol:1850,change:2.3,color:'#38BDF8'},
+  {name:'마트상품권',rate:91,vol:980,change:1.1,color:'#34D399'},
+  {name:'문화상품권',rate:85,vol:520,change:-0.8,color:'#FBBF24'},
+  {name:'해피머니',rate:88,vol:430,change:1.5,color:'#A78BFA'},
+  {name:'온누리상품권',rate:92,vol:380,change:3.2,color:'#FB7185'},
+];
+
+const TREND_DATA=[
+  {day:'4/28',백화점:1820,마트:960,문화:510},{day:'4/29',백화점:1890,마트:1010,문화:490},
+  {day:'4/30',백화점:1750,마트:940,문화:530},{day:'5/1',백화점:2010,마트:990,문화:560},
+  {day:'5/2',백화점:2180,마트:1020,문화:540},{day:'5/3',백화점:1980,마트:970,문화:500},
+  {day:'5/4',백화점:2240,마트:1090,문화:570},
+];
+
+const SETTLEMENTS=[
+  {id:'S-0892',period:'2026.05.04',count:62,gross:'4,560만원',fee:'456만원',net:'4,104만원',status:'정산완료',worker:'worker-1'},
+  {id:'S-0891',period:'2026.05.03',count:51,gross:'3,720만원',fee:'372만원',net:'3,348만원',status:'정산완료',worker:'worker-1'},
+  {id:'S-0890',period:'2026.05.02',count:55,gross:'4,180만원',fee:'418만원',net:'3,762만원',status:'정산완료',worker:'worker-2'},
+  {id:'S-0889',period:'2026.05.01',count:48,gross:'3,450만원',fee:'345만원',net:'3,105만원',status:'정산완료',worker:'worker-1'},
+  {id:'S-0888',period:'2026.04.30',count:35,gross:'2,980만원',fee:'298만원',net:'2,682만원',status:'정산완료',worker:'worker-2'},
+  {id:'S-0887',period:'2026.04.29',count:42,gross:'3,120만원',fee:'312만원',net:'2,808만원',status:'정산완료',worker:'worker-1'},
+  {id:'S-0886',period:'2026.04.28',count:38,gross:'2,840만원',fee:'284만원',net:'2,556만원',status:'정산완료',worker:'worker-2'},
+];
+
+const NOTIFICATIONS=[
+  {id:'N-001',channel:'카카오 알림톡',type:'매입 완료',count:53,success:52,fail:1,template:'매입_완료_알림',status:'정상'},
+  {id:'N-002',channel:'FCM 푸시',type:'이체 완료',count:51,success:50,fail:1,template:'이체_완료_알림',status:'정상'},
+  {id:'N-003',channel:'SMS',type:'본인 인증',count:27,success:27,fail:0,template:'인증번호_발송',status:'정상'},
+  {id:'N-004',channel:'카카오 알림톡',type:'반려 알림',count:2,success:2,fail:0,template:'반려_처리_알림',status:'정상'},
+  {id:'N-005',channel:'FCM 푸시',type:'시세 변동 알림',count:1240,success:1198,fail:42,template:'시세_변동_알림',status:'주의'},
+];
+
+const NOTIF_HIST=[
+  {id:'NH-1284',user:'김민수',channel:'카카오 알림톡',type:'매입 완료',time:'14:23',status:'발송완료'},
+  {id:'NH-1283',user:'이지은',channel:'FCM 푸시',type:'이체 완료',time:'14:21',status:'발송완료'},
+  {id:'NH-1282',user:'박철수',channel:'SMS',type:'본인 인증',time:'14:18',status:'발송완료'},
+  {id:'NH-1281',user:'최수연',channel:'카카오 알림톡',type:'매입 완료',time:'14:15',status:'발송완료'},
+  {id:'NH-1280',user:'정도현',channel:'카카오 알림톡',type:'반려 알림',time:'14:09',status:'발송완료'},
+  {id:'NH-1279',user:'한미래',channel:'FCM 푸시',type:'시세 변동 알림',time:'14:02',status:'실패'},
+];
+
+const FDS_ALERTS=[
+  {id:'FDS-2024',user:'알수없음',ip:'203.249.xx.xx',type:'핀번호 무작위 대입',count:147,score:94,action:'자동차단',time:'14:31',status:'차단됨'},
+  {id:'FDS-2023',user:'정도현',ip:'112.188.xx.xx',type:'단기 과다 신청',count:18,score:72,action:'검토 대기',time:'14:09',status:'검토중'},
+  {id:'FDS-2022',user:'알수없음',ip:'175.202.xx.xx',type:'해외 IP 접속',count:3,score:61,action:'모니터링',time:'13:44',status:'모니터링'},
+  {id:'FDS-2021',user:'박철수',ip:'39.118.xx.xx',type:'계좌 다중 등록',count:5,score:55,action:'검토 대기',time:'13:22',status:'정상'},
+  {id:'FDS-2020',user:'알수없음',ip:'222.111.xx.xx',type:'핀번호 무작위 대입',count:89,score:91,action:'자동차단',time:'12:58',status:'차단됨'},
+];
+
+const FDS_RULES=[
+  {rule:'핀번호 1분내 10회 이상 입력',threshold:'10회/분',action:'자동차단',active:true},
+  {rule:'단일 계좌 1일 5건 이상 신청',threshold:'5건/일',action:'검토 큐',active:true},
+  {rule:'해외 IP 접속 후 즉시 신청',threshold:'1건',action:'모니터링',active:true},
+  {rule:'동일 IP 다중 계정 신청',threshold:'3계정',action:'자동차단',active:true},
+  {rule:'신규 가입 1시간 내 고액 신청',threshold:'50만원',action:'검토 큐',active:false},
+];
+
+// ─── CountUp ───
+function CountUp({end,suffix='',prefix='',duration=1200}){
+  const [val,setVal]=useState(0);
+  useEffect(()=>{
+    let s=0;const step=end/(duration/16);
+    const t=setInterval(()=>{s+=step;if(s>=end){setVal(end);clearInterval(t);}else setVal(Math.floor(s));},16);
+    return()=>clearInterval(t);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{prefix}{val.toLocaleString()}{suffix}</span>;
+}
+
+// ─── Toast ───
+function Toast({msg,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return(
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:'#1E293B',color:C.text,
+      padding:'12px 20px',borderRadius:8,animation:'slideUp 300ms ease',
+      boxShadow:'0 4px 20px rgba(0,0,0,0.4)',display:'flex',gap:10,alignItems:'center',
+      fontSize:14,border:`1px solid ${C.border}`}}>
+      <span style={{color:C.success}}>✓</span>{msg}
+    </div>
+  );
+}
+
+// ─── Modal ───
+function Modal({title,onClose,children,width=580}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:C.surface,borderRadius:14,zIndex:501,
+        animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',
+        boxShadow:'0 24px 60px rgba(0,0,0,0.5)',border:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+          padding:'18px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:16,fontWeight:700,color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSub}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Drawer ───
+function Drawer({item,onClose,children,title}){
+  return(
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:200,animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:480,background:C.surface,
+        zIndex:201,overflowY:'auto',padding:28,animation:'slideInRight 200ms ease',
+        boxShadow:'-4px 0 40px rgba(0,0,0,0.4)',border:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+          <h3 style={{fontSize:16,fontWeight:700}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSub}}>✕</button>
+        </div>
+        {children}
+      </div>
+    </>
+  );
+}
+
+// ─── TopNav ───
+const TABS=[
+  {id:'main',label:'시세 현황'},
+  {id:'settlement',label:'정산 관리'},
+  {id:'notification',label:'알림 관리'},
+  {id:'fds',label:'FDS 모니터링'},
+];
+
+const PAGE_META={
+  main:{title:'멀티 상품권 시세 현황 대시보드',grad:C.grad3,kpis:[{l:'총 매입액',v:'4,560만원'},{l:'신청 건수',v:'62건'},{l:'평균 매입률',v:'89.2%'}]},
+  settlement:{title:'정산 자동화 파이프라인',grad:'linear-gradient(135deg,#1E1B4B,#4C1D95)',kpis:[{l:'오늘 정산액',v:'4,104만원'},{l:'정산 완료율',v:'100%'},{l:'누적 정산',v:'54.3억원'}]},
+  notification:{title:'다중 채널 알림 통합 관리',grad:'linear-gradient(135deg,#14532D,#065F46)',kpis:[{l:'오늘 발송',v:'1,373건'},{l:'전송 성공률',v:'96.9%'},{l:'활성 채널',v:'3개'}]},
+  fds:{title:'FDS 이상 거래 탐지 모니터링',grad:'linear-gradient(135deg,#450A0A,#7F1D1D)',kpis:[{l:'오늘 탐지',v:'5건'},{l:'자동 차단',v:'2건'},{l:'검토 대기',v:'2건'}]},
+};
+
+function TopNav({tab,onTab}){
+  return(
+    <header style={{position:'sticky',top:0,zIndex:100,background:'rgba(22,32,50,0.95)',
+      backdropFilter:'blur(12px)',borderBottom:`1px solid ${C.border}`,
+      display:'flex',alignItems:'center',height:60,padding:'0 28px',gap:4}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginRight:20}}>
+        <div style={{width:32,height:32,borderRadius:8,background:C.primary,
+          display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>💎</div>
+        <span style={{fontWeight:800,fontSize:15,letterSpacing:'-0.02em',color:C.text}}>핀캐시 프로</span>
+      </div>
+      {TABS.map(t=>(
+        <button key={t.id} onClick={()=>onTab(t.id)} title={t.label}
+          style={{padding:'7px 16px',borderRadius:8,border:'none',cursor:'pointer',fontSize:14,fontFamily:'inherit',
+            background:tab===t.id?'rgba(56,189,248,0.15)':'transparent',
+            color:tab===t.id?C.primary:C.textSub,fontWeight:tab===t.id?700:400,
+            borderBottom:tab===t.id?`2px solid ${C.primary}`:'2px solid transparent',
+            transition:'all 150ms'}}>
+          {t.label}
+        </button>
+      ))}
+      <div style={{flex:1}}/>
+      <div style={{display:'flex',gap:8,alignItems:'center',background:'rgba(255,255,255,0.04)',
+        border:`1px solid ${C.border}`,borderRadius:8,padding:'0 12px',height:34}}>
+        <span style={{fontSize:12,color:C.textSub}}>🔍</span>
+        <input placeholder="검색..." style={{border:'none',outline:'none',background:'transparent',
+          fontSize:13,color:C.text,width:130,fontFamily:'inherit'}}/>
+      </div>
+      <button style={{width:34,height:34,borderRadius:8,border:`1px solid ${C.border}`,
+        background:'transparent',cursor:'pointer',fontSize:15,position:'relative',color:C.text}}>
+        🔔
+        <span style={{position:'absolute',top:5,right:5,width:7,height:7,borderRadius:'50%',background:C.danger}}/>
+      </button>
+      <div style={{width:34,height:34,borderRadius:'50%',background:'rgba(56,189,248,0.15)',
+        display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,cursor:'pointer',
+        border:`2px solid ${C.primary}`,color:C.primary,fontWeight:700}}>관</div>
+    </header>
+  );
+}
+
+// ─── Hero Banner ───
+function HeroBanner({tab}){
+  const m=PAGE_META[tab];
+  return(
+    <div style={{background:m.grad,padding:'28px 32px',animation:'fadeIn 300ms ease'}}>
+      <h2 style={{fontSize:22,fontWeight:800,letterSpacing:'-0.02em',marginBottom:14,color:'#fff',
+        textShadow:'0 2px 4px rgba(0,0,0,0.3)'}}>{m.title}</h2>
+      <div style={{display:'flex',gap:32}}>
+        {m.kpis.map((k,i)=>(
+          <div key={k.l} style={{animation:`slideUp 300ms ease ${i*80}ms both`}}>
+            <div style={{fontSize:11,color:'rgba(255,255,255,0.65)',marginBottom:3}}>{k.l}</div>
+            <div style={{fontSize:22,fontWeight:800,color:'#fff'}}>{k.v}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main (시세 현황) ───
+function MainPage({setDrawer,setToast}){
+  const [liveRates,setLiveRates]=useState(VOUCHER_RATES);
+  const [interval1,setInterval1]=useState(null);
+  const [live,setLive]=useState(true);
+
+  useEffect(()=>{
+    if(!live)return;
+    const t=setInterval(()=>{
+      setLiveRates(r=>r.map(x=>({...x,rate:Math.max(70,Math.min(99,x.rate+(Math.random()-0.48)*0.5))})));
+    },3000);
+    return()=>clearInterval(t);
+  },[live]);
+
+  return(
+    <div style={{padding:'24px 32px',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+        <div>
+          <h3 style={{fontSize:16,fontWeight:700}}>실시간 상품권 매입률</h3>
+          <div style={{fontSize:12,color:C.textSub,marginTop:2,display:'flex',alignItems:'center',gap:6}}>
+            <div style={{width:6,height:6,borderRadius:'50%',background:live?C.success:C.textSub,
+              animation:live?'blink 1.5s ease infinite':''}}/>
+            {live?'실시간 업데이트 중 (3초 주기)':'업데이트 일시 중지'}
+          </div>
+        </div>
+        <button onClick={()=>setLive(l=>!l)}
+          style={{padding:'7px 14px',borderRadius:8,border:`1px solid ${C.border}`,background:'transparent',
+            color:live?C.warning:C.primary,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>
+          {live?'⏸ 일시 중지':'▶ 재개'}
+        </button>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:20}}>
+        {liveRates.map((v,i)=>(
+          <div key={v.name} onClick={()=>setDrawer({type:'rate',data:v})}
+            style={{background:C.surface,borderRadius:12,padding:18,border:`1px solid ${C.border}`,
+              cursor:'pointer',animation:`slideUp 300ms ease ${i*60}ms both`,transition:'all 200ms'}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow=`0 8px 24px rgba(0,0,0,0.3)`;e.currentTarget.style.borderColor=v.color+'80';}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='';e.currentTarget.style.borderColor=C.border;}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
+              <div style={{fontSize:14,fontWeight:700}}>{v.name}</div>
+              <div style={{fontSize:12,color:v.change>0?C.success:C.danger}}>{v.change>0?'▲':'▼'}{Math.abs(v.change)}%</div>
+            </div>
+            <div style={{fontSize:28,fontWeight:900,color:v.color,marginBottom:8,letterSpacing:'-0.03em'}}>
+              {v.rate.toFixed(1)}%
+            </div>
+            <div style={{height:4,background:'rgba(255,255,255,0.06)',borderRadius:2,marginBottom:6}}>
+              <div style={{height:'100%',borderRadius:2,background:v.color,width:`${v.rate}%`,transition:'width 500ms ease'}}/>
+            </div>
+            <div style={{fontSize:11,color:C.textSub}}>오늘 거래액 {v.vol.toLocaleString()}만원</div>
+          </div>
+        ))}
+      </div>
+      <div style={{background:C.surface,borderRadius:12,padding:20,border:`1px solid ${C.border}`,marginBottom:16}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:14}}>최근 7일 상품권별 거래 추이 (만원)</h3>
+        <div style={{height:220}}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={TREND_DATA} margin={{top:5,right:10,left:-20,bottom:5}}>
+              <CartesianGrid strokeDasharray="3 3" stroke='rgba(255,255,255,0.04)'/>
+              <XAxis dataKey="day" tick={{fontSize:11,fill:C.textSub}}/>
+              <YAxis tick={{fontSize:11,fill:C.textSub}}/>
+              <Tooltip contentStyle={{background:C.surfaceHigh,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,color:C.text}}/>
+              <Legend wrapperStyle={{fontSize:12,color:C.textSub}}/>
+              <Line type="monotone" dataKey="백화점" stroke="#38BDF8" strokeWidth={2} dot={false}/>
+              <Line type="monotone" dataKey="마트" stroke="#34D399" strokeWidth={2} dot={false}/>
+              <Line type="monotone" dataKey="문화" stroke="#FBBF24" strokeWidth={2} dot={false}/>
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Settlement (정산 관리) ───
+function SettlementPage({setDrawer,setToast}){
+  const [requeue,setRequeue]=useState(false);
+  return(
+    <div style={{padding:'24px 32px',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:20}}>
+        {[{l:'이번달 총 정산',v:'54.3억',c:C.primary,icon:'💰'},
+          {l:'오늘 정산 건수',v:'62건',c:C.success,icon:'📋'},
+          {l:'DLQ 대기',v:'0건',c:C.textSub,icon:'📤'},
+          {l:'평균 처리 속도',v:'1.2초',c:C.accent,icon:'⚡'}
+        ].map((k,i)=>(
+          <div key={i} style={{background:C.surface,borderRadius:10,padding:'16px',
+            border:`1px solid ${C.border}`,animation:`slideUp 300ms ease ${i*60}ms both`}}>
+            <div style={{fontSize:11,color:C.textSub,marginBottom:6}}>{k.icon} {k.l}</div>
+            <div style={{fontSize:22,fontWeight:800,color:k.c}}>{k.v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:16,marginBottom:16}}>
+        <div style={{background:C.surface,borderRadius:12,padding:20,border:`1px solid ${C.border}`}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+            <h3 style={{fontSize:15,fontWeight:700}}>일별 정산 내역</h3>
+            <div style={{display:'flex',gap:4}}>
+              <button onClick={()=>{setRequeue(true);setTimeout(()=>setRequeue(false),2000);setToast('DLQ 재처리 요청이 완료되었습니다.');}}
+                style={{padding:'6px 12px',borderRadius:8,border:`1px solid ${C.border}`,background:'transparent',
+                  color:C.warning,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>
+                {requeue?'처리 중...':'🔄 DLQ 재처리'}
+              </button>
+              <button onClick={()=>setToast('정산 보고서를 생성하고 있습니다...')}
+                style={{padding:'6px 12px',borderRadius:8,border:`1px solid ${C.border}`,background:'transparent',
+                  color:C.primary,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>📊 보고서</button>
+            </div>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                {['정산ID','기간','신청수','총매입','수수료','순지급액','상태','워커'].map(h=>(
+                  <th key={h} style={{padding:'7px 10px',textAlign:'left',fontSize:10,color:C.textSub,fontWeight:600,letterSpacing:'0.04em'}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {SETTLEMENTS.map((s,i)=>(
+                <tr key={s.id} onClick={()=>setDrawer({type:'settlement',data:s})}
+                  style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms',
+                    animation:`slideUp 200ms ease ${i*30}ms both`}}
+                  onMouseEnter={e=>e.currentTarget.style.background='rgba(56,189,248,0.05)'}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <td style={{padding:'10px',fontSize:12,fontWeight:700,color:C.primary}}>{s.id}</td>
+                  <td style={{padding:'10px',fontSize:12}}>{s.period}</td>
+                  <td style={{padding:'10px',fontSize:12}}>{s.count}건</td>
+                  <td style={{padding:'10px',fontSize:12,fontWeight:600}}>{s.gross}</td>
+                  <td style={{padding:'10px',fontSize:12,color:C.danger}}>{s.fee}</td>
+                  <td style={{padding:'10px',fontSize:12,fontWeight:700,color:C.success}}>{s.net}</td>
+                  <td style={{padding:'10px'}}>
+                    <span style={{padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600,background:'rgba(52,211,153,0.15)',color:C.success}}>{s.status}</span>
+                  </td>
+                  <td style={{padding:'10px',fontSize:11,color:C.textSub}}>{s.worker}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{background:C.surface,borderRadius:12,padding:20,border:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:15,fontWeight:700,marginBottom:14}}>Bull Queue 워커 상태</h3>
+          {[{w:'worker-1',jobs:4104,status:'active',cpu:23},{w:'worker-2',jobs:3762,status:'active',cpu:19}].map((w,i)=>(
+            <div key={w.w} style={{background:C.surfaceHigh,borderRadius:8,padding:14,marginBottom:10,
+              border:`1px solid ${C.border}`,animation:`slideUp 200ms ease ${i*80}ms both`}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+                <span style={{fontSize:13,fontWeight:700}}>{w.w}</span>
+                <span style={{fontSize:11,padding:'2px 8px',borderRadius:4,background:'rgba(52,211,153,0.15)',color:C.success}}>⚡ {w.status}</span>
+              </div>
+              <div style={{fontSize:11,color:C.textSub,marginBottom:6}}>처리 완료: {w.jobs.toLocaleString()}건</div>
+              <div style={{fontSize:11,color:C.textSub,marginBottom:6}}>CPU 사용률</div>
+              <div style={{height:4,background:'rgba(255,255,255,0.06)',borderRadius:2}}>
+                <div style={{height:'100%',borderRadius:2,background:C.primary,width:`${w.cpu}%`,transition:'width 800ms ease'}}/>
+              </div>
+              <div style={{fontSize:10,color:C.textMuted,marginTop:4,textAlign:'right'}}>{w.cpu}%</div>
+            </div>
+          ))}
+          <div style={{background:C.surfaceHigh,borderRadius:8,padding:12,border:`1px solid ${C.border}`}}>
+            <div style={{fontSize:12,fontWeight:600,marginBottom:8,color:C.textSub}}>Dead Letter Queue</div>
+            <div style={{fontSize:22,fontWeight:800,color:C.success,marginBottom:4}}>0건</div>
+            <div style={{fontSize:11,color:C.textSub}}>정상 — 재처리 대기 없음</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Notification (알림 관리) ───
+function NotificationPage({setDrawer,setToast}){
+  const [tab,setTab]=useState('channels');
+  const [templateModal,setTemplateModal]=useState(null);
+
+  const CH_COLOR={'카카오 알림톡':'#FAE100','FCM 푸시':'#FF6B35','SMS':'#64748B'};
+
+  return(
+    <div style={{padding:'24px 32px',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:20}}>
+        {[{l:'카카오 알림톡',v:'55건',rate:'100%',color:'#FAE100',icon:'💬'},
+          {l:'FCM 앱 푸시',v:'1,248건',rate:'96.6%',color:'#FF6B35',icon:'📱'},
+          {l:'SMS',v:'27건',rate:'100%',color:'#94A3B8',icon:'📨'}
+        ].map((k,i)=>(
+          <div key={i} style={{background:C.surface,borderRadius:12,padding:18,border:`1px solid ${C.border}`,
+            animation:`slideUp 300ms ease ${i*80}ms both`,cursor:'pointer',transition:'all 200ms'}}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor=k.color+'60';e.currentTarget.style.transform='scale(1.02)';}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.transform='';}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
+              <div>
+                <div style={{fontSize:11,color:C.textSub,marginBottom:3}}>{k.icon} {k.l}</div>
+                <div style={{fontSize:22,fontWeight:800,color:k.color}}>{k.v}</div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:11,color:C.textSub,marginBottom:3}}>성공률</div>
+                <div style={{fontSize:18,fontWeight:700,color:C.success}}>{k.rate}</div>
+              </div>
+            </div>
+            <div style={{height:3,background:'rgba(255,255,255,0.06)',borderRadius:2}}>
+              <div style={{height:'100%',borderRadius:2,background:k.color,
+                width:k.rate,transition:'width 800ms ease'}}/>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,padding:20,border:`1px solid ${C.border}`,marginBottom:16}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <div style={{display:'flex',gap:4}}>
+            {[{id:'channels',l:'채널 현황'},{id:'history',l:'발송 이력'},{id:'templates',l:'템플릿 관리'}].map(t=>(
+              <button key={t.id} onClick={()=>setTab(t.id)}
+                style={{padding:'7px 14px',borderRadius:8,border:'none',cursor:'pointer',fontSize:13,fontFamily:'inherit',
+                  background:tab===t.id?'rgba(56,189,248,0.15)':'transparent',
+                  color:tab===t.id?C.primary:C.textSub,fontWeight:tab===t.id?700:400}}>
+                {t.l}
+              </button>
+            ))}
+          </div>
+          {tab==='history'&&<button onClick={()=>setToast('실패 건 재발송 요청이 완료되었습니다.')}
+            style={{padding:'6px 12px',borderRadius:8,border:`1px solid ${C.danger}`,background:'transparent',
+              color:C.danger,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>🔁 실패 재발송</button>}
+        </div>
+
+        {tab==='channels'&&(
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                {['채널','알림 유형','발송수','성공','실패','템플릿','상태'].map(h=>(
+                  <th key={h} style={{padding:'7px 10px',textAlign:'left',fontSize:10,color:C.textSub,fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {NOTIFICATIONS.map((n,i)=>(
+                <tr key={n.id} onClick={()=>setDrawer({type:'notif',data:n})}
+                  style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',animation:`slideUp 200ms ease ${i*40}ms both`,transition:'background 150ms'}}
+                  onMouseEnter={e=>e.currentTarget.style.background='rgba(56,189,248,0.05)'}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <td style={{padding:'11px 10px'}}>
+                    <span style={{padding:'3px 8px',borderRadius:4,fontSize:12,fontWeight:700,
+                      background:(CH_COLOR[n.channel]||'#fff')+'22',color:CH_COLOR[n.channel]||'#fff'}}>
+                      {n.channel}
+                    </span>
+                  </td>
+                  <td style={{padding:'11px 10px',fontSize:13}}>{n.type}</td>
+                  <td style={{padding:'11px 10px',fontSize:13,fontWeight:600}}>{n.count}건</td>
+                  <td style={{padding:'11px 10px',fontSize:13,color:C.success}}>{n.success}건</td>
+                  <td style={{padding:'11px 10px',fontSize:13,color:n.fail>0?C.danger:C.textSub}}>{n.fail}건</td>
+                  <td style={{padding:'11px 10px',fontSize:11,color:C.textSub}}>{n.template}</td>
+                  <td style={{padding:'11px 10px'}}>
+                    <span style={{padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600,
+                      background:n.status==='정상'?'rgba(52,211,153,0.15)':'rgba(251,191,36,0.15)',
+                      color:n.status==='정상'?C.success:C.warning}}>
+                      {n.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {tab==='history'&&(
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                {['발송ID','사용자','채널','알림유형','시간','상태'].map(h=>(
+                  <th key={h} style={{padding:'7px 10px',textAlign:'left',fontSize:10,color:C.textSub,fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {NOTIF_HIST.map((n,i)=>(
+                <tr key={n.id} onClick={()=>setDrawer({type:'notifHist',data:n})}
+                  style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',animation:`slideUp 200ms ease ${i*30}ms both`,transition:'background 150ms'}}
+                  onMouseEnter={e=>e.currentTarget.style.background='rgba(56,189,248,0.05)'}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <td style={{padding:'10px',fontSize:12,color:C.primary,fontWeight:600}}>{n.id}</td>
+                  <td style={{padding:'10px',fontSize:13,fontWeight:600}}>{n.user}</td>
+                  <td style={{padding:'10px'}}>
+                    <span style={{padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600,
+                      background:(CH_COLOR[n.channel]||'#fff')+'22',color:CH_COLOR[n.channel]||'#fff'}}>
+                      {n.channel}
+                    </span>
+                  </td>
+                  <td style={{padding:'10px',fontSize:12,color:C.textSub}}>{n.type}</td>
+                  <td style={{padding:'10px',fontSize:12,color:C.textSub}}>{n.time}</td>
+                  <td style={{padding:'10px'}}>
+                    <span style={{padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600,
+                      background:n.status==='발송완료'?'rgba(52,211,153,0.15)':'rgba(248,113,113,0.15)',
+                      color:n.status==='발송완료'?C.success:C.danger}}>
+                      {n.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {tab==='templates'&&(
+          <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12}}>
+            {[{name:'매입_완료_알림',ch:'카카오 알림톡',preview:'[핀캐시] 상품권 매입이 완료되었습니다. 매입금액 #{amount}원이 #{bank} #{account}로 이체 처리됩니다.',use:53},
+              {name:'이체_완료_알림',ch:'FCM 푸시',preview:'매입 대금 #{amount}원이 정상 이체되었습니다. 계좌를 확인해주세요.',use:51},
+              {name:'인증번호_발송',ch:'SMS',preview:'[핀캐시] 인증번호: #{code} (5분 유효)',use:27},
+              {name:'반려_처리_알림',ch:'카카오 알림톡',preview:'[핀캐시] 죄송합니다. 상품권 매입이 반려되었습니다. 사유: #{reason}',use:2},
+            ].map((t,i)=>(
+              <div key={t.name} onClick={()=>setTemplateModal(t)}
+                style={{background:C.surfaceHigh,borderRadius:10,padding:16,border:`1px solid ${C.border}`,
+                  cursor:'pointer',animation:`slideUp 200ms ease ${i*60}ms both`,transition:'all 200ms'}}
+                onMouseEnter={e=>{e.currentTarget.style.borderColor=C.primary+'60';}}
+                onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;}}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+                  <div style={{fontSize:13,fontWeight:700}}>{t.name}</div>
+                  <button onClick={e=>{e.stopPropagation();setTemplateModal(t);}}
+                    style={{padding:'3px 8px',borderRadius:4,border:`1px solid ${C.border}`,background:'transparent',
+                      color:C.primary,cursor:'pointer',fontSize:11,fontFamily:'inherit'}}>수정</button>
+                </div>
+                <div style={{fontSize:11,color:C.textSub,marginBottom:8}}>채널: {t.ch} · 사용: {t.use}회</div>
+                <div style={{fontSize:12,color:C.textSub,lineHeight:1.5,background:C.surface,
+                  borderRadius:6,padding:8,borderLeft:`3px solid ${C.primary}`}}>{t.preview}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {templateModal&&(
+        <Modal title={`템플릿 수정 — ${templateModal.name}`} onClose={()=>setTemplateModal(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div>
+              <label style={{fontSize:12,color:C.textSub,display:'block',marginBottom:6}}>채널</label>
+              <input readOnly value={templateModal.ch}
+                style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,
+                  fontSize:13,fontFamily:'inherit',background:C.bg,color:C.textSub,outline:'none'}}/>
+            </div>
+            <div>
+              <label style={{fontSize:12,color:C.textSub,display:'block',marginBottom:6}}>템플릿 본문 ({'{#변수명}'}으로 변수 삽입)</label>
+              <textarea defaultValue={templateModal.preview} rows={4}
+                style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,
+                  fontSize:13,fontFamily:'inherit',background:C.bg,color:C.text,outline:'none',resize:'vertical'}}/>
+            </div>
+            <button onClick={()=>{setTemplateModal(null);setToast('템플릿이 저장되었습니다.');}}
+              style={{padding:'11px',borderRadius:8,border:'none',background:C.primary,color:'#000',
+                cursor:'pointer',fontSize:13,fontWeight:700,fontFamily:'inherit'}}>
+              저장하기
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── FDS (이상 거래 탐지) ───
+function FdsPage({setDrawer,setToast}){
+  const [alerts,setAlerts]=useState(FDS_ALERTS);
+  const [rules,setRules]=useState(FDS_RULES);
+  const [tab,setTab]=useState('alerts');
+  const [drawerFds,setDrawerFds]=useState(null);
+
+  const handleAction=(id,action)=>{
+    setAlerts(a=>a.map(x=>x.id===id?{...x,status:action==='block'?'차단됨':'정상',action:action==='block'?'자동차단':'정상 처리'}:x));
+    setDrawerFds(null);
+    setToast(action==='block'?'해당 접속을 차단했습니다.':'정상 처리로 전환했습니다.');
+  };
+  const toggleRule=(idx)=>{
+    setRules(r=>r.map((x,i)=>i===idx?{...x,active:!x.active}:x));
+    setToast('FDS 규칙 상태가 변경되었습니다.');
+  };
+
+  const FDS_SCORE_COLOR=(s)=>s>=90?C.danger:s>=70?C.warning:C.success;
+
+  return(
+    <div style={{padding:'24px 32px',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:20}}>
+        {[{l:'오늘 탐지',v:5,c:C.danger,icon:'🚨'},{l:'자동 차단',v:2,c:C.danger,icon:'🛡️'},
+          {l:'검토 대기',v:2,c:C.warning,icon:'⏳'},{l:'탐지 규칙',v:5,c:C.primary,icon:'⚙️'}
+        ].map((k,i)=>(
+          <div key={i} style={{background:C.surface,borderRadius:10,padding:'16px',
+            border:`1px solid ${C.border}`,animation:`slideUp 300ms ease ${i*60}ms both`}}>
+            <div style={{fontSize:11,color:C.textSub,marginBottom:6}}>{k.icon} {k.l}</div>
+            <div style={{fontSize:26,fontWeight:800,color:k.c}}><CountUp end={k.v}/></div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,padding:20,border:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',gap:4,marginBottom:16}}>
+          {[{id:'alerts',l:'탐지 현황'},{id:'rules',l:'규칙 관리'}].map(t=>(
+            <button key={t.id} onClick={()=>setTab(t.id)}
+              style={{padding:'7px 16px',borderRadius:8,border:'none',cursor:'pointer',fontSize:13,fontFamily:'inherit',
+                background:tab===t.id?'rgba(56,189,248,0.15)':'transparent',
+                color:tab===t.id?C.primary:C.textSub,fontWeight:tab===t.id?700:400}}>
+              {t.l}
+            </button>
+          ))}
+        </div>
+
+        {tab==='alerts'&&(
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                {['탐지ID','사용자','접속IP','탐지유형','시도수','위험도','조치','시간','상태'].map(h=>(
+                  <th key={h} style={{padding:'7px 10px',textAlign:'left',fontSize:10,color:C.textSub,fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {alerts.map((a,i)=>(
+                <tr key={a.id} onClick={()=>setDrawerFds(a)}
+                  style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',
+                    animation:`slideUp 200ms ease ${i*40}ms both`,transition:'background 150ms'}}
+                  onMouseEnter={e=>e.currentTarget.style.background='rgba(248,113,113,0.05)'}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <td style={{padding:'10px',fontSize:12,fontWeight:700,color:C.danger}}>{a.id}</td>
+                  <td style={{padding:'10px',fontSize:13}}>{a.user}</td>
+                  <td style={{padding:'10px',fontSize:11,fontFamily:'monospace',color:C.textSub}}>{a.ip}</td>
+                  <td style={{padding:'10px',fontSize:12}}>{a.type}</td>
+                  <td style={{padding:'10px',fontSize:13,fontWeight:600,color:C.warning}}>{a.count}회</td>
+                  <td style={{padding:'10px'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <div style={{width:32,height:32,borderRadius:'50%',
+                        border:`3px solid ${FDS_SCORE_COLOR(a.score)}`,
+                        display:'flex',alignItems:'center',justifyContent:'center',
+                        fontSize:11,fontWeight:800,color:FDS_SCORE_COLOR(a.score)}}>
+                        {a.score}
+                      </div>
+                    </div>
+                  </td>
+                  <td style={{padding:'10px',fontSize:12,color:a.action==='자동차단'?C.danger:C.warning}}>{a.action}</td>
+                  <td style={{padding:'10px',fontSize:11,color:C.textSub}}>{a.time}</td>
+                  <td style={{padding:'10px'}}>
+                    <span style={{padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600,
+                      background:a.status==='차단됨'?'rgba(248,113,113,0.15)':a.status==='검토중'?'rgba(251,191,36,0.15)':'rgba(52,211,153,0.15)',
+                      color:a.status==='차단됨'?C.danger:a.status==='검토중'?C.warning:C.success}}>
+                      {a.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {tab==='rules'&&(
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                {['탐지 규칙','임계값','조치','상태',''].map(h=>(
+                  <th key={h} style={{padding:'8px 12px',textAlign:'left',fontSize:10,color:C.textSub,fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rules.map((r,i)=>(
+                <tr key={r.rule} style={{borderBottom:`1px solid ${C.border}`,animation:`slideUp 200ms ease ${i*40}ms both`}}>
+                  <td style={{padding:'12px',fontSize:13,fontWeight:500}}>{r.rule}</td>
+                  <td style={{padding:'12px',fontSize:12,color:C.textSub}}>{r.threshold}</td>
+                  <td style={{padding:'12px'}}>
+                    <span style={{padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600,
+                      background:r.action==='자동차단'?'rgba(248,113,113,0.15)':'rgba(251,191,36,0.15)',
+                      color:r.action==='자동차단'?C.danger:C.warning}}>
+                      {r.action}
+                    </span>
+                  </td>
+                  <td style={{padding:'12px'}}>
+                    <span style={{padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600,
+                      background:r.active?'rgba(52,211,153,0.15)':'rgba(255,255,255,0.05)',
+                      color:r.active?C.success:C.textSub}}>
+                      {r.active?'활성':'비활성'}
+                    </span>
+                  </td>
+                  <td style={{padding:'12px'}}>
+                    <button onClick={()=>toggleRule(i)}
+                      style={{padding:'5px 10px',borderRadius:6,border:`1px solid ${C.border}`,
+                        background:'transparent',color:r.active?C.danger:C.success,
+                        cursor:'pointer',fontSize:11,fontFamily:'inherit'}}>
+                      {r.active?'비활성화':'활성화'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {drawerFds&&(
+        <Drawer title={`FDS 상세 — ${drawerFds.id}`} onClose={()=>setDrawerFds(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div style={{padding:16,borderRadius:10,border:`1px solid ${C.border}`,
+              background:`rgba(${drawerFds.score>=90?'248,113,113':drawerFds.score>=70?'251,191,36':'52,211,153'},0.1)`}}>
+              <div style={{fontSize:11,color:C.textSub,marginBottom:4}}>위험도 점수</div>
+              <div style={{fontSize:40,fontWeight:900,color:drawerFds.score>=90?C.danger:drawerFds.score>=70?C.warning:C.success}}>
+                {drawerFds.score}<span style={{fontSize:18,opacity:0.6}}>/100</span>
+              </div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              {[['탐지 유형',drawerFds.type],['접속 IP',drawerFds.ip],
+                ['시도 횟수',`${drawerFds.count}회`],['탐지 시각',`2026.05.04 ${drawerFds.time}`]].map(([l,v])=>(
+                <div key={l} style={{background:C.surfaceHigh,borderRadius:6,padding:10}}>
+                  <div style={{fontSize:10,color:C.textSub,marginBottom:3}}>{l}</div>
+                  <div style={{fontSize:13,fontWeight:600}}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <div style={{fontSize:12,color:C.textSub,marginBottom:6}}>처리 이력</div>
+              {[`탐지 감지: 2026.05.04 ${drawerFds.time}`,
+                drawerFds.status==='차단됨'?`자동 차단 실행: 2026.05.04 ${drawerFds.time} +5초`:'검토 큐 등록됨',
+              ].map((s,i)=>(
+                <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start',marginBottom:8}}>
+                  <div style={{width:6,height:6,borderRadius:'50%',background:C.primary,marginTop:4,flexShrink:0}}/>
+                  <div style={{fontSize:12,color:C.textSub}}>{s}</div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <label style={{fontSize:12,color:C.textSub,display:'block',marginBottom:6}}>처리 메모</label>
+              <textarea placeholder="조치 내용을 기록하세요..." rows={2}
+                style={{width:'100%',padding:10,borderRadius:8,border:`1px solid ${C.border}`,
+                  fontSize:13,fontFamily:'inherit',background:C.bg,color:C.text,resize:'vertical',outline:'none'}}/>
+            </div>
+            {drawerFds.status!=='차단됨'&&(
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>handleAction(drawerFds.id,'block')}
+                  style={{flex:1,padding:'11px',borderRadius:8,border:'none',background:C.danger,
+                    color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit'}}>
+                  🛡️ 즉시 차단
+                </button>
+                <button onClick={()=>handleAction(drawerFds.id,'pass')}
+                  style={{flex:1,padding:'11px',borderRadius:8,border:`1px solid ${C.border}`,
+                    background:'transparent',color:C.success,cursor:'pointer',fontSize:13,fontFamily:'inherit'}}>
+                  ✅ 정상 처리
+                </button>
+              </div>
+            )}
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+// ─── App ───
+function App(){
+  const [tab,setTab]=useState('main');
+  const [drawer,setDrawer]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [loading,setLoading]=useState(true);
+
+  useEffect(()=>{setTimeout(()=>setLoading(false),1200);},[]);
+
+  if(loading){
+    return(
+      <div style={{display:'flex',width:'100%',height:'100vh',alignItems:'center',justifyContent:'center',background:C.bg}}>
+        <div style={{textAlign:'center'}}>
+          <div style={{width:40,height:40,border:'3px solid rgba(56,189,248,0.2)',borderTopColor:C.primary,
+            borderRadius:'50%',animation:'spin 800ms linear infinite',margin:'0 auto 12px'}}/>
+          <div style={{fontSize:13,color:C.textSub}}>핀캐시 프로 로딩 중...</div>
+        </div>
+      </div>
+    );
+  }
+
+  const handleTabChange=(id)=>{setTab(id);setDrawer(null);};
+
+  // Global drawer renderer
+  const renderDrawer=()=>{
+    if(!drawer)return null;
+    if(drawer.type==='rate'){
+      const v=drawer.data;
+      return(
+        <Drawer title={`${v.name} 시세 상세`} onClose={()=>setDrawer(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <div style={{textAlign:'center',padding:'20px 0'}}>
+              <div style={{fontSize:48,fontWeight:900,color:v.color,marginBottom:4}}>{v.rate.toFixed(1)}%</div>
+              <div style={{fontSize:13,color:C.textSub}}>현재 매입률</div>
+              <div style={{marginTop:8,display:'inline-block',padding:'4px 12px',borderRadius:20,fontSize:12,
+                background:v.change>0?'rgba(52,211,153,0.15)':'rgba(248,113,113,0.15)',
+                color:v.change>0?C.success:C.danger}}>
+                {v.change>0?'▲':'▼'} {Math.abs(v.change)}% 전일 대비
+              </div>
+            </div>
+            {[['오늘 거래액',`${v.vol.toLocaleString()}만원`],['수수료율',`${100-v.rate}%`],
+              ['최고 매입가','50,000원'],['최저 매입가','1,000원']].map(([l,val])=>(
+              <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:13,color:C.textSub}}>{l}</span>
+                <span style={{fontSize:14,fontWeight:700}}>{val}</span>
+              </div>
+            ))}
+            <button onClick={()=>{setDrawer(null);setToast(`${v.name} 알림을 설정했습니다.`);}}
+              style={{padding:'11px',borderRadius:8,border:'none',background:v.color,color:'#000',
+                cursor:'pointer',fontSize:13,fontWeight:700,fontFamily:'inherit'}}>
+              📢 매입률 변동 알림 설정
+            </button>
+          </div>
+        </Drawer>
+      );
+    }
+    if(drawer.type==='settlement'){
+      const s=drawer.data;
+      return(
+        <Drawer title={`정산 상세 — ${s.id}`} onClose={()=>setDrawer(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {[['정산 기간',s.period],['처리 건수',`${s.count}건`],['총 매입액',s.gross],
+              ['수수료 (10%)',s.fee],['순 지급액',s.net],['처리 워커',s.worker]].map(([l,v])=>(
+              <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:13,color:C.textSub}}>{l}</span>
+                <span style={{fontSize:14,fontWeight:700,color:l==='순 지급액'?C.success:C.text}}>{v}</span>
+              </div>
+            ))}
+            <div style={{background:C.surfaceHigh,borderRadius:8,padding:14}}>
+              <div style={{fontSize:12,color:C.textSub,marginBottom:8}}>Bull Queue 처리 로그</div>
+              {['job:4522 → 완료 (0.8s)','job:4523 → 완료 (1.1s)','job:4524 → 완료 (0.9s)','…외 59건 완료'].map((l,i)=>(
+                <div key={i} style={{fontSize:12,fontFamily:'monospace',color:C.textSub,marginBottom:4}}>
+                  <span style={{color:C.success}}>✓</span> {l}
+                </div>
+              ))}
+            </div>
+            <button onClick={()=>{setDrawer(null);setToast('정산 보고서를 다운로드합니다...');}}
+              style={{padding:'11px',borderRadius:8,border:'none',background:C.primary,color:'#000',
+                cursor:'pointer',fontSize:13,fontWeight:700,fontFamily:'inherit'}}>
+              📊 상세 보고서 다운로드
+            </button>
+          </div>
+        </Drawer>
+      );
+    }
+    if(drawer.type==='notif'||drawer.type==='notifHist'){
+      const n=drawer.data;
+      return(
+        <Drawer title={`알림 상세`} onClose={()=>setDrawer(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {Object.entries(n).map(([k,v])=>(
+              <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:12,color:C.textSub}}>{k}</span>
+                <span style={{fontSize:13,fontWeight:600}}>{String(v)}</span>
+              </div>
+            ))}
+            <button onClick={()=>{setDrawer(null);setToast('재발송 요청이 완료되었습니다.');}}
+              style={{padding:'11px',borderRadius:8,border:'none',background:C.primary,color:'#000',
+                cursor:'pointer',fontSize:13,fontWeight:700,fontFamily:'inherit'}}>
+              🔁 재발송
+            </button>
+          </div>
+        </Drawer>
+      );
+    }
+    return null;
+  };
+
+  return(
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh'}}>
+      <TopNav tab={tab} onTab={handleTabChange}/>
+      <HeroBanner tab={tab}/>
+      <main style={{flex:1,background:C.bg}}>
+        {tab==='main'&&<MainPage setDrawer={setDrawer} setToast={setToast}/>}
+        {tab==='settlement'&&<SettlementPage setDrawer={setDrawer} setToast={setToast}/>}
+        {tab==='notification'&&<NotificationPage setDrawer={setDrawer} setToast={setToast}/>}
+        {tab==='fds'&&<FdsPage setDrawer={setDrawer} setToast={setToast}/>}
+      </main>
+      {renderDrawer()}
+      {toast&&<Toast msg={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

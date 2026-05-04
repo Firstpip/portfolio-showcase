@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>핀캐시 매입 플랫폼 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;font-family:'Pretendard',sans-serif;background:#F1F5F9;color:#1E293B;}
+#root{display:flex;width:100%;height:100vh;overflow:hidden;}
+
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes barGrow{from{width:0%}to{width:var(--target-width)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px);max-height:0}to{opacity:1;transform:translateY(0);max-height:500px}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+
+.step-bar{height:6px;border-radius:3px;background:#E2E8F0;overflow:hidden;margin-top:6px;}
+.step-bar-fill{height:100%;border-radius:3px;animation:barGrow 900ms ease both;--target-width:100%;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback}=React;
+const {AreaChart,Area,BarChart,Bar,LineChart,Line,PieChart,Pie,Cell,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,Legend}=Recharts;
+
+// ─── Design tokens ───
+const C={
+  primary:'#1A56DB',
+  primaryHover:'#1447C0',
+  primaryLight:'#EBF2FF',
+  accent:'#0EA5E9',
+  success:'#10B981',
+  warning:'#F59E0B',
+  danger:'#EF4444',
+  purple:'#8B5CF6',
+  bg:'#F1F5F9',
+  surface:'#FFFFFF',
+  sidebar:'#0F172A',
+  sidebarActive:'#1E293B',
+  border:'#E2E8F0',
+  text:'#1E293B',
+  textSub:'#64748B',
+  textMuted:'#94A3B8',
+};
+
+// ─── Mock data ───
+const VOUCHER_TYPES=[
+  {id:'v1',name:'백화점상품권',icon:'🏬',rate:89,daily:142,amount:'1,850만원',trend:'+2.3%'},
+  {id:'v2',name:'마트상품권',icon:'🛒',rate:91,daily:87,amount:'980만원',trend:'+1.1%'},
+  {id:'v3',name:'문화상품권',icon:'📚',rate:85,daily:63,amount:'520만원',trend:'-0.8%'},
+  {id:'v4',name:'해피머니',icon:'😊',rate:88,daily:55,amount:'430만원',trend:'+1.5%'},
+  {id:'v5',name:'온누리상품권',icon:'🌿',rate:92,daily:41,amount:'380만원',trend:'+3.2%'},
+  {id:'v6',name:'편의점상품권',icon:'🏪',rate:86,daily:38,amount:'290만원',trend:'-0.3%'},
+];
+
+const TRANSACTIONS=[
+  {id:'T-2024',user:'김민수',phone:'010-3421-****',type:'백화점상품권',pins:3,amount:'267,000원',status:'이체완료',time:'14:23',bank:'국민은행 ***-***-2847'},
+  {id:'T-2023',user:'이지은',phone:'010-8712-****',type:'해피머니',pins:2,amount:'176,000원',status:'검증중',time:'14:21',bank:'신한은행 ***-***-9134'},
+  {id:'T-2022',user:'박철수',phone:'010-5534-****',type:'마트상품권',pins:5,amount:'455,000원',status:'이체완료',time:'14:18',bank:'카카오뱅크 ***-***-4521'},
+  {id:'T-2021',user:'최수연',phone:'010-2298-****',type:'문화상품권',pins:1,amount:'85,000원',status:'매입완료',time:'14:15',bank:'우리은행 ***-***-7823'},
+  {id:'T-2020',user:'정도현',phone:'010-6641-****',type:'온누리상품권',pins:4,amount:'368,000원',status:'반려',time:'14:09',bank:'하나은행 ***-***-3366'},
+  {id:'T-2019',user:'한미래',phone:'010-9923-****',type:'백화점상품권',pins:2,amount:'178,000원',status:'이체완료',time:'14:05',bank:'신한은행 ***-***-8812'},
+  {id:'T-2018',user:'오준혁',phone:'010-4412-****',type:'해피머니',pins:6,amount:'528,000원',status:'이체완료',time:'14:02',bank:'국민은행 ***-***-1190'},
+  {id:'T-2017',user:'유나영',phone:'010-7756-****',type:'마트상품권',pins:3,amount:'273,000원',status:'검증중',time:'13:58',bank:'카카오뱅크 ***-***-6647'},
+];
+
+const MEMBERS=[
+  {id:'M-001',name:'김민수',email:'minsu.kim@gmail.com',grade:'VIP',count:42,total:'3,840,000원',joined:'2024.01.12',status:'정상',blocked:false},
+  {id:'M-002',name:'이지은',email:'jieun.lee@naver.com',grade:'일반',count:7,total:'630,000원',joined:'2024.03.28',status:'정상',blocked:false},
+  {id:'M-003',name:'박철수',email:'cs.park@kakao.com',grade:'VIP',count:31,total:'2,820,000원',joined:'2024.02.05',status:'정상',blocked:false},
+  {id:'M-004',name:'최수연',email:'sooyeon.choi@gmail.com',grade:'일반',count:3,total:'255,000원',joined:'2024.04.17',status:'정상',blocked:false},
+  {id:'M-005',name:'정도현',email:'dh.jung@naver.com',grade:'주의',count:12,total:'1,080,000원',joined:'2024.01.30',status:'주의',blocked:false},
+  {id:'M-006',name:'강동욱',email:'dongwook.kang@gmail.com',grade:'일반',count:2,total:'170,000원',joined:'2024.05.01',status:'차단',blocked:true},
+];
+
+const RATES=[
+  {type:'백화점상품권',buy:89,margin:11,min:1000,max:500000,active:true},
+  {type:'마트상품권',buy:91,margin:9,min:5000,max:200000,active:true},
+  {type:'문화상품권',buy:85,margin:15,min:1000,max:100000,active:true},
+  {type:'해피머니',buy:88,margin:12,min:1000,max:100000,active:true},
+  {type:'온누리상품권',buy:92,margin:8,min:5000,max:500000,active:true},
+  {type:'편의점상품권',buy:86,margin:14,min:1000,max:50000,active:false},
+];
+
+const CHART_DATA=[
+  {day:'4/28',amount:2840,count:38},{day:'4/29',amount:3120,count:42},
+  {day:'4/30',amount:2980,count:35},{day:'5/1',amount:3450,count:48},
+  {day:'5/2',amount:4180,count:55},{day:'5/3',amount:3720,count:51},
+  {day:'5/4',amount:4560,count:62},
+];
+
+const HOURLY=[
+  {h:'09',cnt:8},{h:'10',cnt:14},{h:'11',cnt:22},{h:'12',cnt:18},
+  {h:'13',cnt:31},{h:'14',cnt:42},{h:'15',cnt:38},{h:'16',cnt:25},
+  {h:'17',cnt:19},{h:'18',cnt:11},{h:'19',cnt:7},
+];
+
+const STATUS_COLOR={
+  '이체완료':{bg:'#DCFCE7',color:'#16A34A'},
+  '검증중':{bg:'#FEF9C3',color:'#A16207'},
+  '매입완료':{bg:'#DBEAFE',color:'#1D4ED8'},
+  '반려':{bg:'#FEE2E2',color:'#DC2626'},
+};
+const GRADE_COLOR={'VIP':{bg:'#EEF2FF',color:'#4338CA'},'일반':{bg:'#F1F5F9',color:'#475569'},'주의':{bg:'#FFF7ED',color:'#C2410C'}};
+
+// ─── CountUp ───
+function CountUp({end,suffix='',prefix='',duration=1200}){
+  const [val,setVal]=useState(0);
+  useEffect(()=>{
+    let s=0;const step=end/(duration/16);
+    const t=setInterval(()=>{s+=step;if(s>=end){setVal(end);clearInterval(t);}else setVal(Math.floor(s));},16);
+    return()=>clearInterval(t);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{prefix}{val.toLocaleString()}{suffix}</span>;
+}
+
+// ─── Toast ───
+function Toast({msg,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return(
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:'#1E293B',color:'#fff',
+      padding:'12px 20px',borderRadius:8,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.2)',
+      display:'flex',gap:10,alignItems:'center',fontSize:14}}>
+      <span style={{color:C.success}}>✓</span>{msg}
+    </div>
+  );
+}
+
+// ─── Modal ───
+function Modal({title,onClose,children,width=560}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.45)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:'#fff',borderRadius:12,zIndex:501,
+        animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',
+        boxShadow:'0 20px 60px rgba(0,0,0,0.15)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+          padding:'18px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:700}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSub}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Sidebar ───
+const NAV=[
+  {id:'dashboard',label:'대시보드',icon:'📊'},
+  {id:'main',label:'매입 신청',icon:'💳'},
+  {id:'purchase',label:'핀번호 검증',icon:'🔐'},
+  {id:'mypage',label:'거래 현황',icon:'📋'},
+  {id:'admin',label:'관리자 대시보드',icon:'⚙️'},
+];
+
+function Sidebar({page,onNav}){
+  return(
+    <aside style={{width:240,background:C.sidebar,color:'#fff',display:'flex',flexDirection:'column',
+      flexShrink:0,height:'100vh',overflow:'hidden'}}>
+      <div style={{padding:'24px 20px',borderBottom:'1px solid rgba(255,255,255,0.08)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:36,height:36,borderRadius:8,background:C.primary,
+            display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>💰</div>
+          <div>
+            <div style={{fontWeight:700,fontSize:15,letterSpacing:'-0.02em'}}>핀캐시</div>
+            <div style={{fontSize:11,color:'rgba(255,255,255,0.4)',marginTop:1}}>상품권 자동 매입 플랫폼</div>
+          </div>
+        </div>
+      </div>
+      <div style={{padding:'16px 12px',flex:1}}>
+        <div style={{fontSize:10,color:'rgba(255,255,255,0.3)',marginBottom:8,paddingLeft:8,letterSpacing:'0.08em'}}>메인 메뉴</div>
+        {NAV.map(n=>(
+          <button key={n.id} onClick={()=>onNav(n.id)} title={n.label}
+            style={{width:'100%',display:'flex',alignItems:'center',gap:10,padding:'10px 12px',
+              borderRadius:8,border:'none',cursor:'pointer',textAlign:'left',marginBottom:2,
+              background:page===n.id?C.primary:'transparent',
+              color:page===n.id?'#fff':'rgba(255,255,255,0.65)',
+              fontFamily:'inherit',fontSize:14,fontWeight:page===n.id?600:400,
+              transition:'all 150ms'}}>
+            <span style={{fontSize:16}}>{n.icon}</span>
+            {n.label}
+            {page===n.id&&<span style={{marginLeft:'auto',width:6,height:6,borderRadius:'50%',background:'#fff',opacity:0.8}}/>}
+          </button>
+        ))}
+      </div>
+      <div style={{padding:'16px 20px',borderTop:'1px solid rgba(255,255,255,0.08)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:32,height:32,borderRadius:'50%',background:'#3B82F6',
+            display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:700}}>관</div>
+          <div>
+            <div style={{fontSize:13,fontWeight:600}}>관리자</div>
+            <div style={{fontSize:11,color:'rgba(255,255,255,0.4)'}}>admin@pincash.io</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+// ─── TopBar ───
+const PAGE_TITLE={
+  dashboard:'대시보드',main:'매입 신청',purchase:'핀번호 검증',mypage:'거래 현황',admin:'관리자 대시보드',
+};
+function TopBar({page,toast,setToast}){
+  return(
+    <div style={{height:60,background:C.surface,borderBottom:`1px solid ${C.border}`,
+      display:'flex',alignItems:'center',padding:'0 24px',gap:12,flexShrink:0}}>
+      <h1 style={{fontSize:18,fontWeight:700,letterSpacing:'-0.02em',flex:1}}>{PAGE_TITLE[page]}</h1>
+      <div style={{display:'flex',alignItems:'center',gap:6,background:C.bg,border:`1px solid ${C.border}`,
+        borderRadius:8,padding:'0 12px',height:36}}>
+        <span style={{fontSize:13,color:C.textSub}}>🔍</span>
+        <input placeholder="검색..." style={{border:'none',outline:'none',background:'transparent',
+          fontSize:13,color:C.text,width:160,fontFamily:'inherit'}}/>
+      </div>
+      <button onClick={()=>setToast('시스템이 정상 운영 중입니다.')}
+        style={{width:36,height:36,borderRadius:8,border:`1px solid ${C.border}`,
+          background:C.surface,cursor:'pointer',fontSize:16,position:'relative'}}>
+        🔔
+        <span style={{position:'absolute',top:6,right:6,width:7,height:7,borderRadius:'50%',background:C.danger}}/>
+      </button>
+      <div style={{width:36,height:36,borderRadius:'50%',background:C.primaryLight,
+        display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,cursor:'pointer',
+        border:`2px solid ${C.primary}`,color:C.primary,fontWeight:700}}>관</div>
+    </div>
+  );
+}
+
+// ─── KPI Card ───
+function KpiCard({label,value,sub,color,icon,idx}){
+  return(
+    <div style={{background:C.surface,borderRadius:12,padding:20,
+      boxShadow:'0 1px 3px rgba(0,0,0,0.08)',animation:`slideUp 400ms ease ${idx*80}ms both`,
+      border:`1px solid ${C.border}`,transition:'all 200ms',cursor:'default'}}
+      onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.12)';}}
+      onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 1px 3px rgba(0,0,0,0.08)';}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+        <div>
+          <div style={{fontSize:12,color:C.textSub,marginBottom:6}}>{label}</div>
+          <div style={{fontSize:26,fontWeight:800,letterSpacing:'-0.03em',color:C.text}}>{value}</div>
+          <div style={{fontSize:12,color:color,marginTop:4}}>{sub}</div>
+        </div>
+        <div style={{width:44,height:44,borderRadius:10,background:color+'18',
+          display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}}>{icon}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Dashboard Page ───
+function DashboardPage(){
+  const [tab,setTab]=useState('daily');
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:20}}>
+        <KpiCard idx={0} label="오늘 총 매입액" value={<CountUp end={4560} prefix="₩" suffix="만원"/>} sub="▲ 22.6% 전일 대비" color={C.success} icon="💰"/>
+        <KpiCard idx={1} label="오늘 신청 건수" value={<CountUp end={62} suffix="건"/>} sub="▲ 21.6% 전일 대비" color={C.primary} icon="📥"/>
+        <KpiCard idx={2} label="검증 대기" value={<CountUp end={7} suffix="건"/>} sub="평균 처리 2.3분" color={C.warning} icon="⏳"/>
+        <KpiCard idx={3} label="이체 완료율" value={<CountUp end={94} suffix="%"/>} sub="목표 달성 (≥90%)" color={C.success} icon="✅"/>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
+        <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',border:`1px solid ${C.border}`}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+            <h3 style={{fontSize:15,fontWeight:700}}>일별 매입 현황</h3>
+            <div style={{display:'flex',gap:4}}>
+              {['daily','weekly'].map(t=>(
+                <button key={t} onClick={()=>setTab(t)}
+                  style={{padding:'4px 12px',borderRadius:6,border:'none',cursor:'pointer',fontSize:12,fontFamily:'inherit',
+                    background:tab===t?C.primary:'transparent',color:tab===t?'#fff':C.textSub,fontWeight:tab===t?600:400}}>
+                  {t==='daily'?'일별':'주별'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{height:200}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={CHART_DATA} margin={{top:5,right:10,left:-20,bottom:5}}>
+                <defs>
+                  <linearGradient id="ca1" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.primary} stopOpacity={0.25}/>
+                    <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                <XAxis dataKey="day" tick={{fontSize:11,fill:C.textSub}}/>
+                <YAxis tick={{fontSize:11,fill:C.textSub}}/>
+                <Tooltip contentStyle={{borderRadius:8,border:`1px solid ${C.border}`,fontSize:12}}/>
+                <Area type="monotone" dataKey="amount" stroke={C.primary} fill="url(#ca1)" strokeWidth={2}/>
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',border:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:15,fontWeight:700,marginBottom:16}}>시간대별 신청 건수</h3>
+          <div style={{height:200}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={HOURLY} margin={{top:5,right:10,left:-20,bottom:5}}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                <XAxis dataKey="h" tick={{fontSize:11,fill:C.textSub}} tickFormatter={h=>`${h}시`}/>
+                <YAxis tick={{fontSize:11,fill:C.textSub}}/>
+                <Tooltip contentStyle={{borderRadius:8,border:`1px solid ${C.border}`,fontSize:12}}/>
+                <Bar dataKey="cnt" fill={C.accent} radius={[4,4,0,0]} name="건수"/>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:14}}>상품권 종류별 매입 현황</h3>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+          {VOUCHER_TYPES.map((v,i)=>(
+            <div key={v.id} style={{padding:14,borderRadius:8,border:`1px solid ${C.border}`,animation:`slideUp 300ms ease ${i*60}ms both`}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+                <span style={{fontSize:13,fontWeight:600}}>{v.icon} {v.name}</span>
+                <span style={{fontSize:12,color:v.trend.startsWith('+')?C.success:C.danger}}>{v.trend}</span>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:C.textSub,marginBottom:6}}>
+                <span>매입률 <strong style={{color:C.text}}>{v.rate}%</strong></span>
+                <span>오늘 {v.daily}건</span>
+              </div>
+              <div style={{height:4,background:C.bg,borderRadius:2}}>
+                <div style={{height:'100%',borderRadius:2,background:C.primary,width:`${v.rate}%`,transition:'width 800ms ease'}}/>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main (매입 신청) Page ───
+function MainPage({setToast}){
+  const [step,setStep]=useState(1);
+  const [selected,setSelected]=useState(null);
+  const [pins,setPins]=useState(['']);
+  const [account,setAccount]=useState('');
+  const [bank,setBank]=useState('국민은행');
+  const [verified,setVerified]=useState(false);
+  const [loading,setLoading]=useState(false);
+
+  const totalAmt=selected?pins.filter(p=>p.trim()).length*(selected.rate/100)*50000:0;
+
+  const handleVerify=()=>{
+    setLoading(true);
+    setTimeout(()=>{setLoading(false);setVerified(true);setToast('핀번호 유효성 검증이 완료되었습니다.');},1800);
+  };
+  const handleSubmit=()=>{
+    setLoading(true);
+    setTimeout(()=>{setLoading(false);setStep(4);setToast('매입 신청이 완료되었습니다. 이체를 처리 중입니다.');},2000);
+  };
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease',maxWidth:780,margin:'0 auto'}}>
+      <div style={{display:'flex',gap:0,marginBottom:28}}>
+        {[{n:1,l:'상품권 선택'},{n:2,l:'핀번호 입력'},{n:3,l:'계좌 등록'},{n:4,l:'신청 완료'}].map((s,i)=>(
+          <div key={s.n} style={{flex:1,display:'flex',alignItems:'center',flexDirection:'column',position:'relative'}}>
+            <div style={{width:32,height:32,borderRadius:'50%',
+              background:step>=s.n?C.primary:C.border,
+              color:step>=s.n?'#fff':C.textSub,
+              display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:700,
+              transition:'all 300ms',zIndex:1,position:'relative'}}>
+              {step>s.n?'✓':s.n}
+            </div>
+            <div style={{fontSize:11,marginTop:6,color:step>=s.n?C.primary:C.textMuted,fontWeight:step===s.n?600:400}}>{s.l}</div>
+            {i<3&&<div style={{position:'absolute',top:16,left:'50%',right:'-50%',height:2,
+              background:step>s.n?C.primary:C.border,transition:'all 300ms',zIndex:0}}/>}
+          </div>
+        ))}
+      </div>
+
+      {step===1&&(
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',border:`1px solid ${C.border}`}}>
+          <div style={{marginBottom:16,color:C.textSub,fontSize:13}}>매입할 상품권 종류를 선택하세요. 실시간 매입률이 적용됩니다.</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10}}>
+            {VOUCHER_TYPES.map(v=>(
+              <button key={v.id} onClick={()=>{setSelected(v);setStep(2);}}
+                style={{padding:'16px 12px',borderRadius:10,border:`2px solid ${selected?.id===v.id?C.primary:C.border}`,
+                  background:selected?.id===v.id?C.primaryLight:C.surface,cursor:'pointer',textAlign:'left',
+                  fontFamily:'inherit',transition:'all 150ms'}}>
+                <div style={{fontSize:22,marginBottom:8}}>{v.icon}</div>
+                <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>{v.name}</div>
+                <div style={{fontSize:12,color:C.textSub}}>매입률 <strong style={{color:C.primary}}>{v.rate}%</strong></div>
+                <div style={{fontSize:11,color:v.trend.startsWith('+')?C.success:C.danger,marginTop:2}}>{v.trend}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {step===2&&selected&&(
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',border:`1px solid ${C.border}`}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+            <div>
+              <span style={{fontSize:15,fontWeight:700}}>{selected.icon} {selected.name}</span>
+              <span style={{fontSize:13,color:C.textSub,marginLeft:8}}>매입률 {selected.rate}%</span>
+            </div>
+            <button onClick={()=>setStep(1)} style={{fontSize:12,color:C.textSub,background:'none',border:'none',cursor:'pointer'}}>← 다시 선택</button>
+          </div>
+          <div style={{marginBottom:14,fontSize:13,color:C.textSub}}>핀번호를 입력하세요 (최대 10개)</div>
+          {pins.map((p,i)=>(
+            <div key={i} style={{display:'flex',gap:8,marginBottom:8,animation:`slideUp 200ms ease ${i*40}ms both`}}>
+              <input value={p} onChange={e=>{const np=[...pins];np[i]=e.target.value;setPins(np);}}
+                placeholder={`핀번호 ${i+1} (16자리)`}
+                style={{flex:1,padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,
+                  fontSize:13,fontFamily:'inherit',outline:'none',letterSpacing:'0.05em'}}/>
+              <button onClick={()=>{const r=totalAmt*0.01;setToast(`예상 매입가: ${Math.round((selected.rate/100)*50000*(1)).toLocaleString()}원`);}}
+                style={{padding:'10px 14px',borderRadius:8,border:`1px solid ${C.primary}`,
+                  background:C.primaryLight,color:C.primary,cursor:'pointer',fontSize:12,fontFamily:'inherit',whiteSpace:'nowrap'}}>
+                검증
+              </button>
+            </div>
+          ))}
+          {pins.length<10&&<button onClick={()=>setPins([...pins,''])}
+            style={{fontSize:13,color:C.primary,background:'none',border:'none',cursor:'pointer',marginBottom:16}}>+ 핀번호 추가</button>}
+          <div style={{background:C.bg,borderRadius:8,padding:14,marginTop:4,marginBottom:16}}>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:13}}>
+              <span style={{color:C.textSub}}>입력 핀번호 수</span><span style={{fontWeight:600}}>{pins.filter(p=>p.trim()).length}개</span>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginTop:6}}>
+              <span style={{color:C.textSub}}>예상 매입가</span>
+              <span style={{fontWeight:700,color:C.primary}}>{totalAmt>0?totalAmt.toLocaleString()+'원':'—'}</span>
+            </div>
+          </div>
+          <div style={{display:'flex',gap:10}}>
+            <button onClick={handleVerify} disabled={loading||!pins.filter(p=>p.trim()).length}
+              style={{flex:1,padding:'12px',borderRadius:8,border:'none',
+                background:verified?C.success:C.primary,color:'#fff',cursor:'pointer',
+                fontSize:14,fontWeight:600,fontFamily:'inherit',
+                opacity:loading?0.7:1}}>
+              {loading?'검증 중...':(verified?'✓ 검증 완료':'핀번호 일괄 검증')}
+            </button>
+            <button onClick={()=>setStep(3)} disabled={!verified}
+              style={{flex:1,padding:'12px',borderRadius:8,border:'none',
+                background:verified?C.primary:'#E2E8F0',color:verified?'#fff':C.textSub,cursor:verified?'pointer':'not-allowed',
+                fontSize:14,fontWeight:600,fontFamily:'inherit'}}>
+              다음 단계 →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step===3&&(
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',border:`1px solid ${C.border}`}}>
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>매입 대금 수령 계좌 등록</div>
+            <div style={{fontSize:12,color:C.textSub}}>본인 명의 계좌만 등록 가능합니다. 계좌 실명 확인이 자동으로 진행됩니다.</div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <label style={{fontSize:12,color:C.textSub,display:'block',marginBottom:6}}>은행 선택</label>
+            <select value={bank} onChange={e=>setBank(e.target.value)}
+              style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,
+                fontSize:13,fontFamily:'inherit',outline:'none',color:C.text,background:C.surface}}>
+              {['국민은행','신한은행','우리은행','하나은행','카카오뱅크','케이뱅크','토스뱅크','기업은행','농협은행'].map(b=>(
+                <option key={b}>{b}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:12,color:C.textSub,display:'block',marginBottom:6}}>계좌번호</label>
+            <input value={account} onChange={e=>setAccount(e.target.value)}
+              placeholder="계좌번호 입력 (- 없이)"
+              style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,
+                fontSize:13,fontFamily:'inherit',outline:'none'}}/>
+          </div>
+          <div style={{background:'#FFF7ED',border:'1px solid #FED7AA',borderRadius:8,padding:12,marginBottom:16}}>
+            <div style={{fontSize:12,color:'#9A3412'}}>⚠️ 등록된 계좌로 매입 대금이 즉시 이체됩니다. 계좌정보를 정확히 입력하세요.</div>
+          </div>
+          <div style={{display:'flex',gap:10}}>
+            <button onClick={()=>setStep(2)} style={{flex:1,padding:'12px',borderRadius:8,
+              border:`1px solid ${C.border}`,background:C.surface,color:C.textSub,cursor:'pointer',
+              fontSize:14,fontFamily:'inherit'}}>← 이전</button>
+            <button onClick={handleSubmit} disabled={loading||!account.trim()}
+              style={{flex:2,padding:'12px',borderRadius:8,border:'none',
+                background:account.trim()?C.primary:'#E2E8F0',color:account.trim()?'#fff':C.textSub,
+                cursor:account.trim()?'pointer':'not-allowed',fontSize:14,fontWeight:700,fontFamily:'inherit',
+                opacity:loading?0.7:1}}>
+              {loading?'처리 중...':'매입 신청 완료'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step===4&&(
+        <div style={{background:C.surface,borderRadius:12,padding:40,textAlign:'center',
+          boxShadow:'0 1px 3px rgba(0,0,0,0.08)',border:`1px solid ${C.border}`,animation:'fadeInScale 400ms ease'}}>
+          <div style={{width:64,height:64,borderRadius:'50%',background:'#DCFCE7',
+            display:'flex',alignItems:'center',justifyContent:'center',fontSize:32,margin:'0 auto 16px'}}>✓</div>
+          <h2 style={{fontSize:22,fontWeight:800,marginBottom:8}}>매입 신청 완료</h2>
+          <p style={{color:C.textSub,fontSize:14,marginBottom:20}}>핀번호 검증 및 이체 처리가 진행 중입니다.<br/>마이페이지에서 실시간 상태를 확인하세요.</p>
+          <div style={{background:C.bg,borderRadius:8,padding:14,marginBottom:20,textAlign:'left'}}>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:6}}>
+              <span style={{color:C.textSub}}>신청 번호</span><span style={{fontWeight:600}}>T-2025</span>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:6}}>
+              <span style={{color:C.textSub}}>상품권 종류</span><span>{selected?.name}</span>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:13}}>
+              <span style={{color:C.textSub}}>예상 이체 금액</span>
+              <span style={{fontWeight:700,color:C.success}}>{totalAmt>0?totalAmt.toLocaleString():'—'}원</span>
+            </div>
+          </div>
+          <button onClick={()=>{setStep(1);setSelected(null);setPins(['']);setVerified(false);}}
+            style={{padding:'12px 32px',borderRadius:8,border:'none',background:C.primary,color:'#fff',
+              cursor:'pointer',fontSize:14,fontWeight:600,fontFamily:'inherit'}}>
+            추가 신청하기
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Purchase (핀번호 검증) Page ───
+function PurchasePage({setToast}){
+  const [list,setList]=useState(TRANSACTIONS);
+  const [filter,setFilter]=useState('전체');
+  const [search,setSearch]=useState('');
+  const [modal,setModal]=useState(null);
+
+  const statuses=['전체','검증중','매입완료','이체완료','반려'];
+  const filtered=list.filter(t=>{
+    const sm=filter==='전체'||t.status===filter;
+    const ss=!search||t.user.includes(search)||t.id.includes(search)||t.type.includes(search);
+    return sm&&ss;
+  });
+
+  const handleApprove=(id)=>{
+    setList(l=>l.map(t=>t.id===id?{...t,status:'이체완료'}:t));
+    setModal(null);
+    setToast('이체 처리가 완료되었습니다.');
+  };
+  const handleReject=(id)=>{
+    setList(l=>l.map(t=>t.id===id?{...t,status:'반려'}:t));
+    setModal(null);
+    setToast('해당 신청을 반려 처리했습니다.');
+  };
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:16}}>
+        {[{l:'오늘 신청',v:62,c:C.primary,icon:'📥'},{l:'검증 중',v:7,c:C.warning,icon:'⏳'},
+          {l:'이체 완료',v:53,c:C.success,icon:'✅'},{l:'반려',v:2,c:C.danger,icon:'❌'}
+        ].map((k,i)=>(
+          <div key={i} style={{background:C.surface,borderRadius:10,padding:'14px 16px',
+            border:`1px solid ${C.border}`,boxShadow:'0 1px 3px rgba(0,0,0,0.06)',animation:`slideUp 300ms ease ${i*60}ms both`}}>
+            <div style={{fontSize:11,color:C.textSub,marginBottom:4}}>{k.icon} {k.l}</div>
+            <div style={{fontSize:22,fontWeight:800,color:k.c}}><CountUp end={k.v}/></div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',border:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',gap:10,marginBottom:16,alignItems:'center'}}>
+          <div style={{display:'flex',gap:4}}>
+            {statuses.map(s=>(
+              <button key={s} onClick={()=>setFilter(s)}
+                style={{padding:'6px 12px',borderRadius:6,border:'none',cursor:'pointer',fontSize:12,fontFamily:'inherit',
+                  background:filter===s?C.primary:'transparent',color:filter===s?'#fff':C.textSub,fontWeight:filter===s?600:400}}>
+                {s}
+              </button>
+            ))}
+          </div>
+          <div style={{marginLeft:'auto',display:'flex',gap:8,background:C.bg,border:`1px solid ${C.border}`,
+            borderRadius:8,padding:'0 12px',height:34,alignItems:'center'}}>
+            <span style={{fontSize:12,color:C.textSub}}>🔍</span>
+            <input value={search} onChange={e=>setSearch(e.target.value)}
+              placeholder="사용자명, 신청번호 검색"
+              style={{border:'none',outline:'none',background:'transparent',fontSize:12,fontFamily:'inherit',width:160}}/>
+          </div>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{borderBottom:`2px solid ${C.border}`}}>
+              {['신청번호','사용자','상품권','핀번호','예상금액','상태','시간',''].map(h=>(
+                <th key={h} style={{padding:'8px 12px',textAlign:'left',fontSize:11,color:C.textSub,fontWeight:600,letterSpacing:'0.04em'}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((t,i)=>(
+              <tr key={t.id} onClick={()=>setModal(t)}
+                style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',
+                  animation:`slideUp 200ms ease ${i*30}ms both`,transition:'background 150ms'}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'12px',fontSize:13,fontWeight:600,color:C.primary}}>{t.id}</td>
+                <td style={{padding:'12px',fontSize:13}}>{t.user}</td>
+                <td style={{padding:'12px',fontSize:12,color:C.textSub}}>{t.type}</td>
+                <td style={{padding:'12px',fontSize:13}}>{t.pins}개</td>
+                <td style={{padding:'12px',fontSize:13,fontWeight:600}}>{t.amount}</td>
+                <td style={{padding:'12px'}}>
+                  <span style={{padding:'3px 8px',borderRadius:4,fontSize:11,fontWeight:600,...(STATUS_COLOR[t.status]||{})}}>
+                    {t.status}
+                  </span>
+                </td>
+                <td style={{padding:'12px',fontSize:12,color:C.textMuted}}>{t.time}</td>
+                <td style={{padding:'12px'}}>
+                  <button onClick={e=>{e.stopPropagation();setModal(t);}}
+                    style={{fontSize:11,color:C.primary,background:C.primaryLight,border:'none',
+                      borderRadius:4,padding:'4px 8px',cursor:'pointer',fontFamily:'inherit'}}>상세</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {modal&&(
+        <Modal title={`신청 상세 — ${modal.id}`} onClose={()=>setModal(null)} width={540}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              {[['사용자',modal.user],['연락처',modal.phone],['상품권 종류',modal.type],['핀번호 수',`${modal.pins}개`],
+                ['예상 매입가',modal.amount],['수령 계좌',modal.bank]].map(([l,v])=>(
+                <div key={l} style={{background:C.bg,borderRadius:6,padding:10}}>
+                  <div style={{fontSize:10,color:C.textSub,marginBottom:3}}>{l}</div>
+                  <div style={{fontSize:13,fontWeight:600}}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{background:C.bg,borderRadius:8,padding:12}}>
+              <div style={{fontSize:11,color:C.textSub,marginBottom:8}}>핀번호 검증 상태</div>
+              {[...Array(modal.pins)].map((_,i)=>(
+                <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+                  padding:'6px 0',borderBottom:i<modal.pins-1?`1px solid ${C.border}`:'none'}}>
+                  <span style={{fontSize:12,fontFamily:'monospace'}}>PIN-{2024+i}-{'*'.repeat(8)}</span>
+                  <span style={{fontSize:11,padding:'2px 8px',borderRadius:4,
+                    ...(modal.status==='반려'&&i===0?{background:'#FEE2E2',color:'#DC2626'}:{background:'#DCFCE7',color:'#16A34A'})}}>
+                    {modal.status==='반려'&&i===0?'잔액 없음':'유효'}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div>
+              <label style={{fontSize:12,color:C.textSub,display:'block',marginBottom:4}}>관리자 메모</label>
+              <textarea placeholder="처리 메모를 입력하세요..." rows={2}
+                style={{width:'100%',padding:10,borderRadius:8,border:`1px solid ${C.border}`,
+                  fontSize:13,fontFamily:'inherit',resize:'vertical',outline:'none'}}/>
+            </div>
+            {modal.status==='검증중'&&(
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>handleApprove(modal.id)}
+                  style={{flex:1,padding:'11px',borderRadius:8,border:'none',background:C.success,
+                    color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit'}}>
+                  ✅ 이체 승인
+                </button>
+                <button onClick={()=>handleReject(modal.id)}
+                  style={{flex:1,padding:'11px',borderRadius:8,border:'none',background:C.danger,
+                    color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit'}}>
+                  ❌ 반려
+                </button>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Mypage (거래 현황) Page ───
+function MypagePage(){
+  const [modal,setModal]=useState(null);
+  const [period,setPeriod]=useState('7일');
+
+  const PIE=[
+    {name:'이체완료',value:53,color:C.success},
+    {name:'검증중',value:4,color:C.warning},
+    {name:'매입완료',value:3,color:C.primary},
+    {name:'반려',value:2,color:C.danger},
+  ];
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
+        <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',border:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:15,fontWeight:700,marginBottom:14}}>상태별 분포</h3>
+          <div style={{display:'flex',alignItems:'center',gap:20}}>
+            <div style={{width:140,height:140,flexShrink:0}}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={PIE} cx="50%" cy="50%" innerRadius={40} outerRadius={65} dataKey="value" paddingAngle={3}>
+                    {PIE.map((e,i)=><Cell key={i} fill={e.color}/>)}
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{flex:1}}>
+              {PIE.map(p=>(
+                <div key={p.name} style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                  <div style={{display:'flex',alignItems:'center',gap:6}}>
+                    <div style={{width:10,height:10,borderRadius:2,background:p.color}}/>
+                    <span style={{fontSize:12}}>{p.name}</span>
+                  </div>
+                  <span style={{fontSize:14,fontWeight:700}}>{p.value}건</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',border:`1px solid ${C.border}`}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+            <h3 style={{fontSize:15,fontWeight:700}}>누적 매입 현황</h3>
+            <div style={{display:'flex',gap:4}}>
+              {['7일','30일','90일'].map(p=>(
+                <button key={p} onClick={()=>setPeriod(p)}
+                  style={{padding:'4px 10px',borderRadius:6,border:'none',cursor:'pointer',fontSize:11,fontFamily:'inherit',
+                    background:period===p?C.primary:'transparent',color:period===p?'#fff':C.textSub}}>
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
+          {[['총 매입 건수','62건',C.primary],['총 매입 금액','4,560만원',C.success],
+            ['평균 매입가','73,500원',C.text],['최다 신청 상품권','백화점상품권',C.purple]].map(([l,v,c])=>(
+            <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:`1px solid ${C.border}`}}>
+              <span style={{fontSize:12,color:C.textSub}}>{l}</span>
+              <span style={{fontSize:13,fontWeight:700,color:c}}>{v}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',border:`1px solid ${C.border}`}}>
+        <h3 style={{fontSize:15,fontWeight:700,marginBottom:14}}>거래 내역</h3>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{borderBottom:`2px solid ${C.border}`}}>
+              {['신청번호','사용자','상품권','핀번호','금액','상태','시간'].map(h=>(
+                <th key={h} style={{padding:'8px 12px',textAlign:'left',fontSize:11,color:C.textSub,fontWeight:600}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {TRANSACTIONS.map((t,i)=>(
+              <tr key={t.id} onClick={()=>setModal(t)}
+                style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',animation:`slideUp 200ms ease ${i*30}ms both`,transition:'background 150ms'}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'11px 12px',fontSize:13,fontWeight:600,color:C.primary}}>{t.id}</td>
+                <td style={{padding:'11px 12px',fontSize:13}}>{t.user}</td>
+                <td style={{padding:'11px 12px',fontSize:12,color:C.textSub}}>{t.type}</td>
+                <td style={{padding:'11px 12px',fontSize:13}}>{t.pins}개</td>
+                <td style={{padding:'11px 12px',fontSize:13,fontWeight:600}}>{t.amount}</td>
+                <td style={{padding:'11px 12px'}}>
+                  <span style={{padding:'3px 8px',borderRadius:4,fontSize:11,fontWeight:600,...(STATUS_COLOR[t.status]||{})}}>{t.status}</span>
+                </td>
+                <td style={{padding:'11px 12px',fontSize:12,color:C.textMuted}}>{t.time}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {modal&&(
+        <Modal title={`거래 상세 — ${modal.id}`} onClose={()=>setModal(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+              padding:14,background:C.bg,borderRadius:8}}>
+              <span style={{fontSize:14,fontWeight:700}}>{modal.type}</span>
+              <span style={{padding:'4px 12px',borderRadius:6,fontSize:13,fontWeight:700,...(STATUS_COLOR[modal.status]||{})}}>{modal.status}</span>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              {[['사용자',modal.user],['연락처',modal.phone],['핀번호 수',`${modal.pins}개`],
+                ['매입 금액',modal.amount],['수령 계좌',modal.bank],['처리 시각',`2026.05.04 ${modal.time}`]].map(([l,v])=>(
+                <div key={l} style={{background:C.bg,borderRadius:6,padding:10}}>
+                  <div style={{fontSize:10,color:C.textSub,marginBottom:2}}>{l}</div>
+                  <div style={{fontSize:13,fontWeight:600}}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{background:C.bg,borderRadius:8,padding:12}}>
+              <div style={{fontSize:11,color:C.textSub,marginBottom:8,fontWeight:600}}>처리 타임라인</div>
+              {[['신청 접수',`2026.05.04 ${modal.time}`,C.primary],
+                ['핀번호 검증 완료',`2026.05.04 ${modal.time} +1분`,C.success],
+                modal.status==='이체완료'?['이체 완료',`2026.05.04 ${modal.time} +3분`,C.success]:
+                ['처리 중','—',C.warning]
+              ].map(([step,time,color])=>(
+                <div key={step} style={{display:'flex',gap:12,alignItems:'flex-start',paddingBottom:8,
+                  borderBottom:`1px solid ${C.border}`,marginBottom:8}}>
+                  <div style={{width:8,height:8,borderRadius:'50%',background:color,marginTop:4,flexShrink:0}}/>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:600}}>{step}</div>
+                    <div style={{fontSize:11,color:C.textSub}}>{time}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Admin (관리자 대시보드) Page ───
+function AdminPage({setToast}){
+  const [tab,setTab]=useState('rates');
+  const [rateModal,setRateModal]=useState(null);
+  const [memberModal,setMemberModal]=useState(null);
+  const [rates,setRates]=useState(RATES);
+  const [members,setMembers]=useState(MEMBERS);
+  const [editRate,setEditRate]=useState({});
+
+  const handleSaveRate=()=>{
+    setRates(r=>r.map(x=>x.type===rateModal.type?{...x,...editRate}:x));
+    setRateModal(null);
+    setToast('할인율 설정이 저장되었습니다.');
+  };
+  const handleBlock=(id)=>{
+    setMembers(m=>m.map(x=>x.id===id?{...x,blocked:!x.blocked,status:x.blocked?'정상':'차단'}:x));
+    setMemberModal(null);
+    setToast('회원 상태가 변경되었습니다.');
+  };
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:16}}>
+        {[{l:'총 회원수',v:'1,284명',c:C.primary,icon:'👥'},{l:'활성 회원',v:'892명',c:C.success,icon:'✅'},
+          {l:'오늘 신규',v:'23명',c:C.accent,icon:'🆕'},{l:'차단 회원',v:'12명',c:C.danger,icon:'🚫'}
+        ].map((k,i)=>(
+          <div key={i} style={{background:C.surface,borderRadius:10,padding:'14px 16px',
+            border:`1px solid ${C.border}`,boxShadow:'0 1px 3px rgba(0,0,0,0.06)',animation:`slideUp 300ms ease ${i*60}ms both`}}>
+            <div style={{fontSize:11,color:C.textSub}}>{k.icon} {k.l}</div>
+            <div style={{fontSize:22,fontWeight:800,marginTop:4,color:k.c}}>{k.v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',border:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',gap:4,marginBottom:16}}>
+          {[{id:'rates',l:'할인율 관리'},{ id:'members',l:'회원 관리'}].map(t=>(
+            <button key={t.id} onClick={()=>setTab(t.id)}
+              style={{padding:'8px 16px',borderRadius:8,border:'none',cursor:'pointer',fontSize:13,fontFamily:'inherit',
+                background:tab===t.id?C.primary:'transparent',color:tab===t.id?'#fff':C.textSub,fontWeight:tab===t.id?600:400}}>
+              {t.l}
+            </button>
+          ))}
+        </div>
+
+        {tab==='rates'&&(
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`2px solid ${C.border}`}}>
+                {['상품권 종류','매입률','마진율','최소금액','최대금액','상태',''].map(h=>(
+                  <th key={h} style={{padding:'8px 12px',textAlign:'left',fontSize:11,color:C.textSub,fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rates.map((r,i)=>(
+                <tr key={r.type} style={{borderBottom:`1px solid ${C.border}`,animation:`slideUp 200ms ease ${i*40}ms both`}}>
+                  <td style={{padding:'12px',fontSize:14,fontWeight:600}}>{r.type}</td>
+                  <td style={{padding:'12px'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8}}>
+                      <span style={{fontSize:16,fontWeight:800,color:C.primary}}>{r.buy}%</span>
+                      <div style={{height:4,width:60,background:C.bg,borderRadius:2}}>
+                        <div style={{height:'100%',borderRadius:2,background:C.primary,width:`${r.buy}%`}}/>
+                      </div>
+                    </div>
+                  </td>
+                  <td style={{padding:'12px',fontSize:13,color:C.success,fontWeight:600}}>{r.margin}%</td>
+                  <td style={{padding:'12px',fontSize:12,color:C.textSub}}>{r.min.toLocaleString()}원</td>
+                  <td style={{padding:'12px',fontSize:12,color:C.textSub}}>{r.max.toLocaleString()}원</td>
+                  <td style={{padding:'12px'}}>
+                    <span style={{padding:'3px 8px',borderRadius:4,fontSize:11,fontWeight:600,
+                      background:r.active?'#DCFCE7':'#F1F5F9',color:r.active?'#16A34A':'#64748B'}}>
+                      {r.active?'활성':'비활성'}
+                    </span>
+                  </td>
+                  <td style={{padding:'12px'}}>
+                    <button onClick={()=>{setRateModal(r);setEditRate({buy:r.buy,margin:r.margin});}}
+                      style={{padding:'5px 10px',borderRadius:6,border:`1px solid ${C.primary}`,background:C.primaryLight,
+                        color:C.primary,cursor:'pointer',fontSize:11,fontFamily:'inherit'}}>수정</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {tab==='members'&&(
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`2px solid ${C.border}`}}>
+                {['회원ID','이름','이메일','등급','신청수','총액','가입일','상태',''].map(h=>(
+                  <th key={h} style={{padding:'8px 12px',textAlign:'left',fontSize:11,color:C.textSub,fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {members.map((m,i)=>(
+                <tr key={m.id} onClick={()=>setMemberModal(m)}
+                  style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',
+                    animation:`slideUp 200ms ease ${i*40}ms both`,transition:'background 150ms'}}
+                  onMouseEnter={e=>e.currentTarget.style.background=C.primaryLight}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <td style={{padding:'11px 12px',fontSize:12,color:C.textSub}}>{m.id}</td>
+                  <td style={{padding:'11px 12px',fontSize:14,fontWeight:600}}>{m.name}</td>
+                  <td style={{padding:'11px 12px',fontSize:12,color:C.textSub}}>{m.email}</td>
+                  <td style={{padding:'11px 12px'}}>
+                    <span style={{padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600,...(GRADE_COLOR[m.grade]||{})}}>
+                      {m.grade}
+                    </span>
+                  </td>
+                  <td style={{padding:'11px 12px',fontSize:13}}>{m.count}회</td>
+                  <td style={{padding:'11px 12px',fontSize:13,fontWeight:600}}>{m.total}</td>
+                  <td style={{padding:'11px 12px',fontSize:12,color:C.textSub}}>{m.joined}</td>
+                  <td style={{padding:'11px 12px'}}>
+                    <span style={{padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600,
+                      background:m.blocked?'#FEE2E2':'#DCFCE7',color:m.blocked?'#DC2626':'#16A34A'}}>
+                      {m.status}
+                    </span>
+                  </td>
+                  <td style={{padding:'11px 12px'}}>
+                    <button onClick={e=>{e.stopPropagation();setMemberModal(m);}}
+                      style={{padding:'4px 10px',borderRadius:6,border:`1px solid ${C.border}`,background:C.surface,
+                        color:C.textSub,cursor:'pointer',fontSize:11,fontFamily:'inherit'}}>상세</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {rateModal&&(
+        <Modal title={`${rateModal.type} 할인율 수정`} onClose={()=>setRateModal(null)} width={440}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div>
+              <label style={{fontSize:12,color:C.textSub,display:'block',marginBottom:6}}>매입률 (%)</label>
+              <input type="number" min={60} max={99}
+                value={editRate.buy||rateModal.buy}
+                onChange={e=>setEditRate({...editRate,buy:Number(e.target.value)})}
+                style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,
+                  fontSize:16,fontWeight:700,fontFamily:'inherit',outline:'none'}}/>
+            </div>
+            <div>
+              <label style={{fontSize:12,color:C.textSub,display:'block',marginBottom:6}}>마진율 (%)</label>
+              <input type="number" readOnly value={100-(editRate.buy||rateModal.buy)}
+                style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,
+                  fontSize:16,fontWeight:700,fontFamily:'inherit',outline:'none',background:C.bg,color:C.success}}/>
+            </div>
+            <div style={{background:'#FFF7ED',border:'1px solid #FED7AA',borderRadius:8,padding:10}}>
+              <div style={{fontSize:12,color:'#9A3412'}}>⚠️ 변경 즉시 사용자 화면에 반영됩니다. 신중히 설정하세요.</div>
+            </div>
+            <button onClick={handleSaveRate}
+              style={{padding:'12px',borderRadius:8,border:'none',background:C.primary,color:'#fff',
+                cursor:'pointer',fontSize:14,fontWeight:700,fontFamily:'inherit'}}>
+              저장하기
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {memberModal&&(
+        <Modal title={`회원 상세 — ${memberModal.name}`} onClose={()=>setMemberModal(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              {[['회원 ID',memberModal.id],['이름',memberModal.name],
+                ['이메일',memberModal.email],['등급',memberModal.grade],
+                ['총 신청수',`${memberModal.count}회`],['총 매입액',memberModal.total],['가입일',memberModal.joined],['상태',memberModal.status]].map(([l,v])=>(
+                <div key={l} style={{background:C.bg,borderRadius:6,padding:10}}>
+                  <div style={{fontSize:10,color:C.textSub,marginBottom:2}}>{l}</div>
+                  <div style={{fontSize:13,fontWeight:600}}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <label style={{fontSize:12,color:C.textSub,display:'block',marginBottom:4}}>처리 사유</label>
+              <textarea placeholder="차단/해제 사유를 입력하세요..." rows={2}
+                style={{width:'100%',padding:10,borderRadius:8,border:`1px solid ${C.border}`,
+                  fontSize:13,fontFamily:'inherit',resize:'vertical',outline:'none'}}/>
+            </div>
+            <button onClick={()=>handleBlock(memberModal.id)}
+              style={{padding:'11px',borderRadius:8,border:'none',
+                background:memberModal.blocked?C.success:C.danger,color:'#fff',
+                cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit'}}>
+              {memberModal.blocked?'✅ 차단 해제':'🚫 차단 처리'}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── App ───
+function App(){
+  const [page,setPage]=useState('dashboard');
+  const [toast,setToast]=useState(null);
+  const [loading,setLoading]=useState(true);
+
+  useEffect(()=>{setTimeout(()=>setLoading(false),1200);},[]);
+
+  if(loading){
+    return(
+      <div style={{display:'flex',width:'100%',height:'100vh',alignItems:'center',justifyContent:'center',background:C.bg}}>
+        <div style={{textAlign:'center'}}>
+          <div style={{width:40,height:40,border:`3px solid ${C.border}`,borderTopColor:C.primary,
+            borderRadius:'50%',animation:'spin 800ms linear infinite',margin:'0 auto 12px'}}/>
+          <div style={{fontSize:13,color:C.textSub}}>핀캐시 로딩 중...</div>
+        </div>
+      </div>
+    );
+  }
+
+  const handleNav=(id)=>{setPage(id);};
+
+  return(
+    <div style={{display:'flex',width:'100%',height:'100vh',overflow:'hidden'}}>
+      <Sidebar page={page} onNav={handleNav}/>
+      <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <TopBar page={page} toast={toast} setToast={setToast}/>
+        <main style={{flex:1,overflow:'auto',padding:20,background:C.bg}}>
+          {page==='dashboard'&&<DashboardPage/>}
+          {page==='main'&&<MainPage setToast={setToast}/>}
+          {page==='purchase'&&<PurchasePage setToast={setToast}/>}
+          {page==='mypage'&&<MypagePage/>}
+          {page==='admin'&&<AdminPage setToast={setToast}/>}
+        </main>
+      </div>
+      {toast&&<Toast msg={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
