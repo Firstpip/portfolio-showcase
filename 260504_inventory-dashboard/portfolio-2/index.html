@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>멀티 거점 재고 통합 분석 플랫폼 — InventIQ</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; }
+    #root { display: flex; flex-direction: column; width: 100%; min-height: 100vh; }
+    @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes fadeInScale { from { opacity: 0; transform: scale(0.95) } to { opacity: 1; transform: scale(1) } }
+    @keyframes slideInRight { from { opacity: 0; transform: translateX(30px) } to { opacity: 1; transform: translateX(0) } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes ripple { 0% { transform: scale(0); opacity: 0.5 } 100% { transform: scale(4); opacity: 0 } }
+    @keyframes countUp { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
+    @keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+    @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+    @keyframes barGrow { from { width: 0% } to { width: var(--target-width, 0%) } }
+    @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); max-height: 0 } to { opacity: 1; transform: translateY(0); max-height: 500px } }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+const { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = Recharts;
+
+const C = {
+  primary: '#059669', primaryDark: '#065F46', primaryLight: '#ECFDF5',
+  accent: '#10B981', bg: '#F0FDF4', surface: '#FFFFFF',
+  text: '#064E3B', textSec: '#374151', textLight: '#9CA3AF',
+  border: '#D1FAE5', borderGray: '#E5E7EB',
+  danger: '#EF4444', warning: '#F59E0B', info: '#3B82F6', purple: '#8B5CF6',
+};
+
+const TABS = [
+  { id: '통합 현황판', icon: '🌐' },
+  { id: '매장 비교 분석', icon: '📊' },
+  { id: 'API 연동 관리', icon: '🔗' },
+  { id: '리포트 & 통계', icon: '📈' },
+];
+
+const PAGE_META = {
+  '통합 현황판': {
+    title: '전사 재고 통합 현황판',
+    sub: '5개 거점 실시간 재고 현황 모니터링',
+    kpis: [{ label: '총 거점', value: 5, suffix: '개' }, { label: '전체 재고', value: 86400, suffix: '개' }, { label: '금일 입출고', value: 2116, suffix: '건' }, { label: '위험 알림', value: 8, suffix: '건' }],
+    grad: `linear-gradient(135deg, #059669, #10B981)`,
+  },
+  '매장 비교 분석': {
+    title: '매장 간 재고 비교 분석',
+    sub: '다중 매장 재고 수량 · 품목 격차 시각화',
+    kpis: [{ label: '비교 매장', value: 3, suffix: '개' }, { label: '분석 품목', value: 48, suffix: '종' }, { label: '재고 편차', value: 32, suffix: '%' }],
+    grad: `linear-gradient(135deg, #0D9488, #059669)`,
+  },
+  'API 연동 관리': {
+    title: 'ERP API 연동 관리',
+    sub: '외부 시스템 동기화 상태 · 스케줄 설정',
+    kpis: [{ label: '연동 API', value: 4, suffix: '개' }, { label: '오늘 동기화', value: 24, suffix: '회' }, { label: '성공률', value: 97, suffix: '%' }],
+    grad: `linear-gradient(135deg, #065F46, #059669)`,
+  },
+  '리포트 & 통계': {
+    title: '기간별 통계 리포트',
+    sub: '입출고 추이 · 품목 회전율 분석',
+    kpis: [{ label: '분석 기간', value: 30, suffix: '일' }, { label: '총 입출고', value: 24830, suffix: '건' }, { label: '회전율 평균', value: 68, suffix: '%' }],
+    grad: `linear-gradient(135deg, #047857, #10B981)`,
+  },
+};
+
+const WEEKLY = [
+  { day: '04/28', in: 980, out: 720 }, { day: '04/29', in: 1150, out: 890 },
+  { day: '04/30', in: 860, out: 640 }, { day: '05/01', in: 1320, out: 1100 },
+  { day: '05/02', in: 940, out: 780 }, { day: '05/03', in: 1080, out: 920 },
+  { day: '05/04', in: 1240, out: 876 },
+];
+
+const STORES_DATA = [
+  { name: '강남 플래그십', stock: 8450, turnover: 72, alerts: 3, sync: '09:30', status: 'normal' },
+  { name: '홍대 직영점', stock: 5620, turnover: 65, alerts: 2, sync: '09:31', status: 'warning' },
+  { name: '잠실 팝업스토어', stock: 2250, turnover: 58, alerts: 1, sync: '09:29', status: 'normal' },
+  { name: '성수 물류센터', stock: 34200, turnover: 41, alerts: 2, sync: '09:32', status: 'normal' },
+  { name: '인천 항만 창고', stock: 35880, turnover: 38, alerts: 0, sync: '09:28', status: 'normal' },
+];
+
+const COMPARE_ITEMS = [
+  { item: '프리미엄 면 티셔츠', s1: 3200, s2: 1800, s3: 900 },
+  { item: '슬림 데님 팬츠', s1: 1800, s2: 1200, s3: 600 },
+  { item: '유기농 그래놀라', s1: 420, s2: 280, s3: 140 },
+  { item: '무선 이어폰 Pro', s1: 180, s2: 120, s3: 60 },
+  { item: '스테인리스 텀블러', s1: 640, s2: 380, s3: 210 },
+  { item: '린넨 블라우스', s1: 980, s2: 760, s3: 420 },
+];
+
+const API_CONNECTIONS = [
+  { id: 'API001', name: 'ERP 본사 시스템', type: 'REST', lastSync: '2026-05-04 09:30', status: 'active', successRate: 99.2, schedule: '*/30 * * * *', errorCount: 2, logs: ['09:30 동기화 완료 — 품목 3,240건', '09:00 동기화 완료 — 품목 3,238건', '08:30 동기화 완료 — 품목 3,241건'] },
+  { id: 'API002', name: '물류 WMS 인터페이스', type: 'REST', lastSync: '2026-05-04 09:31', status: 'active', successRate: 97.8, schedule: '0 * * * *', errorCount: 5, logs: ['09:00 동기화 완료 — 입출고 128건', '08:00 동기화 완료 — 입출고 142건', '07:00 응답 타임아웃 (재시도 성공)'] },
+  { id: 'API003', name: '매장 POS 데이터', type: 'WebSocket', lastSync: '2026-05-04 09:29', status: 'active', successRate: 98.5, schedule: 'real-time', errorCount: 1, logs: ['실시간 연결 활성', '09:15 이벤트 수신 — 판매 47건', '09:00 이벤트 수신 — 판매 51건'] },
+  { id: 'API004', name: '인천 창고 재고 API', type: 'REST', lastSync: '2026-05-04 08:45', status: 'warning', successRate: 84.3, schedule: '0 */2 * * *', errorCount: 18, logs: ['08:45 동기화 완료', '06:45 응답 없음 (타임아웃)', '04:45 응답 없음 (타임아웃)'] },
+];
+
+const TURNOVER_DATA = [
+  { item: '프리미엄 면 티셔츠', out: 1200, avgStock: 3200, rate: 37.5, category: '의류' },
+  { item: '슬림 데님 팬츠', out: 890, avgStock: 1800, rate: 49.4, category: '의류' },
+  { item: '유기농 그래놀라', out: 680, avgStock: 420, rate: 161.9, category: '식품' },
+  { item: '무선 이어폰 Pro', out: 240, avgStock: 180, rate: 133.3, category: '전자제품' },
+  { item: '스테인리스 텀블러', out: 320, avgStock: 640, rate: 50.0, category: '생활용품' },
+  { item: '린넨 블라우스', out: 540, avgStock: 980, rate: 55.1, category: '의류' },
+  { item: '그린티 라떼 믹스', out: 180, avgStock: 85, rate: 211.8, category: '식품' },
+  { item: 'USB-C 충전기 65W', out: 120, avgStock: 240, rate: 50.0, category: '전자제품' },
+];
+
+function CountUp({ end, duration = 1200 }) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    let v = 0; const step = end / (duration / 16);
+    const t = setInterval(() => { v += step; if (v >= end) { setVal(end); clearInterval(t); } else setVal(Math.floor(v)); }, 16);
+    return () => clearInterval(t);
+  }, [end]);
+  return <span>{val.toLocaleString()}</span>;
+}
+
+function Toast({ msg, type = 'success', onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  const bg = type === 'success' ? C.primary : type === 'error' ? C.danger : C.info;
+  return <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999, background: bg, color: '#fff', padding: '12px 20px', borderRadius: 10, animation: 'slideUp 300ms ease', boxShadow: '0 4px 16px rgba(0,0,0,0.2)', fontSize: 14, fontWeight: 500 }}>{msg}</div>;
+}
+
+function Drawer({ item, onClose, children, title }) {
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 200, animation: 'fadeIn 200ms ease' }} />
+      <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 480, background: C.surface, boxShadow: '-8px 0 40px rgba(0,0,0,0.12)', zIndex: 201, overflowY: 'auto', animation: 'slideInRight 220ms ease' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 24px', borderBottom: `1px solid ${C.borderGray}`, position: 'sticky', top: 0, background: C.surface, zIndex: 1 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{title}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: C.textLight }}>✕</button>
+        </div>
+        <div style={{ padding: 24 }}>{children}</div>
+      </div>
+    </>
+  );
+}
+
+function Badge({ status }) {
+  const m = { active: ['정상', '#D1FAE5', C.primary], warning: ['주의', '#FEF3C7', '#D97706'], error: ['오류', '#FEE2E2', C.danger], normal: ['정상', '#D1FAE5', C.primary] };
+  const [label, bg, color] = m[status] || m.normal;
+  return <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 99, background: bg, color, letterSpacing: '0.02em' }}>{label}</span>;
+}
+
+function GlobalNav({ tab, setTab }) {
+  return (
+    <header style={{ position: 'sticky', top: 0, zIndex: 100, background: C.surface, borderBottom: `1px solid ${C.borderGray}`, display: 'flex', alignItems: 'center', height: 56, padding: '0 28px', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 20 }}>
+        <div style={{ width: 32, height: 32, borderRadius: 8, background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>📦</div>
+        <span style={{ fontSize: 15, fontWeight: 800, color: C.primaryDark, letterSpacing: '-0.02em' }}>InventIQ</span>
+      </div>
+      {TABS.map(t => (
+        <button key={t.id} onClick={() => setTab(t.id)}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, border: 'none', background: tab === t.id ? C.primaryLight : 'transparent', color: tab === t.id ? C.primaryDark : C.textSec, fontSize: 13, fontWeight: tab === t.id ? 700 : 400, cursor: 'pointer', transition: 'all 180ms' }}
+          onMouseEnter={e => { if (tab !== t.id) e.currentTarget.style.background = '#F9FAFB'; }}
+          onMouseLeave={e => { if (tab !== t.id) e.currentTarget.style.background = 'transparent'; }}
+        >
+          <span style={{ fontSize: 14 }}>{t.icon}</span><span>{t.id}</span>
+        </button>
+      ))}
+      <div style={{ flex: 1 }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: '#F9FAFB', borderRadius: 8, border: `1px solid ${C.borderGray}` }}>
+        <span style={{ fontSize: 13, color: C.textLight }}>🔍</span>
+        <input placeholder="검색..." style={{ border: 'none', background: 'transparent', fontSize: 13, outline: 'none', width: 140, color: C.text }} />
+      </div>
+      <div style={{ position: 'relative', marginLeft: 4 }}>
+        <button style={{ background: '#F9FAFB', border: `1px solid ${C.borderGray}`, borderRadius: 8, padding: '7px 10px', cursor: 'pointer', fontSize: 16 }}>🔔</button>
+        <span style={{ position: 'absolute', top: -4, right: -4, background: C.danger, color: '#fff', borderRadius: '50%', width: 17, height: 17, fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>8</span>
+      </div>
+      <div style={{ width: 34, height: 34, borderRadius: '50%', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', marginLeft: 4 }}>관</div>
+    </header>
+  );
+}
+
+function HeroBanner({ tab }) {
+  const meta = PAGE_META[tab];
+  return (
+    <div style={{ background: meta.grad, padding: '28px 32px', color: '#fff' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.75, marginBottom: 6 }}>{tab}</div>
+      <h1 style={{ fontSize: 26, fontWeight: 800, letterSpacing: '-0.03em', marginBottom: 4 }}>{meta.title}</h1>
+      <p style={{ fontSize: 13, opacity: 0.8, marginBottom: 20 }}>{meta.sub}</p>
+      <div style={{ display: 'flex', gap: 32 }}>
+        {meta.kpis.map((k, i) => (
+          <div key={k.label} style={{ animation: `slideUp 350ms ease ${i * 80}ms both` }}>
+            <div style={{ fontSize: 28, fontWeight: 800, lineHeight: 1, letterSpacing: '-0.03em' }}>
+              <CountUp end={k.value} />{k.suffix}
+            </div>
+            <div style={{ fontSize: 12, opacity: 0.75, marginTop: 3, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OverviewPage() {
+  const [drawer, setDrawer] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => { const t = setTimeout(() => setLoading(false), 1200); return () => clearTimeout(t); }, []);
+  if (loading) return (
+    <div style={{ padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {[120, 260].map((h, i) => <div key={i} style={{ height: h, borderRadius: 16, background: 'linear-gradient(90deg,#F0FDF4 25%,#D1FAE5 50%,#F0FDF4 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite' }} />)}
+    </div>
+  );
+  return (
+    <div key="overview" style={{ animation: 'fadeIn 300ms ease', padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16 }}>
+        {STORES_DATA.map((s, i) => (
+          <div key={s.name} onClick={() => setDrawer(s)}
+            style={{ background: C.surface, borderRadius: 16, padding: 20, border: `1px solid ${C.borderGray}`, boxShadow: '0 4px 16px rgba(0,0,0,0.07)', cursor: 'pointer', animation: `slideUp 400ms ease ${i * 70}ms both`, transition: 'transform 200ms, box-shadow 200ms' }}
+            onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.02)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.13)'; }}
+            onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.07)'; }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 2 }}>{s.name}</div>
+                <div style={{ fontSize: 11, color: C.textLight }}>마지막 동기화 {s.sync}</div>
+              </div>
+              <Badge status={s.status === 'warning' ? 'warning' : 'active'} />
+            </div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: C.primary, letterSpacing: '-0.03em', marginBottom: 10 }}>{s.stock.toLocaleString()}개</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+              <span style={{ color: C.textSec }}>회전율</span>
+              <span style={{ fontWeight: 700, color: s.turnover > 60 ? C.primary : s.turnover > 40 ? '#D97706' : C.danger }}>{s.turnover}%</span>
+            </div>
+            <div style={{ marginTop: 8, height: 4, borderRadius: 2, background: '#E5E7EB', overflow: 'hidden' }}>
+              <div style={{ height: '100%', background: s.turnover > 60 ? C.primary : s.turnover > 40 ? '#F59E0B' : C.danger, borderRadius: 2, width: `${s.turnover}%`, animation: `barGrow 800ms ease 200ms both`, '--target-width': `${s.turnover}%` }} />
+            </div>
+            {s.alerts > 0 && <div style={{ marginTop: 10, fontSize: 11, color: C.danger, fontWeight: 600 }}>⚠️ 안전재고 알림 {s.alerts}건</div>}
+          </div>
+        ))}
+      </div>
+      <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.borderGray}`, boxShadow: '0 4px 16px rgba(0,0,0,0.05)' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>최근 7일 전사 입출고 현황</div>
+        <div style={{ height: 200 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={WEEKLY} barGap={6}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="day" tick={{ fontSize: 11, fill: C.textSec }} />
+              <YAxis tick={{ fontSize: 11, fill: C.textSec }} />
+              <Tooltip contentStyle={{ fontSize: 12, borderRadius: 10, border: `1px solid ${C.border}` }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="in" name="입고" fill={C.primary} radius={[5,5,0,0]} />
+              <Bar dataKey="out" name="출고" fill={C.accent} radius={[5,5,0,0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      {drawer && (
+        <Drawer title={drawer.name} onClose={() => setDrawer(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ padding: 16, borderRadius: 12, background: C.bg, border: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 28, fontWeight: 800, color: C.primary }}>{drawer.stock.toLocaleString()}<span style={{ fontSize: 14, fontWeight: 500 }}>개</span></div>
+              <div style={{ fontSize: 12, color: C.textSec, marginTop: 3 }}>현재 재고 수량</div>
+            </div>
+            {[['회전율', `${drawer.turnover}%`], ['마지막 동기화', drawer.sync], ['안전재고 알림', `${drawer.alerts}건`], ['상태', drawer.status === 'warning' ? '주의 필요' : '정상']].map(([k, v]) => (
+              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderBottom: `1px solid ${C.borderGray}` }}>
+                <span style={{ fontSize: 13, color: C.textSec }}>{k}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{v}</span>
+              </div>
+            ))}
+            <textarea placeholder="거점 관리 메모..." style={{ width: '100%', height: 80, borderRadius: 10, border: `1px solid ${C.borderGray}`, padding: 12, fontSize: 13, resize: 'none', outline: 'none', marginTop: 8 }} />
+            <button onClick={() => setDrawer(null)} style={{ padding: '11px 0', background: C.primary, color: '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>재고 보충 요청</button>
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+function ComparisonPage() {
+  const [selected, setSelected] = useState(['강남 플래그십', '홍대 직영점', '잠실 팝업스토어']);
+  const [drawer, setDrawer] = useState(null);
+  const allStores = STORES_DATA.map(s => s.name);
+  const chartData = COMPARE_ITEMS.map(d => ({ item: d.item.slice(0, 5) + '..', s1: d.s1, s2: d.s2, s3: d.s3 }));
+  return (
+    <div key="compare" style={{ animation: 'fadeIn 300ms ease', padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <div style={{ background: C.surface, borderRadius: 16, padding: 20, border: `1px solid ${C.borderGray}` }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 14 }}>비교할 매장 선택</div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {allStores.map(s => (
+            <label key={s} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8, border: `1px solid ${selected.includes(s) ? C.primary : C.borderGray}`, background: selected.includes(s) ? C.primaryLight : C.surface, cursor: 'pointer', transition: 'all 180ms' }}>
+              <input type="checkbox" checked={selected.includes(s)} onChange={e => {
+                if (e.target.checked) setSelected(prev => [...prev, s]);
+                else setSelected(prev => prev.filter(x => x !== s));
+              }} style={{ accentColor: C.primary }} />
+              <span style={{ fontSize: 13, fontWeight: selected.includes(s) ? 600 : 400, color: selected.includes(s) ? C.primaryDark : C.text }}>{s}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+      <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.borderGray}` }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>품목별 재고 수량 비교 (개)</div>
+        <div style={{ height: 260 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} barGap={3}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="item" tick={{ fontSize: 10, fill: C.textSec }} />
+              <YAxis tick={{ fontSize: 10, fill: C.textSec }} />
+              <Tooltip contentStyle={{ fontSize: 12, borderRadius: 10 }} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {selected.includes('강남 플래그십') && <Bar dataKey="s1" name="강남 플래그십" fill={C.primary} radius={[4,4,0,0]} />}
+              {selected.includes('홍대 직영점') && <Bar dataKey="s2" name="홍대 직영점" fill={C.accent} radius={[4,4,0,0]} />}
+              {selected.includes('잠실 팝업스토어') && <Bar dataKey="s3" name="잠실 팝업스토어" fill="#34D399" radius={[4,4,0,0]} />}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      <div style={{ background: C.surface, borderRadius: 16, border: `1px solid ${C.borderGray}` }}>
+        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.borderGray}`, fontSize: 13, fontWeight: 700, color: C.textSec, textTransform: 'uppercase', letterSpacing: '0.05em' }}>재고 격차 분석 (클릭 시 상세)</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 0 }}>
+          {COMPARE_ITEMS.map((d, i) => {
+            const max = Math.max(d.s1, d.s2, d.s3); const min = Math.min(d.s1, d.s2, d.s3);
+            const gap = max > 0 ? Math.round((max - min) / max * 100) : 0;
+            return (
+              <div key={d.item} onClick={() => setDrawer(d)}
+                style={{ padding: '16px 20px', borderBottom: i < 3 ? `1px solid ${C.borderGray}` : 'none', borderRight: (i % 3 !== 2) ? `1px solid ${C.borderGray}` : 'none', cursor: 'pointer', transition: 'background 150ms', animation: `slideUp 300ms ease ${i * 50}ms both` }}
+                onMouseEnter={e => e.currentTarget.style.background = C.bg}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 8 }}>{d.item}</div>
+                <div style={{ fontSize: 11, color: C.textSec, marginBottom: 6 }}>강남 {d.s1.toLocaleString()} / 홍대 {d.s2.toLocaleString()} / 잠실 {d.s3.toLocaleString()}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: gap > 50 ? C.danger : gap > 30 ? '#D97706' : C.primary, fontWeight: 700 }}>격차 {gap}%</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {drawer && (
+        <Drawer title={`${drawer.item} — 재고 비교`} onClose={() => setDrawer(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>매장별 재고 현황</div>
+            {[['강남 플래그십', drawer.s1], ['홍대 직영점', drawer.s2], ['잠실 팝업스토어', drawer.s3]].map(([store, qty]) => (
+              <div key={store} style={{ padding: '14px 16px', borderRadius: 12, border: `1px solid ${C.borderGray}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{store}</span>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: C.primary }}>{qty.toLocaleString()}개</span>
+                </div>
+                <div style={{ height: 6, borderRadius: 3, background: '#E5E7EB', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', background: C.primary, borderRadius: 3, width: `${Math.round(qty / Math.max(drawer.s1, drawer.s2, drawer.s3) * 100)}%` }} />
+                </div>
+              </div>
+            ))}
+            <div style={{ padding: 14, borderRadius: 12, background: '#FFF9C4', border: '1px solid #FDE68A', marginTop: 4 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#92400E', marginBottom: 3 }}>📊 격차 분석</div>
+              <div style={{ fontSize: 13, color: '#78350F' }}>
+                최대 격차: {(Math.max(drawer.s1, drawer.s2, drawer.s3) - Math.min(drawer.s1, drawer.s2, drawer.s3)).toLocaleString()}개 ({Math.round((Math.max(drawer.s1,drawer.s2,drawer.s3)-Math.min(drawer.s1,drawer.s2,drawer.s3))/Math.max(drawer.s1,drawer.s2,drawer.s3)*100)}%)
+              </div>
+            </div>
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+function ApiPage() {
+  const [drawer, setDrawer] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [editSchedule, setEditSchedule] = useState(false);
+  return (
+    <div key="api" style={{ animation: 'fadeIn 300ms ease', padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+        {API_CONNECTIONS.map((api, i) => (
+          <div key={api.id} onClick={() => setDrawer(api)}
+            style={{ background: C.surface, borderRadius: 16, padding: 20, border: `1px solid ${api.status === 'warning' ? '#FDE68A' : C.borderGray}`, boxShadow: '0 4px 16px rgba(0,0,0,0.06)', cursor: 'pointer', animation: `slideUp 380ms ease ${i * 80}ms both`, transition: 'transform 200ms, box-shadow 200ms' }}
+            onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.02)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)'; }}
+            onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.06)'; }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 2 }}>{api.name}</div>
+                <div style={{ fontSize: 11, color: C.textLight }}>{api.type} · {api.id}</div>
+              </div>
+              <Badge status={api.status} />
+            </div>
+            <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: api.successRate > 95 ? C.primary : C.danger }}>{api.successRate}%</div>
+                <div style={{ fontSize: 10, color: C.textLight, textTransform: 'uppercase' }}>성공률</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: api.errorCount > 10 ? C.danger : C.text }}>{api.errorCount}</div>
+                <div style={{ fontSize: 10, color: C.textLight, textTransform: 'uppercase' }}>오류 건수</div>
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: C.textSec }}>마지막 동기화: {api.lastSync}</div>
+            <div style={{ fontSize: 11, color: C.textLight, marginTop: 3 }}>스케줄: <code style={{ background: C.bg, padding: '1px 4px', borderRadius: 3, fontSize: 10 }}>{api.schedule}</code></div>
+          </div>
+        ))}
+      </div>
+      {drawer && (
+        <Drawer title={drawer.name} onClose={() => setDrawer(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ padding: 16, borderRadius: 12, background: C.bg, border: `1px solid ${C.border}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ fontSize: 12, color: C.textSec }}>연동 타입</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{drawer.type}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ fontSize: 12, color: C.textSec }}>성공률</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: drawer.successRate > 95 ? C.primary : C.danger }}>{drawer.successRate}%</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 12, color: C.textSec }}>오류 건수</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{drawer.errorCount}건</span>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>동기화 스케줄</div>
+              {editSchedule ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <select style={{ padding: '8px 12px', borderRadius: 8, border: `1px solid ${C.borderGray}`, fontSize: 13, outline: 'none' }}>
+                    <option>매 30분 (*/30 * * * *)</option>
+                    <option>매 1시간 (0 * * * *)</option>
+                    <option>매 2시간 (0 */2 * * *)</option>
+                    <option>실시간</option>
+                  </select>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => { setEditSchedule(false); setToast('스케줄이 즉시 적용되었습니다.'); }} style={{ flex: 1, padding: '9px 0', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>저장</button>
+                    <button onClick={() => setEditSchedule(false)} style={{ padding: '9px 16px', background: '#F9FAFB', border: `1px solid ${C.borderGray}`, borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>취소</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderRadius: 8, border: `1px solid ${C.borderGray}`, background: '#FAFAFA' }}>
+                  <code style={{ fontSize: 13, color: C.text }}>{drawer.schedule}</code>
+                  <button onClick={() => setEditSchedule(true)} style={{ fontSize: 12, color: C.primary, background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>수정</button>
+                </div>
+              )}
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>최근 실행 로그</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {drawer.logs.map((log, i) => (
+                  <div key={i} style={{ padding: '9px 12px', borderRadius: 8, background: log.includes('오류') || log.includes('타임아웃') ? '#FFF1F2' : C.bg, border: `1px solid ${log.includes('오류') || log.includes('타임아웃') ? '#FECACA' : C.border}`, fontSize: 12, color: C.text }}>{log}</div>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <button onClick={() => { setToast('수동 동기화를 시작합니다...'); setDrawer(null); }} style={{ flex: 1, padding: '11px 0', background: C.primary, color: '#fff', border: 'none', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>수동 동기화</button>
+              <button onClick={() => setDrawer(null)} style={{ padding: '11px 16px', background: '#F9FAFB', border: `1px solid ${C.borderGray}`, borderRadius: 10, fontSize: 13, cursor: 'pointer' }}>닫기</button>
+            </div>
+          </div>
+        </Drawer>
+      )}
+      {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+function ReportPage() {
+  const [drawer, setDrawer] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [period, setPeriod] = useState('30일');
+  const sortedItems = [...TURNOVER_DATA].sort((a, b) => b.rate - a.rate);
+  return (
+    <div key="report" style={{ animation: 'fadeIn 300ms ease', padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        {['7일', '30일', '90일'].map(p => (
+          <button key={p} onClick={() => setPeriod(p)}
+            style={{ padding: '7px 18px', borderRadius: 8, border: `1px solid ${period === p ? C.primary : C.borderGray}`, background: period === p ? C.primaryLight : C.surface, color: period === p ? C.primaryDark : C.textSec, fontSize: 13, fontWeight: period === p ? 700 : 400, cursor: 'pointer', transition: 'all 180ms' }}
+          >{p}</button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <button onClick={() => setToast('CSV 파일을 생성하여 다운로드합니다...')} style={{ padding: '7px 16px', borderRadius: 8, border: `1px solid ${C.borderGray}`, background: C.surface, fontSize: 13, cursor: 'pointer', color: C.text, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
+          📥 CSV 내보내기
+        </button>
+      </div>
+      <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.borderGray}` }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.textSec, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 16 }}>기간별 입출고 추이 ({period})</div>
+        <div style={{ height: 220 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={WEEKLY}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="day" tick={{ fontSize: 11, fill: C.textSec }} />
+              <YAxis tick={{ fontSize: 11, fill: C.textSec }} />
+              <Tooltip contentStyle={{ fontSize: 12, borderRadius: 10 }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Line type="monotone" dataKey="in" name="입고" stroke={C.primary} strokeWidth={2.5} dot={{ r: 5, fill: C.primary }} />
+              <Line type="monotone" dataKey="out" name="출고" stroke={C.accent} strokeWidth={2.5} dot={{ r: 5, fill: C.accent }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      <div style={{ background: C.surface, borderRadius: 16, border: `1px solid ${C.borderGray}` }}>
+        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.borderGray}`, fontSize: 13, fontWeight: 700, color: C.textSec, textTransform: 'uppercase', letterSpacing: '0.05em' }}>품목별 재고 회전율 (클릭 시 상세)</div>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: '#F9FAFB' }}>
+              {['순위','품목명','카테고리','출고량','평균 재고','회전율'].map(h => (
+                <th key={h} style={{ padding: '10px 16px', fontSize: 11, fontWeight: 700, color: C.textSec, textAlign: 'left', borderBottom: `1px solid ${C.borderGray}`, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedItems.map((item, i) => (
+              <tr key={item.item} onClick={() => setDrawer(item)}
+                style={{ cursor: 'pointer', transition: 'background 150ms', animation: `slideUp 300ms ease ${i * 35}ms both` }}
+                onMouseEnter={e => { e.currentTarget.style.background = C.bg; e.currentTarget.style.borderLeft = `3px solid ${C.primary}`; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderLeft = 'none'; }}
+              >
+                <td style={{ padding: '12px 16px', fontSize: 13, fontWeight: 700, color: i < 3 ? C.primary : C.textLight, borderBottom: `1px solid ${C.borderGray}` }}>#{i + 1}</td>
+                <td style={{ padding: '12px 16px', fontSize: 13, fontWeight: 600, color: C.text, borderBottom: `1px solid ${C.borderGray}` }}>{item.item}</td>
+                <td style={{ padding: '12px 16px', fontSize: 12, color: C.textSec, borderBottom: `1px solid ${C.borderGray}` }}>{item.category}</td>
+                <td style={{ padding: '12px 16px', fontSize: 13, color: C.text, borderBottom: `1px solid ${C.borderGray}` }}>{item.out.toLocaleString()}</td>
+                <td style={{ padding: '12px 16px', fontSize: 13, color: C.textSec, borderBottom: `1px solid ${C.borderGray}` }}>{item.avgStock.toLocaleString()}</td>
+                <td style={{ padding: '12px 16px', borderBottom: `1px solid ${C.borderGray}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ flex: 1, height: 6, borderRadius: 3, background: '#E5E7EB', overflow: 'hidden', maxWidth: 80 }}>
+                      <div style={{ height: '100%', background: item.rate > 100 ? C.danger : item.rate > 60 ? C.warning : C.primary, borderRadius: 3, width: `${Math.min(item.rate / 2, 100)}%` }} />
+                    </div>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: item.rate > 100 ? C.danger : item.rate > 60 ? '#D97706' : C.primary, minWidth: 45 }}>{item.rate}%</span>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {drawer && (
+        <Drawer title={`${drawer.item} — 회전율 상세`} onClose={() => setDrawer(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ padding: 16, borderRadius: 12, background: C.bg, border: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 28, fontWeight: 800, color: drawer.rate > 100 ? C.danger : drawer.rate > 60 ? '#D97706' : C.primary }}>{drawer.rate}%</div>
+              <div style={{ fontSize: 12, color: C.textSec, marginTop: 2 }}>재고 회전율 (기간 출고량 ÷ 평균 재고량 × 100)</div>
+            </div>
+            {[['카테고리', drawer.category], ['기간 출고량', `${drawer.out.toLocaleString()}개`], ['평균 재고', `${drawer.avgStock.toLocaleString()}개`], ['분석 기간', period]].map(([k, v]) => (
+              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '11px 0', borderBottom: `1px solid ${C.borderGray}` }}>
+                <span style={{ fontSize: 13, color: C.textSec }}>{k}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{v}</span>
+              </div>
+            ))}
+            {drawer.rate > 100 && (
+              <div style={{ padding: 14, borderRadius: 12, background: '#FFF1F2', border: '1px solid #FECACA' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.danger, marginBottom: 3 }}>⚠️ 과회전 위험</div>
+                <div style={{ fontSize: 13, color: '#991B1B' }}>출고량이 평균 재고량을 초과합니다. 안전재고 기준 재검토가 필요합니다.</div>
+              </div>
+            )}
+          </div>
+        </Drawer>
+      )}
+      {toast && <Toast msg={toast} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+function App() {
+  const [tab, setTab] = useState('통합 현황판');
+  const renderPage = () => {
+    if (tab === '통합 현황판') return <OverviewPage />;
+    if (tab === '매장 비교 분석') return <ComparisonPage />;
+    if (tab === 'API 연동 관리') return <ApiPage />;
+    if (tab === '리포트 & 통계') return <ReportPage />;
+    return null;
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', minHeight: '100vh', background: C.bg, fontFamily: "'Pretendard', -apple-system, sans-serif" }}>
+      <GlobalNav tab={tab} setTab={setTab} />
+      <HeroBanner tab={tab} />
+      <div style={{ flex: 1 }}>{renderPage()}</div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
