@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartBoard 기술지원 플랫폼 — 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;font-family:'Pretendard',sans-serif;background:#0F1117;color:#E8ECF4}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+@keyframes barGrow{from{width:0}to{width:var(--tw,0%)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes glowPulse{0%,100%{box-shadow:0 0 8px rgba(108,71,255,0.4)}50%{box-shadow:0 0 20px rgba(108,71,255,0.7)}}
+@keyframes progressFill{from{width:0}to{width:100%}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef} = React;
+const {AreaChart,Area,BarChart,Bar,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,PieChart,Pie,Cell} = Recharts;
+
+const C = {
+  primary:'#6C47FF', secondary:'#3A1FA8', accent:'#F5A623',
+  bg:'#0F1117', surface:'#1A1E2E', surface2:'#252A3D',
+  text:'#E8ECF4', textLight:'#8A94AD', border:'rgba(255,255,255,0.08)',
+  green:'#22D3A5', red:'#F87171', warn:'#FBBF24',
+};
+
+/* ─── mock data ─── */
+const DAILY_QUERIES = [
+  {d:'04/28',q:98,miss:12},{d:'04/29',q:115,miss:8},{d:'04/30',q:127,miss:15},
+  {d:'05/01',q:89,miss:6},{d:'05/02',q:143,miss:11},{d:'05/03',q:156,miss:9},{d:'05/04',q:134,miss:13},
+];
+const TOP_KEYWORDS = [
+  {k:'화면 꺼짐',cnt:48},{k:'터치 오류',cnt:37},{k:'소리 없음',cnt:31},{k:'Wi-Fi 연결',cnt:28},{k:'앱 설치',cnt:24},
+  {k:'밝기 조절',cnt:19},{k:'전원 문제',cnt:17},{k:'업데이트',cnt:15},
+];
+const MISSED = [
+  {id:1,q:'HDMI 케이블 연결 시 화면 분할',ts:'오늘 14:23'},
+  {id:2,q:'구글 미트 화상회의 카메라 설정',ts:'오늘 13:08'},
+  {id:3,q:'판서 앱 저장 경로 변경',ts:'오늘 11:45'},
+  {id:4,q:'펜 감압 설정 초기화',ts:'어제 17:22'},
+];
+const CONTENT_LIST = [
+  {id:1,type:'pdf',name:'SmartBoard 초기설정 매뉴얼.pdf',size:'4.2MB',keys:['초기설정','설치'],status:'active',upd:'2026-04-28'},
+  {id:2,type:'video',name:'터치패널_캘리브레이션.mp4',size:'87.3MB',keys:['터치','캘리브레이션'],status:'active',upd:'2026-04-27'},
+  {id:3,type:'excel',name:'AS_이력_2026Q1.xlsx',size:'1.1MB',keys:['AS','수리'],status:'converting',upd:'2026-05-01'},
+  {id:4,type:'pdf',name:'네트워크_연결_가이드.pdf',size:'2.8MB',keys:['네트워크','Wi-Fi'],status:'active',upd:'2026-04-25'},
+  {id:5,type:'video',name:'앱스토어_설치방법.mp4',size:'54.6MB',keys:['앱','설치'],status:'active',upd:'2026-04-20'},
+];
+const KEYWORD_LIST = [
+  {id:1,kw:'화면 꺼짐',syns:['화면 꺼짐','디스플레이 꺼짐','절전 모드'],content:3,hits:48,editing:false},
+  {id:2,kw:'터치 오류',syns:['터치 안됨','터치 반응 없음','터치 오작동'],content:2,hits:37,editing:false},
+  {id:3,kw:'소리 없음',syns:['무음','소리 안남','오디오 오류'],content:4,hits:31,editing:false},
+  {id:4,kw:'Wi-Fi 연결',syns:['무선 인터넷','Wi-Fi','인터넷 연결'],content:2,hits:28,editing:false},
+  {id:5,kw:'앱 설치',syns:['어플 설치','앱 다운로드'],content:3,hits:24,editing:false},
+];
+
+/* ─── helper components ─── */
+function CountUp({end,suffix=''}){
+  const [v,setV]=useState(0);
+  useEffect(()=>{
+    let s=0;const step=end/(1200/16);
+    const t=setInterval(()=>{s+=step;if(s>=end){setV(end);clearInterval(t);}else setV(Math.floor(s));},16);
+    return()=>clearInterval(t);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{v.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({msg,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return(
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:C.surface2,color:C.text,padding:'12px 20px',borderRadius:8,animation:'slideUp 300ms ease',boxShadow:'0 4px 24px rgba(0,0,0,0.4)',display:'flex',alignItems:'center',gap:10,border:`1px solid ${C.border}`,borderLeft:`4px solid ${C.accent}`}}>
+      <span style={{color:C.accent}}>✓</span><span style={{fontSize:14}}>{msg}</span>
+    </div>
+  );
+}
+
+function Modal({title,onClose,children,width=540}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.6)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:C.surface,borderRadius:14,zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.5)',border:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'18px 22px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:700,color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textLight}}>✕</button>
+        </div>
+        <div style={{padding:22,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Badge({label,color}){
+  const map={active:{bg:'#16473A',color:'#22D3A5',label:'활성'},converting:{bg:'#4A3200',color:C.warn,label:'변환 중'},inactive:{bg:'#3A1A1A',color:'#F87171',label:'비활성'}};
+  const s=map[label]||{bg:C.surface2,color:C.textLight,label};
+  return <span style={{padding:'3px 9px',borderRadius:999,fontSize:11,fontWeight:600,background:s.bg,color:s.color}}>{s.label}</span>;
+}
+
+/* ─── pages ─── */
+function DashboardPage(){
+  const STATS=[
+    {label:'오늘 총 질의',value:134,suffix:'건',icon:'💬',delta:'+12%',up:true},
+    {label:'미답변 질의',value:13,suffix:'건',icon:'⚠️',delta:'-3건',up:true},
+    {label:'등록 콘텐츠',value:163,suffix:'개',icon:'📁',delta:'+5개',up:true},
+    {label:'검색 키워드',value:2340,suffix:'개',icon:'🔑',delta:'+48개',up:true},
+  ];
+  return(
+    <div style={{padding:'32px',maxWidth:1200,margin:'0 auto',width:'100%'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:28}}>
+        {STATS.map((s,i)=>(
+          <div key={s.label} style={{background:C.surface,borderRadius:14,padding:'20px',border:`1px solid ${C.border}`,animation:`slideUp 400ms ease ${i*70}ms both`,position:'relative',overflow:'hidden',cursor:'default',transition:'transform 200ms, box-shadow 200ms',boxShadow:'0 0 20px rgba(108,71,255,0.12)'}} onMouseOver={e=>{e.currentTarget.style.transform='scale(1.03)';e.currentTarget.style.boxShadow='0 0 32px rgba(108,71,255,0.25)';}} onMouseOut={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 0 20px rgba(108,71,255,0.12)'}}>
+            <div style={{position:'absolute',top:-20,right:-20,fontSize:52,opacity:0.07}}>{s.icon}</div>
+            <div style={{fontSize:13,color:C.textLight,marginBottom:8}}>{s.label}</div>
+            <div style={{fontSize:28,fontWeight:800,color:C.text,marginBottom:6}}><CountUp end={s.value} suffix={s.suffix}/></div>
+            <div style={{fontSize:12,color:s.up?C.green:C.red}}>{s.delta}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:20,marginBottom:24}}>
+        <div style={{background:C.surface,borderRadius:14,padding:22,border:`1px solid ${C.border}`}}>
+          <div style={{fontWeight:600,marginBottom:18,fontSize:15}}>📈 일별 검색 질의 추이 (최근 7일)</div>
+          <div style={{height:220}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={DAILY_QUERIES}>
+                <defs>
+                  <linearGradient id="gQ" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.primary} stopOpacity={0.4}/>
+                    <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="gM" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.red} stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor={C.red} stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false}/>
+                <XAxis dataKey="d" tick={{fill:C.textLight,fontSize:11}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fill:C.textLight,fontSize:11}} axisLine={false} tickLine={false}/>
+                <Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}}/>
+                <Area type="monotone" dataKey="q" name="총 질의" stroke={C.primary} strokeWidth={2} fill="url(#gQ)"/>
+                <Area type="monotone" dataKey="miss" name="미답변" stroke={C.red} strokeWidth={2} fill="url(#gM)"/>
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{background:C.surface,borderRadius:14,padding:22,border:`1px solid ${C.border}`}}>
+          <div style={{fontWeight:600,marginBottom:16,fontSize:15}}>🚨 미답변 질의</div>
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {MISSED.map((m,i)=>(
+              <div key={m.id} style={{padding:'10px 12px',background:C.surface2,borderRadius:10,display:'flex',flexDirection:'column',gap:3,animation:`slideUp 400ms ease ${i*60}ms both`,cursor:'pointer'}}
+              onMouseOver={e=>e.currentTarget.style.borderColor=C.primary}
+              onMouseOut={e=>e.currentTarget.style.borderColor='transparent'}>
+                <div style={{fontSize:13,color:C.text,fontWeight:500}}>{m.q}</div>
+                <div style={{fontSize:11,color:C.textLight}}>{m.ts}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:14,padding:22,border:`1px solid ${C.border}`}}>
+        <div style={{fontWeight:600,marginBottom:16,fontSize:15}}>🔥 인기 검색 키워드 TOP 8</div>
+        <div style={{height:180}}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={TOP_KEYWORDS} layout="vertical">
+              <XAxis type="number" tick={{fill:C.textLight,fontSize:11}} axisLine={false} tickLine={false}/>
+              <YAxis dataKey="k" type="category" width={100} tick={{fill:C.textLight,fontSize:12}} axisLine={false} tickLine={false}/>
+              <Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}}/>
+              <Bar dataKey="cnt" name="검색 횟수" fill={C.primary} radius={[0,6,6,0]}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UploadPage(){
+  const [files,setFiles]=useState(CONTENT_LIST);
+  const [dragging,setDragging]=useState(false);
+  const [uploading,setUploading]=useState(null);
+  const [filter,setFilter]=useState('all');
+  const [detail,setDetail]=useState(null);
+  const [toast,setToast]=useState(null);
+  const TI={pdf:'📄',video:'🎬',excel:'📊'};
+  const TC={pdf:'#F59E0B',video:'#6366F1',excel:'#22C55E'};
+
+  const startUpload=(name,type)=>{
+    setUploading({name,pct:0});
+    let p=0;
+    const t=setInterval(()=>{p+=Math.random()*15;if(p>=100){clearInterval(t);setFiles(prev=>[...prev,{id:Date.now(),type,name,size:'—',keys:[],status:'active',upd:'2026-05-04'}]);setUploading(null);setToast('업로드 완료! 콘텐츠가 등록됩니다.');}else setUploading({name,pct:Math.min(p,99)});},200);
+  };
+
+  const filtered=files.filter(f=>filter==='all'||f.type===filter);
+
+  return(
+    <div style={{padding:'32px',maxWidth:1200,margin:'0 auto',width:'100%'}}>
+      {/* drop zone */}
+      <div onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onDrop={e=>{e.preventDefault();setDragging(false);const f=e.dataTransfer.files[0];if(f)startUpload(f.name,f.name.endsWith('.pdf')?'pdf':f.name.endsWith('.mp4')?'video':'excel');}}
+        style={{border:`2px dashed ${dragging?C.primary:C.border}`,borderRadius:14,padding:'40px 32px',textAlign:'center',marginBottom:24,background:dragging?`${C.primary}08`:C.surface,transition:'all 250ms',cursor:'pointer',animation:'slideUp 400ms ease'}}
+        onClick={()=>startUpload('새_콘텐츠.pdf','pdf')}>
+        <div style={{fontSize:48,marginBottom:12}}>☁️</div>
+        <div style={{fontWeight:600,fontSize:16,color:C.text,marginBottom:6}}>파일을 드래그하거나 클릭해 업로드</div>
+        <div style={{fontSize:13,color:C.textLight}}>PDF, Excel(AS 자료), MP4 동영상 지원 · 파일당 최대 500MB</div>
+        {uploading&&(
+          <div style={{marginTop:20}}>
+            <div style={{fontSize:13,color:C.textLight,marginBottom:8}}>업로드 중: {uploading.name}</div>
+            <div style={{height:6,background:C.surface2,borderRadius:999,overflow:'hidden',maxWidth:400,margin:'0 auto'}}>
+              <div style={{height:'100%',background:C.primary,borderRadius:999,width:`${uploading.pct}%`,transition:'width 200ms',animation:'glowPulse 1.5s infinite'}}/>
+            </div>
+            <div style={{fontSize:12,color:C.primary,marginTop:6}}>{Math.round(uploading.pct)}%</div>
+          </div>
+        )}
+      </div>
+
+      {/* filter + list */}
+      <div style={{display:'flex',gap:8,marginBottom:16}}>
+        {['all','pdf','video','excel'].map(v=>(
+          <button key={v} onClick={()=>setFilter(v)} style={{padding:'7px 14px',borderRadius:8,border:`1px solid ${filter===v?C.primary:C.border}`,background:filter===v?C.primary:C.surface,color:filter===v?'#fff':C.textLight,cursor:'pointer',fontSize:12,fontWeight:filter===v?600:400}}>
+            {v==='all'?'전체':v==='pdf'?'PDF':v==='video'?'동영상':'Excel'}
+          </button>
+        ))}
+      </div>
+
+      <div style={{background:C.surface,borderRadius:14,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+        <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr 1fr 80px',padding:'10px 18px',borderBottom:`1px solid ${C.border}`,fontSize:11,fontWeight:700,color:C.textLight,textTransform:'uppercase',letterSpacing:'0.04em'}}>
+          <div>파일명</div><div>유형</div><div>크기</div><div>상태</div><div>업데이트</div><div>관리</div>
+        </div>
+        {filtered.map((f,i)=>(
+          <div key={f.id} style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr 1fr 1fr 80px',padding:'14px 18px',borderBottom:`1px solid ${C.border}`,alignItems:'center',animation:`slideUp 300ms ease ${i*50}ms both`,cursor:'pointer',transition:'background 150ms'}}
+          onMouseOver={e=>e.currentTarget.style.background=C.surface2}
+          onMouseOut={e=>e.currentTarget.style.background='transparent'}
+          onClick={()=>setDetail(f)}>
+            <div style={{display:'flex',alignItems:'center',gap:10}}>
+              <span style={{fontSize:20}}>{TI[f.type]}</span>
+              <div>
+                <div style={{fontSize:13,fontWeight:500,color:C.text}}>{f.name}</div>
+                <div style={{fontSize:11,color:C.textLight}}>{f.keys.join(', ')}</div>
+              </div>
+            </div>
+            <div style={{fontSize:12,color:TC[f.type]||C.textLight,fontWeight:600}}>{f.type.toUpperCase()}</div>
+            <div style={{fontSize:13,color:C.textLight}}>{f.size}</div>
+            <div><Badge label={f.status}/></div>
+            <div style={{fontSize:12,color:C.textLight}}>{f.upd}</div>
+            <div style={{display:'flex',gap:6}}>
+              <button onClick={e=>{e.stopPropagation();setToast('콘텐츠가 삭제됩니다.');setFiles(p=>p.filter(x=>x.id!==f.id));}} style={{padding:'5px 10px',background:'transparent',border:`1px solid ${C.red}50`,color:C.red,borderRadius:6,cursor:'pointer',fontSize:11}}>삭제</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {detail&&(
+        <Modal title={detail.name} onClose={()=>setDetail(null)}>
+          <div style={{display:'flex',gap:12,marginBottom:16}}>
+            <div style={{flex:1,background:C.surface2,borderRadius:8,padding:14,textAlign:'center'}}><div style={{fontSize:24,fontWeight:700,color:C.primary}}>{detail.size}</div><div style={{fontSize:12,color:C.textLight}}>파일 크기</div></div>
+            <div style={{flex:1,background:C.surface2,borderRadius:8,padding:14,textAlign:'center'}}><div style={{fontSize:24,fontWeight:700,color:C.green}}>{detail.type.toUpperCase()}</div><div style={{fontSize:12,color:C.textLight}}>파일 유형</div></div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:12,color:C.textLight,marginBottom:6}}>연결 키워드</div>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+              {detail.keys.length?detail.keys.map(k=><span key={k} style={{padding:'4px 10px',background:`${C.primary}20`,color:C.primary,borderRadius:999,fontSize:12}}>{k}</span>):<span style={{fontSize:13,color:C.textLight}}>등록된 키워드 없음</span>}
+            </div>
+          </div>
+          <button onClick={()=>{setDetail(null);setToast('키워드 편집 화면으로 이동합니다.');}} style={{width:'100%',padding:12,background:C.primary,color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer'}}>키워드 연결 편집</button>
+        </Modal>
+      )}
+      {toast&&<Toast msg={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+function KeywordPage(){
+  const [kws,setKws]=useState(KEYWORD_LIST);
+  const [editing,setEditing]=useState(null);
+  const [newSyn,setNewSyn]=useState('');
+  const [search,setSearch]=useState('');
+  const [toast,setToast]=useState(null);
+  const [addModal,setAddModal]=useState(false);
+  const [newKw,setNewKw]=useState('');
+
+  const filtered=kws.filter(k=>!search||k.kw.includes(search)||k.syns.some(s=>s.includes(search)));
+
+  const addSyn=(id)=>{
+    if(!newSyn.trim())return;
+    setKws(p=>p.map(k=>k.id===id?{...k,syns:[...k.syns,newSyn]}:k));
+    setNewSyn('');setToast('동의어가 추가됩니다. Redis 캐시를 자동 무효화합니다.');
+  };
+  const removeSyn=(id,syn)=>{
+    setKws(p=>p.map(k=>k.id===id?{...k,syns:k.syns.filter(s=>s!==syn)}:k));
+    setToast('동의어가 제거됩니다.');
+  };
+  const addKw=()=>{
+    if(!newKw.trim())return;
+    setKws(p=>[...p,{id:Date.now(),kw:newKw,syns:[newKw],content:0,hits:0,editing:false}]);
+    setNewKw('');setAddModal(false);setToast('새 키워드가 등록됩니다.');
+  };
+
+  return(
+    <div style={{padding:'32px',maxWidth:1200,margin:'0 auto',width:'100%'}}>
+      <div style={{display:'flex',gap:10,marginBottom:20}}>
+        <div style={{flex:1,position:'relative'}}>
+          <span style={{position:'absolute',left:12,top:0,bottom:0,display:'flex',alignItems:'center',color:C.textLight}}>🔍</span>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="키워드 또는 동의어 검색..." style={{width:'100%',padding:'10px 14px 10px 38px',background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,fontSize:13,color:C.text,outline:'none'}}/>
+        </div>
+        <button onClick={()=>setAddModal(true)} style={{padding:'10px 20px',background:C.primary,color:'#fff',border:'none',borderRadius:10,cursor:'pointer',fontWeight:600,fontSize:13}}>+ 키워드 추가</button>
+      </div>
+
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        {filtered.map((k,i)=>(
+          <div key={k.id} style={{background:C.surface,borderRadius:12,border:`1px solid ${C.border}`,padding:'18px 20px',animation:`slideUp 350ms ease ${i*60}ms both`}}>
+            <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:15,color:C.text}}>{k.kw}</div>
+                <div style={{fontSize:12,color:C.textLight}}>연결 콘텐츠 {k.content}개 · 검색 {k.hits}회</div>
+              </div>
+              <div style={{width:60,height:6,background:C.surface2,borderRadius:999,overflow:'hidden'}}>
+                <div style={{height:'100%',background:C.primary,borderRadius:999,width:`${Math.min(k.hits/50*100,100)}%`,animation:'barGrow 800ms ease both'}}/>
+              </div>
+              <button onClick={()=>setEditing(editing===k.id?null:k.id)} style={{padding:'6px 14px',background:editing===k.id?`${C.primary}20`:C.surface2,border:`1px solid ${editing===k.id?C.primary:C.border}`,color:editing===k.id?C.primary:C.textLight,borderRadius:8,cursor:'pointer',fontSize:12}}>
+                {editing===k.id?'접기':'편집'}
+              </button>
+            </div>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:editing===k.id?12:0}}>
+              {k.syns.map(s=>(
+                <div key={s} style={{display:'flex',alignItems:'center',gap:4,padding:'4px 10px',background:`${C.primary}15`,borderRadius:999,fontSize:12,color:C.primary}}>
+                  {s}
+                  {editing===k.id&&<button onClick={()=>removeSyn(k.id,s)} style={{background:'none',border:'none',cursor:'pointer',color:C.textLight,fontSize:13,lineHeight:1}}>×</button>}
+                </div>
+              ))}
+            </div>
+            {editing===k.id&&(
+              <div style={{display:'flex',gap:8,animation:'slideDown 200ms ease'}}>
+                <input value={newSyn} onChange={e=>setNewSyn(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addSyn(k.id)} placeholder="새 동의어 입력..." style={{flex:1,padding:'8px 12px',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,color:C.text,outline:'none'}}/>
+                <button onClick={()=>addSyn(k.id)} style={{padding:'8px 16px',background:C.accent,color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontSize:12,fontWeight:600}}>추가</button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {addModal&&(
+        <Modal title="새 키워드 추가" onClose={()=>setAddModal(false)} width={420}>
+          <div style={{marginBottom:14}}>
+            <label style={{fontSize:13,color:C.textLight,display:'block',marginBottom:6}}>키워드명</label>
+            <input value={newKw} onChange={e=>setNewKw(e.target.value)} placeholder="예: 화면 깜빡임" style={{width:'100%',padding:'10px 14px',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,fontSize:13,color:C.text,outline:'none'}}/>
+          </div>
+          <div style={{display:'flex',gap:10}}>
+            <button onClick={()=>setAddModal(false)} style={{flex:1,padding:12,background:'transparent',border:`1px solid ${C.border}`,color:C.textLight,borderRadius:8,cursor:'pointer'}}>취소</button>
+            <button onClick={addKw} style={{flex:1,padding:12,background:C.primary,color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontWeight:600}}>등록</button>
+          </div>
+        </Modal>
+      )}
+      {toast&&<Toast msg={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+function AnalyticsPage(){
+  const [period,setPeriod]=useState('7d');
+  const PIE_DATA=[{name:'PDF',value:38,color:'#F59E0B'},{name:'동영상',value:29,color:'#6366F1'},{name:'AS자료',value:22,color:'#22D3A5'},{name:'미답변',value:11,color:'#F87171'}];
+  return(
+    <div style={{padding:'32px',maxWidth:1200,margin:'0 auto',width:'100%'}}>
+      <div style={{display:'flex',gap:8,marginBottom:22}}>
+        {[{id:'7d',label:'최근 7일'},{id:'30d',label:'최근 30일'},{id:'90d',label:'최근 90일'}].map(p=>(
+          <button key={p.id} onClick={()=>setPeriod(p.id)} style={{padding:'7px 14px',borderRadius:8,border:`1px solid ${period===p.id?C.primary:C.border}`,background:period===p.id?C.primary:C.surface,color:period===p.id?'#fff':C.textLight,cursor:'pointer',fontSize:12}}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:20,marginBottom:20}}>
+        <div style={{background:C.surface,borderRadius:14,padding:22,border:`1px solid ${C.border}`}}>
+          <div style={{fontWeight:600,marginBottom:18,fontSize:15}}>📊 검색 질의 / 미답변 추이</div>
+          <div style={{height:240}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={DAILY_QUERIES}>
+                <defs>
+                  <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.primary} stopOpacity={0.5}/>
+                    <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.accent} stopOpacity={0.4}/>
+                    <stop offset="95%" stopColor={C.accent} stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false}/>
+                <XAxis dataKey="d" tick={{fill:C.textLight,fontSize:11}} axisLine={false} tickLine={false}/>
+                <YAxis tick={{fill:C.textLight,fontSize:11}} axisLine={false} tickLine={false}/>
+                <Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}}/>
+                <Area type="monotone" dataKey="q" name="총 질의" stroke={C.primary} strokeWidth={2} fill="url(#g1)"/>
+                <Area type="monotone" dataKey="miss" name="미답변" stroke={C.accent} strokeWidth={2} fill="url(#g2)"/>
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{background:C.surface,borderRadius:14,padding:22,border:`1px solid ${C.border}`}}>
+          <div style={{fontWeight:600,marginBottom:18,fontSize:15}}>🍩 답변 유형 분포</div>
+          <div style={{height:180,display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={PIE_DATA} cx="50%" cy="50%" innerRadius={50} outerRadius={75} paddingAngle={3} dataKey="value">
+                  {PIE_DATA.map((entry,i)=><Cell key={i} fill={entry.color}/>)}
+                </Pie>
+                <Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}}/>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:8,justifyContent:'center'}}>
+            {PIE_DATA.map(d=><div key={d.name} style={{display:'flex',alignItems:'center',gap:4,fontSize:11,color:C.textLight}}><div style={{width:8,height:8,borderRadius:'50%',background:d.color}}/>{d.name} {d.value}%</div>)}
+          </div>
+        </div>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:14,padding:22,border:`1px solid ${C.border}`}}>
+        <div style={{fontWeight:600,marginBottom:16,fontSize:15}}>🔥 검색 키워드 TOP 8 (기간: {period})</div>
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {TOP_KEYWORDS.map((k,i)=>(
+            <div key={k.k} style={{display:'flex',alignItems:'center',gap:14,animation:`slideUp 300ms ease ${i*50}ms both`}}>
+              <div style={{width:24,fontSize:12,color:C.textLight,textAlign:'right',flexShrink:0}}>#{i+1}</div>
+              <div style={{fontSize:13,color:C.text,width:120,flexShrink:0}}>{k.k}</div>
+              <div style={{flex:1,height:8,background:C.surface2,borderRadius:999,overflow:'hidden'}}>
+                <div style={{height:'100%',background:`linear-gradient(90deg,${C.primary},${C.accent})`,borderRadius:999,width:`${k.cnt/48*100}%`,animation:'barGrow 800ms ease both'}}/>
+              </div>
+              <div style={{fontSize:13,fontWeight:600,color:C.text,width:40,textAlign:'right'}}>{k.cnt}</div>
+              <button style={{padding:'4px 12px',background:C.surface2,border:`1px solid ${C.border}`,color:C.textLight,borderRadius:6,cursor:'pointer',fontSize:11}}>편집</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPage(){
+  const [cache,setCache]=useState(true);
+  const [ttl,setTtl]=useState('300');
+  const [maxUpload,setMaxUpload]=useState('500');
+  const [toast,setToast]=useState(null);
+  const [confirm,setConfirm]=useState(false);
+  const HEALTH=[{label:'PostgreSQL',status:'정상',ms:12},{label:'Redis',status:'정상',ms:3},{label:'파일 저장소',status:'정상',ms:8},{label:'검색 엔진',status:'정상',ms:22}];
+  return(
+    <div style={{padding:'32px',maxWidth:900,margin:'0 auto',width:'100%'}}>
+      <div style={{display:'flex',flexDirection:'column',gap:20}}>
+        <div style={{background:C.surface,borderRadius:14,border:`1px solid ${C.border}`,padding:24}}>
+          <div style={{fontWeight:600,fontSize:15,marginBottom:18}}>🔧 시스템 설정</div>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px',background:C.surface2,borderRadius:10}}>
+              <div><div style={{fontSize:14,fontWeight:500,color:C.text}}>Redis 캐싱</div><div style={{fontSize:12,color:C.textLight,marginTop:2}}>검색 결과 캐시 활성화 (TTL: {ttl}초)</div></div>
+              <div onClick={()=>setCache(p=>!p)} style={{width:46,height:26,borderRadius:13,background:cache?C.primary:C.surface,border:`2px solid ${cache?C.primary:C.border}`,position:'relative',cursor:'pointer',transition:'all 200ms'}}>
+                <div style={{position:'absolute',top:2,left:cache?22:2,width:18,height:18,borderRadius:'50%',background:'#fff',transition:'left 200ms'}}/>
+              </div>
+            </div>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px',background:C.surface2,borderRadius:10}}>
+              <div><div style={{fontSize:14,fontWeight:500,color:C.text}}>캐시 TTL</div><div style={{fontSize:12,color:C.textLight,marginTop:2}}>검색 캐시 만료 시간</div></div>
+              <select value={ttl} onChange={e=>setTtl(e.target.value)} style={{padding:'7px 12px',background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:13,cursor:'pointer'}}>
+                {['60','180','300','600','1800'].map(v=><option key={v} value={v}>{v}초</option>)}
+              </select>
+            </div>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px',background:C.surface2,borderRadius:10}}>
+              <div><div style={{fontSize:14,fontWeight:500,color:C.text}}>최대 업로드 크기</div><div style={{fontSize:12,color:C.textLight,marginTop:2}}>단일 파일 업로드 한도</div></div>
+              <select value={maxUpload} onChange={e=>setMaxUpload(e.target.value)} style={{padding:'7px 12px',background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,fontSize:13,cursor:'pointer'}}>
+                {['100','200','500','1000'].map(v=><option key={v} value={v}>{v}MB</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{marginTop:20,display:'flex',gap:10}}>
+            <button onClick={()=>setToast('설정이 저장됩니다.')} style={{padding:'10px 22px',background:C.primary,color:'#fff',border:'none',borderRadius:10,cursor:'pointer',fontWeight:600,fontSize:13}}>설정 저장</button>
+            <button onClick={()=>setConfirm(true)} style={{padding:'10px 22px',background:'transparent',border:`1px solid ${C.red}60`,color:C.red,borderRadius:10,cursor:'pointer',fontSize:13}}>캐시 전체 초기화</button>
+          </div>
+        </div>
+
+        <div style={{background:C.surface,borderRadius:14,border:`1px solid ${C.border}`,padding:24}}>
+          <div style={{fontWeight:600,fontSize:15,marginBottom:18}}>💚 시스템 상태</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12}}>
+            {HEALTH.map((h,i)=>(
+              <div key={h.label} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 16px',background:C.surface2,borderRadius:10,animation:`slideUp 300ms ease ${i*60}ms both`}}>
+                <div style={{width:10,height:10,borderRadius:'50%',background:C.green,animation:'pulse 2s infinite',flexShrink:0}}/>
+                <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500,color:C.text}}>{h.label}</div><div style={{fontSize:11,color:C.green}}>{h.status}</div></div>
+                <div style={{fontSize:12,color:C.textLight}}>{h.ms}ms</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {confirm&&(
+        <Modal title="캐시 초기화 확인" onClose={()=>setConfirm(false)} width={400}>
+          <p style={{fontSize:14,color:C.textLight,lineHeight:1.7,marginBottom:20}}>Redis 전체 캐시를 초기화합니다. 초기화 직후 첫 검색 응답이 느려질 수 있습니다. 계속하시겠습니까?</p>
+          <div style={{display:'flex',gap:10}}>
+            <button onClick={()=>setConfirm(false)} style={{flex:1,padding:12,background:C.surface2,border:`1px solid ${C.border}`,color:C.textLight,borderRadius:8,cursor:'pointer'}}>취소</button>
+            <button onClick={()=>{setConfirm(false);setToast('Redis 캐시가 초기화됩니다.');}} style={{flex:1,padding:12,background:C.red,color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontWeight:600}}>초기화 실행</button>
+          </div>
+        </Modal>
+      )}
+      {toast&&<Toast msg={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+/* ─── App (spa-modern layout) ─── */
+function App(){
+  const [route,setRoute]=useState('home');
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{setTimeout(()=>setLoading(false),1400);},[]);
+
+  const NAV=[
+    {id:'home',label:'관리자 대시보드'},
+    {id:'upload',label:'콘텐츠 업로드'},
+    {id:'keyword',label:'키워드 편집'},
+    {id:'analytics',label:'검색 통계'},
+    {id:'settings',label:'시스템 설정'},
+  ];
+  const HERO={
+    home:{title:'관리자 대시보드',sub:'콘텐츠·키워드·검색 현황을 한눈에 파악합니다',kpis:[{l:'총 질의',v:862,s:'건'},{l:'등록 콘텐츠',v:163,s:'개'},{l:'검색 키워드',v:2340,s:'개'}]},
+    upload:{title:'콘텐츠 업로드 관리',sub:'PDF·Excel·동영상을 업로드하고 챗봇 답변에 연결합니다',kpis:[{l:'총 파일',v:163,s:'개'},{l:'총 용량',v:1241,s:'MB'},{l:'변환 대기',v:3,s:'건'}]},
+    keyword:{title:'키워드 매핑 편집기',sub:'동의어·별칭을 추가하고 검색 정확도를 실시간 조율합니다',kpis:[{l:'등록 키워드',v:2340,s:'개'},{l:'동의어 매핑',v:456,s:'개'},{l:'캐시 히트율',v:78,s:'%'}]},
+    analytics:{title:'검색 통계 분석',sub:'질의 패턴과 미답변 현황을 분석하여 콘텐츠를 보강합니다',kpis:[{l:'총 질의',v:862,s:'건'},{l:'미답변',v:67,s:'건'},{l:'평균 키워드 매칭',v:3.2,s:'개'}]},
+    settings:{title:'시스템 설정',sub:'Redis 캐시·업로드 정책·시스템 상태를 관리합니다',kpis:[{l:'캐시 TTL',v:300,s:'초'},{l:'최대 업로드',v:500,s:'MB'},{l:'연결 서비스',v:4,s:'개'}]},
+  };
+  const h=HERO[route]||HERO.home;
+
+  if(loading){
+    return(
+      <div style={{display:'flex',flexDirection:'column',gap:14,padding:32,minHeight:'100vh',background:C.bg}}>
+        {[0,1,2].map(i=><div key={i} style={{height:100,borderRadius:12,background:'linear-gradient(90deg,#1A1E2E 25%,#252A3D 50%,#1A1E2E 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>)}
+      </div>
+    );
+  }
+
+  return(
+    <div style={{minHeight:'100vh',background:C.bg,display:'flex',flexDirection:'column',width:'100%'}}>
+      {/* global nav */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:'rgba(26,30,46,0.95)',backdropFilter:'blur(10px)',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:60,padding:'0 28px',gap:6}}>
+        <div style={{fontWeight:800,fontSize:17,marginRight:20,background:`linear-gradient(135deg,${C.primary},${C.accent})`,WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>SmartBoard Admin</div>
+        <nav style={{display:'flex',gap:2}}>
+          {NAV.map(n=>(
+            <button key={n.id} onClick={()=>setRoute(n.id)} style={{padding:'7px 14px',borderRadius:8,border:'none',cursor:'pointer',fontSize:13,fontWeight:route===n.id?700:400,background:route===n.id?`${C.primary}20`:'transparent',color:route===n.id?C.primary:C.textLight,transition:'all 200ms'}}>
+              {n.label}
+            </button>
+          ))}
+        </nav>
+        <div style={{flex:1}}/>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:8,height:8,borderRadius:'50%',background:C.green,animation:'pulse 2s infinite'}}/>
+          <span style={{fontSize:12,color:C.green}}>시스템 정상</span>
+          <div style={{width:32,height:32,borderRadius:'50%',background:`${C.primary}20`,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',border:`1px solid ${C.primary}30`,marginLeft:8}}>👤</div>
+        </div>
+      </header>
+
+      {/* hero */}
+      <div style={{background:`linear-gradient(135deg,${C.secondary},${C.primary})`,padding:'26px 32px'}}>
+        <div style={{maxWidth:1200,margin:'0 auto'}}>
+          <div style={{fontSize:20,fontWeight:800,marginBottom:3,color:'#fff'}}>{h.title}</div>
+          <div style={{fontSize:13,opacity:0.8,marginBottom:14,color:'rgba(255,255,255,0.85)'}}>{h.sub}</div>
+          <div style={{display:'flex',gap:32}}>
+            {h.kpis.map(k=>(
+              <div key={k.l}>
+                <div style={{fontSize:22,fontWeight:800,color:'#fff'}}><CountUp end={k.v} suffix={k.s}/></div>
+                <div style={{fontSize:12,color:'rgba(255,255,255,0.7)'}}>{k.l}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* content */}
+      <main style={{flex:1}}>
+        <div key={route} style={{animation:'fadeIn 300ms ease'}}>
+          {route==='home'&&<DashboardPage/>}
+          {route==='upload'&&<UploadPage/>}
+          {route==='keyword'&&<KeywordPage/>}
+          {route==='analytics'&&<AnalyticsPage/>}
+          {route==='settings'&&<SettingsPage/>}
+        </div>
+      </main>
+
+      {/* footer */}
+      <footer style={{background:C.surface,borderTop:`1px solid ${C.border}`,padding:'20px 32px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <div style={{fontSize:13,color:C.textLight}}>SmartBoard 기술지원 플랫폼 <span style={{color:C.primary}}>Admin v2.0</span></div>
+        <div style={{display:'flex',gap:20,fontSize:12,color:C.textLight}}>
+          <span style={{cursor:'pointer'}}>이용약관</span>
+          <span style={{cursor:'pointer'}}>개인정보처리방침</span>
+          <span style={{cursor:'pointer'}}>기술지원</span>
+        </div>
+      </footer>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

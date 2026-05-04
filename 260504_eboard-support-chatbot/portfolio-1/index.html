@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartBoard 기술지원 챗봇 — 맞춤 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;font-family:'Pretendard',sans-serif;background:#F5F7FA}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+@keyframes barGrow{from{width:0}to{width:var(--tw,0%)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes typingDot{0%,80%,100%{transform:scale(0);opacity:0.4}40%{transform:scale(1);opacity:1}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef} = React;
+
+const C = {
+  primary:'#1E6FD9', secondary:'#0A3A6B', accent:'#29C7AC',
+  bg:'#F5F7FA', surface:'#FFFFFF', text:'#1A2233', textLight:'#5A6A82', border:'#E2E8F0',
+  warn:'#F59E0B', purple:'#6366F1', green:'#22C55E',
+};
+
+/* ─── mock data ─── */
+const CATS = [
+  {id:'screen',icon:'🖥️',label:'화면 설정',count:24},
+  {id:'audio',icon:'🔊',label:'오디오/소리',count:18},
+  {id:'network',icon:'📡',label:'네트워크',count:31},
+  {id:'app',icon:'📲',label:'앱 설치',count:15},
+  {id:'power',icon:'⚡',label:'전원/부팅',count:22},
+];
+const INIT_MSGS = [
+  {id:1,who:'bot',fmt:'text',ts:'09:30',text:'안녕하세요! SmartBoard 기술지원 챗봇입니다. 전자칠판 사용 중 궁금한 점을 질문해 주세요.'},
+  {id:2,who:'user',fmt:'text',ts:'09:31',text:'화면이 갑자기 꺼졌어요'},
+  {id:3,who:'bot',fmt:'text',ts:'09:31',text:'화면이 꺼지는 문제는 절전 모드 설정 또는 전원 연결 상태로 발생하는 경우가 많습니다.'},
+  {id:4,who:'bot',fmt:'guide',ts:'09:31',steps:['설정 → 디스플레이 → 절전 시간 확인','전원 어댑터 연결 상태 점검','전원 버튼 5초 장누름 후 재시작','문제 지속 시 서비스 센터 접수']},
+];
+const BOT_Q = [
+  {fmt:'pdf',text:'관련 매뉴얼 PDF를 찾았습니다. 아래에서 확인하세요.',pdf:'SmartBoard_설치_매뉴얼_v3.2.pdf',page:45},
+  {fmt:'video',text:'동영상으로 해결 방법을 안내드립니다.',vTitle:'터치 패널 캘리브레이션 방법',dur:'2:34'},
+  {fmt:'guide',steps:['설정 앱 실행','터치 설정 이동','캘리브레이션 시작','화면 순서대로 터치','완료 후 재시작']},
+];
+const SEARCH_DATA = [
+  {id:1,type:'pdf',title:'SmartBoard 초기 설정 매뉴얼',keys:['초기 설정','설치','연결'],score:97,extra:'82페이지'},
+  {id:2,type:'video',title:'화면 밝기 조절 방법',keys:['밝기','디스플레이','화면'],score:94,extra:'1분 45초'},
+  {id:3,type:'as',title:'터치 반응 불량 AS 이력',keys:['터치','반응','오작동'],score:91,extra:'34건 해결'},
+  {id:4,type:'pdf',title:'네트워크 연결 가이드',keys:['Wi-Fi','인터넷','네트워크'],score:88,extra:'24페이지'},
+  {id:5,type:'video',title:'앱 설치 및 업데이트',keys:['앱','설치','업데이트'],score:85,extra:'3분 12초'},
+  {id:6,type:'as',title:'전원 연결 오류 AS 이력',keys:['전원','어댑터','부팅'],score:82,extra:'18건 해결'},
+];
+const ANSWER_EX = [
+  {id:1,type:'text',title:'텍스트 답변',icon:'💬',preview:'전자칠판 화면 꺼짐 현상은 주로 절전 설정 문제입니다...',content:'전자칠판 화면이 갑자기 꺼지는 현상은 절전 모드 설정, 전원 어댑터 연결 불량, 또는 소프트웨어 오류로 발생합니다. 아래 순서로 점검하시기 바랍니다.'},
+  {id:2,type:'pdf',title:'PDF 매뉴얼 링크',icon:'📄',preview:'연결된 PDF 45페이지로 바로 이동합니다.',pdf:'설치_사용자_매뉴얼.pdf',page:45},
+  {id:3,type:'video',title:'동영상 가이드',icon:'🎬',preview:'2분 34초의 해결 방법 동영상을 제공합니다.',vTitle:'터치 패널 설정 가이드',dur:'2:34'},
+  {id:4,type:'guide',title:'단계별 가이드',icon:'✅',preview:'5단계 해결 절차를 순서대로 안내합니다.',steps:['전원 어댑터 연결 확인','설정 → 디스플레이 이동','절전 설정 변경','재시작 실행','정상 동작 확인']},
+];
+
+/* ─── tiny components ─── */
+function CountUp({end,suffix=''}){
+  const [v,setV]=useState(0);
+  useEffect(()=>{
+    const isInt=Number.isInteger(end);
+    let s=0; const step=end/(1200/16);
+    const t=setInterval(()=>{s+=step;if(s>=end){setV(end);clearInterval(t);}else setV(isInt?Math.floor(s):Math.round(s*10)/10);},16);
+    return()=>clearInterval(t);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{typeof v==='number'&&!Number.isInteger(end)?v.toFixed(1):v.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({msg,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return(
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:'#1A2233',color:'#fff',padding:'12px 20px',borderRadius:8,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.2)',display:'flex',alignItems:'center',gap:10,borderLeft:`4px solid ${C.accent}`}}>
+      <span>✓</span><span style={{fontSize:14}}>{msg}</span>
+    </div>
+  );
+}
+
+function Drawer({item,onClose}){
+  return(
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:200}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:460,background:C.surface,boxShadow:'-6px 0 32px rgba(0,0,0,0.12)',zIndex:201,overflowY:'auto',padding:28,animation:'slideInRight 200ms ease'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
+          <h3 style={{fontSize:18,fontWeight:700,color:C.text}}>{item.title||'상세 보기'}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:C.textLight}}>✕</button>
+        </div>
+        {item.type==='text'&&<p style={{fontSize:14,color:C.text,lineHeight:1.8}}>{item.content||item.preview}</p>}
+        {item.type==='pdf'&&(
+          <div>
+            <div style={{background:'#FEF9EC',border:`1px solid ${C.warn}`,borderRadius:10,padding:16,marginBottom:16,display:'flex',gap:12,alignItems:'center'}}>
+              <span style={{fontSize:36}}>📄</span>
+              <div><div style={{fontWeight:600,color:C.text}}>{item.pdf}</div><div style={{fontSize:13,color:C.textLight,marginTop:2}}>45페이지로 바로 이동합니다</div></div>
+            </div>
+            <div style={{height:180,background:'#F1F5F9',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',color:C.textLight,marginBottom:16}}>PDF 미리보기 영역</div>
+            <button style={{width:'100%',padding:12,background:C.warn,color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:14}}>📥 PDF 열기 (페이지 {item.page})</button>
+          </div>
+        )}
+        {item.type==='video'&&(
+          <div>
+            <div style={{background:C.secondary,borderRadius:10,padding:0,marginBottom:16,overflow:'hidden'}}>
+              <div style={{height:200,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:10}}>
+                <div style={{width:60,height:60,borderRadius:'50%',background:'rgba(255,255,255,0.2)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:26,cursor:'pointer'}}>▶️</div>
+                <div style={{color:'#fff',fontWeight:600}}>{item.vTitle}</div>
+                <div style={{color:'rgba(255,255,255,0.7)',fontSize:13}}>{item.dur}</div>
+              </div>
+            </div>
+            <p style={{fontSize:14,color:C.text,lineHeight:1.7}}>이 동영상에서는 전자칠판 {item.vTitle}을 단계별로 안내합니다.</p>
+          </div>
+        )}
+        {item.type==='guide'&&(
+          <div>{(item.steps||[]).map((s,i)=>(
+            <div key={i} style={{display:'flex',gap:12,marginBottom:14,alignItems:'flex-start'}}>
+              <div style={{width:26,height:26,borderRadius:'50%',background:C.primary,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,flexShrink:0}}>{i+1}</div>
+              <div style={{paddingTop:3,fontSize:14,color:C.text}}>{s}</div>
+            </div>
+          ))}</div>
+        )}
+        {item.type==='as'&&(
+          <div>
+            <div style={{display:'flex',gap:12,marginBottom:16}}>
+              <div style={{flex:1,background:'#F8FAFC',borderRadius:8,padding:16,textAlign:'center'}}><div style={{fontSize:24,fontWeight:700,color:C.primary}}>{item.extra?.replace('건 해결','')}</div><div style={{fontSize:12,color:C.textLight}}>해결된 AS 건수</div></div>
+              <div style={{flex:1,background:'#F8FAFC',borderRadius:8,padding:16,textAlign:'center'}}><div style={{fontSize:24,fontWeight:700,color:C.accent}}>98%</div><div style={{fontSize:12,color:C.textLight}}>해결률</div></div>
+            </div>
+            <p style={{fontSize:14,color:C.text,lineHeight:1.7}}>과거 AS 이력을 분석하여 가장 효과적인 해결 방법을 제시합니다.</p>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* ─── chat message ─── */
+function ChatMsg({m}){
+  const bot=m.who==='bot';
+  return(
+    <div style={{display:'flex',justifyContent:bot?'flex-start':'flex-end',marginBottom:14,animation:'slideUp 300ms ease'}}>
+      {bot&&<div style={{width:32,height:32,borderRadius:'50%',background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',marginRight:8,flexShrink:0,fontSize:15,marginTop:2}}>🤖</div>}
+      <div style={{maxWidth:'76%'}}>
+        {m.fmt==='text'&&<div style={{background:bot?C.surface:C.primary,color:bot?C.text:'#fff',padding:'10px 14px',borderRadius:bot?'4px 12px 12px 12px':'12px 4px 12px 12px',fontSize:13,lineHeight:1.6,boxShadow:'0 1px 3px rgba(0,0,0,0.07)'}}>{m.text}</div>}
+        {m.fmt==='pdf'&&<div style={{background:'#FEF9EC',border:`1px solid ${C.warn}30`,borderRadius:10,padding:12,fontSize:13}}><div style={{fontWeight:600,color:C.text,marginBottom:4}}>📄 {m.pdf}</div><div style={{color:C.textLight,marginBottom:8,fontSize:12}}>페이지 {m.page}에서 관련 내용을 확인할 수 있습니다.</div><button style={{background:C.warn,color:'#fff',border:'none',borderRadius:6,padding:'5px 12px',cursor:'pointer',fontSize:12}}>PDF 열기</button></div>}
+        {m.fmt==='video'&&<div style={{background:'#EEF2FF',border:`1px solid ${C.purple}30`,borderRadius:10,padding:12,fontSize:13}}><div style={{fontWeight:600,color:C.text,marginBottom:4}}>🎬 {m.vTitle}</div><div style={{color:C.textLight,marginBottom:8,fontSize:12}}>재생 시간: {m.dur}</div><button style={{background:C.purple,color:'#fff',border:'none',borderRadius:6,padding:'5px 12px',cursor:'pointer',fontSize:12}}>동영상 보기</button></div>}
+        {m.fmt==='guide'&&<div style={{background:'#F0FDF4',border:`1px solid ${C.green}30`,borderRadius:10,padding:12,fontSize:13}}><div style={{fontWeight:600,color:C.text,marginBottom:8}}>✅ 단계별 해결 가이드</div>{m.steps.map((s,i)=><div key={i} style={{display:'flex',gap:6,marginBottom:6}}><span style={{background:C.green,color:'#fff',width:18,height:18,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700,flexShrink:0}}>{i+1}</span><span style={{color:C.text}}>{s}</span></div>)}</div>}
+        <div style={{fontSize:11,color:C.textLight,marginTop:3,textAlign:bot?'left':'right'}}>{m.ts}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── pages ─── */
+function ChatPage(){
+  const [msgs,setMsgs]=useState(INIT_MSGS);
+  const [input,setInput]=useState('');
+  const [typing,setTyping]=useState(false);
+  const [cat,setCat]=useState(null);
+  const botIdx=useRef(0);
+  const endRef=useRef(null);
+  useEffect(()=>{endRef.current?.scrollIntoView({behavior:'smooth'});},[msgs,typing]);
+  const send=()=>{
+    if(!input.trim())return;
+    const now=new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
+    setMsgs(p=>[...p,{id:Date.now(),who:'user',fmt:'text',ts:now,text:input}]);
+    setInput('');setTyping(true);
+    setTimeout(()=>{
+      const r=BOT_Q[botIdx.current%BOT_Q.length];botIdx.current++;
+      setMsgs(p=>[...p,{id:Date.now()+1,who:'bot',ts:now,...r}]);
+      setTyping(false);
+    },1100);
+  };
+  return(
+    <div style={{display:'flex',gap:20,padding:'24px 32px'}}>
+      {/* sidebar categories */}
+      <div style={{width:210,flexShrink:0}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.textLight,marginBottom:10,textTransform:'uppercase',letterSpacing:'0.06em'}}>질문 카테고리</div>
+        {CATS.map((c,i)=>(
+          <div key={c.id} onClick={()=>{setCat(c.id);setInput(c.label+' 문제 해결 방법');}} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',borderRadius:10,marginBottom:6,cursor:'pointer',background:cat===c.id?`${C.primary}12`:C.surface,border:`1px solid ${cat===c.id?C.primary:C.border}`,transition:'all 200ms',animation:`slideUp 400ms ease ${i*70}ms both`}}>
+            <span style={{fontSize:18}}>{c.icon}</span>
+            <div style={{flex:1}}><div style={{fontSize:13,fontWeight:cat===c.id?600:400,color:C.text}}>{c.label}</div><div style={{fontSize:11,color:C.textLight}}>{c.count}개 사례</div></div>
+            {cat===c.id&&<span style={{width:6,height:6,borderRadius:'50%',background:C.primary,display:'block'}}/>}
+          </div>
+        ))}
+        <div style={{marginTop:16,padding:14,background:`${C.accent}10`,borderRadius:10,border:`1px solid ${C.accent}30`}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.accent,marginBottom:4}}>📊 오늘 현황</div>
+          <div style={{fontSize:12,color:C.text}}>총 질의 <strong>127건</strong></div>
+          <div style={{fontSize:12,color:C.text}}>답변 완료 <strong style={{color:C.accent}}>120건</strong></div>
+        </div>
+      </div>
+      {/* chat window */}
+      <div style={{flex:1,background:C.surface,borderRadius:14,border:`1px solid ${C.border}`,boxShadow:'0 4px 16px rgba(0,0,0,0.06)',display:'flex',flexDirection:'column',height:530}}>
+        <div style={{padding:'14px 18px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:34,height:34,borderRadius:'50%',background:`${C.primary}15`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>🤖</div>
+          <div>
+            <div style={{fontWeight:600,fontSize:14,color:C.text}}>SmartBoard 기술지원 봇</div>
+            <div style={{fontSize:12,color:C.accent,display:'flex',alignItems:'center',gap:4}}>
+              <span style={{width:7,height:7,borderRadius:'50%',background:C.accent,animation:'pulse 2s infinite',display:'block'}}/>온라인
+            </div>
+          </div>
+          <div style={{marginLeft:'auto'}}><span style={{padding:'4px 10px',background:'#F0FDF4',color:C.green,borderRadius:999,fontSize:12,fontWeight:600}}>답변률 94.5%</span></div>
+        </div>
+        <div style={{flex:1,overflowY:'auto',padding:'18px 16px'}}>
+          {msgs.map(m=><ChatMsg key={m.id} m={m}/>)}
+          {typing&&(
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14}}>
+              <div style={{width:32,height:32,borderRadius:'50%',background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',fontSize:15}}>🤖</div>
+              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:'4px 12px 12px 12px',padding:'12px 14px',display:'flex',gap:4}}>
+                {[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:'50%',background:C.textLight,animation:`typingDot 1.4s infinite ${i*0.2}s`}}/>)}
+              </div>
+            </div>
+          )}
+          <div ref={endRef}/>
+        </div>
+        <div style={{padding:'12px 14px',borderTop:`1px solid ${C.border}`,display:'flex',gap:8}}>
+          <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="전자칠판 관련 질문을 입력하세요..." style={{flex:1,padding:'10px 14px',border:`1px solid ${C.border}`,borderRadius:10,fontSize:13,outline:'none',color:C.text}}/>
+          <button onClick={send} style={{padding:'10px 20px',background:C.primary,color:'#fff',border:'none',borderRadius:10,cursor:'pointer',fontWeight:600,fontSize:13,transition:'all 200ms'}}>전송</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SearchPage(){
+  const [q,setQ]=useState('');
+  const [f,setF]=useState('all');
+  const [drawer,setDrawer]=useState(null);
+  const TL={pdf:'PDF 매뉴얼',video:'동영상',as:'AS 자료'};
+  const TC={pdf:C.warn,video:C.purple,as:C.green};
+  const TI={pdf:'📄',video:'🎬',as:'🔧'};
+  const results=SEARCH_DATA.filter(d=>{
+    const qm=!q||d.title.includes(q)||d.keys.some(k=>k.includes(q));
+    const fm=f==='all'||d.type===f;
+    return qm&&fm;
+  });
+  return(
+    <div style={{padding:'24px 32px'}}>
+      <div style={{display:'flex',gap:10,marginBottom:18}}>
+        <div style={{flex:1,position:'relative'}}>
+          <span style={{position:'absolute',left:13,top:'50%',transform:'translateY(-50%)',color:C.textLight}}>🔍</span>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="키워드, 증상, 모델명 등을 입력하세요..." style={{width:'100%',padding:'12px 14px 12px 40px',border:`1px solid ${C.border}`,borderRadius:10,fontSize:13,outline:'none',color:C.text}}/>
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          {['all','pdf','video','as'].map(v=>(
+            <button key={v} onClick={()=>setF(v)} style={{padding:'10px 14px',borderRadius:10,border:`1px solid ${f===v?C.primary:C.border}`,background:f===v?C.primary:C.surface,color:f===v?'#fff':C.text,cursor:'pointer',fontSize:12,fontWeight:f===v?600:400}}>
+              {v==='all'?'전체':TL[v]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{marginBottom:14,fontSize:13,color:C.textLight}}>검색 결과 <strong style={{color:C.primary}}>{results.length}건</strong>{q&&` — "${q}"`}</div>
+      <div style={{display:'flex',flexDirection:'column',gap:10}}>
+        {results.map((d,i)=>(
+          <div key={d.id} onClick={()=>setDrawer(d)} style={{background:C.surface,borderRadius:12,padding:'14px 18px',border:`1px solid ${C.border}`,cursor:'pointer',display:'flex',alignItems:'center',gap:14,animation:`slideUp 350ms ease ${i*55}ms both`,transition:'all 200ms'}}
+          onMouseOver={e=>{e.currentTarget.style.borderColor=C.primary;e.currentTarget.style.boxShadow=`0 4px 12px ${C.primary}20`;}}
+          onMouseOut={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.boxShadow='none';}}>
+            <div style={{width:42,height:42,borderRadius:10,background:`${TC[d.type]}20`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,flexShrink:0}}>{TI[d.type]}</div>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:600,color:C.text,marginBottom:4,fontSize:14}}>{d.title}</div>
+              <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
+                {d.keys.map(k=><span key={k} style={{padding:'2px 8px',background:`${C.primary}10`,color:C.primary,borderRadius:999,fontSize:11}}>{k}</span>)}
+              </div>
+            </div>
+            <div style={{textAlign:'right',flexShrink:0}}>
+              <div style={{fontWeight:700,color:C.primary,fontSize:18}}>{d.score}%</div>
+              <div style={{fontSize:11,color:C.textLight}}>관련도</div>
+            </div>
+            <div style={{width:5,height:5,borderRadius:'50%',background:TC[d.type],flexShrink:0}}/>
+          </div>
+        ))}
+      </div>
+      {drawer&&<Drawer item={drawer} onClose={()=>setDrawer(null)}/>}
+    </div>
+  );
+}
+
+function AnswerPage(){
+  const [sel,setSel]=useState(null);
+  return(
+    <div style={{padding:'24px 32px'}}>
+      <p style={{fontSize:13,color:C.textLight,marginBottom:18}}>챗봇이 제공하는 4가지 답변 형식을 직접 체험해보세요. 카드를 클릭하면 실제 답변 예시를 확인할 수 있습니다.</p>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:18}}>
+        {ANSWER_EX.map((ex,i)=>(
+          <div key={ex.id} onClick={()=>setSel(ex)} style={{background:C.surface,borderRadius:14,padding:24,border:`2px solid ${sel?.id===ex.id?C.primary:C.border}`,cursor:'pointer',animation:`slideUp 400ms ease ${i*80}ms both`,transition:'all 200ms',boxShadow:sel?.id===ex.id?`0 0 0 4px ${C.primary}15`:'none'}}
+          onMouseOver={e=>e.currentTarget.style.transform='translateY(-3px)'}
+          onMouseOut={e=>e.currentTarget.style.transform=''}>
+            <div style={{fontSize:40,marginBottom:12}}>{ex.icon}</div>
+            <div style={{fontWeight:700,fontSize:16,color:C.text,marginBottom:8}}>{ex.title}</div>
+            <div style={{fontSize:13,color:C.textLight,lineHeight:1.6,marginBottom:14}}>{ex.preview}</div>
+            <div style={{fontSize:13,color:C.primary,fontWeight:600}}>예시 보기 →</div>
+          </div>
+        ))}
+      </div>
+      {sel&&<Drawer item={sel} onClose={()=>setSel(null)}/>}
+    </div>
+  );
+}
+
+function ResponsivePage(){
+  const [mode,setMode]=useState('both');
+  return(
+    <div style={{padding:'24px 32px'}}>
+      <div style={{display:'flex',gap:8,marginBottom:20}}>
+        {[{id:'both',label:'양쪽 비교'},{id:'landscape',label:'전자칠판 (가로)'},{id:'portrait',label:'스마트폰 (세로)'}].map(v=>(
+          <button key={v.id} onClick={()=>setMode(v.id)} style={{padding:'8px 14px',borderRadius:8,border:`1px solid ${mode===v.id?C.primary:C.border}`,background:mode===v.id?C.primary:C.surface,color:mode===v.id?'#fff':C.text,cursor:'pointer',fontSize:13,transition:'all 200ms'}}>{v.label}</button>
+        ))}
+      </div>
+      <div style={{display:'flex',gap:20,alignItems:'flex-start'}}>
+        {(mode==='both'||mode==='landscape')&&(
+          <div style={{flex:mode==='landscape'?1:2,animation:'slideUp 350ms ease'}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.textLight,marginBottom:8,display:'flex',alignItems:'center',gap:6}}>🖥️ 전자칠판 <span style={{background:'#EEF2FF',color:C.purple,padding:'2px 8px',borderRadius:999,fontSize:11}}>1920 × 1080</span></div>
+            <div style={{border:`2px solid ${C.purple}`,borderRadius:12,overflow:'hidden',boxShadow:'0 6px 20px rgba(0,0,0,0.08)'}}>
+              <div style={{background:C.secondary,padding:'8px 14px',display:'flex',alignItems:'center',gap:8}}>
+                <span style={{color:'#fff',fontWeight:700,fontSize:13}}>🖥️ SmartBoard 기술지원</span>
+                <div style={{marginLeft:'auto',width:7,height:7,borderRadius:'50%',background:C.accent,animation:'pulse 2s infinite'}}/>
+              </div>
+              <div style={{display:'flex',height:280,background:C.bg}}>
+                <div style={{width:150,background:'#F1F5F9',padding:10,borderRight:`1px solid ${C.border}`}}>
+                  <div style={{fontSize:10,fontWeight:600,color:C.textLight,marginBottom:6}}>카테고리</div>
+                  {CATS.slice(0,4).map(c=>(
+                    <div key={c.id} style={{display:'flex',gap:5,padding:'5px 7px',borderRadius:6,marginBottom:3,background:c.id==='screen'?`${C.primary}10`:'transparent',fontSize:11}}>
+                      <span>{c.icon}</span><span style={{color:C.text}}>{c.label}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{flex:1,display:'flex',flexDirection:'column',padding:12}}>
+                  <div style={{flex:1,display:'flex',flexDirection:'column',gap:6,overflowY:'hidden'}}>
+                    <div style={{background:'#fff',borderRadius:8,padding:'7px 10px',fontSize:11,maxWidth:'80%'}}>안녕하세요! SmartBoard 기술지원 챗봇입니다.</div>
+                    <div style={{background:C.primary,borderRadius:8,padding:'7px 10px',fontSize:11,color:'#fff',maxWidth:'60%',alignSelf:'flex-end'}}>화면이 안 켜져요</div>
+                    <div style={{background:'#fff',borderRadius:8,padding:'7px 10px',fontSize:11,maxWidth:'80%'}}>전원 버튼을 5초간 눌러주세요.</div>
+                  </div>
+                  <div style={{display:'flex',gap:6,marginTop:10}}>
+                    <div style={{flex:1,background:'#fff',border:`1px solid ${C.border}`,borderRadius:8,padding:'6px 10px',fontSize:10,color:C.textLight}}>질문을 입력하세요...</div>
+                    <div style={{padding:'6px 12px',background:C.primary,borderRadius:8,fontSize:10,color:'#fff'}}>전송</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {(mode==='both'||mode==='portrait')&&(
+          <div style={{width:mode==='portrait'?'50%':190,margin:mode==='portrait'?'0 auto':0,animation:'slideUp 350ms ease 80ms'}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.textLight,marginBottom:8,display:'flex',alignItems:'center',gap:6}}>📱 스마트폰 <span style={{background:'#FEE2E2',color:'#DC2626',padding:'2px 8px',borderRadius:999,fontSize:11}}>360 × 800</span></div>
+            <div style={{border:'2px solid #EF4444',borderRadius:12,overflow:'hidden',boxShadow:'0 6px 20px rgba(0,0,0,0.08)'}}>
+              <div style={{background:C.secondary,padding:'8px 10px',display:'flex',alignItems:'center',gap:6}}>
+                <span style={{color:'#fff',fontWeight:700,fontSize:12}}>📱 기술지원</span>
+                <div style={{marginLeft:'auto',width:6,height:6,borderRadius:'50%',background:C.accent}}/>
+              </div>
+              <div style={{background:C.bg,padding:10,minHeight:280}}>
+                <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                  <div style={{background:'#fff',borderRadius:8,padding:'7px 9px',fontSize:11}}>안녕하세요! SmartBoard 기술지원 챗봇입니다.</div>
+                  <div style={{background:C.primary,borderRadius:8,padding:'7px 9px',fontSize:11,color:'#fff',alignSelf:'flex-end',maxWidth:'75%'}}>소리가 안 나요</div>
+                  <div style={{background:'#fff',borderRadius:8,padding:'7px 9px',fontSize:11}}>볼륨 설정을 확인해 주세요.</div>
+                </div>
+                <div style={{marginTop:14,display:'flex',gap:5}}>
+                  <div style={{flex:1,background:'#fff',border:`1px solid ${C.border}`,borderRadius:8,padding:'7px 9px',fontSize:10,color:C.textLight}}>질문 입력...</div>
+                  <div style={{padding:'7px 9px',background:C.primary,borderRadius:8,fontSize:10,color:'#fff'}}>전송</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      <div style={{marginTop:22,background:'#F0F9FF',borderRadius:12,padding:18}}>
+        <div style={{fontWeight:600,color:'#0369A1',marginBottom:10}}>🔧 반응형 구현 기술</div>
+        <div style={{display:'flex',gap:14}}>
+          {[{l:'CSS Grid',d:'2-컬럼 ↔ 1-컬럼 자동 전환'},{l:'Breakpoint',d:'1024px/768px 기준'},{l:'WebView 호환',d:'iOS/Android 웹뷰 최적화'}].map(t=>(
+            <div key={t.l} style={{flex:1,background:'#fff',borderRadius:8,padding:12}}><div style={{fontWeight:600,fontSize:13,color:'#0369A1',marginBottom:3}}>{t.l}</div><div style={{fontSize:12,color:C.textLight}}>{t.d}</div></div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GuidePage(){
+  const STEPS=[
+    {icon:'📱',title:'앱 실행',desc:'전자칠판 또는 스마트폰에서 SmartBoard 기술지원 앱을 실행합니다.'},
+    {icon:'📂',title:'카테고리 선택',desc:'화면 왼쪽에서 문제 유형을 선택하거나 검색창에 증상 키워드를 입력합니다.'},
+    {icon:'💬',title:'질문 입력',desc:'발생한 증상을 자연어로 입력합니다. 예: "화면이 꺼져요", "터치가 안 돼요".'},
+    {icon:'📋',title:'답변 확인',desc:'매뉴얼 PDF, 동영상, 단계별 가이드 중 적합한 형태로 답변을 받습니다.'},
+    {icon:'🛠️',title:'추가 지원',desc:'자가 해결이 어려운 경우 기술지원팀 연결을 요청합니다.'},
+  ];
+  return(
+    <div style={{padding:'24px 32px'}}>
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        {STEPS.map((s,i)=>(
+          <div key={i} style={{display:'flex',gap:18,background:C.surface,borderRadius:14,padding:22,border:`1px solid ${C.border}`,animation:`slideUp 400ms ease ${i*80}ms both`,boxShadow:'0 0 3px rgba(0,0,0,0.07)'}}>
+            <div style={{width:50,height:50,borderRadius:'50%',background:`${C.primary}12`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:24,flexShrink:0}}>{s.icon}</div>
+            <div style={{display:'flex',alignItems:'flex-start',gap:14,flex:1}}>
+              <div style={{width:26,height:26,borderRadius:'50%',background:C.primary,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:700,flexShrink:0,marginTop:2}}>{i+1}</div>
+              <div>
+                <div style={{fontWeight:700,fontSize:15,color:C.text,marginBottom:5}}>{s.title}</div>
+                <div style={{fontSize:13,color:C.textLight,lineHeight:1.7}}>{s.desc}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{marginTop:22,display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14}}>
+        {[{label:'해결 유형',value:5,suffix:'가지'},{label:'질문 카테고리',value:5,suffix:'개'},{label:'연동 콘텐츠',value:163,suffix:'개'}].map(k=>(
+          <div key={k.label} style={{background:C.surface,borderRadius:12,padding:18,border:`1px solid ${C.border}`,textAlign:'center'}}>
+            <div style={{fontSize:28,fontWeight:800,color:C.primary}}><CountUp end={k.value} suffix={k.suffix}/></div>
+            <div style={{fontSize:12,color:C.textLight,marginTop:4}}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── App ─── */
+function App(){
+  const [tab,setTab]=useState('home');
+  const [toast,setToast]=useState(null);
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{setTimeout(()=>setLoading(false),1400);},[]);
+
+  const TABS=[
+    {id:'home',label:'챗봇 인터페이스'},
+    {id:'search',label:'키워드 검색'},
+    {id:'answer',label:'답변 포맷'},
+    {id:'responsive',label:'반응형 뷰'},
+    {id:'guide',label:'이용 가이드'},
+  ];
+  const META={
+    home:{title:'SmartBoard 기술지원 챗봇',sub:'키워드 기반 AI-free 기술지원 챗봇 시스템',kpis:[{l:'오늘 질의',v:127,s:'건'},{l:'답변률',v:94.5,s:'%'},{l:'등록 콘텐츠',v:163,s:'개'}]},
+    search:{title:'키워드 검색 엔진',sub:'PostgreSQL GIN 인덱스 기반 풀텍스트 검색 구현',kpis:[{l:'등록 키워드',v:2340,s:'개'},{l:'동의어 매핑',v:456,s:'개'},{l:'검색 정확도',v:94,s:'%'}]},
+    answer:{title:'다양한 답변 포맷',sub:'PDF · 동영상 · 텍스트 · 단계별 가이드 통합 지원',kpis:[{l:'PDF 매뉴얼',v:82,s:'개'},{l:'동영상',v:47,s:'개'},{l:'AS 자료',v:234,s:'개'}]},
+    responsive:{title:'반응형 레이아웃',sub:'전자칠판(가로) / 스마트폰(세로) 자동 최적화 UI',kpis:[{l:'지원 해상도',v:2,s:'종'},{l:'최소 너비',v:360,s:'px'},{l:'최대 너비',v:1920,s:'px'}]},
+    guide:{title:'이용 가이드',sub:'5단계로 빠르게 기술지원을 받아보세요',kpis:[{l:'해결 유형',v:5,s:'가지'},{l:'질문 카테고리',v:5,s:'개'},{l:'연동 콘텐츠',v:163,s:'개'}]},
+  };
+  const m=META[tab]||META.home;
+
+  if(loading){
+    return(
+      <div style={{display:'flex',flexDirection:'column',gap:14,padding:32,minHeight:'100vh',background:C.bg}}>
+        {[0,1,2].map(i=><div key={i} style={{height:100,borderRadius:12,background:'linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>)}
+      </div>
+    );
+  }
+
+  return(
+    <div style={{minHeight:'100vh',background:C.bg,display:'flex',flexDirection:'column',width:'100%'}}>
+      <header style={{position:'sticky',top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:6}}>
+        <div style={{fontWeight:800,fontSize:16,color:C.secondary,marginRight:14}}><span style={{color:C.primary}}>Smart</span>Board</div>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{padding:'7px 13px',borderRadius:8,border:'none',cursor:'pointer',fontSize:13,fontWeight:tab===t.id?700:400,background:tab===t.id?`${C.primary}10`:'transparent',color:tab===t.id?C.primary:C.text,transition:'all 200ms'}}>{t.label}</button>
+        ))}
+        <div style={{flex:1}}/>
+        <button onClick={()=>setToast({msg:'데모가 시작됩니다!'})} style={{padding:'7px 16px',background:C.primary,color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:13}}>데모 체험</button>
+        <div style={{width:32,height:32,borderRadius:'50%',background:`${C.secondary}20`,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',marginLeft:6}}>👤</div>
+      </header>
+
+      <div style={{background:`linear-gradient(135deg,${C.secondary},${C.primary})`,padding:'26px 32px',color:'#fff'}}>
+        <div style={{fontSize:21,fontWeight:800,marginBottom:3}}>{m.title}</div>
+        <div style={{fontSize:13,opacity:0.85,marginBottom:14}}>{m.sub}</div>
+        <div style={{display:'flex',gap:32}}>
+          {m.kpis.map(k=>(
+            <div key={k.l}>
+              <div style={{fontSize:22,fontWeight:800}}><CountUp end={k.v} suffix={k.s}/></div>
+              <div style={{fontSize:12,opacity:0.8}}>{k.l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <main style={{flex:1}}>
+        <div key={tab} style={{animation:'fadeIn 300ms ease'}}>
+          {tab==='home'&&<ChatPage/>}
+          {tab==='search'&&<SearchPage/>}
+          {tab==='answer'&&<AnswerPage/>}
+          {tab==='responsive'&&<ResponsivePage/>}
+          {tab==='guide'&&<GuidePage/>}
+        </div>
+      </main>
+
+      {toast&&<Toast msg={toast.msg} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
