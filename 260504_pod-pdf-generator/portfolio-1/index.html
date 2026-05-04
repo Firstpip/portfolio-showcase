@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>POD 인쇄 PDF 자동 생성 플랫폼 — 맞춤 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;font-family:'Pretendard',sans-serif;background:#F5F8FC;color:#1A2B42}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes barGrow{from{width:0%}to{width:var(--tw)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px);max-height:0}to{opacity:1;transform:translateY(0);max-height:500px}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const C={
+  primary:'#1B4F8A',secondary:'#2D7DD2',accent:'#5BA3E0',
+  bg:'#F5F8FC',surface:'#FFFFFF',border:'#D8E4F0',
+  text:'#1A2B42',textSub:'#5A7090',
+  success:'#16A34A',warn:'#D97706',danger:'#DC2626',
+};
+const {useState,useEffect,useRef}=React;
+const {BarChart,Bar,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,LineChart,Line}=Recharts;
+
+// ── Toast ──────────────────────────────────────────────
+function Toast({msg,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return(<div style={{position:'fixed',bottom:28,right:28,zIndex:9999,background:C.primary,color:'#fff',padding:'12px 24px',borderRadius:8,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.2)',fontSize:14}}>{msg}</div>);
+}
+
+// ── Modal ──────────────────────────────────────────────
+function Modal({title,onClose,children,width=560}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.4)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:C.surface,borderRadius:14,zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.18)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'20px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:700,color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSub}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Drawer ─────────────────────────────────────────────
+function Drawer({item,onClose}){
+  if(!item)return null;
+  const statusColor={완료:C.success,생성중:C.secondary,대기:C.textSub,오류:C.danger};
+  return(
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:200}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:460,background:C.surface,boxShadow:'-8px 0 40px rgba(0,0,0,0.13)',zIndex:201,overflowY:'auto',padding:28,animation:'slideInRight 200ms ease'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
+          <h2 style={{fontSize:18,fontWeight:700,color:C.text}}>{item.name}</h2>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSub}}>✕</button>
+        </div>
+        <div style={{display:'flex',gap:8,marginBottom:20}}>
+          <span style={{background:`${statusColor[item.status]}20`,color:statusColor[item.status],padding:'4px 12px',borderRadius:20,fontSize:12,fontWeight:600}}>{item.status}</span>
+          <span style={{background:`${C.primary}15`,color:C.primary,padding:'4px 12px',borderRadius:20,fontSize:12}}>{item.pages}페이지</span>
+        </div>
+        {[['주문 ID',item.id],['요청일',item.date],['이미지 수',`${item.images}장`],['PDF 크기',item.size],['색공간','CMYK (ICC: USWebCoatedSWOP)'],['해상도','300 DPI'],['블리드','0.125인치 (사방)'],['바인딩','하드커버 무선제본']].map(([k,v])=>(
+          <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`,fontSize:14}}>
+            <span style={{color:C.textSub}}>{k}</span><span style={{fontWeight:500,color:C.text}}>{v}</span>
+          </div>
+        ))}
+        <div style={{marginTop:20}}>
+          <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:8}}>관리 메모</div>
+          <textarea style={{width:'100%',height:80,border:`1px solid ${C.border}`,borderRadius:8,padding:10,fontSize:13,resize:'none',outline:'none'}} placeholder="메모를 입력하세요..."/>
+        </div>
+        <div style={{display:'flex',gap:10,marginTop:20}}>
+          <button style={{flex:1,padding:'10px',background:C.primary,color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontWeight:600,fontSize:14}}>PDF 다운로드</button>
+          <button style={{flex:1,padding:'10px',background:`${C.primary}15`,color:C.primary,border:'none',borderRadius:8,cursor:'pointer',fontWeight:600,fontSize:14}}>POD 전송</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── CountUp ────────────────────────────────────────────
+function CountUp({end,suffix=''}){
+  const [v,setV]=useState(0);
+  useEffect(()=>{let s=0;const step=end/(1200/16);const t=setInterval(()=>{s+=step;if(s>=end){setV(end);clearInterval(t);}else setV(Math.floor(s));},16);return()=>clearInterval(t);},[end]);
+  return<span style={{animation:'countUp 400ms ease'}}>{v.toLocaleString()}{suffix}</span>;
+}
+
+// ── Hero Banner ────────────────────────────────────────
+function HeroBanner({tab}){
+  const meta={
+    main:{title:'PDF 자동 생성 파이프라인',icon:'🖨️',kpis:[{l:'총 생성 건수',v:2847,s:'건'},{l:'이번 달 생성',v:312,s:'건'},{l:'평균 생성 시간',v:28,s:'초'},{l:'성공률',v:99,s:'%'}]},
+    layout:{title:'페이지 레이아웃 에디터',icon:'📐',kpis:[{l:'등록 템플릿',v:24,s:'개'},{l:'커스텀 폰트',v:8,s:'개'},{l:'레이아웃 프리셋',v:16,s:'개'},{l:'최근 수정',v:3,s:'일 전'}]},
+    color:{title:'CMYK 색공간 변환 관리',icon:'🎨',kpis:[{l:'변환 완료',v:1842,s:'장'},{l:'처리 대기',v:12,s:'장'},{l:'ICC 프로파일',v:3,s:'개'},{l:'오류율',v:0.2,s:'%'}]},
+    preview:{title:'PDF 미리보기 & 최종 검증',icon:'🔍',kpis:[{l:'검증 완료',v:218,s:'건'},{l:'QR 삽입 완료',v:218,s:'건'},{l:'다운로드',v:196,s:'건'},{l:'POD 전송',v:22,s:'건'}]},
+  };
+  const m=meta[tab]||meta.main;
+  return(
+    <div style={{background:`linear-gradient(135deg, ${C.primary} 0%, ${C.secondary} 60%, ${C.accent} 100%)`,padding:'28px 32px',color:'#fff'}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}>
+        <span style={{fontSize:28}}>{m.icon}</span>
+        <h1 style={{fontSize:22,fontWeight:800,letterSpacing:'-0.02em'}}>{m.title}</h1>
+      </div>
+      <div style={{display:'flex',gap:32,flexWrap:'wrap'}}>
+        {m.kpis.map((k,i)=>(
+          <div key={k.l} style={{animation:`slideUp 400ms ease ${i*80}ms both`}}>
+            <div style={{fontSize:12,opacity:0.8,marginBottom:4}}>{k.l}</div>
+            <div style={{fontSize:26,fontWeight:800}}><CountUp end={k.v} suffix={k.s}/></div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Tab: PDF 생성 워크플로우 ────────────────────────────
+const JOBS=[
+  {id:'JOB-2847',name:'나연이의 우주 탐험',status:'완료',date:'2026-05-04',pages:22,images:20,size:'18.4MB'},
+  {id:'JOB-2846',name:'지우의 숲 속 친구들',status:'완료',date:'2026-05-04',pages:22,images:20,size:'21.1MB'},
+  {id:'JOB-2845',name:'준서의 바다 이야기',status:'생성중',date:'2026-05-04',pages:22,images:20,size:'-'},
+  {id:'JOB-2844',name:'하은이와 별나라 여행',status:'대기',date:'2026-05-03',pages:22,images:20,size:'-'},
+  {id:'JOB-2843',name:'민준의 공룡 왕국',status:'완료',date:'2026-05-03',pages:22,images:20,size:'19.7MB'},
+  {id:'JOB-2842',name:'수아의 꽃밭 모험',status:'오류',date:'2026-05-03',pages:22,images:20,size:'-'},
+];
+const STEPS=[
+  {n:'이미지 전처리',d:'sRGB→CMYK 변환, ICC 프로파일 적용, 블리드 영역 계산',icon:'🖼️',done:true},
+  {n:'레이아웃 조립',d:'표지·내지 페이지 순서 배치, 텍스트·이미지 포지셔닝',icon:'📑',done:true},
+  {n:'폰트 임베딩',d:'OTF/TTF 커스텀 폰트 서브셋 생성 및 PDF 삽입',icon:'🔤',done:true},
+  {n:'PDF 렌더링',d:'ReportLab 엔진으로 최종 인쇄 규격 PDF 출력',icon:'📄',done:false},
+];
+
+function TabMain({onToast}){
+  const [drawer,setDrawer]=useState(null);
+  const [modal,setModal]=useState(false);
+  const [creating,setCreating]=useState(false);
+  const statusColor={완료:C.success,생성중:C.secondary,대기:C.textSub,오류:C.danger};
+
+  function handleCreate(){
+    setCreating(true);
+    setTimeout(()=>{setCreating(false);setModal(false);onToast('새 PDF 생성 작업이 큐에 추가되었습니다.');},1800);
+  }
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {/* 파이프라인 단계 */}
+      <div style={{marginBottom:28}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <h3 style={{fontSize:16,fontWeight:700,color:C.text}}>생성 파이프라인 단계</h3>
+          <span style={{fontSize:12,color:C.textSub}}>JOB-2845 진행 중...</span>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14}}>
+          {STEPS.map((s,i)=>(
+            <div key={s.n} style={{background:s.done?`${C.primary}08`:C.surface,border:`1px solid ${s.done?C.primary+'40':C.border}`,borderRadius:12,padding:16,animation:`slideUp 400ms ease ${i*80}ms both`,boxShadow:`0 2px 8px rgba(0,0,0,0.06)`}}>
+              <div style={{fontSize:22,marginBottom:8}}>{s.icon}</div>
+              <div style={{fontSize:13,fontWeight:700,color:s.done?C.primary:C.text,marginBottom:4}}>{s.n}</div>
+              <div style={{fontSize:11,color:C.textSub,lineHeight:1.5}}>{s.d}</div>
+              {s.done
+                ?<div style={{marginTop:10,fontSize:11,color:C.success,fontWeight:600}}>✓ 완료</div>
+                :<div style={{marginTop:10,height:4,background:`${C.primary}20`,borderRadius:2,overflow:'hidden'}}>
+                  <div style={{height:'100%',width:'60%',background:C.secondary,borderRadius:2,animation:'barGrow 2s ease infinite'}}/>
+                </div>
+              }
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 생성 이력 테이블 */}
+      <div style={{background:C.surface,borderRadius:14,boxShadow:'0 4px 16px rgba(0,0,0,0.08)',overflow:'hidden'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'18px 20px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.text}}>생성 이력</h3>
+          <button onClick={()=>setModal(true)} style={{background:C.primary,color:'#fff',border:'none',borderRadius:8,padding:'8px 18px',fontSize:13,fontWeight:600,cursor:'pointer'}}>+ 새 PDF 생성</button>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{background:`${C.bg}`}}>
+            {['작업명','작업 ID','상태','페이지','요청일','PDF 크기','액션'].map(h=>(
+              <th key={h} style={{padding:'10px 16px',fontSize:12,fontWeight:600,color:C.textSub,textAlign:'left'}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {JOBS.map((j,i)=>(
+              <tr key={j.id} onClick={()=>setDrawer(j)} style={{cursor:'pointer',borderBottom:`1px solid ${C.border}`,transition:'background 150ms',animation:`slideUp 300ms ease ${i*50}ms both'`}}
+                onMouseEnter={e=>{e.currentTarget.style.background=`${C.primary}06`}}
+                onMouseLeave={e=>{e.currentTarget.style.background=''}}>
+                <td style={{padding:'13px 16px',fontSize:14,fontWeight:500,color:C.text}}>{j.name}</td>
+                <td style={{padding:'13px 16px',fontSize:13,color:C.textSub,fontFamily:'monospace'}}>{j.id}</td>
+                <td style={{padding:'13px 16px'}}>
+                  <span style={{background:`${statusColor[j.status]}20`,color:statusColor[j.status],padding:'3px 10px',borderRadius:20,fontSize:12,fontWeight:600}}>
+                    {j.status==='생성중'?<span style={{animation:'pulse 1.5s infinite'}}>{j.status}</span>:j.status}
+                  </span>
+                </td>
+                <td style={{padding:'13px 16px',fontSize:13,color:C.text}}>{j.pages}p</td>
+                <td style={{padding:'13px 16px',fontSize:13,color:C.textSub}}>{j.date}</td>
+                <td style={{padding:'13px 16px',fontSize:13,color:C.text}}>{j.size}</td>
+                <td style={{padding:'13px 16px'}}>
+                  {j.status==='완료'&&<button onClick={e=>{e.stopPropagation();onToast('PDF 다운로드가 시작됩니다.');}} style={{background:`${C.primary}15`,color:C.primary,border:'none',borderRadius:6,padding:'4px 12px',fontSize:12,cursor:'pointer',fontWeight:600}}>다운로드</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {drawer&&<Drawer item={drawer} onClose={()=>setDrawer(null)}/>}
+      {modal&&(
+        <Modal title="새 PDF 생성 요청" onClose={()=>setModal(false)}>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <div>
+              <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>동화책 제목</label>
+              <input defaultValue="" placeholder="예: 지우의 숲 속 친구들" style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 12px',fontSize:14,outline:'none'}}/>
+            </div>
+            <div>
+              <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>아이 이름</label>
+              <input defaultValue="" placeholder="예: 이지우" style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 12px',fontSize:14,outline:'none'}}/>
+            </div>
+            <div>
+              <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>이미지 파일 (20장, PNG 4096×4096)</label>
+              <div style={{border:`2px dashed ${C.border}`,borderRadius:10,padding:'28px',textAlign:'center',cursor:'pointer',background:`${C.primary}04`}}>
+                <div style={{fontSize:28,marginBottom:8}}>📁</div>
+                <div style={{fontSize:13,color:C.textSub}}>클릭 또는 드래그하여 업로드</div>
+                <div style={{fontSize:11,color:C.textSub,marginTop:4}}>PNG, 4096×4096px, 최대 200MB</div>
+              </div>
+            </div>
+            <div>
+              <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>스토리 JSON</label>
+              <div style={{border:`2px dashed ${C.border}`,borderRadius:10,padding:'20px',textAlign:'center',cursor:'pointer',background:`${C.primary}04`}}>
+                <div style={{fontSize:22,marginBottom:6}}>📋</div>
+                <div style={{fontSize:13,color:C.textSub}}>story.json 파일 업로드</div>
+              </div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+              <div>
+                <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>PDF 엔진</label>
+                <select style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 12px',fontSize:14,background:C.surface,outline:'none'}}>
+                  <option>ReportLab (기본)</option>
+                  <option>fpdf2</option>
+                </select>
+              </div>
+              <div>
+                <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>ICC 프로파일</label>
+                <select style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 12px',fontSize:14,background:C.surface,outline:'none'}}>
+                  <option>USWebCoatedSWOP</option>
+                  <option>ISOcoated_v2</option>
+                  <option>JapanColor2001</option>
+                </select>
+              </div>
+            </div>
+            <button onClick={handleCreate} disabled={creating} style={{width:'100%',padding:'12px',background:creating?C.textSub:C.primary,color:'#fff',border:'none',borderRadius:8,cursor:creating?'default':'pointer',fontWeight:700,fontSize:15}}>
+              {creating?<span style={{animation:'pulse 1s infinite'}}>⚙️ 생성 큐에 추가 중...</span>:'PDF 생성 시작'}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Tab: 레이아웃 에디터 ───────────────────────────────
+const FONTS=[
+  {name:'나눔고딕',type:'OTF',size:'1.2MB',pages:22,status:'활성'},
+  {name:'Gmarket Sans',type:'OTF',size:'0.8MB',pages:18,status:'활성'},
+  {name:'배달의민족 연성',type:'TTF',size:'2.1MB',pages:8,status:'활성'},
+  {name:'Apple SD Gothic Neo',type:'System',size:'-',pages:5,status:'시스템'},
+];
+function TabLayout({onToast}){
+  const [bleedMode,setBleedMode]=useState('full');
+  const [pageNum,setPageNum]=useState(true);
+  const [bgOpacity,setBgOpacity]=useState(60);
+  const [modal,setModal]=useState(false);
+
+  return(
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,animation:'fadeIn 300ms ease'}}>
+      {/* 표지 설정 */}
+      <div style={{background:C.surface,borderRadius:14,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.08)'}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:18}}>📖 표지 설정</h3>
+        {[{l:'제목 위치',v:'상단 중앙'},{l:'아이 이름 위치',v:'하단 우측'},{l:'부제목 표시',v:'활성화'},{l:'QR 코드 위치',v:'뒤표지 하단 우측'}].map(({l,v})=>(
+          <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`,fontSize:14}}>
+            <span style={{color:C.textSub}}>{l}</span>
+            <span style={{fontWeight:500,color:C.text,cursor:'pointer',color:C.secondary}}>{v} ✎</span>
+          </div>
+        ))}
+        <div style={{marginTop:16}}>
+          <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:10}}>배경 박스 투명도</div>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <input type="range" min={0} max={100} value={bgOpacity} onChange={e=>setBgOpacity(+e.target.value)} style={{flex:1,accentColor:C.primary}}/>
+            <span style={{fontSize:13,fontWeight:600,color:C.primary,minWidth:36}}>{bgOpacity}%</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 내지 레이아웃 */}
+      <div style={{background:C.surface,borderRadius:14,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.08)'}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:18}}>📄 내지 레이아웃</h3>
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:10}}>이미지 배치 모드</div>
+          <div style={{display:'flex',gap:8}}>
+            {['full','margin'].map(m=>(
+              <button key={m} onClick={()=>setBleedMode(m)} style={{flex:1,padding:'10px',borderRadius:8,border:`2px solid ${bleedMode===m?C.primary:C.border}`,background:bleedMode===m?`${C.primary}12`:'transparent',color:bleedMode===m?C.primary:C.textSub,cursor:'pointer',fontSize:13,fontWeight:bleedMode===m?700:400}}>
+                {m==='full'?'풀블리드':'마진 내 배치'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:`1px solid ${C.border}`,marginBottom:12}}>
+          <span style={{fontSize:14,color:C.textSub}}>페이지 번호 표시</span>
+          <div onClick={()=>setPageNum(v=>!v)} style={{width:44,height:24,borderRadius:12,background:pageNum?C.primary:C.border,cursor:'pointer',position:'relative',transition:'background 200ms'}}>
+            <div style={{position:'absolute',top:2,left:pageNum?22:2,width:20,height:20,borderRadius:10,background:'#fff',transition:'left 200ms',boxShadow:'0 1px 4px rgba(0,0,0,0.2)'}}/>
+          </div>
+        </div>
+        {[{l:'페이지 번호 위치',v:'하단 중앙'},{l:'텍스트 기본 폰트',v:'나눔고딕 16pt'},{l:'블리드 마진',v:'0.125인치 (3.175mm)'},{l:'안전 영역',v:'0.25인치 (6.35mm)'}].map(({l,v})=>(
+          <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:`1px solid ${C.border}`,fontSize:13}}>
+            <span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500,color:C.text}}>{v}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* 폰트 관리 */}
+      <div style={{background:C.surface,borderRadius:14,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.08)',gridColumn:'span 2'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.text}}>🔤 커스텀 폰트 관리</h3>
+          <button onClick={()=>setModal(true)} style={{background:C.primary,color:'#fff',border:'none',borderRadius:8,padding:'7px 16px',fontSize:13,fontWeight:600,cursor:'pointer'}}>+ 폰트 업로드</button>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{background:C.bg}}>
+            {['폰트명','형식','파일 크기','사용 페이지','상태'].map(h=>(
+              <th key={h} style={{padding:'9px 14px',fontSize:12,fontWeight:600,color:C.textSub,textAlign:'left'}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {FONTS.map((f,i)=>(
+              <tr key={f.name} style={{borderBottom:`1px solid ${C.border}`,animation:`slideUp 300ms ease ${i*60}ms both`}}>
+                <td style={{padding:'11px 14px',fontSize:14,fontWeight:500,color:C.text}}>{f.name}</td>
+                <td style={{padding:'11px 14px',fontSize:13,color:C.textSub}}><span style={{background:`${C.secondary}15`,color:C.secondary,padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600}}>{f.type}</span></td>
+                <td style={{padding:'11px 14px',fontSize:13,color:C.text}}>{f.size}</td>
+                <td style={{padding:'11px 14px',fontSize:13,color:C.text}}>{f.pages}페이지</td>
+                <td style={{padding:'11px 14px'}}><span style={{background:`${C.success}15`,color:C.success,padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600}}>{f.status}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {modal&&(
+        <Modal title="새 폰트 업로드" onClose={()=>setModal(false)} width={460}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div style={{border:`2px dashed ${C.border}`,borderRadius:10,padding:'32px',textAlign:'center',cursor:'pointer',background:`${C.primary}04`}}>
+              <div style={{fontSize:32,marginBottom:8}}>🔤</div>
+              <div style={{fontSize:14,color:C.textSub}}>OTF 또는 TTF 파일을 드래그하거나 클릭</div>
+            </div>
+            <div>
+              <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>폰트 별칭</label>
+              <input placeholder="예: 마포꽃섬" style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 12px',fontSize:14,outline:'none'}}/>
+            </div>
+            <button onClick={()=>{setModal(false);onToast('폰트가 성공적으로 등록되었습니다.');}} style={{padding:'11px',background:C.primary,color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontWeight:700,fontSize:14}}>폰트 등록</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Tab: 색공간 변환 ────────────────────────────────────
+const IMAGES=[
+  {name:'cover_front.png',status:'완료',original:'sRGB',converted:'CMYK',delta:'ΔE 1.2',page:'표지'},
+  {name:'page_01.png',status:'완료',original:'sRGB',converted:'CMYK',delta:'ΔE 0.8',page:'1페이지'},
+  {name:'page_02.png',status:'완료',original:'sRGB',converted:'CMYK',delta:'ΔE 1.5',page:'2페이지'},
+  {name:'page_03.png',status:'변환중',original:'sRGB',converted:'-',delta:'-',page:'3페이지'},
+  {name:'page_04.png',status:'대기',original:'sRGB',converted:'-',delta:'-',page:'4페이지'},
+  {name:'page_05.png',status:'대기',original:'sRGB',converted:'-',delta:'-',page:'5페이지'},
+];
+function TabColor({onToast}){
+  const [profile,setProfile]=useState('USWebCoatedSWOP');
+  const [converting,setConverting]=useState(false);
+  const statusColor={완료:C.success,변환중:C.secondary,대기:C.textSub,오류:C.danger};
+
+  function handleConvert(){
+    setConverting(true);
+    setTimeout(()=>{setConverting(false);onToast('배치 변환이 완료되었습니다. (대기 2장)');},2000);
+  }
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {/* ICC 설정 */}
+      <div style={{background:C.surface,borderRadius:14,padding:20,marginBottom:20,boxShadow:'0 4px 16px rgba(0,0,0,0.08)',display:'flex',gap:20,alignItems:'center',flexWrap:'wrap'}}>
+        <div style={{flex:1,minWidth:220}}>
+          <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:8}}>ICC 프로파일 선택</div>
+          <select value={profile} onChange={e=>setProfile(e.target.value)} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 12px',fontSize:14,background:C.surface,outline:'none'}}>
+            <option>USWebCoatedSWOP</option>
+            <option>ISOcoated_v2</option>
+            <option>JapanColor2001Coated</option>
+          </select>
+        </div>
+        <div style={{flex:1,minWidth:220}}>
+          <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:8}}>변환 엔진</div>
+          <select style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 12px',fontSize:14,background:C.surface,outline:'none'}}>
+            <option>Pillow (권장)</option>
+            <option>ImageMagick</option>
+          </select>
+        </div>
+        <div style={{display:'flex',gap:10,alignItems:'flex-end',paddingTop:22}}>
+          <button onClick={handleConvert} disabled={converting} style={{padding:'10px 20px',background:converting?C.textSub:C.primary,color:'#fff',border:'none',borderRadius:8,cursor:converting?'default':'pointer',fontWeight:600,fontSize:14,whiteSpace:'nowrap'}}>
+            {converting?<span style={{animation:'pulse 1s infinite'}}>🔄 변환 중...</span>:'배치 변환 실행'}
+          </button>
+          <button onClick={()=>onToast('검증 리포트를 생성합니다.')} style={{padding:'10px 20px',background:`${C.primary}12`,color:C.primary,border:'none',borderRadius:8,cursor:'pointer',fontWeight:600,fontSize:14,whiteSpace:'nowrap'}}>검증 리포트</button>
+        </div>
+      </div>
+
+      {/* 이미지 변환 상태 */}
+      <div style={{background:C.surface,borderRadius:14,boxShadow:'0 4px 16px rgba(0,0,0,0.08)',overflow:'hidden'}}>
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.text}}>이미지 색공간 변환 현황</h3>
+          <span style={{fontSize:12,color:C.textSub}}>총 20장 중 3장 완료</span>
+        </div>
+        {/* 진행 바 */}
+        <div style={{padding:'14px 20px',borderBottom:`1px solid ${C.border}`}}>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:C.textSub,marginBottom:6}}>
+            <span>전체 진행률</span><span style={{color:C.primary,fontWeight:600}}>15%</span>
+          </div>
+          <div style={{height:8,background:`${C.primary}15`,borderRadius:4,overflow:'hidden'}}>
+            <div style={{height:'100%',width:'15%',background:`linear-gradient(90deg,${C.primary},${C.accent})`,borderRadius:4,animation:'barGrow 1s ease 200ms both','--tw':'15%'}}/>
+          </div>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{background:C.bg}}>
+            {['파일명','페이지','원본','변환 결과','ΔE 색차','상태'].map(h=>(
+              <th key={h} style={{padding:'9px 16px',fontSize:12,fontWeight:600,color:C.textSub,textAlign:'left'}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {IMAGES.map((img,i)=>(
+              <tr key={img.name} style={{borderBottom:`1px solid ${C.border}`,animation:`slideUp 300ms ease ${i*50}ms both`}}>
+                <td style={{padding:'11px 16px',fontSize:13,fontWeight:500,color:C.text,fontFamily:'monospace'}}>{img.name}</td>
+                <td style={{padding:'11px 16px',fontSize:13,color:C.textSub}}>{img.page}</td>
+                <td style={{padding:'11px 16px'}}><span style={{background:`${C.warn}15`,color:C.warn,padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600}}>{img.original}</span></td>
+                <td style={{padding:'11px 16px'}}>{img.converted!=='-'&&<span style={{background:`${C.success}15`,color:C.success,padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600}}>{img.converted}</span>}</td>
+                <td style={{padding:'11px 16px',fontSize:13,color:img.delta!=='-'?C.success:C.textSub,fontWeight:img.delta!=='-'?600:400}}>{img.delta}</td>
+                <td style={{padding:'11px 16px'}}>
+                  <span style={{background:`${statusColor[img.status]}20`,color:statusColor[img.status],padding:'3px 10px',borderRadius:20,fontSize:12,fontWeight:600}}>
+                    {img.status==='변환중'?<span style={{animation:'pulse 1s infinite'}}>{img.status}</span>:img.status}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Tab: 미리보기 & 검증 ────────────────────────────────
+const PAGES_PREVIEW=[
+  {n:'표지 (앞)',qr:false,verified:true,pg:0},{n:'1페이지',qr:false,verified:true,pg:1},{n:'2페이지',qr:false,verified:true,pg:2},{n:'3페이지',qr:false,verified:false,pg:3},
+  {n:'4페이지',qr:false,verified:false,pg:4},{n:'5페이지',qr:false,verified:false,pg:5},{n:'6페이지',qr:false,verified:false,pg:6},{n:'뒤표지',qr:true,verified:true,pg:21},
+];
+const PAGE_COLORS=['#E8F4FD','#FFF8E1','#E8F5E9','#FCE4EC','#F3E5F5','#E0F2F1','#FFF3E0','#1B4F8A'];
+
+function TabPreview({onToast}){
+  const [selected,setSelected]=useState(null);
+  const [downloading,setDownloading]=useState(false);
+
+  function handleDownload(){
+    setDownloading(true);
+    setTimeout(()=>{setDownloading(false);onToast('PDF 다운로드가 시작되었습니다.');},1500);
+  }
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {/* QR 코드 정보 */}
+      <div style={{background:C.surface,borderRadius:14,padding:20,marginBottom:20,boxShadow:'0 4px 16px rgba(0,0,0,0.08)',display:'flex',gap:20,alignItems:'center'}}>
+        <div style={{width:80,height:80,background:`${C.primary}12`,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',fontSize:36}}>
+          <div style={{width:64,height:64,background:`${C.primary}20`,borderRadius:8,display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:2,padding:8}}>
+            {[...Array(16)].map((_,i)=>(
+              <div key={i} style={{background:Math.random()>0.4?C.primary:'transparent',borderRadius:1}}/>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:6}}>QR 코드 생성 완료</div>
+          <div style={{fontSize:13,color:C.textSub,marginBottom:4}}>주문 ID: <span style={{fontFamily:'monospace',color:C.primary}}>JOB-2847</span></div>
+          <div style={{fontSize:13,color:C.textSub}}>삽입 위치: 뒤표지 우하단 (42pt × 42pt)</div>
+          <div style={{marginTop:8}}><span style={{background:`${C.success}15`,color:C.success,padding:'3px 10px',borderRadius:20,fontSize:12,fontWeight:600}}>✓ 검증 완료</span></div>
+        </div>
+        <div style={{flex:1,display:'flex',gap:12,justifyContent:'flex-end'}}>
+          <button onClick={handleDownload} disabled={downloading} style={{padding:'10px 20px',background:downloading?C.textSub:C.primary,color:'#fff',border:'none',borderRadius:8,cursor:downloading?'default':'pointer',fontWeight:600,fontSize:14}}>
+            {downloading?'다운로드 중...':'📥 PDF 다운로드'}
+          </button>
+          <button onClick={()=>onToast('POD 플랫폼으로 전송합니다.')} style={{padding:'10px 20px',background:`${C.primary}12`,color:C.primary,border:'none',borderRadius:8,cursor:'pointer',fontWeight:600,fontSize:14}}>🚀 POD 전송</button>
+        </div>
+      </div>
+
+      {/* 페이지 미리보기 그리드 */}
+      <div style={{background:C.surface,borderRadius:14,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.08)'}}>
+        <h3 style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>페이지 미리보기 (22페이지)</h3>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14}}>
+          {PAGES_PREVIEW.map((p,i)=>(
+            <div key={p.n} onClick={()=>setSelected(p)} style={{cursor:'pointer',borderRadius:10,overflow:'hidden',border:`2px solid ${selected?.n===p.n?C.primary:C.border}`,transition:'all 200ms',animation:`slideUp 300ms ease ${i*40}ms both`}}
+              onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-4px)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,0.12)'}}
+              onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow=''}}>
+              <div style={{height:120,background:PAGE_COLORS[i%PAGE_COLORS.length],display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',position:'relative'}}>
+                {p.qr&&<div style={{position:'absolute',bottom:8,right:8,width:28,height:28,background:C.primary,borderRadius:4,display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:1,padding:4}}>
+                  {[...Array(9)].map((_,j)=><div key={j} style={{background:'#fff',borderRadius:1}}/>)}
+                </div>}
+                <div style={{fontSize:11,fontWeight:700,color:C.primary}}>{p.pg===0?'표지':p.pg===21?'뒤표지':`${p.pg}p`}</div>
+                <div style={{fontSize:28,marginTop:4}}>{p.pg===0?'📚':p.pg===21?'🔙':'📖'}</div>
+              </div>
+              <div style={{padding:'8px 10px',background:C.surface}}>
+                <div style={{fontSize:12,fontWeight:600,color:C.text,marginBottom:4}}>{p.n}</div>
+                <div style={{display:'flex',gap:4}}>
+                  {p.verified&&<span style={{background:`${C.success}15`,color:C.success,fontSize:10,padding:'1px 6px',borderRadius:4,fontWeight:600}}>검증완료</span>}
+                  {p.qr&&<span style={{background:`${C.secondary}15`,color:C.secondary,fontSize:10,padding:'1px 6px',borderRadius:4,fontWeight:600}}>QR</span>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {selected&&(
+        <Modal title={`${selected.n} 상세 보기`} onClose={()=>setSelected(null)} width={480}>
+          <div style={{textAlign:'center'}}>
+            <div style={{height:260,background:PAGE_COLORS[selected.pg%PAGE_COLORS.length],borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',marginBottom:16,fontSize:48}}>
+              {selected.pg===0?'📚':selected.pg===21?'🔙':'📖'}
+            </div>
+            {[['페이지',''+selected.n],['사이즈','8.5 × 8.5인치 + 블리드'],['해상도','300 DPI'],['색공간','CMYK (USWebCoatedSWOP)'],['QR 포함',selected.qr?'예':'아니오'],['검증 상태',selected.verified?'완료':'미완료']].map(([k,v])=>(
+              <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:`1px solid ${C.border}`,fontSize:13}}>
+                <span style={{color:C.textSub}}>{k}</span><span style={{fontWeight:500,color:C.text}}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Main App ───────────────────────────────────────────
+const TABS=[
+  {id:'main',label:'PDF 생성 워크플로우'},
+  {id:'layout',label:'레이아웃 에디터'},
+  {id:'color',label:'색공간 변환'},
+  {id:'preview',label:'미리보기 & 검증'},
+];
+
+function App(){
+  const [tab,setTab]=useState('main');
+  const [toast,setToast]=useState(null);
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{setTimeout(()=>setLoading(false),1200);},[]);
+
+  if(loading){
+    return(
+      <div style={{minHeight:'100vh',background:C.bg,display:'flex',alignItems:'center',justifyContent:'center'}}>
+        <div style={{textAlign:'center'}}>
+          <div style={{fontSize:48,marginBottom:16}}>🖨️</div>
+          <div style={{fontSize:18,fontWeight:700,color:C.primary,marginBottom:8}}>POD PDF 플랫폼</div>
+          <div style={{display:'flex',gap:8,justifyContent:'center'}}>
+            {[0,1,2].map(i=><div key={i} style={{width:8,height:8,borderRadius:4,background:C.primary,animation:`pulse 1.2s ease ${i*0.2}s infinite`}}/>)}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{width:'100%',minHeight:'100vh',background:C.bg,display:'flex',flexDirection:'column'}}>
+      {/* 상단 네비 */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:4}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginRight:24,flexShrink:0}}>
+          <div style={{width:32,height:32,background:C.primary,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:16}}>📄</div>
+          <span style={{fontSize:15,fontWeight:800,color:C.primary}}>POD Print</span>
+        </div>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{padding:'6px 16px',borderRadius:8,border:'none',background:tab===t.id?`${C.primary}15`:'transparent',color:tab===t.id?C.primary:C.textSub,cursor:'pointer',fontSize:14,fontWeight:tab===t.id?700:400,transition:'all 150ms',whiteSpace:'nowrap'}}>
+            {t.label}
+          </button>
+        ))}
+        <div style={{flex:1}}/>
+        <div style={{display:'flex',gap:10,alignItems:'center'}}>
+          <div style={{position:'relative'}}>
+            <div style={{width:36,height:36,borderRadius:8,background:C.bg,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:18}}>🔔</div>
+            <div style={{position:'absolute',top:-2,right:-2,width:16,height:16,background:C.danger,borderRadius:8,fontSize:10,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700}}>3</div>
+          </div>
+          <div style={{width:36,height:36,borderRadius:18,background:`linear-gradient(135deg,${C.primary},${C.accent})`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer'}}>K</div>
+        </div>
+      </header>
+
+      {/* 히어로 배너 */}
+      <HeroBanner tab={tab}/>
+
+      {/* 콘텐츠 */}
+      <main style={{flex:1,padding:28,maxWidth:1200,width:'100%',margin:'0 auto',alignSelf:'stretch',boxSizing:'border-box'}}>
+        {tab==='main'&&<TabMain onToast={setToast}/>}
+        {tab==='layout'&&<TabLayout onToast={setToast}/>}
+        {tab==='color'&&<TabColor onToast={setToast}/>}
+        {tab==='preview'&&<TabPreview onToast={setToast}/>}
+      </main>
+
+      {toast&&<Toast msg={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>POD 주문·배송 통합 운영 플랫폼 — 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;font-family:'Pretendard',sans-serif;background:#1C2533;color:#ECF0F1}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes barGrow{from{width:0%}to{width:var(--tw)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px);max-height:0}to{opacity:1;transform:translateY(0);max-height:500px}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const C={
+  primary:'#2C3E50',secondary:'#34495E',accent:'#3498DB',
+  bg:'#1C2533',surface:'#243040',surface2:'#2D3E52',border:'#3A4F65',
+  text:'#ECF0F1',textSub:'#95A5B8',
+  success:'#2ECC71',warn:'#F39C12',danger:'#E74C3C',green:'#27AE60',
+};
+const {useState,useEffect,useRef}=React;
+const {AreaChart,Area,BarChart,Bar,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,PieChart,Pie,Cell,Legend}=Recharts;
+
+// ── CountUp ───────────────────────────────────────────
+function CountUp({end,suffix=''}){
+  const [v,setV]=useState(0);
+  useEffect(()=>{let s=0;const step=end/(1200/16);const t=setInterval(()=>{s+=step;if(s>=end){setV(end);clearInterval(t);}else setV(Math.floor(s));},16);return()=>clearInterval(t);},[end]);
+  return<span style={{animation:'countUp 400ms ease'}}>{v.toLocaleString()}{suffix}</span>;
+}
+
+// ── Toast ──────────────────────────────────────────────
+function Toast({msg,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return(<div style={{position:'fixed',bottom:28,right:28,zIndex:9999,background:C.accent,color:'#fff',padding:'12px 24px',borderRadius:8,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.4)',fontSize:14}}>{msg}</div>);
+}
+
+// ── Modal ──────────────────────────────────────────────
+function Modal({title,onClose,children,width=540}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.6)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:C.surface,borderRadius:14,zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.5)',border:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'20px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:700,color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSub}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Card ───────────────────────────────────────────────
+function Card({children,style={}}){
+  return(
+    <div style={{background:C.surface,borderRadius:12,border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.2)',...style}}>
+      {children}
+    </div>
+  );
+}
+
+// ── KPI Card ───────────────────────────────────────────
+function KpiCard({icon,label,value,suffix='',color,i}){
+  return(
+    <div style={{background:C.surface,borderRadius:12,padding:20,border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.2)',animation:`slideUp 400ms ease ${i*80}ms both`,transition:'transform 200ms,box-shadow 200ms'}}
+      onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-2px)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,0.3)'}}
+      onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 2px 8px rgba(0,0,0,0.2)'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+        <span style={{fontSize:13,color:C.textSub}}>{label}</span>
+        <div style={{width:36,height:36,borderRadius:8,background:`${color}20`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>{icon}</div>
+      </div>
+      <div style={{fontSize:26,fontWeight:800,color:color||C.text}}><CountUp end={value} suffix={suffix}/></div>
+    </div>
+  );
+}
+
+// ── Route: 주문 대시보드 ───────────────────────────────
+const ORDERS=[
+  {id:'ORD-20240',name:'민지의 하늘 탐험',status:'배송중',pdf:'완료',api:'Printful',date:'2026-05-04',amount:'38,500원'},
+  {id:'ORD-20239',name:'서준의 로봇 친구',status:'POD전송',pdf:'완료',api:'Blurb',date:'2026-05-04',amount:'42,000원'},
+  {id:'ORD-20238',name:'아린이의 마법 학교',status:'PDF생성',pdf:'생성중',api:'-',date:'2026-05-03',amount:'38,500원'},
+  {id:'ORD-20237',name:'태양의 바다 모험',status:'결제완료',pdf:'대기',api:'-',date:'2026-05-03',amount:'42,000원'},
+  {id:'ORD-20236',name:'나래의 꿈 이야기',status:'배송완료',pdf:'완료',api:'Printful',date:'2026-05-02',amount:'38,500원'},
+  {id:'ORD-20235',name:'도현의 우주 여행',status:'배송완료',pdf:'완료',api:'Blurb',date:'2026-05-02',amount:'45,000원'},
+];
+const PIPELINE_STAGES=['접수','결제완료','PDF생성','POD전송','배송중','배송완료'];
+
+function RouteDashboard({onToast}){
+  const [detail,setDetail]=useState(null);
+  const stageColor={'접수':'#6B7280','결제완료':C.accent,'PDF생성':C.warn,'POD전송':'#9B59B6','배송중':C.success,'배송완료':C.green};
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {/* KPI */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}}>
+        {[{icon:'📦',label:'오늘 접수',value:47,suffix:'건',color:C.accent},{icon:'🖨️',label:'PDF 생성 완료',value:38,suffix:'건',color:C.success},{icon:'🚚',label:'배송 중',value:23,suffix:'건',color:C.warn},{icon:'✅',label:'이번 달 완료',value:312,suffix:'건',color:C.green}].map((k,i)=>(
+          <KpiCard key={k.label} {...k} i={i}/>
+        ))}
+      </div>
+
+      {/* 파이프라인 현황 */}
+      <Card style={{padding:20,marginBottom:20}}>
+        <h3 style={{fontSize:14,fontWeight:700,color:C.textSub,marginBottom:14,letterSpacing:'0.05em',textTransform:'uppercase'}}>주문 파이프라인 현황</h3>
+        <div style={{display:'flex',gap:0}}>
+          {PIPELINE_STAGES.map((s,i)=>{
+            const counts=[12,8,6,4,15,307];
+            return(
+              <div key={s} style={{flex:1,textAlign:'center',position:'relative'}}>
+                <div style={{height:6,background:`${stageColor[s]}30`,borderRadius:0,overflow:'hidden'}}>
+                  <div style={{height:'100%',width:'100%',background:stageColor[s],animation:'barGrow 800ms ease both','--tw':'100%'}}/>
+                </div>
+                <div style={{marginTop:10,fontSize:10,color:C.textSub,textTransform:'uppercase',letterSpacing:'0.05em'}}>{s}</div>
+                <div style={{fontSize:20,fontWeight:800,color:stageColor[s]}}>{counts[i]}</div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* 주문 목록 */}
+      <Card style={{overflow:'hidden'}}>
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.text}}>최근 주문</h3>
+          <div style={{display:'flex',gap:10}}>
+            <input placeholder="주문 검색..." style={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:7,padding:'7px 12px',fontSize:13,color:C.text,outline:'none',width:180}}/>
+            <select style={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:7,padding:'7px 10px',fontSize:13,color:C.text,outline:'none'}}>
+              <option>전체 상태</option>
+              {PIPELINE_STAGES.map(s=><option key={s}>{s}</option>)}
+            </select>
+          </div>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{background:C.bg}}>
+            {['주문 ID','도서명','결제금액','PDF 상태','공급사','배송 상태','주문일','상세'].map(h=>(
+              <th key={h} style={{padding:'10px 16px',fontSize:11,fontWeight:600,color:C.textSub,textAlign:'left',letterSpacing:'0.05em',textTransform:'uppercase'}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {ORDERS.map((o,i)=>(
+              <tr key={o.id} style={{borderBottom:`1px solid ${C.border}`,transition:'background 150ms',animation:`slideUp 300ms ease ${i*50}ms both`}}
+                onMouseEnter={e=>{e.currentTarget.style.background=`${C.accent}08`}}
+                onMouseLeave={e=>{e.currentTarget.style.background=''}}>
+                <td style={{padding:'12px 16px',fontSize:12,fontFamily:'monospace',color:C.accent}}>{o.id}</td>
+                <td style={{padding:'12px 16px',fontSize:13,fontWeight:500,color:C.text}}>{o.name}</td>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.text}}>{o.amount}</td>
+                <td style={{padding:'12px 16px'}}><span style={{background:`${o.pdf==='완료'?C.success:o.pdf==='생성중'?C.warn:C.border}20`,color:o.pdf==='완료'?C.success:o.pdf==='생성중'?C.warn:C.textSub,padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600}}>{o.pdf}</span></td>
+                <td style={{padding:'12px 16px',fontSize:12,color:C.textSub}}>{o.api}</td>
+                <td style={{padding:'12px 16px'}}><span style={{background:`${stageColor[o.status]||C.border}20`,color:stageColor[o.status]||C.textSub,padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600}}>{o.status}</span></td>
+                <td style={{padding:'12px 16px',fontSize:12,color:C.textSub}}>{o.date}</td>
+                <td style={{padding:'12px 16px'}}><button onClick={()=>setDetail(o)} style={{background:`${C.accent}15`,color:C.accent,border:'none',borderRadius:6,padding:'4px 10px',fontSize:11,cursor:'pointer',fontWeight:600}}>상세</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+
+      {detail&&(
+        <Modal title={`주문 상세: ${detail.id}`} onClose={()=>setDetail(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {[['주문 ID',detail.id],['도서명',detail.name],['결제금액',detail.amount],['주문일',detail.date],['PDF 상태',detail.pdf],['POD 공급사',detail.api],['배송 상태',detail.status]].map(([k,v])=>(
+              <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'9px 0',borderBottom:`1px solid ${C.border}`,fontSize:14}}>
+                <span style={{color:C.textSub}}>{k}</span><span style={{fontWeight:500,color:C.text}}>{v}</span>
+              </div>
+            ))}
+            <div style={{marginTop:8}}>
+              <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:8}}>배송 추적 타임라인</div>
+              {['주문 접수 · 2026-05-04 09:12','결제 완료 · 2026-05-04 09:15','PDF 생성 완료 · 2026-05-04 09:42','Printful 전송 · 2026-05-04 10:03','인쇄 완료 · 2026-05-04 14:20','배송 출발 · 2026-05-04 16:45'].map((t,i)=>(
+                <div key={i} style={{display:'flex',gap:10,alignItems:'flex-start',marginBottom:8}}>
+                  <div style={{width:8,height:8,borderRadius:4,background:i===5?C.success:C.accent,marginTop:4,flexShrink:0}}/>
+                  <div style={{fontSize:12,color:i===5?C.text:C.textSub}}>{t}</div>
+                </div>
+              ))}
+            </div>
+            <button onClick={()=>{setDetail(null);onToast('배송 추적 링크를 복사했습니다.');}} style={{padding:'10px',background:C.accent,color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontWeight:600,fontSize:14,marginTop:8}}>배송 추적 링크 복사</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Route: POD API 연동 ────────────────────────────────
+const WEBHOOKS=[
+  {provider:'Printful',event:'order.shipped',time:'2026-05-04 16:45',status:'성공',latency:'142ms'},
+  {provider:'Printful',event:'order.fulfilled',time:'2026-05-04 14:21',status:'성공',latency:'98ms'},
+  {provider:'Blurb',event:'order.failed',time:'2026-05-04 11:33',status:'재시도',latency:'오류'},
+  {provider:'Printful',event:'order.created',time:'2026-05-04 10:03',status:'성공',latency:'205ms'},
+  {provider:'Blurb',event:'order.created',time:'2026-05-04 09:47',status:'성공',latency:'318ms'},
+  {provider:'Printful',event:'order.payment',time:'2026-05-04 09:15',status:'성공',latency:'167ms'},
+];
+function RouteApi({onToast}){
+  const [testing,setTesting]=useState(null);
+  function handleTest(name){
+    setTesting(name);
+    setTimeout(()=>{setTesting(null);onToast(`${name} API 연결 테스트 성공 (응답: 210ms)`);},1600);
+  }
+  const providers=[
+    {name:'Printful',status:'연결됨',region:'US-East',orders:1248,success:'99.2%',color:C.success},
+    {name:'Blurb',status:'연결됨',region:'US-West',orders:312,success:'97.8%',color:C.accent},
+  ];
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      {/* API 공급사 카드 */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:24}}>
+        {providers.map((p,i)=>(
+          <Card key={p.name} style={{padding:24,animation:`slideUp 400ms ease ${i*80}ms both`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16}}>
+              <div>
+                <div style={{fontSize:18,fontWeight:700,color:C.text,marginBottom:4}}>{p.name}</div>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <span style={{background:`${p.color}20`,color:p.color,padding:'3px 10px',borderRadius:20,fontSize:11,fontWeight:600}}>● {p.status}</span>
+                  <span style={{fontSize:11,color:C.textSub}}>{p.region}</span>
+                </div>
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>handleTest(p.name)} disabled={testing===p.name} style={{padding:'7px 14px',background:testing===p.name?C.secondary:`${C.accent}20`,color:C.accent,border:'none',borderRadius:7,cursor:'pointer',fontSize:12,fontWeight:600}}>
+                  {testing===p.name?<span style={{animation:'pulse 1s infinite'}}>테스트 중...</span>:'연결 테스트'}
+                </button>
+                <button onClick={()=>onToast(`${p.name} API 설정 페이지로 이동합니다.`)} style={{padding:'7px 14px',background:`${C.border}40`,color:C.textSub,border:'none',borderRadius:7,cursor:'pointer',fontSize:12,fontWeight:600}}>설정</button>
+              </div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              {[['총 주문 건수',p.orders+'건'],['성공률',p.success],['재시도 정책','지수 백오프 × 3'],['Webhook 검증','HMAC-SHA256']].map(([k,v])=>(
+                <div key={k} style={{background:C.surface2,borderRadius:8,padding:'10px 12px'}}>
+                  <div style={{fontSize:10,color:C.textSub,marginBottom:4,textTransform:'uppercase',letterSpacing:'0.05em'}}>{k}</div>
+                  <div style={{fontSize:13,fontWeight:600,color:C.text}}>{v}</div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Webhook 로그 */}
+      <Card style={{overflow:'hidden'}}>
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.text}}>Webhook 수신 이력</h3>
+          <button onClick={()=>onToast('Webhook 로그를 CSV로 내보냅니다.')} style={{background:`${C.accent}15`,color:C.accent,border:'none',borderRadius:7,padding:'7px 14px',fontSize:13,cursor:'pointer',fontWeight:600}}>CSV 내보내기</button>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{background:C.bg}}>
+            {['공급사','이벤트','수신 시각','처리 상태','응답 속도'].map(h=>(
+              <th key={h} style={{padding:'9px 16px',fontSize:11,fontWeight:600,color:C.textSub,textAlign:'left',textTransform:'uppercase',letterSpacing:'0.05em'}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {WEBHOOKS.map((w,i)=>(
+              <tr key={i} style={{borderBottom:`1px solid ${C.border}`,animation:`slideUp 300ms ease ${i*40}ms both`,transition:'background 150ms'}}
+                onMouseEnter={e=>{e.currentTarget.style.background=`${C.accent}05`}}
+                onMouseLeave={e=>{e.currentTarget.style.background=''}}>
+                <td style={{padding:'11px 16px',fontSize:13,fontWeight:600,color:w.provider==='Printful'?C.success:C.accent}}>{w.provider}</td>
+                <td style={{padding:'11px 16px',fontSize:12,fontFamily:'monospace',color:C.text}}>{w.event}</td>
+                <td style={{padding:'11px 16px',fontSize:12,color:C.textSub}}>{w.time}</td>
+                <td style={{padding:'11px 16px'}}>
+                  <span style={{background:`${w.status==='성공'?C.success:C.warn}20`,color:w.status==='성공'?C.success:C.warn,padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:600}}>{w.status}</span>
+                </td>
+                <td style={{padding:'11px 16px',fontSize:12,color:w.latency==='오류'?C.danger:C.textSub,fontFamily:'monospace'}}>{w.latency}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+// ── Route: 템플릿 관리 ──────────────────────────────────
+const TEMPLATES=[
+  {id:'TPL-001',name:'동화 클래식',style:'따뜻한 파스텔',fonts:'나눔고딕',pages:22,used:412,version:3,color:'#FF8A65'},
+  {id:'TPL-002',name:'미래 탐험',style:'시원한 블루',fonts:'Gmarket Sans',pages:22,used:218,version:2,color:'#42A5F5'},
+  {id:'TPL-003',name:'숲속 마법',style:'초록 자연',fonts:'배달의민족 연성',pages:22,used:156,version:1,color:'#66BB6A'},
+  {id:'TPL-004',name:'우주 어드벤처',style:'딥 다크',fonts:'나눔고딕',pages:22,used:89,version:1,color:'#7E57C2'},
+  {id:'TPL-005',name:'봄날의 꿈',style:'플로럴 핑크',fonts:'Apple SD Gothic Neo',pages:22,used:67,version:2,color:'#EC407A'},
+  {id:'TPL-006',name:'황금빛 이야기',style:'웜 골드',fonts:'나눔고딕',pages:22,used:34,version:1,color:'#FFA726'},
+];
+function RouteTemplate({onToast}){
+  const [modal,setModal]=useState(false);
+  const [editItem,setEditItem]=useState(null);
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div>
+          <h2 style={{fontSize:20,fontWeight:800,color:C.text,marginBottom:4}}>도서 템플릿 관리</h2>
+          <p style={{fontSize:13,color:C.textSub}}>총 {TEMPLATES.length}개 템플릿 · Immutable 버전 관리 적용</p>
+        </div>
+        <button onClick={()=>{setEditItem(null);setModal(true);}} style={{background:C.accent,color:'#fff',border:'none',borderRadius:9,padding:'10px 20px',fontSize:14,fontWeight:700,cursor:'pointer'}}>+ 새 템플릿</button>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+        {TEMPLATES.map((t,i)=>(
+          <Card key={t.id} style={{overflow:'hidden',cursor:'pointer',transition:'transform 200ms,box-shadow 200ms',animation:`slideUp 400ms ease ${i*60}ms both`}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 12px 32px rgba(0,0,0,0.35)'}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow=''}}>
+            <div style={{height:100,background:`linear-gradient(135deg, ${t.color}40, ${t.color}20)`,position:'relative',display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <div style={{width:60,height:76,background:t.color,borderRadius:4,boxShadow:'4px 4px 12px rgba(0,0,0,0.3)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>📚</div>
+              <span style={{position:'absolute',top:8,right:8,background:`${t.color}30`,color:C.text,fontSize:10,padding:'2px 8px',borderRadius:4,fontWeight:600}}>v{t.version}</span>
+            </div>
+            <div style={{padding:16}}>
+              <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:4}}>{t.name}</div>
+              <div style={{fontSize:11,color:C.textSub,marginBottom:10}}>{t.style} · {t.fonts}</div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:C.textSub,marginBottom:12}}>
+                <span>사용 건수: <span style={{color:C.text,fontWeight:600}}>{t.used}</span></span>
+                <span>페이지: <span style={{color:C.text,fontWeight:600}}>{t.pages}p</span></span>
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>{setEditItem(t);setModal(true);}} style={{flex:1,padding:'7px',background:`${C.accent}15`,color:C.accent,border:'none',borderRadius:7,cursor:'pointer',fontSize:12,fontWeight:600}}>수정</button>
+                <button onClick={()=>onToast(`'${t.name}' 템플릿을 복제합니다.`)} style={{flex:1,padding:'7px',background:`${C.border}40`,color:C.textSub,border:'none',borderRadius:7,cursor:'pointer',fontSize:12,fontWeight:600}}>복제</button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {modal&&(
+        <Modal title={editItem?`템플릿 수정: ${editItem.name}`:'새 템플릿 생성'} onClose={()=>setModal(false)}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div>
+              <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>템플릿 이름</label>
+              <input defaultValue={editItem?.name||''} placeholder="예: 봄날의 꿈" style={{width:'100%',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 12px',fontSize:14,color:C.text,outline:'none'}}/>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <div>
+                <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>기본 폰트</label>
+                <select defaultValue={editItem?.fonts} style={{width:'100%',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 12px',fontSize:14,color:C.text,outline:'none'}}>
+                  <option>나눔고딕</option><option>Gmarket Sans</option><option>배달의민족 연성</option>
+                </select>
+              </div>
+              <div>
+                <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>이미지 배치 모드</label>
+                <select style={{width:'100%',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 12px',fontSize:14,color:C.text,outline:'none'}}>
+                  <option>풀블리드</option><option>마진 내 배치</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>컬러 테마</label>
+              <div style={{display:'flex',gap:8}}>
+                {['#FF8A65','#42A5F5','#66BB6A','#7E57C2','#EC407A','#FFA726'].map(col=>(
+                  <div key={col} onClick={()=>{}} style={{width:32,height:32,borderRadius:16,background:col,cursor:'pointer',border:`2px solid ${editItem?.color===col?'#fff':'transparent'}`,transition:'transform 150ms'}}
+                    onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.15)'}}
+                    onMouseLeave={e=>{e.currentTarget.style.transform=''}}/>
+                ))}
+              </div>
+            </div>
+            <button onClick={()=>{setModal(false);onToast(editItem?'템플릿이 업데이트되었습니다. (v'+((editItem?.version||1)+1)+')':'새 템플릿이 생성되었습니다.');}} style={{padding:'11px',background:C.accent,color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontWeight:700,fontSize:14,marginTop:4}}>
+              {editItem?'변경 사항 저장':'템플릿 생성'}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Route: 운영 분석 ────────────────────────────────────
+const ORDER_DATA=[
+  {name:'4/28',orders:28,success:27},{name:'4/29',orders:35,success:34},{name:'4/30',orders:42,success:41},
+  {name:'5/1',orders:38,success:37},{name:'5/2',orders:51,success:49},{name:'5/3',orders:44,success:43},{name:'5/4',orders:47,success:46},
+];
+const API_DATA=[
+  {name:'Printful',value:78,color:'#2ECC71'},{name:'Blurb',value:22,color:'#3498DB'},
+];
+const TEMPLATE_DATA=[
+  {name:'동화 클래식',count:82},{name:'미래 탐험',count:54},{name:'숲속 마법',count:41},{name:'우주 어드벤처',count:32},{name:'봄날의 꿈',count:28},{name:'황금빛',count:17},
+];
+
+function RouteAnalytics(){
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <h2 style={{fontSize:20,fontWeight:800,color:C.text}}>운영 분석</h2>
+        <div style={{display:'flex',gap:8}}>
+          {['오늘','7일','30일','3개월'].map((r,i)=>(
+            <button key={r} style={{padding:'6px 14px',borderRadius:7,border:`1px solid ${i===1?C.accent:C.border}`,background:i===1?`${C.accent}15`:'transparent',color:i===1?C.accent:C.textSub,cursor:'pointer',fontSize:12,fontWeight:i===1?600:400}}>{r}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* KPI */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}}>
+        {[{icon:'📦',label:'기간 내 주문',value:285,suffix:'건',color:C.accent},{icon:'✅',label:'PDF 생성 성공률',value:98,suffix:'%',color:C.success},{icon:'🚀',label:'POD 전송 성공률',value:97,suffix:'%',color:C.green},{icon:'⚡',label:'평균 처리 시간',value:34,suffix:'분',color:C.warn}].map((k,i)=>(
+          <KpiCard key={k.label} {...k} i={i}/>
+        ))}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:16,marginBottom:16}}>
+        {/* 주문량 추이 */}
+        <Card style={{padding:20}}>
+          <h3 style={{fontSize:14,fontWeight:700,color:C.textSub,marginBottom:16,textTransform:'uppercase',letterSpacing:'0.05em'}}>일별 주문량 추이</h3>
+          <div style={{height:220}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={ORDER_DATA} margin={{top:5,right:10,left:-20,bottom:0}}>
+                <defs>
+                  <linearGradient id="gOrders" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C.accent} stopOpacity={0.4}/>
+                    <stop offset="95%" stopColor={C.accent} stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                <XAxis dataKey="name" tick={{fill:C.textSub,fontSize:11}} axisLine={{stroke:C.border}}/>
+                <YAxis tick={{fill:C.textSub,fontSize:11}} axisLine={{stroke:C.border}}/>
+                <Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}} labelStyle={{color:C.text}}/>
+                <Area type="monotone" dataKey="orders" stroke={C.accent} fill="url(#gOrders)" strokeWidth={2} name="주문"/>
+                <Area type="monotone" dataKey="success" stroke={C.success} fill="none" strokeWidth={2} strokeDasharray="4 2" name="성공"/>
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        {/* 공급사 비율 */}
+        <Card style={{padding:20}}>
+          <h3 style={{fontSize:14,fontWeight:700,color:C.textSub,marginBottom:16,textTransform:'uppercase',letterSpacing:'0.05em'}}>공급사별 주문 비율</h3>
+          <div style={{height:220}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={API_DATA} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" nameKey="name">
+                  {API_DATA.map((d,i)=><Cell key={i} fill={d.color}/>)}
+                </Pie>
+                <Tooltip formatter={(v)=>`${v}%`} contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}}/>
+                <Legend formatter={v=><span style={{color:C.text,fontSize:12}}>{v}</span>}/>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      </div>
+
+      {/* 템플릿별 사용 빈도 */}
+      <Card style={{padding:20}}>
+        <h3 style={{fontSize:14,fontWeight:700,color:C.textSub,marginBottom:16,textTransform:'uppercase',letterSpacing:'0.05em'}}>템플릿별 사용 빈도</h3>
+        <div style={{height:180}}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={TEMPLATE_DATA} margin={{top:0,right:10,left:-20,bottom:0}}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false}/>
+              <XAxis dataKey="name" tick={{fill:C.textSub,fontSize:11}} axisLine={{stroke:C.border}}/>
+              <YAxis tick={{fill:C.textSub,fontSize:11}} axisLine={{stroke:C.border}}/>
+              <Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}}/>
+              <Bar dataKey="count" fill={C.accent} radius={[4,4,0,0]} name="사용 건수"/>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ── Main App ───────────────────────────────────────────
+const NAV=[
+  {id:'main',label:'주문 대시보드',icon:'📦'},
+  {id:'api',label:'POD API 연동',icon:'🔗'},
+  {id:'template',label:'템플릿 관리',icon:'📐'},
+  {id:'analytics',label:'운영 분석',icon:'📊'},
+];
+
+function App(){
+  const [route,setRoute]=useState('main');
+  const [toast,setToast]=useState(null);
+  const [loading,setLoading]=useState(true);
+  useEffect(()=>{setTimeout(()=>setLoading(false),1300);},[]);
+
+  if(loading){
+    return(
+      <div style={{minHeight:'100vh',background:C.bg,display:'flex',alignItems:'center',justifyContent:'center'}}>
+        <div style={{textAlign:'center'}}>
+          <div style={{width:64,height:64,border:`3px solid ${C.border}`,borderTop:`3px solid ${C.accent}`,borderRadius:32,margin:'0 auto 20px',animation:'spin 0.8s linear infinite'}}
+            style={{width:64,height:64,borderRadius:32,background:`linear-gradient(135deg,${C.accent},${C.success})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:28,margin:'0 auto 20px',animation:'pulse 1.2s ease infinite'}}>🚚</div>
+          <div style={{fontSize:18,fontWeight:700,color:C.text,marginBottom:8}}>POD 운영 플랫폼</div>
+          <div style={{display:'flex',gap:6,justifyContent:'center'}}>
+            {[0,1,2].map(i=><div key={i} style={{width:6,height:6,borderRadius:3,background:C.accent,animation:`pulse 1.2s ease ${i*0.2}s infinite`}}/>)}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{width:'100%',minHeight:'100vh',background:C.bg,display:'flex',flexDirection:'column'}}>
+      {/* 글로벌 네비 */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:`${C.surface}F0`,backdropFilter:'blur(10px)',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:64,padding:'0 32px',gap:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginRight:32,flexShrink:0}}>
+          <div style={{width:36,height:36,background:`linear-gradient(135deg,${C.accent},${C.success})`,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:18}}>🚚</div>
+          <div>
+            <div style={{fontSize:14,fontWeight:800,color:C.text,lineHeight:1}}>POD Platform</div>
+            <div style={{fontSize:10,color:C.textSub}}>운영 통합 플랫폼</div>
+          </div>
+        </div>
+        <nav style={{display:'flex',gap:2}}>
+          {NAV.map(n=>(
+            <button key={n.id} onClick={()=>setRoute(n.id)} style={{padding:'8px 16px',borderRadius:8,border:'none',background:route===n.id?`${C.accent}20`:'transparent',color:route===n.id?C.accent:C.textSub,cursor:'pointer',fontSize:13,fontWeight:route===n.id?700:400,transition:'all 150ms',display:'flex',alignItems:'center',gap:6}}>
+              <span style={{fontSize:15}}>{n.icon}</span>{n.label}
+            </button>
+          ))}
+        </nav>
+        <div style={{flex:1}}/>
+        <div style={{display:'flex',gap:10,alignItems:'center'}}>
+          <div style={{padding:'6px 14px',background:`${C.success}20`,borderRadius:20,fontSize:11,color:C.success,fontWeight:600}}>● 시스템 정상</div>
+          <div style={{position:'relative'}}>
+            <div style={{width:36,height:36,borderRadius:8,background:C.surface2,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:18}}>🔔</div>
+            <div style={{position:'absolute',top:-2,right:-2,width:16,height:16,background:C.danger,borderRadius:8,fontSize:10,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700}}>2</div>
+          </div>
+          <div style={{width:36,height:36,borderRadius:18,background:`linear-gradient(135deg,${C.accent},${C.success})`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer'}}>K</div>
+        </div>
+      </header>
+
+      {/* 메인 콘텐츠 */}
+      <main style={{flex:1,padding:'28px 32px',maxWidth:1320,width:'100%',margin:'0 auto',alignSelf:'stretch',boxSizing:'border-box'}}>
+        {route==='main'&&<RouteDashboard onToast={setToast}/>}
+        {route==='api'&&<RouteApi onToast={setToast}/>}
+        {route==='template'&&<RouteTemplate onToast={setToast}/>}
+        {route==='analytics'&&<RouteAnalytics/>}
+      </main>
+
+      {/* 푸터 */}
+      <footer style={{background:C.surface,borderTop:`1px solid ${C.border}`,padding:'24px 32px',marginTop:32}}>
+        <div style={{maxWidth:1320,margin:'0 auto',display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <div style={{width:28,height:28,background:`linear-gradient(135deg,${C.accent},${C.success})`,borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:14}}>🚚</div>
+            <span style={{fontSize:13,fontWeight:700,color:C.text}}>POD Platform</span>
+          </div>
+          <div style={{display:'flex',gap:20,fontSize:12,color:C.textSub}}>
+            {['주문 파이프라인','API 연동 설정','템플릿 라이브러리','운영 분석 리포트'].map(l=>(
+              <span key={l} style={{cursor:'pointer',transition:'color 150ms'}}
+                onMouseEnter={e=>{e.currentTarget.style.color=C.accent}}
+                onMouseLeave={e=>{e.currentTarget.style.color=C.textSub}}>{l}</span>
+            ))}
+          </div>
+          <div style={{fontSize:11,color:C.textSub}}>POD 주문·배송 통합 운영 플랫폼 — 구현 데모</div>
+        </div>
+      </footer>
+
+      {toast&&<Toast msg={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
