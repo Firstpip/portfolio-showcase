@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IR 이미지 품질 검증 플랫폼 — 구현 데모</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; font-family:'Pretendard',sans-serif; background:#111B27; color:#E8F4F0; }
+#root { display:flex; flex-direction:column; width:100%; min-height:100vh; }
+@keyframes fadeIn { from{opacity:0} to{opacity:1} }
+@keyframes fadeInScale { from{opacity:0;transform:scale(0.95)} to{opacity:1;transform:scale(1)} }
+@keyframes slideInRight { from{opacity:0;transform:translateX(30px)} to{opacity:1;transform:translateX(0)} }
+@keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+@keyframes ripple { 0%{transform:scale(0);opacity:0.5} 100%{transform:scale(4);opacity:0} }
+@keyframes countUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+@keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+@keyframes barGrow { from{width:0%} to{width:var(--target-width)} }
+@keyframes slideDown { from{opacity:0;transform:translateY(-10px);max-height:0} to{opacity:1;transform:translateY(0);max-height:500px} }
+::-webkit-scrollbar{width:5px} ::-webkit-scrollbar-track{background:transparent} ::-webkit-scrollbar-thumb{background:#2E4055;border-radius:3px}
+.chart-wrap { position:relative; height:220px; }
+.chart-wrap canvas { width:100%!important; height:100%!important; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback}=React;
+
+const C={
+  primary:'#0D1F2D',secondary:'#2ECC8E',accent:'#1ABC9C',
+  bg:'#111B27',surface:'#1A2B3C',surface2:'#213447',
+  text:'#E8F4F0',textSec:'#8AADA0',border:'#233447',
+  success:'#2ECC8E',warning:'#F59E0B',error:'#EF4444',info:'#3B82F6',
+};
+
+const JOBS=[
+  {id:'JOB-0043',files:24,done:24,failed:0,pass:22,fail:2,preset:'Profile A',created:'2024.03.15 14:00',duration:'8분 12초',status:'완료'},
+  {id:'JOB-0042',files:18,done:15,failed:0,pass:null,fail:null,preset:'Profile B',created:'2024.03.15 10:30',duration:'진행 중...',status:'실행 중'},
+  {id:'JOB-0041',files:12,done:12,failed:1,pass:9,fail:3,preset:'Profile A',created:'2024.03.14 16:00',duration:'5분 33초',status:'완료'},
+  {id:'JOB-0040',files:30,done:30,failed:0,pass:28,fail:2,preset:'Profile C',created:'2024.03.14 09:00',duration:'11분 44초',status:'완료'},
+  {id:'JOB-0039',files:8,done:8,failed:0,pass:8,fail:0,preset:'Profile A',created:'2024.03.13 14:20',duration:'3분 17초',status:'완료'},
+];
+
+const HISTORY=[
+  {id:'ANA-1087',file:'IR_240315_A.tiff',preset:'Profile A',spots:18,result:'합격',score:94,date:'2024.03.15 14:23'},
+  {id:'ANA-1086',file:'IR_240315_B.tiff',preset:'Profile A',spots:16,result:'합격',score:88,date:'2024.03.15 14:21'},
+  {id:'ANA-1085',file:'IR_240315_C.tiff',preset:'Profile A',spots:22,result:'불합격',score:61,date:'2024.03.15 14:19'},
+  {id:'ANA-1084',file:'IR_240314_A.tiff',preset:'Profile B',spots:14,result:'합격',score:91,date:'2024.03.14 16:45'},
+  {id:'ANA-1083',file:'IR_240314_B.tiff',preset:'Profile B',spots:19,result:'합격',score:85,date:'2024.03.14 16:43'},
+  {id:'ANA-1082',file:'IR_240314_C.tiff',preset:'Profile B',spots:25,result:'불합격',score:58,date:'2024.03.14 16:40'},
+  {id:'ANA-1081',file:'IR_240313_A.tiff',preset:'Profile A',spots:17,result:'합격',score:90,date:'2024.03.13 15:33'},
+  {id:'ANA-1080',file:'IR_240313_B.tiff',preset:'Profile C',spots:21,result:'합격',score:87,date:'2024.03.13 15:31'},
+];
+
+function CountUp({end,suffix=''}){
+  const [v,setV]=useState(0);
+  useEffect(()=>{
+    let s=0; const step=end/60;
+    const t=setInterval(()=>{s+=step;if(s>=end){setV(end);clearInterval(t);}else setV(Math.floor(s));},16);
+    return()=>clearInterval(t);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{v.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({message,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:C.secondary,color:'#0A1F18',padding:'12px 20px',borderRadius:8,animation:'slideUp 300ms ease',boxShadow:'0 4px 20px rgba(46,204,142,0.4)',fontSize:14,fontWeight:700}}>✓ {message}</div>;
+}
+
+function Drawer({item,onClose,children}){
+  return(
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:200,animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:480,background:C.surface,boxShadow:'-8px 0 40px rgba(0,0,0,0.4)',zIndex:201,overflowY:'auto',padding:28,animation:'slideInRight 200ms ease'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
+          <h3 style={{fontSize:18,fontWeight:700,color:C.text}}>{item?.title||'상세 정보'}</h3>
+          <button onClick={onClose} style={{background:C.surface2,border:'none',color:C.textSec,width:32,height:32,borderRadius:8,cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+        </div>
+        {children}
+      </div>
+    </>
+  );
+}
+
+function ChartLine({id,data,labels,color}){
+  const ref=useRef(null);
+  const chartRef=useRef(null);
+  useEffect(()=>{
+    if(!ref.current) return;
+    if(chartRef.current) chartRef.current.destroy();
+    chartRef.current=new Chart(ref.current,{
+      type:'line',
+      data:{labels,datasets:[{data,borderColor:color,backgroundColor:color+'22',fill:true,tension:0.4,pointRadius:4,pointBackgroundColor:color}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#1E3248'},ticks:{color:C.textSec,font:{size:11}}},y:{grid:{color:'#1E3248'},ticks:{color:C.textSec,font:{size:11}}}}},
+    });
+    return()=>{if(chartRef.current){chartRef.current.destroy();chartRef.current=null;}};
+  },[]);
+  return <canvas ref={ref} id={id}/>;
+}
+
+function ChartBar({id,data,labels,colors}){
+  const ref=useRef(null);
+  const chartRef=useRef(null);
+  useEffect(()=>{
+    if(!ref.current) return;
+    if(chartRef.current) chartRef.current.destroy();
+    chartRef.current=new Chart(ref.current,{
+      type:'bar',
+      data:{labels,datasets:[{data,backgroundColor:colors||C.secondary,borderRadius:4}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{color:'#1E3248'},ticks:{color:C.textSec,font:{size:11}}},y:{grid:{color:'#1E3248'},ticks:{color:C.textSec,font:{size:11}}}}},
+    });
+    return()=>{if(chartRef.current){chartRef.current.destroy();chartRef.current=null;}};
+  },[]);
+  return <canvas ref={ref} id={id}/>;
+}
+
+function ChartDoughnut({id,data,labels}){
+  const ref=useRef(null);
+  const chartRef=useRef(null);
+  useEffect(()=>{
+    if(!ref.current) return;
+    if(chartRef.current) chartRef.current.destroy();
+    chartRef.current=new Chart(ref.current,{
+      type:'doughnut',
+      data:{labels,datasets:[{data,backgroundColor:['#2ECC8E','#EF4444','#F59E0B'],borderWidth:0,hoverOffset:4}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:C.textSec,font:{size:11},padding:12}}}},
+    });
+    return()=>{if(chartRef.current){chartRef.current.destroy();chartRef.current=null;}};
+  },[]);
+  return <canvas ref={ref} id={id}/>;
+}
+
+// Simplified IR thumbnail SVG
+function IRThumb({variant,scale=1}){
+  const spots=variant==='ref'
+    ?[[80,60,8],[180,90,10],[130,140,7],[210,60,9],[60,130,6]]
+    :[[82,58,8],[178,93,10],[135,138,7],[215,65,9],[58,134,6],[160,110,5]];
+  return(
+    <svg width="100%" viewBox="0 0 280 200" style={{background:'#04070E',borderRadius:6,display:'block'}}>
+      <defs>
+        <radialGradient id={`bg${variant}`} cx="50%" cy="45%" r="60%">
+          <stop offset="0%" stopColor="#0A1F40" stopOpacity="0.7"/>
+          <stop offset="100%" stopColor="#02050B" stopOpacity="0"/>
+        </radialGradient>
+      </defs>
+      <rect width="280" height="200" fill={`url(#bg${variant})`}/>
+      {spots.map(([x,y,r],i)=>(
+        <g key={i}>
+          <circle cx={x} cy={y} r={r*3} fill="rgba(0,180,216,0.15)"/>
+          <circle cx={x} cy={y} r={r} fill="rgba(255,255,255,0.92)"/>
+          <circle cx={x} cy={y} r={r*0.4} fill="rgba(120,230,255,0.6)"/>
+        </g>
+      ))}
+      {variant==='test'&&<circle cx="160" cy="110" r="5" fill="rgba(255,100,100,0.8)"/>}
+    </svg>
+  );
+}
+
+function BatchPage({onToast}){
+  const [drawer,setDrawer]=useState(null);
+  const [progress,setProgress]=useState(62);
+
+  useEffect(()=>{
+    const iv=setInterval(()=>setProgress(p=>p>=100?100:p+1),2000);
+    return()=>clearInterval(iv);
+  },[]);
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:20}}>
+        {[{l:'전체 배치 작업',v:5,s:'건',c:C.secondary},{l:'분석 이미지',v:92,s:'장',c:C.accent},{l:'합격 이미지',v:67,s:'장',c:C.success},{l:'불합격 이미지',v:7,s:'장',c:C.error}].map(({l,v,s,c},i)=>(
+          <div key={l} style={{background:C.surface,borderRadius:14,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.2)',animation:`slideUp 400ms ease ${i*80}ms both`,border:`1px solid ${C.border}`}}>
+            <div style={{fontSize:12,color:C.textSec,marginBottom:10}}>{l}</div>
+            <div style={{fontSize:28,fontWeight:800,color:c}}><CountUp end={v} suffix={s}/></div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 340px',gap:20,marginBottom:20}}>
+        <div style={{background:C.surface,borderRadius:14,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.2)',border:`1px solid ${C.border}`}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
+            <span style={{fontWeight:700,fontSize:15,color:C.text}}>배치 작업 현황</span>
+            <button onClick={()=>onToast('새 배치 작업이 생성되었습니다')} style={{background:C.secondary,color:'#0A1F18',border:'none',borderRadius:8,padding:'8px 16px',cursor:'pointer',fontWeight:700,fontSize:13}}>+ 새 작업</button>
+          </div>
+          {JOBS.map((j,idx)=>(
+            <div key={j.id} onClick={()=>setDrawer(j)} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 0',borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'all 150ms',animation:`slideUp 300ms ease ${idx*60}ms both`}}
+              onMouseEnter={e=>e.currentTarget.style.background='rgba(46,204,142,0.05)'}
+              onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+              <div style={{width:40,height:40,borderRadius:10,background:j.status==='완료'?'rgba(46,204,142,0.15)':'rgba(245,158,11,0.15)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,flexShrink:0}}>
+                {j.status==='완료'?'✅':'⏳'}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:700,fontSize:14,color:C.text}}>{j.id}</div>
+                <div style={{fontSize:12,color:C.textSec,marginTop:2}}>파일 {j.files}장 · {j.preset} · {j.created}</div>
+                {j.status==='실행 중'&&(
+                  <div style={{marginTop:6}}>
+                    <div style={{height:4,background:C.border,borderRadius:2,overflow:'hidden'}}>
+                      <div style={{height:'100%',background:C.secondary,borderRadius:2,width:`${progress}%`,transition:'width 400ms'}}/>
+                    </div>
+                    <div style={{fontSize:11,color:C.secondary,marginTop:3}}>{progress}% — {j.done}/{j.files}장 완료</div>
+                  </div>
+                )}
+              </div>
+              <div style={{textAlign:'right',flexShrink:0}}>
+                <span style={{padding:'4px 10px',borderRadius:20,fontSize:12,fontWeight:600,background:j.status==='완료'?'rgba(46,204,142,0.15)':'rgba(245,158,11,0.15)',color:j.status==='완료'?C.success:C.warning}}>{j.status}</span>
+                {j.pass!=null&&<div style={{fontSize:11,color:C.textSec,marginTop:4}}>합격 {j.pass} / 불합격 {j.fail}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{background:C.surface,borderRadius:14,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.2)',border:`1px solid ${C.border}`}}>
+          <div style={{fontWeight:700,fontSize:14,color:C.text,marginBottom:16}}>판정 분포 (최근 92장)</div>
+          <div className="chart-wrap"><ChartDoughnut id="doughnut" data={[67,7,18]} labels={['합격','불합격','검토 중']}/></div>
+          <div style={{marginTop:16}}>
+            {[{l:'합격률',v:'72.8%',c:C.success},{l:'불합격률',v:'7.6%',c:C.error},{l:'검토 중',v:'19.6%',c:C.warning}].map(({l,v,c})=>(
+              <div key={l} style={{display:'flex',justifyContent:'space-between',marginBottom:8,fontSize:13}}>
+                <span style={{color:C.textSec}}>{l}</span>
+                <span style={{fontWeight:700,color:c}}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:14,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.2)',border:`1px solid ${C.border}`}}>
+        <div style={{fontWeight:700,fontSize:14,color:C.text,marginBottom:16}}>일별 분석 추이 (최근 7일)</div>
+        <div className="chart-wrap">
+          <ChartLine id="trend" data={[14,18,22,16,24,20,18]} labels={['3/9','3/10','3/11','3/12','3/13','3/14','3/15']} color={C.secondary}/>
+        </div>
+      </div>
+      {drawer&&(
+        <Drawer item={{title:`작업 상세 — ${drawer.id}`}} onClose={()=>setDrawer(null)}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
+            {[['배치 ID',drawer.id],['파일 수',`${drawer.files}장`],['완료',`${drawer.done}장`],['실패',`${drawer.failed}장`],['적용 프리셋',drawer.preset],['소요 시간',drawer.duration],['상태',drawer.status],['생성 시각',drawer.created]].map(([l,v])=>(
+              <div key={l} style={{background:C.surface2,borderRadius:10,padding:14}}>
+                <div style={{fontSize:11,color:C.textSec,marginBottom:4}}>{l}</div>
+                <div style={{fontWeight:700,color:C.text,fontSize:14}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          {drawer.pass!=null&&(
+            <div style={{display:'flex',gap:12,marginBottom:20}}>
+              <div style={{flex:1,background:'rgba(46,204,142,0.1)',borderRadius:10,padding:16,textAlign:'center'}}>
+                <div style={{fontSize:32,fontWeight:800,color:C.success}}>{drawer.pass}</div>
+                <div style={{fontSize:12,color:C.textSec}}>합격</div>
+              </div>
+              <div style={{flex:1,background:'rgba(239,68,68,0.1)',borderRadius:10,padding:16,textAlign:'center'}}>
+                <div style={{fontSize:32,fontWeight:800,color:C.error}}>{drawer.fail}</div>
+                <div style={{fontSize:12,color:C.textSec}}>불합격</div>
+              </div>
+            </div>
+          )}
+          <button onClick={()=>{setDrawer(null);onToast('리포트 생성이 시작되었습니다');}} style={{width:'100%',background:C.secondary,color:'#0A1F18',border:'none',borderRadius:10,padding:'12px',cursor:'pointer',fontWeight:700,fontSize:14}}>리포트 생성</button>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+function ComparePage({onToast}){
+  const [mode,setMode]=useState('side');
+  const [threshold,setThreshold]=useState(15);
+  const [selected,setSelected]=useState(null);
+
+  const diffs=[
+    {id:1,type:'누락',refX:160,refY:110,testX:'-',size:5,desc:'레퍼런스에만 존재'},
+    {id:2,type:'이동',refX:82,refY:58,testX:80,testY:60,delta:2.8,desc:'위치 2.8px 이동'},
+    {id:3,type:'이동',refX:215,refY:65,testX:213,testY:68,delta:3.6,desc:'위치 3.6px 이동'},
+  ];
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',gap:16,alignItems:'center',marginBottom:20}}>
+        <div style={{display:'flex',gap:8}}>
+          {[['side','좌우 비교'],['overlay','오버레이']].map(([m,l])=>(
+            <button key={m} onClick={()=>setMode(m)} style={{padding:'8px 16px',border:`1px solid ${mode===m?C.secondary:C.border}`,borderRadius:8,cursor:'pointer',background:mode===m?'rgba(46,204,142,0.1)':C.surface,color:mode===m?C.secondary:C.textSec,fontWeight:mode===m?700:400,fontSize:13,transition:'all 150ms'}}>{l}</button>
+          ))}
+        </div>
+        <div style={{flex:1}}/>
+        <div style={{fontSize:13,color:C.textSec}}>차이 임계값:</div>
+        <input type="range" min={5} max={30} value={threshold} onChange={e=>setThreshold(Number(e.target.value))} style={{width:120,accentColor:C.secondary}}/>
+        <span style={{fontSize:13,fontWeight:700,color:C.secondary,minWidth:30}}>{threshold}px</span>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16}}>
+        <div style={{background:C.surface,borderRadius:14,padding:16,border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.textSec,marginBottom:10}}>레퍼런스 이미지</div>
+          <IRThumb variant="ref"/>
+          <div style={{marginTop:8,fontSize:12,color:C.textSec}}>IR_REF_standard.tiff · 스팟 5개</div>
+        </div>
+        <div style={{background:C.surface,borderRadius:14,padding:16,border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.error,marginBottom:10}}>검사 이미지 (차이 감지)</div>
+          <IRThumb variant="test"/>
+          <div style={{marginTop:8,fontSize:12,color:C.textSec}}>IR_240315_C.tiff · 스팟 6개 (누락 1, 추가 1, 이동 2)</div>
+        </div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 320px',gap:16}}>
+        <div style={{background:C.surface,borderRadius:14,padding:20,border:`1px solid ${C.border}`}}>
+          <div style={{fontWeight:700,fontSize:14,color:C.text,marginBottom:16}}>스팟 차이 히트맵</div>
+          <div className="chart-wrap">
+            <ChartBar id="heatbar" data={[0,0,1,2,0,1,0,0]} labels={['A1','A2','A3','A4','B1','B2','B3','B4']}
+              colors={['rgba(46,204,142,0.4)','rgba(46,204,142,0.4)','rgba(239,68,68,0.7)','rgba(239,68,68,0.9)','rgba(46,204,142,0.4)','rgba(239,68,68,0.7)','rgba(46,204,142,0.4)','rgba(46,204,142,0.4)']}/>
+          </div>
+          <div style={{marginTop:10,fontSize:12,color:C.textSec}}>격자 구역별 이상 스팟 수 (임계값 {threshold}px 기준)</div>
+        </div>
+        <div style={{background:C.surface,borderRadius:14,padding:20,border:`1px solid ${C.border}`}}>
+          <div style={{fontWeight:700,fontSize:14,color:C.text,marginBottom:14}}>감지된 차이점</div>
+          {diffs.map(d=>(
+            <div key={d.id} onClick={()=>setSelected(d===selected?null:d)} style={{background:selected===d?'rgba(239,68,68,0.1)':C.surface2,borderRadius:10,padding:12,marginBottom:10,cursor:'pointer',border:`1px solid ${selected===d?C.error:C.border}`,transition:'all 150ms'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                <span style={{fontWeight:700,fontSize:13,color:d.type==='누락'?C.error:C.warning}}>{d.type}</span>
+                <span style={{fontSize:11,color:C.textSec}}>Spot #{d.id}</span>
+              </div>
+              <div style={{fontSize:12,color:C.textSec}}>{d.desc}</div>
+            </div>
+          ))}
+          <button onClick={()=>onToast('차이 분석 리포트 생성 완료')} style={{width:'100%',background:C.secondary,color:'#0A1F18',border:'none',borderRadius:8,padding:'10px',cursor:'pointer',fontWeight:700,fontSize:13,marginTop:8}}>차이 리포트 생성</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HistoryPage({onToast}){
+  const [search,setSearch]=useState('');
+  const [resultFilter,setResultFilter]=useState('전체');
+  const [drawer,setDrawer]=useState(null);
+
+  const filtered=HISTORY.filter(h=>(resultFilter==='전체'||h.result===resultFilter)&&(h.file.includes(search)||h.id.includes(search)));
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',gap:12,marginBottom:20}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="파일명 또는 ID 검색..."
+          style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:'10px 14px',color:C.text,fontSize:14,outline:'none'}}/>
+        <div style={{display:'flex',gap:8}}>
+          {['전체','합격','불합격'].map(f=>(
+            <button key={f} onClick={()=>setResultFilter(f)} style={{padding:'10px 16px',border:`1px solid ${resultFilter===f?C.secondary:C.border}`,borderRadius:8,cursor:'pointer',background:resultFilter===f?'rgba(46,204,142,0.1)':C.surface,color:resultFilter===f?C.secondary:C.textSec,fontWeight:resultFilter===f?700:400,fontSize:13,transition:'all 150ms'}}>{f}</button>
+          ))}
+        </div>
+        <button onClick={()=>onToast('이력 CSV 내보내기 완료')} style={{padding:'10px 16px',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,cursor:'pointer',color:C.textSec,fontSize:13}}>CSV 내보내기</button>
+      </div>
+      <div style={{background:C.surface,borderRadius:14,overflow:'hidden',border:`1px solid ${C.border}`,marginBottom:20}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{background:C.surface2}}>
+            {['분석 ID','파일명','프리셋','스팟 수','품질 점수','판정','분석 일시',''].map(h=><th key={h} style={{padding:'12px 16px',textAlign:'left',fontSize:12,color:C.textSec,fontWeight:600,whiteSpace:'nowrap'}}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {filtered.map((h,i)=>(
+              <tr key={h.id} style={{borderTop:`1px solid ${C.border}`,transition:'background 150ms',animation:`slideUp 300ms ease ${i*40}ms both`}}
+                onMouseEnter={e=>e.currentTarget.style.background='rgba(46,204,142,0.04)'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.accent,fontWeight:600}}>{h.id}</td>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.text}}>{h.file}</td>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.textSec}}>{h.preset}</td>
+                <td style={{padding:'12px 16px',fontSize:13,fontWeight:700}}>{h.spots}개</td>
+                <td style={{padding:'12px 16px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <div style={{flex:1,height:4,background:C.border,borderRadius:2,overflow:'hidden'}}>
+                      <div style={{height:'100%',width:`${h.score}%`,background:h.score>=80?C.success:C.error,borderRadius:2,animation:'barGrow 800ms ease both','--target-width':`${h.score}%`}}/>
+                    </div>
+                    <span style={{fontSize:13,fontWeight:700,color:h.score>=80?C.success:C.error,minWidth:32}}>{h.score}</span>
+                  </div>
+                </td>
+                <td style={{padding:'12px 16px'}}>
+                  <span style={{padding:'3px 10px',borderRadius:20,fontSize:12,fontWeight:600,background:h.result==='합격'?'rgba(46,204,142,0.15)':'rgba(239,68,68,0.15)',color:h.result==='합격'?C.success:C.error}}>{h.result}</span>
+                </td>
+                <td style={{padding:'12px 16px',fontSize:12,color:C.textSec}}>{h.date}</td>
+                <td style={{padding:'12px 16px'}}>
+                  <button onClick={()=>setDrawer(h)} style={{padding:'5px 10px',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:6,cursor:'pointer',fontSize:12,color:C.textSec}}>상세</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{background:C.surface,borderRadius:14,padding:20,border:`1px solid ${C.border}`}}>
+        <div style={{fontWeight:700,fontSize:14,color:C.text,marginBottom:16}}>품질 점수 추이</div>
+        <div className="chart-wrap">
+          <ChartLine id="scoretrend" data={[90,85,61,91,85,58,90,87]} labels={HISTORY.map(h=>h.id.slice(-4)).reverse()} color={C.accent}/>
+        </div>
+      </div>
+      {drawer&&(
+        <Drawer item={{title:`분석 상세 — ${drawer.id}`}} onClose={()=>setDrawer(null)}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
+            {[['파일명',drawer.file],['프리셋',drawer.preset],['스팟 수',`${drawer.spots}개`],['품질 점수',drawer.score],['판정',drawer.result],['분석 일시',drawer.date]].map(([l,v])=>(
+              <div key={l} style={{background:C.surface2,borderRadius:10,padding:14}}>
+                <div style={{fontSize:11,color:C.textSec,marginBottom:4}}>{l}</div>
+                <div style={{fontWeight:700,color:drawer.result==='불합격'&&l==='판정'?C.error:C.text,fontSize:14}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:13,color:C.textSec,marginBottom:8}}>품질 점수 상세</div>
+            <div style={{height:6,background:C.border,borderRadius:3,overflow:'hidden',marginBottom:6}}>
+              <div style={{height:'100%',width:`${drawer.score}%`,background:drawer.score>=80?C.success:C.error,borderRadius:3}}/>
+            </div>
+            <div style={{fontSize:12,color:C.textSec}}>{drawer.score}/100점 — {drawer.result}</div>
+          </div>
+          <button onClick={()=>{setDrawer(null);onToast('세션 복원 완료');}} style={{width:'100%',background:C.secondary,color:'#0A1F18',border:'none',borderRadius:10,padding:'12px',cursor:'pointer',fontWeight:700,fontSize:14}}>이 세션 복원하기</button>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+function ReportPage({onToast}){
+  const [generating,setGenerating]=useState(false);
+  const [generated,setGenerated]=useState(false);
+  const [jobSel,setJobSel]=useState('JOB-0043');
+  const [opts,setOpts]=useState({stats:true,gallery:true,chart:true,diff:false});
+
+  const doGenerate=()=>{
+    setGenerating(true);
+    setTimeout(()=>{setGenerating(false);setGenerated(true);onToast('품질 검증 리포트 생성 완료');},2200);
+  };
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'380px 1fr',gap:20}}>
+        <div style={{background:C.surface,borderRadius:14,padding:24,border:`1px solid ${C.border}`,alignSelf:'start'}}>
+          <div style={{fontWeight:700,fontSize:16,color:C.text,marginBottom:20}}>리포트 생성 설정</div>
+          <div style={{marginBottom:18}}>
+            <div style={{fontSize:13,fontWeight:600,color:C.textSec,marginBottom:8}}>대상 배치 작업</div>
+            <select value={jobSel} onChange={e=>setJobSel(e.target.value)}
+              style={{width:'100%',background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,padding:'10px',color:C.text,fontSize:14}}>
+              {JOBS.filter(j=>j.status==='완료').map(j=><option key={j.id} value={j.id}>{j.id} — {j.files}장 ({j.created})</option>)}
+            </select>
+          </div>
+          <div style={{marginBottom:18}}>
+            <div style={{fontSize:13,fontWeight:600,color:C.textSec,marginBottom:10}}>포함 섹션</div>
+            {[['stats','통계 요약'],['gallery','불합격 이미지 갤러리'],['chart','품질 분포 차트'],['diff','비교 분석 결과']].map(([k,l])=>(
+              <div key={k} onClick={()=>setOpts(o=>({...o,[k]:!o[k]}))} style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,cursor:'pointer'}}>
+                <span style={{fontSize:13,color:C.text}}>{l}</span>
+                <div style={{width:38,height:20,background:opts[k]?C.secondary:'#2E4055',borderRadius:10,position:'relative',transition:'background 200ms'}}>
+                  <div style={{position:'absolute',top:2,left:opts[k]?18:2,width:16,height:16,background:'#fff',borderRadius:8,transition:'left 200ms'}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:13,fontWeight:600,color:C.textSec,marginBottom:8}}>출력 형식</div>
+            <div style={{display:'flex',gap:8}}>
+              {['PDF (A4)','Excel','HTML'].map(f=>(
+                <button key={f} style={{flex:1,padding:'8px',border:`1px solid ${f==='PDF (A4)'?C.secondary:C.border}`,borderRadius:6,background:f==='PDF (A4)'?'rgba(46,204,142,0.1)':C.surface2,color:f==='PDF (A4)'?C.secondary:C.textSec,fontSize:12,cursor:'pointer',fontWeight:f==='PDF (A4)'?700:400}}>{f}</button>
+              ))}
+            </div>
+          </div>
+          <button onClick={doGenerate} disabled={generating}
+            style={{width:'100%',background:generating?C.surface2:C.secondary,color:generating?C.textSec:'#0A1F18',border:'none',borderRadius:10,padding:'14px',cursor:generating?'default':'pointer',fontWeight:700,fontSize:15,transition:'all 200ms'}}>
+            {generating?'리포트 생성 중...':'리포트 생성'}
+          </button>
+          {generating&&(
+            <div style={{marginTop:10}}>
+              <div style={{height:3,background:C.border,borderRadius:2,overflow:'hidden'}}>
+                <div style={{height:'100%',background:C.secondary,borderRadius:2,animation:'shimmer 1.5s infinite',backgroundImage:`linear-gradient(90deg,${C.secondary} 25%,${C.accent} 50%,${C.secondary} 75%)`,backgroundSize:'200% 100%'}}/>
+              </div>
+              <div style={{fontSize:12,color:C.textSec,marginTop:6,textAlign:'center'}}>PDF 페이지 조립 중...</div>
+            </div>
+          )}
+        </div>
+        <div>
+          <div style={{background:C.surface,borderRadius:14,padding:24,border:`1px solid ${generated?C.secondary:C.border}`,marginBottom:16,transition:'border-color 300ms'}}>
+            <div style={{fontWeight:700,fontSize:15,color:C.text,marginBottom:16}}>리포트 미리보기</div>
+            <div style={{background:C.surface2,borderRadius:10,padding:24,minHeight:300}}>
+              <div style={{textAlign:'center',paddingBottom:20,borderBottom:`1px solid ${C.border}`,marginBottom:20}}>
+                <div style={{fontSize:11,color:C.textSec,marginBottom:8}}>품질 검증 리포트</div>
+                <div style={{fontSize:20,fontWeight:800,color:C.text}}>배치 작업 {jobSel}</div>
+                <div style={{fontSize:13,color:C.textSec,marginTop:4}}>생성일: 2024.03.15 · Profile A</div>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:20}}>
+                {[{l:'분석 이미지',v:'24장'},{l:'합격',v:'22장'},{l:'불합격',v:'2장'}].map(({l,v})=>(
+                  <div key={l} style={{background:C.primary,borderRadius:8,padding:14,textAlign:'center'}}>
+                    <div style={{fontSize:11,color:C.textSec,marginBottom:4}}>{l}</div>
+                    <div style={{fontSize:18,fontWeight:800,color:C.text}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              {opts.chart&&(
+                <div style={{marginBottom:20}}>
+                  <div style={{fontSize:13,fontWeight:600,color:C.textSec,marginBottom:10}}>품질 분포 차트 (미리보기)</div>
+                  <div className="chart-wrap" style={{height:'140px'}}>
+                    <ChartBar id="rptbar" data={[5,8,12,18,22,15,12,6,3,2]} labels={['50','55','60','65','70','75','80','85','90','95']} colors={C.secondary}/>
+                  </div>
+                </div>
+              )}
+              {!generated&&<div style={{textAlign:'center',padding:20,color:C.textSec,fontSize:13}}>리포트를 생성하면 전체 미리보기가 표시됩니다</div>}
+              {generated&&(
+                <div style={{background:'rgba(46,204,142,0.1)',borderRadius:8,padding:12,textAlign:'center',animation:'fadeIn 400ms ease'}}>
+                  <div style={{fontSize:13,fontWeight:700,color:C.success}}>✓ 리포트 생성 완료</div>
+                  <div style={{fontSize:12,color:C.textSec,marginTop:4}}>PDF 26페이지 · 3.4 MB</div>
+                </div>
+              )}
+            </div>
+          </div>
+          {generated&&(
+            <div style={{display:'flex',gap:12,animation:'slideUp 400ms ease'}}>
+              <button onClick={()=>onToast('PDF 다운로드 시작')} style={{flex:1,background:C.secondary,color:'#0A1F18',border:'none',borderRadius:10,padding:'12px',cursor:'pointer',fontWeight:700,fontSize:14}}>PDF 다운로드</button>
+              <button onClick={()=>onToast('공유 링크가 복사되었습니다')} style={{padding:'12px 20px',background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,cursor:'pointer',fontWeight:600,color:C.textSec,fontSize:14}}>공유 링크</button>
+              <button onClick={()=>onToast('이메일 발송 완료')} style={{padding:'12px 20px',background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,cursor:'pointer',fontWeight:600,color:C.textSec,fontSize:14}}>이메일 발송</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const TABS=[
+  {id:'batch',label:'배치 분석',icon:'📊'},
+  {id:'compare',label:'비교 분석',icon:'🔀'},
+  {id:'history',label:'분석 이력',icon:'📋'},
+  {id:'report',label:'리포트 생성',icon:'📄'},
+  {id:'settings',label:'설정',icon:'⚙️'},
+];
+
+const PAGE_META={
+  batch:{title:'배치 분석 대시보드',kpis:[{l:'전체 작업',v:'5건'},{l:'분석 이미지',v:'92장'},{l:'합격률',v:'72.8%'}]},
+  compare:{title:'비교 분석 뷰어',kpis:[{l:'레퍼런스',v:'5개 스팟'},{l:'검사 이미지',v:'6개 스팟'},{l:'차이점',v:'3건'}]},
+  history:{title:'분석 이력 관리',kpis:[{l:'전체 이력',v:'1,087건'},{l:'합격',v:'812건'},{l:'불합격',v:'184건'}]},
+  report:{title:'품질 리포트 생성',kpis:[{l:'생성된 리포트',v:'43건'},{l:'이번 주',v:'8건'},{l:'자동 발송',v:'32건'}]},
+  settings:{title:'시스템 설정',kpis:[{l:'활성 프리셋',v:'3개'},{l:'연결 장치',v:'2대'},{l:'저장소',v:'14.2 GB'}]},
+};
+
+function App(){
+  const [tab,setTab]=useState('batch');
+  const [toast,setToast]=useState(null);
+  const showToast=msg=>setToast(msg);
+
+  const renderContent=()=>{
+    switch(tab){
+      case 'batch': return <BatchPage onToast={showToast}/>;
+      case 'compare': return <ComparePage onToast={showToast}/>;
+      case 'history': return <HistoryPage onToast={showToast}/>;
+      case 'report': return <ReportPage onToast={showToast}/>;
+      default: return(
+        <div style={{background:C.surface,borderRadius:14,padding:48,textAlign:'center',border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:40,marginBottom:16}}>{TABS.find(t=>t.id===tab)?.icon}</div>
+          <div style={{fontSize:18,fontWeight:700,color:C.text}}>{PAGE_META[tab]?.title||tab}</div>
+        </div>
+      );
+    }
+  };
+
+  const meta=PAGE_META[tab]||{title:tab,kpis:[]};
+
+  return(
+    <div style={{minHeight:'100vh',background:C.bg,display:'flex',flexDirection:'column'}}>
+      {/* Top nav */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:'rgba(26,43,60,0.96)',backdropFilter:'blur(12px)',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:6,flexShrink:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginRight:20}}>
+          <div style={{width:28,height:28,background:C.secondary,borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,flexShrink:0}}>🔬</div>
+          <span style={{fontWeight:800,fontSize:14,color:C.text}}>IR QualityPlatform</span>
+        </div>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            style={{padding:'6px 14px',border:'none',borderRadius:8,cursor:'pointer',background:tab===t.id?'rgba(46,204,142,0.15)':'transparent',color:tab===t.id?C.secondary:C.textSec,fontWeight:tab===t.id?700:400,fontSize:13,transition:'all 150ms'}}
+            onMouseEnter={e=>{if(tab!==t.id)e.currentTarget.style.background='rgba(255,255,255,0.05)';}}
+            onMouseLeave={e=>{if(tab!==t.id)e.currentTarget.style.background='transparent';}}>
+            {t.label}
+          </button>
+        ))}
+        <div style={{flex:1}}/>
+        <div style={{display:'flex',alignItems:'center',gap:6,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:'6px 12px',fontSize:13,color:C.textSec,cursor:'pointer'}}>🔍 검색</div>
+        <div style={{width:30,height:30,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:14}}>🔔</div>
+        <div style={{width:28,height:28,background:C.secondary,borderRadius:14,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:'#0A1F18',cursor:'pointer',marginLeft:4}}>김</div>
+      </header>
+
+      {/* Hero banner */}
+      <div style={{background:`linear-gradient(135deg, #0D2A1A 0%, #0A1F2D 60%, #111B27 100%)`,padding:'24px 32px',borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+        <div style={{maxWidth:1280,margin:'0 auto'}}>
+          <div style={{fontSize:22,fontWeight:800,color:C.text,marginBottom:12,letterSpacing:'-0.02em'}}>{meta.title}</div>
+          <div style={{display:'flex',gap:32}}>
+            {meta.kpis.map((k,i)=>(
+              <div key={i} style={{display:'flex',gap:10,alignItems:'center'}}>
+                <span style={{fontSize:20,fontWeight:800,color:C.secondary}}>{k.v}</span>
+                <span style={{fontSize:13,color:C.textSec}}>{k.l}</span>
+                {i<meta.kpis.length-1&&<div style={{width:1,height:20,background:C.border,marginLeft:18}}/>}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <main style={{flex:1,padding:'24px 32px',maxWidth:1280,width:'100%',margin:'0 auto',alignSelf:'stretch'}}>
+        <div key={tab} style={{animation:'fadeIn 250ms ease'}}>{renderContent()}</div>
+      </main>
+
+      {toast&&<Toast message={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IR Spot 분석 워크벤치 — 맞춤 구현 데모</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; font-family:'Pretendard',sans-serif; }
+#root { display:flex; width:100%; height:100vh; overflow:hidden; }
+@keyframes fadeIn { from{opacity:0} to{opacity:1} }
+@keyframes fadeInScale { from{opacity:0;transform:scale(0.95)} to{opacity:1;transform:scale(1)} }
+@keyframes slideInRight { from{opacity:0;transform:translateX(30px)} to{opacity:1;transform:translateX(0)} }
+@keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+@keyframes ripple { 0%{transform:scale(0);opacity:0.5} 100%{transform:scale(4);opacity:0} }
+@keyframes countUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+@keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+@keyframes barGrow { from{width:0%} to{width:var(--target-width)} }
+@keyframes slideDown { from{opacity:0;transform:translateY(-10px);max-height:0} to{opacity:1;transform:translateY(0);max-height:500px} }
+::-webkit-scrollbar{width:5px} ::-webkit-scrollbar-track{background:transparent} ::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px}
+input[type=range]{-webkit-appearance:none;width:100%;height:5px;border-radius:3px;background:#E1E8EE;outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#0077B6;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback}=React;
+const {BarChart,Bar,ScatterChart,Scatter,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,Cell,LineChart,Line,ReferenceLine}=Recharts;
+
+const C={primary:'#0A2463',secondary:'#00B4D8',accent:'#0077B6',bg:'#F0F4F8',surface:'#FFFFFF',textPrimary:'#1A2340',textSecondary:'#5A6A85',border:'#E1E8EE',success:'#10B981',warning:'#F59E0B',error:'#EF4444'};
+
+const SPOTS=[
+  {id:1,x:152,y:134,radius:12,brightness:218,area:452,relBrightness:0.85,shape:'circular',dist:null},
+  {id:2,x:287,y:198,radius:15,brightness:241,area:707,relBrightness:0.94,shape:'circular',dist:149},
+  {id:3,x:198,y:267,radius:10,brightness:189,area:314,relBrightness:0.74,shape:'oval',dist:88},
+  {id:4,x:412,y:157,radius:18,brightness:253,area:1018,relBrightness:0.99,shape:'circular',dist:222},
+  {id:5,x:356,y:312,radius:11,brightness:204,area:380,relBrightness:0.80,shape:'circular',dist:175},
+  {id:6,x:478,y:240,radius:13,brightness:231,area:531,relBrightness:0.90,shape:'circular',dist:134},
+  {id:7,x:265,y:350,radius:9,brightness:175,area:254,relBrightness:0.68,shape:'oval',dist:115},
+  {id:8,x:511,y:340,radius:16,brightness:247,area:804,relBrightness:0.97,shape:'circular',dist:143},
+  {id:9,x:378,y:415,radius:14,brightness:222,area:616,relBrightness:0.87,shape:'circular',dist:90},
+  {id:10,x:145,y:380,radius:11,brightness:196,area:380,relBrightness:0.77,shape:'oval',dist:193},
+  {id:11,x:445,y:128,radius:12,brightness:213,area:452,relBrightness:0.83,shape:'circular',dist:143},
+  {id:12,x:320,y:85,radius:9,brightness:178,area:254,relBrightness:0.70,shape:'oval',dist:175},
+  {id:13,x:88,y:220,radius:14,brightness:235,area:616,relBrightness:0.92,shape:'circular',dist:117},
+  {id:14,x:540,y:190,radius:10,brightness:201,area:314,relBrightness:0.79,shape:'circular',dist:144},
+  {id:15,x:210,y:450,radius:17,brightness:250,area:908,relBrightness:0.98,shape:'circular',dist:113},
+  {id:16,x:490,y:420,radius:12,brightness:219,area:452,relBrightness:0.86,shape:'oval',dist:107},
+  {id:17,x:330,y:235,radius:13,brightness:228,area:531,relBrightness:0.89,shape:'circular',dist:52},
+  {id:18,x:570,y:290,radius:15,brightness:239,area:707,relBrightness:0.94,shape:'circular',dist:80},
+];
+
+const SESSIONS=[
+  {id:'SES-2024-043',file:'IR_240315_A.tiff',spots:18,date:'2024.03.15 14:23',preset:'Profile A',result:'정상'},
+  {id:'SES-2024-042',file:'IR_240315_B.tiff',spots:16,date:'2024.03.15 11:07',preset:'Profile A',result:'검토'},
+  {id:'SES-2024-041',file:'IR_240314_C.tiff',spots:21,date:'2024.03.14 16:45',preset:'Profile B',result:'정상'},
+  {id:'SES-2024-040',file:'IR_240314_A.tiff',spots:17,date:'2024.03.14 10:12',preset:'Profile A',result:'이상'},
+  {id:'SES-2024-039',file:'IR_240313_B.tiff',spots:19,date:'2024.03.13 15:33',preset:'Profile C',result:'정상'},
+];
+
+const BRIGHTNESS_HIST=[
+  {range:'160~170',count:2},{range:'170~180',count:3},{range:'180~190',count:4},
+  {range:'190~200',count:5},{range:'200~210',count:6},{range:'210~220',count:8},
+  {range:'220~230',count:7},{range:'230~240',count:6},{range:'240~250',count:5},{range:'250~256',count:3},
+];
+
+function drawIRCanvas(canvas, spots, filterRange, highlightId){
+  if(!canvas) return;
+  const ctx=canvas.getContext('2d');
+  const W=600, H=460;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#04070E'; ctx.fillRect(0,0,W,H);
+  const bg=ctx.createRadialGradient(380,200,0,380,200,300);
+  bg.addColorStop(0,'rgba(10,36,99,0.4)'); bg.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='rgba(20,50,90,0.6)'; ctx.lineWidth=0.6;
+  for(let x=0;x<W;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=0;y<H;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+  spots.forEach(s=>{
+    const inRange=s.brightness>=filterRange[0]&&s.brightness<=filterRange[1];
+    const hl=highlightId===s.id;
+    const alpha=inRange?1:0.2;
+    const og=ctx.createRadialGradient(s.x,s.y,0,s.x,s.y,s.radius*3.5);
+    og.addColorStop(0,hl?`rgba(255,220,0,${alpha*0.5})`:`rgba(0,180,216,${alpha*0.35})`);
+    og.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=og; ctx.beginPath(); ctx.arc(s.x,s.y,s.radius*3.5,0,Math.PI*2); ctx.fill();
+    const cg=ctx.createRadialGradient(s.x-s.radius*0.15,s.y-s.radius*0.15,0,s.x,s.y,s.radius);
+    cg.addColorStop(0,`rgba(255,255,255,${alpha*0.97})`);
+    cg.addColorStop(0.45,hl?`rgba(255,200,50,${alpha*0.75})`:`rgba(120,230,255,${alpha*0.7})`);
+    cg.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=cg; ctx.beginPath(); ctx.arc(s.x,s.y,s.radius,0,Math.PI*2); ctx.fill();
+    if(inRange){
+      ctx.strokeStyle=hl?'rgba(255,220,0,0.9)':'rgba(0,200,240,0.7)';
+      ctx.lineWidth=1.2; ctx.beginPath(); ctx.arc(s.x,s.y,s.radius+3,0,Math.PI*2); ctx.stroke();
+      ctx.fillStyle='rgba(0,200,240,0.85)'; ctx.font='9px sans-serif';
+      ctx.fillText(`#${s.id}`,s.x+s.radius+3,s.y-2);
+    }
+  });
+  ctx.strokeStyle='rgba(0,180,216,0.85)'; ctx.lineWidth=1.8;
+  ctx.setLineDash([10,5]); ctx.strokeRect(75,60,450,335); ctx.setLineDash([]);
+  ctx.strokeStyle='rgba(80,120,160,0.7)'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(462,438); ctx.lineTo(562,438); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(462,433); ctx.lineTo(462,443); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(562,433); ctx.lineTo(562,443); ctx.stroke();
+  ctx.fillStyle='rgba(100,140,170,0.9)'; ctx.font='10px sans-serif';
+  ctx.textAlign='center'; ctx.fillText('5.0 mm',512,453); ctx.textAlign='start';
+  ctx.fillStyle='rgba(60,100,140,0.8)'; ctx.font='10px sans-serif';
+  ctx.fillText('640×480px • 14-bit',8,16);
+}
+
+function IRCanvas({spots,filterRange,highlightId,onSpotClick}){
+  const ref=useRef(null);
+  useEffect(()=>{ drawIRCanvas(ref.current,spots,filterRange,highlightId); },[spots,filterRange,highlightId]);
+  const handleClick=useCallback(e=>{
+    const canvas=ref.current; if(!canvas||!onSpotClick) return;
+    const r=canvas.getBoundingClientRect();
+    const sx=600/r.width, sy=460/r.height;
+    const mx=(e.clientX-r.left)*sx, my=(e.clientY-r.top)*sy;
+    const hit=spots.find(s=>Math.hypot(mx-s.x,my-s.y)<s.radius*2.5);
+    if(hit) onSpotClick(hit);
+  },[spots,onSpotClick]);
+  return <canvas ref={ref} width={600} height={460} onClick={handleClick} style={{width:'100%',borderRadius:8,cursor:'crosshair',display:'block'}}/>;
+}
+
+function CountUp({end,suffix=''}){
+  const [v,setV]=useState(0);
+  useEffect(()=>{
+    let s=0; const step=end/60;
+    const t=setInterval(()=>{ s+=step; if(s>=end){setV(end);clearInterval(t);}else setV(Math.floor(s)); },16);
+    return ()=>clearInterval(t);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{v.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({message,onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:C.primary,color:'#fff',padding:'12px 20px',borderRadius:8,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.25)',fontSize:14,display:'flex',alignItems:'center',gap:8}}>✓ {message}</div>;
+}
+
+function Modal({title,onClose,children,width=580}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.45)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'88vh',background:C.surface,borderRadius:12,zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.18)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'18px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:700,color:C.textPrimary}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSecondary}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function KpiCard({label,value,suffix='',color,idx}){
+  return(
+    <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',animation:`slideUp 400ms ease ${idx*80}ms both`,borderLeft:`3px solid ${color}`}}>
+      <div style={{fontSize:12,color:C.textSecondary,marginBottom:8}}>{label}</div>
+      <div style={{fontSize:26,fontWeight:700,color}}><CountUp end={value} suffix={suffix}/></div>
+    </div>
+  );
+}
+
+function WorkspacePage({onToast}){
+  const [modal,setModal]=useState(null);
+  const [prog,setProg]=useState(0);
+  const [loading,setLoading]=useState(false);
+
+  const doUpload=()=>{
+    setLoading(true); setProg(0);
+    const iv=setInterval(()=>{
+      setProg(p=>{if(p>=100){clearInterval(iv);setLoading(false);onToast('이미지 로드 완료');return 0;}return p+12;});
+    },130);
+  };
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:18,marginBottom:22}}>
+        <KpiCard label="감지된 스팟 수" value={18} suffix="개" color={C.secondary} idx={0}/>
+        <KpiCard label="평균 밝기 (0~255)" value={221} color={C.accent} idx={1}/>
+        <KpiCard label="ROI 면적" value={145200} suffix="px²" color="#7C3AED" idx={2}/>
+        <KpiCard label="분석 화각" value={32} suffix="°" color={C.success} idx={3}/>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 280px',gap:20,marginBottom:20}}>
+        <div style={{background:C.surface,borderRadius:12,padding:18,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+            <span style={{fontWeight:600,fontSize:14,color:C.textPrimary}}>IR 이미지 뷰어 (ROI 활성)</span>
+            <button onClick={doUpload} style={{background:C.secondary,color:'#fff',border:'none',borderRadius:6,padding:'6px 14px',cursor:'pointer',fontSize:13,fontWeight:600}}>새 이미지 로드</button>
+          </div>
+          {loading&&<div style={{height:4,background:'#E1E8EE',borderRadius:2,marginBottom:10,overflow:'hidden'}}><div style={{height:'100%',background:C.secondary,borderRadius:2,width:`${prog}%`,transition:'width 130ms'}}/></div>}
+          <IRCanvas spots={SPOTS} filterRange={[170,255]} highlightId={null} onSpotClick={s=>setModal({type:'spot',...s})}/>
+          <div style={{marginTop:8,fontSize:12,color:C.textSecondary}}>스팟 클릭 시 상세 정보 확인 · ROI: 좌측 드래그로 설정</div>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{background:C.surface,borderRadius:12,padding:18,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',flex:1}}>
+            <div style={{fontWeight:600,fontSize:14,color:C.textPrimary,marginBottom:14}}>스팟 통계 요약</div>
+            {[['최대 밝기','253 (Spot #4)'],['최소 밝기','175 (Spot #7)'],['평균 면적','544.8 px²'],['최대 간격','222.1 px'],['원형 스팟','13개 (72.2%)'],['타원형 스팟','5개 (27.8%)']].map(([l,v])=>(
+              <div key={l} style={{display:'flex',justifyContent:'space-between',marginBottom:9,fontSize:13}}>
+                <span style={{color:C.textSecondary}}>{l}</span>
+                <span style={{fontWeight:700,color:C.textPrimary}}>{v}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{background:C.surface,borderRadius:12,padding:18,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+            <div style={{fontWeight:600,fontSize:14,color:C.textPrimary,marginBottom:12}}>활성 파라미터 프리셋</div>
+            <div style={{background:C.bg,borderRadius:8,padding:12,fontSize:13}}>
+              <div style={{fontWeight:700,color:C.accent,marginBottom:8}}>Profile A — 표준</div>
+              {[['최소 픽셀','8 px'],['최대 픽셀','25 px'],['밝기 임계','170'],['원형도','≥ 0.70']].map(([k,v])=>(
+                <div key={k} style={{display:'flex',justifyContent:'space-between',marginBottom:5}}>
+                  <span style={{color:C.textSecondary}}>{k}</span><span style={{fontWeight:600}}>{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+        <div style={{fontWeight:600,fontSize:14,color:C.textPrimary,marginBottom:14}}>최근 분석 세션</div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{borderBottom:`1px solid ${C.border}`}}>{['세션 ID','파일명','스팟 수','분석 일시','프리셋','판정'].map(h=><th key={h} style={{textAlign:'left',padding:'8px 12px',fontSize:12,color:C.textSecondary,fontWeight:600}}>{h}</th>)}</tr></thead>
+          <tbody>
+            {SESSIONS.map(s=>(
+              <tr key={s.id} onClick={()=>setModal({type:'session',...s})}
+                style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms'}}
+                onMouseEnter={e=>e.currentTarget.style.background='#F5F8FF'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'11px 12px',fontSize:13,color:C.accent,fontWeight:600}}>{s.id}</td>
+                <td style={{padding:'11px 12px',fontSize:13}}>{s.file}</td>
+                <td style={{padding:'11px 12px',fontSize:13,fontWeight:700}}>{s.spots}개</td>
+                <td style={{padding:'11px 12px',fontSize:13,color:C.textSecondary}}>{s.date}</td>
+                <td style={{padding:'11px 12px',fontSize:13}}>{s.preset}</td>
+                <td style={{padding:'11px 12px'}}>
+                  <span style={{background:s.result==='정상'?'#DCFCE7':s.result==='이상'?'#FEE2E2':'#FEF9C3',color:s.result==='정상'?'#15803D':s.result==='이상'?'#DC2626':'#A16207',padding:'3px 10px',borderRadius:20,fontSize:12,fontWeight:600}}>{s.result}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {modal?.type==='spot'&&(
+        <Modal title={`Spot #${modal.id} 상세 정보`} onClose={()=>setModal(null)}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:20}}>
+            {[['중심 좌표',`(${modal.x}, ${modal.y})`],['반지름',`${modal.radius} px`],['면적',`${modal.area} px²`],['밝기 (0–255)',modal.brightness],['상대 밝기',`${(modal.relBrightness*100).toFixed(1)}%`],['형상',modal.shape==='circular'?'원형':'타원형'],['인접 스팟 거리',modal.dist?`${modal.dist} px`:'기준 스팟']].map(([l,v])=>(
+              <div key={l} style={{background:C.bg,borderRadius:8,padding:14}}>
+                <div style={{fontSize:11,color:C.textSecondary,marginBottom:4}}>{l}</div>
+                <div style={{fontSize:16,fontWeight:700}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{background:'#EFF6FF',borderRadius:8,padding:12,fontSize:13,color:C.accent}}>상대 밝기 {(modal.relBrightness*100).toFixed(1)}% — {modal.relBrightness>=0.9?'고강도 스팟':'일반 스팟'}</div>
+        </Modal>
+      )}
+      {modal?.type==='session'&&(
+        <Modal title={`세션 상세 — ${modal.id}`} onClose={()=>setModal(null)}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
+            {[['파일명',modal.file],['감지 스팟',`${modal.spots}개`],['분석 일시',modal.date],['적용 프리셋',modal.preset],['판정 결과',modal.result]].map(([l,v])=>(
+              <div key={l} style={{background:C.bg,borderRadius:8,padding:12}}>
+                <div style={{fontSize:11,color:C.textSecondary,marginBottom:3}}>{l}</div>
+                <div style={{fontWeight:700,fontSize:14}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <button onClick={()=>{setModal(null);onToast('세션 복원 완료');}} style={{width:'100%',background:C.accent,color:'#fff',border:'none',borderRadius:8,padding:'11px',cursor:'pointer',fontWeight:700,fontSize:14}}>이 세션 불러오기</button>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+const PRESETS={
+  A:{minR:8,maxR:25,brightness:170,circ:70,conv:75,inertia:40,count:18},
+  B:{minR:5,maxR:40,brightness:150,circ:60,conv:65,inertia:30,count:24},
+  C:{minR:12,maxR:20,brightness:200,circ:80,conv:85,inertia:50,count:11},
+};
+
+function ParamsPage({onToast}){
+  const [preset,setPreset]=useState('A');
+  const [p,setP]=useState(PRESETS.A);
+  const [liveCount,setLiveCount]=useState(18);
+  const [saved,setSaved]=useState(false);
+
+  const upd=(key,val)=>{
+    const np={...p,[key]:val}; setP(np);
+    const base=PRESETS[preset].count;
+    setLiveCount(Math.max(5,Math.min(35,base+Math.round((p.brightness-np.brightness)/8)+(np.minR<p.minR?2:-2))));
+  };
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 320px',gap:24}}>
+        <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <div style={{fontWeight:700,fontSize:16,color:C.textPrimary,marginBottom:20}}>파라미터 설정</div>
+          <div style={{marginBottom:24}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.textSecondary,marginBottom:10}}>파라미터 프리셋 선택</div>
+            <div style={{display:'flex',gap:10}}>
+              {['A','B','C'].map(pr=>(
+                <button key={pr} onClick={()=>{setPreset(pr);setP(PRESETS[pr]);setLiveCount(PRESETS[pr].count);}}
+                  style={{flex:1,padding:'10px',border:`2px solid ${preset===pr?C.accent:C.border}`,borderRadius:8,cursor:'pointer',background:preset===pr?'#EFF6FF':C.surface,color:preset===pr?C.accent:C.textPrimary,fontWeight:700,fontSize:14,transition:'all 150ms'}}>
+                  Profile {pr}
+                </button>
+              ))}
+            </div>
+          </div>
+          {[
+            {key:'minR',label:'최소 픽셀 크기',min:3,max:30,unit:'px'},
+            {key:'maxR',label:'최대 픽셀 크기',min:10,max:100,unit:'px'},
+            {key:'brightness',label:'밝기 임계값 (Threshold)',min:100,max:254,unit:''},
+            {key:'circ',label:'원형도 (Circularity)',min:0,max:100,unit:'%'},
+            {key:'conv',label:'볼록도 (Convexity)',min:0,max:100,unit:'%'},
+            {key:'inertia',label:'관성비 (Inertia Ratio)',min:0,max:100,unit:'%'},
+          ].map(({key,label,min,max,unit})=>(
+            <div key={key} style={{marginBottom:20}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:7}}>
+                <span style={{fontSize:13,fontWeight:600,color:C.textPrimary}}>{label}</span>
+                <span style={{fontSize:13,fontWeight:700,color:C.accent}}>{p[key]}{unit}</span>
+              </div>
+              <input type="range" min={min} max={max} value={p[key]} onChange={e=>upd(key,Number(e.target.value))}
+                style={{width:'100%',accentColor:C.accent}}/>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:C.textSecondary,marginTop:3}}>
+                <span>{min}{unit}</span><span>{max}{unit}</span>
+              </div>
+            </div>
+          ))}
+          <div style={{display:'flex',gap:12,marginTop:8}}>
+            <button onClick={()=>onToast('분석 실행 완료 — 스팟 18개 감지')} style={{flex:1,background:C.accent,color:'#fff',border:'none',borderRadius:8,padding:'12px',cursor:'pointer',fontWeight:700,fontSize:14}}>분석 실행</button>
+            <button onClick={()=>onToast('프리셋 저장 완료')} style={{padding:'12px 18px',background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,cursor:'pointer',fontWeight:600,color:C.textPrimary,fontSize:14}}>프리셋 저장</button>
+          </div>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+            <div style={{fontWeight:600,fontSize:14,color:C.textPrimary,marginBottom:14}}>실시간 감지 미리보기</div>
+            <div style={{textAlign:'center',padding:'16px 0'}}>
+              <div style={{fontSize:52,fontWeight:800,color:C.secondary}}>{liveCount}</div>
+              <div style={{fontSize:14,color:C.textSecondary}}>감지된 스팟 수</div>
+              <div style={{fontSize:12,color:C.textSecondary,marginTop:4}}>파라미터 변경 시 즉시 갱신</div>
+            </div>
+            <div style={{background:C.bg,borderRadius:8,padding:12}}>
+              {Object.entries({minR:'최소 크기',maxR:'최대 크기',brightness:'밝기 임계',circ:'원형도',conv:'볼록도',inertia:'관성비'}).map(([k,l])=>(
+                <div key={k} style={{display:'flex',justifyContent:'space-between',marginBottom:6,fontSize:12}}>
+                  <span style={{color:C.textSecondary}}>{l}</span>
+                  <span style={{fontWeight:700}}>{p[k]}{k==='minR'||k==='maxR'?'px':k==='brightness'?'':' %'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+            <div style={{fontWeight:600,fontSize:14,color:C.textPrimary,marginBottom:14}}>전처리 필터</div>
+            {[['가우시안 블러 (σ=1.5)',true],['히스토그램 균등화',true],['모폴로지 Opening',false],['Canny 엣지 감지',false]].map(([l,on])=>(
+              <div key={l} style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,fontSize:13}}>
+                <span style={{color:C.textPrimary}}>{l}</span>
+                <div onClick={()=>onToast(`${l} ${on?'비활성':'활성'}화`)} style={{width:40,height:22,background:on?C.accent:'#CBD5E1',borderRadius:11,cursor:'pointer',position:'relative',transition:'background 200ms'}}>
+                  <div style={{position:'absolute',top:3,left:on?20:3,width:16,height:16,background:'#fff',borderRadius:8,transition:'left 200ms'}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OverlayPage({onToast}){
+  const [brightRange,setBrightRange]=useState([170,255]);
+  const [sizeRange,setSizeRange]=useState([8,25]);
+  const [selected,setSelected]=useState(null);
+
+  const filtered=SPOTS.filter(s=>s.brightness>=brightRange[0]&&s.brightness<=brightRange[1]&&s.radius>=sizeRange[0]&&s.radius<=sizeRange[1]);
+
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 300px',gap:24}}>
+        <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+            <span style={{fontWeight:600,fontSize:14,color:C.textPrimary}}>오버레이 뷰어 — {filtered.length}개 표시</span>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>onToast('오버레이 PNG 저장 완료')} style={{padding:'6px 14px',background:C.accent,color:'#fff',border:'none',borderRadius:6,cursor:'pointer',fontSize:13,fontWeight:600}}>PNG 저장</button>
+            </div>
+          </div>
+          <IRCanvas spots={SPOTS} filterRange={brightRange} highlightId={selected?.id||null} onSpotClick={setSelected}/>
+          {selected&&(
+            <div style={{marginTop:10,background:C.bg,borderRadius:8,padding:'10px 14px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span style={{fontSize:13,fontWeight:600,color:C.textPrimary}}>선택: Spot #{selected.id} — 밝기 {selected.brightness} · 반지름 {selected.radius}px · {selected.shape==='circular'?'원형':'타원형'}</span>
+              <button onClick={()=>setSelected(null)} style={{background:'none',border:'none',cursor:'pointer',color:C.textSecondary,fontSize:16}}>✕</button>
+            </div>
+          )}
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{background:C.surface,borderRadius:12,padding:18,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+            <div style={{fontWeight:600,fontSize:14,color:C.textPrimary,marginBottom:16}}>스팟 필터링</div>
+            <div style={{marginBottom:18}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:6,fontSize:13}}>
+                <span style={{fontWeight:600}}>밝기 범위</span>
+                <span style={{color:C.accent,fontWeight:700}}>{brightRange[0]} ~ {brightRange[1]}</span>
+              </div>
+              <input type="range" min={100} max={brightRange[1]-5} value={brightRange[0]} onChange={e=>setBrightRange([Number(e.target.value),brightRange[1]])} style={{width:'100%',accentColor:C.secondary,marginBottom:4}}/>
+              <input type="range" min={brightRange[0]+5} max={255} value={brightRange[1]} onChange={e=>setBrightRange([brightRange[0],Number(e.target.value)])} style={{width:'100%',accentColor:C.secondary}}/>
+            </div>
+            <div style={{marginBottom:18}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:6,fontSize:13}}>
+                <span style={{fontWeight:600}}>반지름 범위</span>
+                <span style={{color:C.accent,fontWeight:700}}>{sizeRange[0]} ~ {sizeRange[1]} px</span>
+              </div>
+              <input type="range" min={3} max={sizeRange[1]-2} value={sizeRange[0]} onChange={e=>setSizeRange([Number(e.target.value),sizeRange[1]])} style={{width:'100%',accentColor:C.secondary,marginBottom:4}}/>
+              <input type="range" min={sizeRange[0]+2} max={30} value={sizeRange[1]} onChange={e=>setSizeRange([sizeRange[0],Number(e.target.value)])} style={{width:'100%',accentColor:C.secondary}}/>
+            </div>
+            <div style={{background:C.bg,borderRadius:8,padding:12,textAlign:'center'}}>
+              <div style={{fontSize:28,fontWeight:800,color:C.secondary}}>{filtered.length}</div>
+              <div style={{fontSize:12,color:C.textSecondary}}>필터 적용 결과</div>
+            </div>
+          </div>
+          <div style={{background:C.surface,borderRadius:12,padding:18,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',flex:1}}>
+            <div style={{fontWeight:600,fontSize:14,color:C.textPrimary,marginBottom:12}}>스팟 목록</div>
+            <div style={{maxHeight:280,overflowY:'auto'}}>
+              {filtered.map(s=>(
+                <div key={s.id} onClick={()=>setSelected(s)}
+                  style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`1px solid ${C.border}`,cursor:'pointer',fontSize:13,transition:'color 150ms'}}
+                  onMouseEnter={e=>e.currentTarget.style.color=C.accent}
+                  onMouseLeave={e=>e.currentTarget.style.color=C.textPrimary}>
+                  <span style={{fontWeight:600,color:selected?.id===s.id?C.accent:'inherit'}}>#{s.id}</span>
+                  <span style={{color:C.textSecondary}}>밝기 {s.brightness}</span>
+                  <span style={{color:C.textSecondary}}>r={s.radius}px</span>
+                  <span style={{fontSize:11,color:s.shape==='circular'?C.success:C.warning}}>{s.shape==='circular'?'원형':'타원'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExportPage({onToast}){
+  const [exporting,setExporting]=useState(null);
+  const doExport=(type)=>{
+    setExporting(type);
+    setTimeout(()=>{setExporting(null);onToast(`${type} 내보내기 완료`);},1800);
+  };
+  const scatter=SPOTS.map(s=>({x:s.radius,y:s.brightness}));
+  return(
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,marginBottom:20}}>
+        <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <div style={{fontWeight:600,fontSize:14,color:C.textPrimary,marginBottom:16}}>밝기 분포 히스토그램</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={BRIGHTNESS_HIST} margin={{top:0,right:0,bottom:0,left:-20}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9"/>
+              <XAxis dataKey="range" tick={{fontSize:9,fill:C.textSecondary}}/>
+              <YAxis tick={{fontSize:11,fill:C.textSecondary}}/>
+              <Tooltip contentStyle={{fontSize:12,borderRadius:8}}/>
+              <Bar dataKey="count" radius={[3,3,0,0]}>
+                {BRIGHTNESS_HIST.map((_,i)=><Cell key={i} fill={`hsl(${195+i*7},75%,${42+i*2}%)`}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <div style={{fontWeight:600,fontSize:14,color:C.textPrimary,marginBottom:16}}>크기 × 밝기 산점도</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <ScatterChart margin={{top:0,right:0,bottom:0,left:-20}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9"/>
+              <XAxis dataKey="x" name="반지름" tick={{fontSize:11,fill:C.textSecondary}} label={{value:'반지름(px)',position:'insideBottom',fontSize:10,dy:10}}/>
+              <YAxis dataKey="y" name="밝기" tick={{fontSize:11,fill:C.textSecondary}}/>
+              <Tooltip contentStyle={{fontSize:12,borderRadius:8}}/>
+              <Scatter data={scatter} fill={C.secondary} opacity={0.8}/>
+            </ScatterChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,padding:24,boxShadow:'0 1px 3px rgba(0,0,0,0.08)',marginBottom:20}}>
+        <div style={{fontWeight:600,fontSize:15,color:C.textPrimary,marginBottom:18}}>결과 내보내기</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+          {[{type:'Excel (.xlsx)',desc:'스팟별 정량 데이터 (좌표·밝기·면적·거리)',icon:'📊',color:'#15803D'},
+            {type:'오버레이 PNG',desc:'스팟 윤곽선 매핑 결과 이미지',icon:'🖼️',color:C.accent},
+            {type:'차트 PNG',desc:'히스토그램 + 산점도 통합 이미지',icon:'📈',color:'#7C3AED'}].map(opt=>(
+            <div key={opt.type} style={{border:`1px solid ${C.border}`,borderRadius:12,padding:20}}>
+              <div style={{fontSize:28,marginBottom:10}}>{opt.icon}</div>
+              <div style={{fontWeight:700,fontSize:14,color:C.textPrimary,marginBottom:6}}>{opt.type}</div>
+              <div style={{fontSize:12,color:C.textSecondary,marginBottom:16,lineHeight:1.5}}>{opt.desc}</div>
+              <button onClick={()=>doExport(opt.type)} disabled={!!exporting}
+                style={{width:'100%',background:opt.color,color:'#fff',border:'none',borderRadius:8,padding:'10px',cursor:exporting?'default':'pointer',fontWeight:600,fontSize:13,opacity:exporting?0.7:1}}>
+                {exporting===opt.type?'생성 중...':'내보내기'}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+        <div style={{fontWeight:600,fontSize:14,color:C.textPrimary,marginBottom:12}}>데이터 미리보기 (상위 5개)</div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+            <thead><tr style={{background:C.bg}}>
+              {['ID','X','Y','반지름','면적(px²)','밝기','상대밝기','형상','인접거리'].map(h=><th key={h} style={{padding:'8px 12px',textAlign:'left',fontWeight:600,color:C.textSecondary,fontSize:12,whiteSpace:'nowrap'}}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {SPOTS.slice(0,5).map(s=>(
+                <tr key={s.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                  <td style={{padding:'10px 12px',fontWeight:700,color:C.accent}}>#{s.id}</td>
+                  <td style={{padding:'10px 12px'}}>{s.x}</td>
+                  <td style={{padding:'10px 12px'}}>{s.y}</td>
+                  <td style={{padding:'10px 12px'}}>{s.radius}px</td>
+                  <td style={{padding:'10px 12px'}}>{s.area}</td>
+                  <td style={{padding:'10px 12px'}}>{s.brightness}</td>
+                  <td style={{padding:'10px 12px'}}>{(s.relBrightness*100).toFixed(1)}%</td>
+                  <td style={{padding:'10px 12px'}}>{s.shape==='circular'?'원형':'타원형'}</td>
+                  <td style={{padding:'10px 12px'}}>{s.dist||'기준'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{marginTop:8,fontSize:12,color:C.textSecondary}}>전체 18개 스팟 데이터 포함 예정</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const NAV=[
+  {id:'workspace',label:'분석 워크스페이스',icon:'⚡'},
+  {id:'params',label:'파라미터 조정',icon:'⚙️'},
+  {id:'overlay',label:'오버레이 뷰어',icon:'🔍'},
+  {id:'export',label:'결과 내보내기',icon:'📤'},
+  {id:'sessions',label:'세션 관리',icon:'📂'},
+  {id:'settings',label:'환경 설정',icon:'🔧'},
+];
+
+const PAGE_TITLES={workspace:'분석 워크스페이스',params:'파라미터 조정',overlay:'오버레이 뷰어',export:'결과 내보내기',sessions:'세션 관리',settings:'환경 설정'};
+
+function App(){
+  const [page,setPage]=useState('workspace');
+  const [toast,setToast]=useState(null);
+  const showToast=msg=>{setToast(msg);};
+
+  const renderPage=()=>{
+    const key=page;
+    switch(page){
+      case 'workspace': return <WorkspacePage onToast={showToast}/>;
+      case 'params': return <ParamsPage onToast={showToast}/>;
+      case 'overlay': return <OverlayPage onToast={showToast}/>;
+      case 'export': return <ExportPage onToast={showToast}/>;
+      default: return(
+        <div style={{background:C.surface,borderRadius:12,padding:48,textAlign:'center',boxShadow:'0 1px 3px rgba(0,0,0,0.08)'}}>
+          <div style={{fontSize:40,marginBottom:16}}>{NAV.find(n=>n.id===page)?.icon}</div>
+          <div style={{fontSize:18,fontWeight:700,color:C.textPrimary}}>{PAGE_TITLES[page]}</div>
+          <div style={{fontSize:14,color:C.textSecondary,marginTop:8}}>화면 구현 영역</div>
+        </div>
+      );
+    }
+  };
+
+  return(
+    <div style={{display:'flex',width:'100%',height:'100vh',overflow:'hidden'}}>
+      <aside style={{width:260,background:C.primary,flexShrink:0,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <div style={{padding:'22px 18px 14px',borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10}}>
+            <div style={{width:34,height:34,background:C.secondary,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,flexShrink:0}}>🔬</div>
+            <div>
+              <div style={{color:'#fff',fontWeight:800,fontSize:14}}>IR SpotBench</div>
+              <div style={{color:'rgba(255,255,255,0.45)',fontSize:11}}>v2.1.0 — 맞춤 구현 데모</div>
+            </div>
+          </div>
+        </div>
+        <div style={{margin:'12px',background:'rgba(0,180,216,0.14)',borderRadius:8,padding:'10px 12px'}}>
+          <div style={{fontSize:11,color:'rgba(255,255,255,0.45)',marginBottom:2}}>현재 파일</div>
+          <div style={{fontSize:12,color:C.secondary,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>IR_240315_A.tiff</div>
+        </div>
+        <nav style={{flex:1,padding:'4px 10px',overflowY:'auto'}}>
+          {NAV.map(n=>(
+            <button key={n.id} onClick={()=>setPage(n.id)}
+              style={{width:'100%',display:'flex',alignItems:'center',gap:10,padding:'11px 12px',marginBottom:2,borderRadius:8,border:'none',cursor:'pointer',background:page===n.id?'rgba(0,180,216,0.2)':'transparent',color:page===n.id?C.secondary:'rgba(255,255,255,0.62)',fontWeight:page===n.id?700:400,fontSize:13,textAlign:'left',transition:'all 150ms'}}
+              onMouseEnter={e=>{if(page!==n.id)e.currentTarget.style.background='rgba(255,255,255,0.07)';}}
+              onMouseLeave={e=>{if(page!==n.id)e.currentTarget.style.background='transparent';}}>
+              <span style={{fontSize:15}}>{n.icon}</span>{n.label}
+            </button>
+          ))}
+        </nav>
+        <div style={{padding:'14px 18px',borderTop:'1px solid rgba(255,255,255,0.1)',display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:30,height:30,background:C.secondary,borderRadius:15,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:C.primary,flexShrink:0}}>김</div>
+          <div><div style={{color:'#fff',fontSize:13,fontWeight:600}}>김연구원</div><div style={{color:'rgba(255,255,255,0.4)',fontSize:11}}>R&D 팀</div></div>
+        </div>
+      </aside>
+      <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <div style={{height:58,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',padding:'0 24px',gap:12,flexShrink:0}}>
+          <h1 style={{fontSize:18,fontWeight:700,color:C.textPrimary,flex:1}}>{PAGE_TITLES[page]}</h1>
+          <div style={{display:'flex',alignItems:'center',gap:6,background:C.bg,borderRadius:8,padding:'7px 12px',fontSize:13,color:C.textSecondary,cursor:'pointer'}}>🔍 파일 검색</div>
+          <div style={{width:32,height:32,background:C.bg,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}}>🔔</div>
+          <div style={{width:30,height:30,background:C.secondary,borderRadius:15,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:C.primary,cursor:'pointer'}}>김</div>
+        </div>
+        <main style={{flex:1,overflow:'auto',padding:22}}>
+          <div key={page} style={{animation:'fadeIn 250ms ease'}}>{renderPage()}</div>
+        </main>
+      </div>
+      {toast&&<Toast message={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
