@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IR 컨퍼런스 콜 AI 요약 시스템 — 맞춤 구현 데모</title>
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html, body { width:100%; height:100%; font-family:'Pretendard',-apple-system,sans-serif; background:#F4F6F9; }
+    #root { display:flex; flex-direction:column; width:100%; min-height:100vh; }
+    @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+    @keyframes fadeInScale { from{opacity:0;transform:scale(0.95)} to{opacity:1;transform:scale(1)} }
+    @keyframes slideInRight { from{opacity:0;transform:translateX(30px)} to{opacity:1;transform:translateX(0)} }
+    @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes ripple { 0%{transform:scale(0);opacity:0.5} 100%{transform:scale(4);opacity:0} }
+    @keyframes countUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+    @keyframes barGrow { from{width:0%} to{width:var(--target-width)} }
+    @keyframes slideDown { from{opacity:0;transform:translateY(-10px)} to{opacity:1;transform:translateY(0)} }
+    ::-webkit-scrollbar { width:6px; height:6px; }
+    ::-webkit-scrollbar-track { background:#F4F6F9; }
+    ::-webkit-scrollbar-thumb { background:#CBD5E1; border-radius:3px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } = Recharts;
+
+const C = {
+  primary:'#1B4F72', secondary:'#2E86AB', accent:'#17C3B2',
+  bg:'#F4F6F9', surface:'#FFFFFF', text:'#1A2332', textLight:'#5B6E8C',
+  border:'#DDE3EA', success:'#0F9D58', warning:'#F39C12', danger:'#E53E3E',
+  primaryLight:'#EBF4FA', accentLight:'#E6FAF8',
+};
+
+const TABS = [
+  { id:'dashboard', label:'요약 현황' },
+  { id:'history',   label:'요약 이력' },
+  { id:'ticker',    label:'종목 관리' },
+  { id:'pipeline',  label:'파이프라인 모니터링' },
+  { id:'settings',  label:'시스템 설정' },
+];
+
+const PAGE_META = {
+  dashboard: { title:'요약 현황', sub:'실시간 IR 컨퍼런스 콜 AI 요약 처리 현황', kpis:[{l:'오늘 처리',v:24,u:'건'},{l:'요약 완료',v:21,u:'건'},{l:'발송 완료',v:21,u:'건'}] },
+  history:   { title:'요약 이력', sub:'수집된 컨퍼런스 콜 스크립트 및 AI 요약 조회', kpis:[{l:'전체 이력',v:342,u:'건'},{l:'이번 주',v:58,u:'건'},{l:'검색 결과',v:24,u:'건'}] },
+  ticker:    { title:'종목 관리', sub:'관심 종목 및 수집 활성화 설정 관리', kpis:[{l:'등록 종목',v:12,u:'개'},{l:'활성',v:9,u:'개'},{l:'오늘 신규 콜',v:3,u:'건'}] },
+  pipeline:  { title:'파이프라인 모니터링', sub:'수집 → 요약 → 발송 단계별 처리 상태 모니터링', kpis:[{l:'대기 중',v:4,u:'건'},{l:'처리 중',v:2,u:'건'},{l:'에러',v:1,u:'건'}] },
+  settings:  { title:'시스템 설정', sub:'API 연동 · LLM 모델 · Rate Limit · 텔레그램 봇 설정', kpis:[{l:'API 상태',v:'정상',u:''},{l:'잔여 슬롯',v:80,u:'%'},{l:'마지막 동기화',v:'2분',u:'전'}] },
+};
+
+const SUMMARIES = [
+  {id:1, ticker:'005930', company:'삼성전자',  date:'2026-05-06 09:30', speakers:4, status:'완료', sent:true,  score:92, summary:'Q1 2026 실적 발표. 반도체 부문 영업이익 YoY 127% 성장. HBM3E 양산 체제 진입, 2H26 본격 공급 예정. 파운드리 2나노 GAA 수율 안정화 진행 중.', original:'안녕하세요. 삼성전자 IR 담당자입니다. 오늘은 2026년 1분기 실적을 발표하겠습니다...'},
+  {id:2, ticker:'000660', company:'SK하이닉스',date:'2026-05-06 10:00', speakers:3, status:'완료', sent:true,  score:88, summary:'AI 서버향 HBM 수요 견조. 엔비디아 H200/B200 공급 지속. 일반 DRAM 재고 정상화 완료. 2026년 CAPEX 가이던스 22조원 유지.', original:'안녕하세요. SK하이닉스 CFO입니다. 오늘 2026 Q1 컨퍼런스 콜을 시작하겠습니다...'},
+  {id:3, ticker:'005380', company:'현대자동차',date:'2026-05-05 14:00', speakers:5, status:'완료', sent:true,  score:76, summary:'전기차 수익성 개선 지속. 아이오닉9 글로벌 사전계약 3.2만대. 북미 조지아 공장 EV 전용 라인 전환 완료. 2026년 EV 판매 목표 55만대.', original:'이번 2026년 1분기 현대자동차 실적 발표를 진행합니다...'},
+  {id:4, ticker:'373220', company:'LG에너지솔루션',date:'2026-05-05 15:30', speakers:3, status:'요약 중', sent:false, score:null, summary:'', original:''},
+  {id:5, ticker:'005490', company:'POSCO홀딩스',date:'2026-05-04 10:00', speakers:4, status:'완료', sent:true,  score:81, summary:'리튬 사업부 2차전지 소재 매출 1.4조원. 아르헨티나 리튬 광산 생산 확대. 포스코퓨처엠 양극재 캐파 증설 진행. 철강 수요 회복 관찰.', original:''},
+  {id:6, ticker:'068270', company:'셀트리온',    date:'2026-05-04 11:00', speakers:3, status:'오류', sent:false, score:null, summary:'LLM API 호출 타임아웃 (retry 3회 초과)', original:''},
+  {id:7, ticker:'035420', company:'NAVER',       date:'2026-05-03 14:00', speakers:4, status:'완료', sent:true,  score:85, summary:'하이퍼클로바X 기업 구독 MAB 2,100개사 돌파. 클라우드 매출 전년비 34% 성장. 웹툰/SNOW 글로벌 수익화 가속.', original:''},
+  {id:8, ticker:'035720', company:'카카오',      date:'2026-05-03 15:00', speakers:3, status:'완료', sent:true,  score:79, summary:'카카오톡 AI 기능 고도화. 카카오페이 BEP 달성. 카카오픽코마 일본 흑자 전환. 다음 포털 개편 1H26 예정.', original:''},
+];
+
+const TICKERS = [
+  {id:1, code:'005930', name:'삼성전자',      sector:'반도체', active:true,  llm:'gpt-4o',     channel:'@ir_samsung',   calls:8,  lastCall:'2026-05-06'},
+  {id:2, code:'000660', name:'SK하이닉스',   sector:'반도체', active:true,  llm:'gpt-4o',     channel:'@ir_skhynix',   calls:6,  lastCall:'2026-05-06'},
+  {id:3, code:'005380', name:'현대자동차',   sector:'자동차', active:true,  llm:'gpt-4o-mini', channel:'@ir_hyundai',   calls:4,  lastCall:'2026-05-05'},
+  {id:4, code:'373220', name:'LG에너지솔루션',sector:'배터리', active:true,  llm:'gpt-4o',     channel:'@ir_lges',      calls:3,  lastCall:'2026-05-05'},
+  {id:5, code:'005490', name:'POSCO홀딩스',  sector:'소재',   active:true,  llm:'gpt-4o-mini', channel:'@ir_posco',     calls:5,  lastCall:'2026-05-04'},
+  {id:6, code:'068270', name:'셀트리온',     sector:'바이오', active:false, llm:'gpt-4o-mini', channel:'@ir_celltrion', calls:2,  lastCall:'2026-05-02'},
+  {id:7, code:'035420', name:'NAVER',        sector:'IT',     active:true,  llm:'gemini-pro',  channel:'@ir_naver',     calls:7,  lastCall:'2026-05-03'},
+  {id:8, code:'035720', name:'카카오',       sector:'IT',     active:true,  llm:'gemini-pro',  channel:'@ir_kakao',     calls:4,  lastCall:'2026-05-03'},
+  {id:9, code:'000270', name:'기아',         sector:'자동차', active:true,  llm:'gpt-4o-mini', channel:'@ir_kia',       calls:3,  lastCall:'2026-05-02'},
+];
+
+const PIPELINE_JOBS = [
+  {id:1, ticker:'005930', company:'삼성전자',   stage:'발송 완료', status:'done',       ts:'09:42', duration:'1m 12s', detail:'요약 길이 847자 · 화자 4명'},
+  {id:2, ticker:'000660', company:'SK하이닉스', stage:'발송 완료', status:'done',       ts:'10:08', duration:'58s',    detail:'요약 길이 612자 · 화자 3명'},
+  {id:3, ticker:'373220', company:'LG에너지솔루션', stage:'AI 요약 중', status:'running', ts:'10:35', duration:'진행 중', detail:'LLM API 호출 대기 중 (슬롯 예약)'},
+  {id:4, ticker:'005490', company:'POSCO홀딩스', stage:'텔레그램 발송 대기', status:'pending', ts:'10:48', duration:'대기', detail:'발송 큐 3번째'},
+  {id:5, ticker:'068270', company:'셀트리온',   stage:'오류', status:'error',           ts:'10:52', duration:'-',      detail:'LLM API 응답 타임아웃 (3회 재시도 초과) → Dead Letter Queue'},
+  {id:6, ticker:'035420', company:'NAVER',       stage:'데이터 수집 중', status:'running', ts:'11:05', duration:'진행 중', detail:'API 스크립트 수신 중 (화자 4명)'},
+];
+
+const WEEKLY_DATA = [
+  {day:'04/30',collected:18,summarized:16,sent:16},
+  {day:'05/01',collected:22,summarized:20,sent:19},
+  {day:'05/02',collected:15,summarized:14,sent:14},
+  {day:'05/03',collected:28,summarized:25,sent:25},
+  {day:'05/04',collected:31,summarized:28,sent:27},
+  {day:'05/05',collected:26,summarized:23,sent:22},
+  {day:'05/06',collected:24,summarized:21,sent:21},
+];
+
+function CountUp({ end, duration=1200, suffix='' }) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    if (typeof end !== 'number') { setVal(end); return; }
+    let start=0; const step=end/(duration/16);
+    const t = setInterval(() => {
+      start+=step;
+      if(start>=end){setVal(end);clearInterval(t);} else setVal(Math.floor(start));
+    },16);
+    return ()=>clearInterval(t);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{typeof val==='number'?val.toLocaleString():val}{suffix}</span>;
+}
+
+function Toast({ msg, onClose }) {
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return (
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:C.text,color:'#fff',padding:'12px 20px',borderRadius:8,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.2)',display:'flex',alignItems:'center',gap:10,fontSize:14}}>
+      <span style={{color:C.success}}>✓</span> {msg}
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, width=560 }) {
+  return (
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.45)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:C.surface,borderRadius:12,zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.15)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'20px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:700,color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textLight,lineHeight:1}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Drawer({ item, onClose }) {
+  if(!item) return null;
+  return (
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:200,animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:520,background:C.surface,boxShadow:'-8px 0 40px rgba(0,0,0,0.12)',zIndex:201,overflowY:'auto',animation:'slideInRight 200ms ease'}}>
+        <div style={{padding:'20px 24px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontSize:11,color:C.textLight,marginBottom:4,textTransform:'uppercase',letterSpacing:'0.05em'}}>컨퍼런스 콜 요약 상세</div>
+            <div style={{fontSize:17,fontWeight:700,color:C.text}}>{item.company} ({item.ticker})</div>
+          </div>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textLight}}>✕</button>
+        </div>
+        <div style={{padding:24}}>
+          <div style={{display:'flex',gap:8,marginBottom:20,flexWrap:'wrap'}}>
+            <span style={{padding:'4px 10px',background:item.status==='완료'?'#E6FAF8':item.status==='요약 중'?'#FEF9E7':'#FDEDEC',color:item.status==='완료'?C.accent:item.status==='요약 중'?C.warning:C.danger,borderRadius:20,fontSize:12,fontWeight:600}}>{item.status}</span>
+            <span style={{padding:'4px 10px',background:C.primaryLight,color:C.primary,borderRadius:20,fontSize:12}}>{item.date}</span>
+            <span style={{padding:'4px 10px',background:'#F0F4F8',color:C.textLight,borderRadius:20,fontSize:12}}>화자 {item.speakers}명</span>
+            {item.score && <span style={{padding:'4px 10px',background:'#EBF8F2',color:C.success,borderRadius:20,fontSize:12,fontWeight:600}}>품질 {item.score}점</span>}
+          </div>
+
+          {item.summary && (
+            <div style={{marginBottom:20}}>
+              <div style={{fontSize:12,fontWeight:600,color:C.textLight,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:10}}>AI 요약본</div>
+              <div style={{background:C.bg,borderRadius:10,padding:16,fontSize:14,lineHeight:1.8,color:C.text,border:`1px solid ${C.border}`}}>
+                {item.summary}
+              </div>
+            </div>
+          )}
+
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.textLight,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:10}}>처리 정보</div>
+            {[
+              ['텔레그램 발송', item.sent?'완료':'미발송'],
+              ['수집 API', '클라이언트 제공 IR 스크립트 API'],
+              ['LLM 모델', 'GPT-4o'],
+              ['프롬프트 버전', 'v2.3 (IR 전문 요약)'],
+            ].map(([k,v])=>(
+              <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`,fontSize:14}}>
+                <span style={{color:C.textLight}}>{k}</span>
+                <span style={{fontWeight:500,color:C.text}}>{v}</span>
+              </div>
+            ))}
+          </div>
+
+          <div style={{display:'flex',gap:10}}>
+            <button style={{flex:1,padding:'10px 16px',background:C.primary,color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:14}}>텔레그램 재발송</button>
+            <button style={{flex:1,padding:'10px 16px',background:C.bg,color:C.text,border:`1px solid ${C.border}`,borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:14}}>요약 재생성</button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function SkeletonRow() {
+  return (
+    <div style={{height:52,background:`linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)`,backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite',borderRadius:6,marginBottom:8}}/>
+  );
+}
+
+function DashboardPage() {
+  const [loaded, setLoaded] = useState(false);
+  useEffect(()=>{setTimeout(()=>setLoaded(true),1200);},[]);
+
+  const recentSummaries = SUMMARIES.slice(0,5);
+  const kpiCards = [
+    {label:'오늘 처리된 콜',value:24,icon:'📡',color:C.primary,bg:C.primaryLight,change:'+3'},
+    {label:'요약 완료',value:21,icon:'🤖',color:C.accent,bg:C.accentLight,change:'+2'},
+    {label:'텔레그램 발송',value:21,icon:'📨',color:C.success,bg:'#E6F4EA',change:'전량'},
+    {label:'처리 실패',value:3,icon:'⚠️',color:C.danger,bg:'#FDEDEC',change:'-1'},
+  ];
+
+  if(!loaded) return (
+    <div style={{padding:32}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:28}}>
+        {[0,1,2,3].map(i=><div key={i} style={{height:100,background:`linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)`,backgroundSize:'200% 100%',animation:`shimmer 1.5s infinite ${i*0.2}s`,borderRadius:12}}/>)}
+      </div>
+      {[0,1,2].map(i=><SkeletonRow key={i}/>)}
+    </div>
+  );
+
+  return (
+    <div style={{padding:'28px 32px',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:28}}>
+        {kpiCards.map((k,i)=>(
+          <div key={k.label} style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 4px rgba(0,0,0,0.07)',animation:`slideUp 400ms ease ${i*80}ms both`,cursor:'default'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+              <div style={{width:40,height:40,borderRadius:10,background:k.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:18}}>{k.icon}</div>
+              <span style={{fontSize:11,color:k.color,fontWeight:600,background:k.bg,padding:'2px 8px',borderRadius:20}}>{k.change}</span>
+            </div>
+            <div style={{fontSize:28,fontWeight:800,color:k.color,marginBottom:4}}><CountUp end={typeof k.value==='number'?k.value:0}/>{typeof k.value!=='number'?k.value:''}</div>
+            <div style={{fontSize:12,color:C.textLight}}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1.6fr 1fr',gap:20,marginBottom:24}}>
+        <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:15,fontWeight:700,color:C.text}}>최근 7일 처리 현황</div>
+            <div style={{fontSize:12,color:C.textLight,marginTop:2}}>수집 · 요약 완료 · 발송 완료</div>
+          </div>
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={WEEKLY_DATA} margin={{top:5,right:10,left:-20,bottom:0}}>
+              <defs>
+                <linearGradient id="gCollected" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={C.primary} stopOpacity={0.15}/>
+                  <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                </linearGradient>
+                <linearGradient id="gSent" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={C.accent} stopOpacity={0.2}/>
+                  <stop offset="95%" stopColor={C.accent} stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+              <XAxis dataKey="day" tick={{fontSize:11,fill:C.textLight}} axisLine={false} tickLine={false}/>
+              <YAxis tick={{fontSize:11,fill:C.textLight}} axisLine={false} tickLine={false}/>
+              <Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}}/>
+              <Area type="monotone" dataKey="collected" name="수집" stroke={C.primary} fill="url(#gCollected)" strokeWidth={2}/>
+              <Area type="monotone" dataKey="sent" name="발송 완료" stroke={C.accent} fill="url(#gSent)" strokeWidth={2}/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>파이프라인 상태</div>
+          {[
+            {label:'수집 중',count:2,color:C.secondary,pct:40},
+            {label:'AI 요약 중',count:1,color:C.accent,pct:20},
+            {label:'발송 대기',count:3,color:C.warning,pct:60},
+            {label:'완료 (오늘)',count:21,color:C.success,pct:100},
+            {label:'에러',count:1,color:C.danger,pct:20},
+          ].map((s,i)=>(
+            <div key={s.label} style={{marginBottom:12,animation:`slideUp 400ms ease ${i*60}ms both`}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}>
+                <span style={{fontSize:13,color:C.text}}>{s.label}</span>
+                <span style={{fontSize:13,fontWeight:700,color:s.color}}>{s.count}</span>
+              </div>
+              <div style={{height:6,background:'#F1F5F9',borderRadius:3,overflow:'hidden'}}>
+                <div style={{height:'100%',background:s.color,borderRadius:3,'--target-width':`${s.pct}%`,animation:`barGrow 800ms ease ${i*100}ms both`,width:`${s.pct}%`}}/>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+        <div style={{marginBottom:16,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text}}>최근 요약 현황</div>
+          <span style={{fontSize:12,color:C.secondary,cursor:'pointer',fontWeight:500}}>전체 보기 →</span>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{borderBottom:`2px solid ${C.border}`}}>
+              {['종목','기업명','발표 일시','화자','상태','발송'].map(h=>(
+                <th key={h} style={{textAlign:'left',padding:'8px 12px',fontSize:11,color:C.textLight,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.05em'}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {recentSummaries.map((s,i)=>(
+              <tr key={s.id} style={{borderBottom:`1px solid ${C.border}`,transition:'background 150ms',animation:`slideUp 400ms ease ${i*60}ms both`,cursor:'pointer'}}
+                onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'12px 12px',fontSize:12,color:C.textLight,fontFamily:'monospace'}}>{s.ticker}</td>
+                <td style={{padding:'12px 12px',fontSize:13,fontWeight:600,color:C.text}}>{s.company}</td>
+                <td style={{padding:'12px 12px',fontSize:12,color:C.textLight}}>{s.date}</td>
+                <td style={{padding:'12px 12px',fontSize:13,color:C.text,textAlign:'center'}}>{s.speakers}</td>
+                <td style={{padding:'12px 12px'}}>
+                  <span style={{padding:'3px 10px',background:s.status==='완료'?'#E6FAF8':s.status==='요약 중'?'#FEF9E7':'#FDEDEC',color:s.status==='완료'?C.accent:s.status==='요약 중'?C.warning:C.danger,borderRadius:20,fontSize:11,fontWeight:600}}>{s.status}</span>
+                </td>
+                <td style={{padding:'12px 12px',textAlign:'center',fontSize:16}}>{s.sent?'✅':'⏳'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function HistoryPage({ onSelect }) {
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('전체');
+
+  const filtered = SUMMARIES.filter(s =>
+    (statusFilter==='전체' || s.status===statusFilter) &&
+    (query==='' || s.company.includes(query) || s.ticker.includes(query))
+  );
+
+  return (
+    <div style={{padding:'28px 32px',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',gap:12,marginBottom:20}}>
+        <div style={{flex:1,position:'relative'}}>
+          <span style={{position:'absolute',left:12,top:'50%',transform:'translateY(-50%)',color:C.textLight,fontSize:15}}>🔍</span>
+          <input value={query} onChange={e=>setQuery(e.target.value)}
+            placeholder="종목코드 또는 기업명 검색..."
+            style={{width:'100%',padding:'10px 12px 10px 38px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,color:C.text,outline:'none',background:C.surface}}/>
+        </div>
+        <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}
+          style={{padding:'10px 14px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,color:C.text,background:C.surface,outline:'none',cursor:'pointer'}}>
+          {['전체','완료','요약 중','오류'].map(s=><option key={s}>{s}</option>)}
+        </select>
+        <input type="date" defaultValue="2026-05-01"
+          style={{padding:'10px 12px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,color:C.text,background:C.surface,outline:'none'}}/>
+        <input type="date" defaultValue="2026-05-06"
+          style={{padding:'10px 12px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,color:C.text,background:C.surface,outline:'none'}}/>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,overflow:'hidden',boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:C.bg,borderBottom:`2px solid ${C.border}`}}>
+              {['종목코드','기업명','발표 일시','화자','품질 점수','상태','텔레그램','액션'].map(h=>(
+                <th key={h} style={{textAlign:'left',padding:'12px 16px',fontSize:11,color:C.textLight,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.04em'}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((s,i)=>(
+              <tr key={s.id} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms',animation:`slideUp 400ms ease ${i*50}ms both`}}
+                onClick={()=>onSelect(s)}
+                onMouseEnter={e=>e.currentTarget.style.background='#F8FAFC'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'14px 16px',fontFamily:'monospace',fontSize:12,color:C.textLight,fontWeight:600}}>{s.ticker}</td>
+                <td style={{padding:'14px 16px',fontSize:14,fontWeight:600,color:C.text}}>{s.company}</td>
+                <td style={{padding:'14px 16px',fontSize:12,color:C.textLight}}>{s.date}</td>
+                <td style={{padding:'14px 16px',fontSize:13,color:C.text,textAlign:'center'}}>{s.speakers}</td>
+                <td style={{padding:'14px 16px',textAlign:'center'}}>
+                  {s.score ? (
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <div style={{width:40,height:6,background:'#F1F5F9',borderRadius:3,overflow:'hidden'}}>
+                        <div style={{height:'100%',width:`${s.score}%`,background:s.score>=85?C.success:s.score>=70?C.warning:C.danger,borderRadius:3}}/>
+                      </div>
+                      <span style={{fontSize:12,fontWeight:700,color:s.score>=85?C.success:s.score>=70?C.warning:C.danger}}>{s.score}</span>
+                    </div>
+                  ) : <span style={{color:C.textLight,fontSize:12}}>-</span>}
+                </td>
+                <td style={{padding:'14px 16px'}}>
+                  <span style={{padding:'3px 10px',background:s.status==='완료'?'#E6FAF8':s.status==='요약 중'?'#FEF9E7':'#FDEDEC',color:s.status==='완료'?C.accent:s.status==='요약 중'?C.warning:C.danger,borderRadius:20,fontSize:11,fontWeight:600}}>{s.status}</span>
+                </td>
+                <td style={{padding:'14px 16px',textAlign:'center',fontSize:16}}>{s.sent?'✅':'⏳'}</td>
+                <td style={{padding:'14px 16px'}}>
+                  <button onClick={e=>{e.stopPropagation();onSelect(s);}} style={{padding:'5px 12px',background:C.primaryLight,color:C.primary,border:'none',borderRadius:6,fontSize:12,fontWeight:600,cursor:'pointer'}}>상세 보기</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{padding:'12px 16px',borderTop:`1px solid ${C.border}`,background:C.bg,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <span style={{fontSize:12,color:C.textLight}}>총 {filtered.length}건</span>
+          <div style={{display:'flex',gap:4}}>
+            {[1,2,3].map(p=>(
+              <button key={p} style={{width:28,height:28,border:`1px solid ${p===1?C.primary:C.border}`,background:p===1?C.primary:'transparent',color:p===1?'#fff':C.textLight,borderRadius:6,fontSize:12,cursor:'pointer'}}>{p}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TickerPage({ onToast }) {
+  const [tickers, setTickers] = useState(TICKERS);
+  const [showModal, setShowModal] = useState(false);
+  const [newTicker, setNewTicker] = useState({code:'',name:'',sector:'',channel:''});
+
+  const toggle = id => {
+    setTickers(ts=>ts.map(t=>t.id===id?{...t,active:!t.active}:t));
+    const t = tickers.find(t=>t.id===id);
+    onToast(`${t.name} 수집 ${t.active?'비활성화':'활성화'}됨`);
+  };
+
+  const addTicker = () => {
+    if(!newTicker.code||!newTicker.name) return;
+    setTickers(ts=>[...ts,{...newTicker,id:Date.now(),active:true,llm:'gpt-4o-mini',calls:0,lastCall:'-'}]);
+    setShowModal(false);
+    onToast(`${newTicker.name} (${newTicker.code}) 종목 등록 완료`);
+    setNewTicker({code:'',name:'',sector:'',channel:''});
+  };
+
+  return (
+    <div style={{padding:'28px 32px',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div style={{fontSize:14,color:C.textLight}}>등록된 종목 {tickers.length}개 · 활성 {tickers.filter(t=>t.active).length}개</div>
+        <button onClick={()=>setShowModal(true)} style={{display:'flex',alignItems:'center',gap:6,padding:'10px 18px',background:C.primary,color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:14}}>
+          + 종목 추가
+        </button>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+        {tickers.map((t,i)=>(
+          <div key={t.id} style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 4px rgba(0,0,0,0.07)',animation:`slideUp 400ms ease ${i*60}ms both`,border:`1px solid ${t.active?C.accentLight:C.border}`,transition:'border-color 300ms'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14}}>
+              <div>
+                <div style={{fontSize:15,fontWeight:700,color:C.text}}>{t.name}</div>
+                <div style={{fontSize:12,color:C.textLight,fontFamily:'monospace',marginTop:2}}>{t.code} · {t.sector}</div>
+              </div>
+              <div onClick={()=>toggle(t.id)} style={{width:44,height:24,borderRadius:12,background:t.active?C.accent:'#D1D5DB',cursor:'pointer',position:'relative',transition:'background 300ms'}}>
+                <div style={{position:'absolute',top:2,left:t.active?22:2,width:20,height:20,borderRadius:10,background:'#fff',transition:'left 300ms',boxShadow:'0 1px 3px rgba(0,0,0,0.2)'}}/>
+              </div>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
+              <div style={{background:C.bg,borderRadius:8,padding:'8px 12px'}}>
+                <div style={{fontSize:10,color:C.textLight,marginBottom:2}}>LLM 모델</div>
+                <div style={{fontSize:12,fontWeight:600,color:C.text}}>{t.llm}</div>
+              </div>
+              <div style={{background:C.bg,borderRadius:8,padding:'8px 12px'}}>
+                <div style={{fontSize:10,color:C.textLight,marginBottom:2}}>처리 건수</div>
+                <div style={{fontSize:12,fontWeight:600,color:C.primary}}>{t.calls}건</div>
+              </div>
+            </div>
+            <div style={{fontSize:11,color:C.textLight,padding:'8px 0',borderTop:`1px solid ${C.border}`}}>
+              채널: <span style={{color:C.secondary,fontWeight:500}}>{t.channel}</span>
+              <span style={{float:'right'}}>최근: {t.lastCall}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {showModal && (
+        <Modal title="종목 추가" onClose={()=>setShowModal(false)}>
+          {[['종목 코드','code','예: 005930'],['기업명','name','예: 삼성전자'],['업종','sector','예: 반도체'],['텔레그램 채널','channel','예: @ir_samsung']].map(([label,key,ph])=>(
+            <div key={key} style={{marginBottom:16}}>
+              <label style={{display:'block',fontSize:13,fontWeight:600,color:C.text,marginBottom:6}}>{label}</label>
+              <input value={newTicker[key]} onChange={e=>setNewTicker(p=>({...p,[key]:e.target.value}))} placeholder={ph}
+                style={{width:'100%',padding:'10px 12px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,outline:'none',color:C.text}}/>
+            </div>
+          ))}
+          <div style={{marginBottom:16}}>
+            <label style={{display:'block',fontSize:13,fontWeight:600,color:C.text,marginBottom:6}}>LLM 모델</label>
+            <select style={{width:'100%',padding:'10px 12px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,outline:'none',color:C.text,background:C.surface}}>
+              <option>gpt-4o</option>
+              <option>gpt-4o-mini</option>
+              <option>gemini-pro</option>
+            </select>
+          </div>
+          <div style={{display:'flex',gap:10,paddingTop:8}}>
+            <button onClick={addTicker} style={{flex:1,padding:'12px',background:C.primary,color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer'}}>등록</button>
+            <button onClick={()=>setShowModal(false)} style={{flex:1,padding:'12px',background:C.bg,color:C.text,border:`1px solid ${C.border}`,borderRadius:8,fontWeight:600,cursor:'pointer'}}>취소</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function PipelinePage() {
+  const [jobs, setJobs] = useState(PIPELINE_JOBS);
+  const [showDetail, setShowDetail] = useState(null);
+
+  const retryJob = (id) => {
+    setJobs(js=>js.map(j=>j.id===id?{...j,status:'running',stage:'재시도 중'}:j));
+    setTimeout(()=>setJobs(js=>js.map(j=>j.id===id?{...j,status:'done',stage:'발송 완료'}:j)),2000);
+  };
+
+  const statusColor = s => ({done:C.success,running:C.secondary,pending:C.warning,error:C.danger}[s]||C.textLight);
+  const statusIcon  = s => ({done:'✅',running:'⟳',pending:'⏳',error:'⚠️'}[s]||'●');
+  const statusBg    = s => ({done:'#E6F4EA',running:C.primaryLight,pending:'#FEF9E7',error:'#FDEDEC'}[s]||C.bg);
+
+  return (
+    <div style={{padding:'28px 32px',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}}>
+        {[
+          {label:'수집 중',count:2,status:'running'},
+          {label:'AI 요약 중',count:1,status:'running'},
+          {label:'발송 대기',count:3,status:'pending'},
+          {label:'에러',count:1,status:'error'},
+        ].map((s,i)=>(
+          <div key={s.label} style={{background:C.surface,borderRadius:12,padding:16,boxShadow:'0 1px 4px rgba(0,0,0,0.07)',display:'flex',alignItems:'center',gap:14,animation:`slideUp 400ms ease ${i*80}ms both`}}>
+            <div style={{width:44,height:44,borderRadius:10,background:statusBg(s.status),display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}}>{statusIcon(s.status)}</div>
+            <div>
+              <div style={{fontSize:24,fontWeight:800,color:statusColor(s.status)}}>{s.count}</div>
+              <div style={{fontSize:12,color:C.textLight}}>{s.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,overflow:'hidden',boxShadow:'0 1px 4px rgba(0,0,0,0.07)',marginBottom:20}}>
+        <div style={{padding:'16px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text}}>실시간 처리 현황</div>
+          <div style={{display:'flex',alignItems:'center',gap:6}}>
+            <div style={{width:8,height:8,borderRadius:4,background:C.success,animation:'pulse 2s infinite'}}/>
+            <span style={{fontSize:12,color:C.textLight}}>SSE 실시간 연결</span>
+          </div>
+        </div>
+        {jobs.map((j,i)=>(
+          <div key={j.id} style={{padding:'14px 20px',borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',gap:16,cursor:'pointer',transition:'background 150ms',animation:`slideUp 400ms ease ${i*50}ms both`}}
+            onClick={()=>setShowDetail(j)}
+            onMouseEnter={e=>e.currentTarget.style.background='#F8FAFC'}
+            onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+            <div style={{width:8,height:8,borderRadius:4,background:statusColor(j.status),flexShrink:0,animation:j.status==='running'?'pulse 1.5s infinite':'none'}}/>
+            <div style={{flex:'0 0 100px',fontFamily:'monospace',fontSize:12,color:C.textLight}}>{j.ticker}</div>
+            <div style={{flex:1,fontSize:13,fontWeight:600,color:C.text}}>{j.company}</div>
+            <div style={{flex:1,fontSize:12,color:C.textLight}}>{j.detail}</div>
+            <span style={{padding:'3px 10px',background:statusBg(j.status),color:statusColor(j.status),borderRadius:20,fontSize:11,fontWeight:600,whiteSpace:'nowrap'}}>{j.stage}</span>
+            <div style={{flex:'0 0 60px',fontSize:11,color:C.textLight,textAlign:'right'}}>{j.ts}</div>
+            {j.status==='error' && (
+              <button onClick={e=>{e.stopPropagation();retryJob(j.id);}} style={{padding:'5px 12px',background:'#FDEDEC',color:C.danger,border:'none',borderRadius:6,fontSize:12,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>재시도</button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+        <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:14}}>Rate Limit 모니터</div>
+        {[
+          {api:'클라이언트 IR API',limit:100,used:20,color:C.secondary},
+          {api:'OpenAI GPT-4o',limit:200,used:45,color:C.accent},
+          {api:'Telegram Bot API',limit:30,used:6,color:C.success},
+        ].map((r,i)=>(
+          <div key={r.api} style={{marginBottom:14,animation:`slideUp 400ms ease ${i*80}ms both`}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+              <span style={{fontSize:13,color:C.text}}>{r.api}</span>
+              <span style={{fontSize:12,color:C.textLight}}>잔여 {r.limit-r.used}/{r.limit} 슬롯</span>
+            </div>
+            <div style={{height:8,background:'#F1F5F9',borderRadius:4,overflow:'hidden'}}>
+              <div style={{height:'100%',width:`${(r.used/r.limit)*100}%`,background:r.color,borderRadius:4,transition:'width 300ms'}}/>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {showDetail && (
+        <Modal title={`${showDetail.company} — 처리 상세`} onClose={()=>setShowDetail(null)} width={460}>
+          {[
+            ['종목 코드',showDetail.ticker],
+            ['처리 단계',showDetail.stage],
+            ['시작 시각',showDetail.ts],
+            ['소요 시간',showDetail.duration],
+            ['상세 내용',showDetail.detail],
+          ].map(([k,v])=>(
+            <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`,fontSize:14}}>
+              <span style={{color:C.textLight}}>{k}</span>
+              <span style={{fontWeight:500,color:C.text,maxWidth:'60%',textAlign:'right'}}>{v}</span>
+            </div>
+          ))}
+          <div style={{marginTop:16,display:'flex',gap:10}}>
+            {showDetail.status==='error' && (
+              <button onClick={()=>setShowDetail(null)} style={{flex:1,padding:'10px',background:C.danger,color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer'}}>수동 재시도</button>
+            )}
+            <button onClick={()=>setShowDetail(null)} style={{flex:1,padding:'10px',background:C.bg,color:C.text,border:`1px solid ${C.border}`,borderRadius:8,fontWeight:600,cursor:'pointer'}}>닫기</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function SettingsPage({ onToast }) {
+  const [settings, setSettings] = useState({
+    apiEndpoint:'https://api.ir-data.com/v2/transcripts',
+    llmDefault:'gpt-4o',
+    rateLimit:100,
+    retryMax:3,
+    retryDelay:1000,
+    botToken:'••••••••••••••••••••••',
+    botName:'@IRSummaryBot',
+    summaryMaxLen:1000,
+    promptVersion:'v2.3',
+  });
+
+  const save = () => onToast('시스템 설정이 저장되었습니다');
+
+  const Field = ({label,k,type='text'}) => (
+    <div style={{marginBottom:16}}>
+      <label style={{display:'block',fontSize:13,fontWeight:600,color:C.text,marginBottom:6}}>{label}</label>
+      {type==='select' ? (
+        <select value={settings[k]} onChange={e=>setSettings(p=>({...p,[k]:e.target.value}))}
+          style={{width:'100%',padding:'10px 12px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,outline:'none',color:C.text,background:C.surface}}>
+          <option>gpt-4o</option><option>gpt-4o-mini</option><option>gemini-pro</option><option>gemini-flash</option>
+        </select>
+      ) : (
+        <input type={type} value={settings[k]} onChange={e=>setSettings(p=>({...p,[k]:e.target.value}))}
+          style={{width:'100%',padding:'10px 12px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,outline:'none',color:C.text}}/>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{padding:'28px 32px',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+        {[
+          {title:'📡 데이터 수집 API',fields:[
+            {label:'엔드포인트 URL',k:'apiEndpoint'},
+            {label:'Rate Limit (분당 요청)',k:'rateLimit',type:'number'},
+            {label:'최대 재시도 횟수',k:'retryMax',type:'number'},
+            {label:'재시도 간격 (ms)',k:'retryDelay',type:'number'},
+          ]},
+          {title:'🤖 AI 요약 설정',fields:[
+            {label:'기본 LLM 모델',k:'llmDefault',type:'select'},
+            {label:'요약 최대 길이 (자)',k:'summaryMaxLen',type:'number'},
+            {label:'프롬프트 버전',k:'promptVersion'},
+          ]},
+          {title:'📨 텔레그램 봇 설정',fields:[
+            {label:'봇 토큰',k:'botToken'},
+            {label:'봇 사용자명',k:'botName'},
+          ]},
+        ].map(sec=>(
+          <div key={sec.title} style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+            <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>{sec.title}</div>
+            {sec.fields.map(f=><Field key={f.k} {...f}/>)}
+          </div>
+        ))}
+
+        <div style={{background:C.surface,borderRadius:12,padding:20,boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+          <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:16}}>⚡ 연결 상태 테스트</div>
+          {[
+            {name:'IR API 연결', status:'정상', latency:'142ms', color:C.success},
+            {name:'OpenAI API', status:'정상', latency:'286ms', color:C.success},
+            {name:'Telegram Bot', status:'정상', latency:'58ms', color:C.success},
+            {name:'PostgreSQL DB', status:'정상', latency:'12ms', color:C.success},
+          ].map((c,i)=>(
+            <div key={c.name} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:`1px solid ${C.border}`,animation:`slideUp 400ms ease ${i*60}ms both`}}>
+              <span style={{fontSize:13,color:C.text}}>{c.name}</span>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <span style={{fontSize:11,color:C.textLight}}>{c.latency}</span>
+                <span style={{padding:'2px 10px',background:'#E6F4EA',color:C.success,borderRadius:20,fontSize:11,fontWeight:600}}>{c.status}</span>
+              </div>
+            </div>
+          ))}
+          <button onClick={save} style={{marginTop:16,width:'100%',padding:'11px',background:'#EBF4FA',color:C.primary,border:`1px solid ${C.primaryLight}`,borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:14}}>연결 재테스트</button>
+        </div>
+      </div>
+
+      <div style={{marginTop:20,display:'flex',justifyContent:'flex-end',gap:12}}>
+        <button style={{padding:'12px 24px',background:C.bg,color:C.text,border:`1px solid ${C.border}`,borderRadius:8,fontWeight:600,cursor:'pointer'}}>초기화</button>
+        <button onClick={save} style={{padding:'12px 32px',background:C.primary,color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:15}}>설정 저장</button>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [tab, setTab] = useState('dashboard');
+  const [drawer, setDrawer] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [pageKey, setPageKey] = useState(0);
+
+  const navigate = t => { setTab(t); setPageKey(k=>k+1); };
+  const showToast = msg => setToast(msg);
+
+  const hero = PAGE_META[tab];
+
+  const renderPage = () => {
+    switch(tab) {
+      case 'dashboard': return <DashboardPage />;
+      case 'history':   return <HistoryPage onSelect={setDrawer}/>;
+      case 'ticker':    return <TickerPage onToast={showToast}/>;
+      case 'pipeline':  return <PipelinePage />;
+      case 'settings':  return <SettingsPage onToast={showToast}/>;
+    }
+  };
+
+  return (
+    <div style={{minHeight:'100vh',background:C.bg,display:'flex',flexDirection:'column',width:'100%'}}>
+      {/* 상단 수평 네비 */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:4}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginRight:20,minWidth:200}}>
+          <div style={{width:32,height:32,borderRadius:8,background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>📡</div>
+          <div>
+            <div style={{fontSize:14,fontWeight:800,color:C.text,lineHeight:1}}>IR Summary</div>
+            <div style={{fontSize:10,color:C.textLight,lineHeight:1.2}}>AI 요약 시스템</div>
+          </div>
+        </div>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>navigate(t.id)}
+            style={{padding:'8px 14px',border:'none',borderRadius:6,background:tab===t.id?C.primaryLight:'transparent',color:tab===t.id?C.primary:C.textLight,fontWeight:tab===t.id?700:400,cursor:'pointer',fontSize:13,transition:'all 150ms',whiteSpace:'nowrap'}}>
+            {t.label}
+          </button>
+        ))}
+        <div style={{flex:1}}/>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <div style={{display:'flex',alignItems:'center',gap:5,padding:'5px 10px',background:C.accentLight,borderRadius:6}}>
+            <div style={{width:6,height:6,borderRadius:3,background:C.accent,animation:'pulse 2s infinite'}}/>
+            <span style={{fontSize:11,color:C.accent,fontWeight:600}}>실시간</span>
+          </div>
+          <div style={{width:32,height:32,borderRadius:16,background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:14,fontWeight:700}}>김</div>
+        </div>
+      </header>
+
+      {/* 페이지 히어로 배너 */}
+      <div style={{background:`linear-gradient(135deg, ${C.primary} 0%, ${C.secondary} 60%, ${C.accent} 100%)`,padding:'24px 32px',color:'#fff'}}>
+        <h1 style={{fontSize:22,fontWeight:800,marginBottom:6}}>{hero.title}</h1>
+        <p style={{fontSize:13,opacity:0.85,marginBottom:12}}>{hero.sub}</p>
+        <div style={{display:'flex',gap:28}}>
+          {hero.kpis.map(k=>(
+            <div key={k.l} style={{display:'flex',flexDirection:'column'}}>
+              <div style={{fontSize:22,fontWeight:800}}><CountUp end={typeof k.v==='number'?k.v:0}/>{typeof k.v!=='number'?k.v:''}{k.u}</div>
+              <div style={{fontSize:11,opacity:0.8,marginTop:1}}>{k.l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 콘텐츠 */}
+      <main style={{flex:1}} key={pageKey}>
+        {renderPage()}
+      </main>
+
+      <Drawer item={drawer} onClose={()=>setDrawer(null)}/>
+      {toast && <Toast msg={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
