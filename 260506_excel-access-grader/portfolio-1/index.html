@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>엑셀·액세스 실습 자동 채점 플랫폼 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; font-family:'Pretendard',sans-serif; background:#F8FAFC; color:#0F172A; }
+#root { display:flex; flex-direction:column; width:100%; min-height:100vh; }
+
+@keyframes fadeIn { from{opacity:0} to{opacity:1} }
+@keyframes fadeInScale { from{opacity:0;transform:scale(0.96)} to{opacity:1;transform:scale(1)} }
+@keyframes slideInRight { from{opacity:0;transform:translateX(30px)} to{opacity:1;transform:translateX(0)} }
+@keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+@keyframes ripple { 0%{transform:scale(0);opacity:0.5} 100%{transform:scale(4);opacity:0} }
+@keyframes countUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+@keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+@keyframes barGrow { from{width:0%} to{width:var(--target-width)} }
+@keyframes slideDown { from{opacity:0;transform:translateY(-10px);max-height:0} to{opacity:1;transform:translateY(0);max-height:500px} }
+@keyframes drawerSlide { from{transform:translateX(100%)} to{transform:translateX(0)} }
+@keyframes progressFill { from{width:0} to{width:var(--fill-width)} }
+
+.chart-canvas-wrap { position:relative; }
+.chart-canvas-wrap canvas { width:100%!important; height:100%!important; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const C = {
+  primary:'#1E6FD9', primaryLight:'#EFF6FF', primaryDark:'#1558B0',
+  secondary:'#0EA5E9', accent:'#10B981', accentLight:'#ECFDF5',
+  danger:'#EF4444', dangerLight:'#FEF2F2',
+  warn:'#F59E0B', warnLight:'#FFFBEB',
+  bg:'#F8FAFC', surface:'#FFFFFF', border:'#E2E8F0',
+  text:'#0F172A', textSub:'#64748B', textLight:'#94A3B8',
+};
+
+const TABS = [
+  {id:'home', label:'홈'},
+  {id:'upload', label:'파일 업로드'},
+  {id:'result', label:'채점 결과'},
+  {id:'history', label:'학습 이력'},
+  {id:'main-hero', label:'문제 목록'},
+];
+
+const PAGE_META = {
+  home:{title:'실습 학습 현황',subtitle:'오늘의 채점 현황을 확인하세요',gradient:`linear-gradient(135deg,${C.primary} 0%,${C.secondary} 100%)`,kpis:[{label:'총 제출',val:128,suffix:'건'},{label:'채점 완료',val:114,suffix:'건'},{label:'평균 점수',val:78,suffix:'점'}]},
+  upload:{title:'파일 업로드',subtitle:'채점할 실습 파일을 업로드하세요',gradient:`linear-gradient(135deg,#1E6FD9 0%,#10B981 100%)`,kpis:[{label:'허용 형식',val:2,suffix:'종'},{label:'최대 크기',val:10,suffix:'MB'},{label:'오늘 제출',val:8,suffix:'건'}]},
+  result:{title:'채점 결과',subtitle:'항목별 채점 내역을 확인하세요',gradient:`linear-gradient(135deg,#1558B0 0%,#6366F1 100%)`,kpis:[{label:'총점',val:84,suffix:'점'},{label:'정답',val:9,suffix:'개'},{label:'오답',val:3,suffix:'개'}]},
+  history:{title:'학습 이력',subtitle:'제출 이력과 점수 추이를 확인하세요',gradient:`linear-gradient(135deg,#0369A1 0%,#059669 100%)`,kpis:[{label:'총 제출',val:24,suffix:'회'},{label:'최고 점수',val:96,suffix:'점'},{label:'평균 점수',val:78,suffix:'점'}]},
+  'main-hero':{title:'문제 목록',subtitle:'도서별 실습 문제를 선택하세요',gradient:`linear-gradient(135deg,#1E3A5F 0%,#1E6FD9 100%)`,kpis:[{label:'등록 도서',val:5,suffix:'권'},{label:'전체 문제',val:148,suffix:'개'},{label:'완료율',val:52,suffix:'%'}]},
+};
+
+// ── CountUp ──────────────────────────────────────
+function CountUp({end,duration=1200,suffix=''}) {
+  const [val,setVal] = useState(0);
+  useEffect(()=>{
+    let s=0; const step=end/(duration/16);
+    const t=setInterval(()=>{s+=step;if(s>=end){setVal(end);clearInterval(t);}else setVal(Math.floor(s));},16);
+    return ()=>clearInterval(t);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{val.toLocaleString()}{suffix}</span>;
+}
+
+// ── Toast ──────────────────────────────────────
+function Toast({message,type='success',onClose}) {
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  const bg = type==='success'?C.accent:type==='error'?C.danger:C.primary;
+  return (
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:bg,color:'#fff',
+      padding:'12px 20px',borderRadius:10,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.15)',
+      display:'flex',alignItems:'center',gap:10,fontSize:14,fontWeight:600}}>
+      <span>{type==='success'?'✓':type==='error'?'✕':'ℹ'}</span>
+      {message}
+    </div>
+  );
+}
+
+// ── Modal ──────────────────────────────────────
+function Modal({title,onClose,children,width=560}) {
+  return (
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.4)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:C.surface,borderRadius:16,zIndex:501,
+        animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.15)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'20px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:18,fontWeight:700}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:C.textSub,lineHeight:1}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Drawer ──────────────────────────────────────
+function Drawer({item,onClose}) {
+  if(!item) return null;
+  return (
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:200,animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:480,background:C.surface,
+        zIndex:201,overflowY:'auto',padding:28,animation:'drawerSlide 220ms ease',boxShadow:'-8px 0 40px rgba(0,0,0,0.12)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
+          <h3 style={{fontSize:18,fontWeight:700,color:C.text}}>{item.title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:C.textSub}}>✕</button>
+        </div>
+        <div style={{display:'flex',gap:8,marginBottom:20,flexWrap:'wrap'}}>
+          <span style={{background:C.primaryLight,color:C.primary,padding:'4px 12px',borderRadius:20,fontSize:12,fontWeight:600}}>{item.type||'엑셀'}</span>
+          <span style={{background:item.status==='채점완료'?C.accentLight:C.warnLight,
+            color:item.status==='채점완료'?C.accent:C.warn,padding:'4px 12px',borderRadius:20,fontSize:12,fontWeight:600}}>{item.status||'채점완료'}</span>
+        </div>
+        {item.scores && (
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:12}}>항목별 채점 결과</div>
+            {item.scores.map((s,i)=>(
+              <div key={i} style={{marginBottom:12}}>
+                <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:6}}>
+                  <span style={{fontWeight:600}}>{s.name}</span>
+                  <span style={{color:s.score>=s.max*0.7?C.accent:C.danger,fontWeight:700}}>{s.score}/{s.max}점</span>
+                </div>
+                <div style={{background:C.border,borderRadius:4,height:6,overflow:'hidden'}}>
+                  <div style={{height:'100%',borderRadius:4,background:s.score>=s.max*0.7?C.accent:C.danger,
+                    '--fill-width':`${(s.score/s.max)*100}%`,width:`${(s.score/s.max)*100}%`,animation:'progressFill 800ms ease'}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{background:C.bg,borderRadius:12,padding:16,marginBottom:20}}>
+          <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:8}}>제출 정보</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            {[['파일명',item.filename||'chapter3_q1.xlsx'],['도서',item.book||'엑셀 실무 완성'],
+              ['제출 일시',item.date||'2026.05.06 14:22'],['채점 소요',item.time||'1.2초']].map(([k,v])=>(
+              <div key={k} style={{fontSize:12}}><span style={{color:C.textSub}}>{k}: </span><span style={{fontWeight:600}}>{v}</span></div>
+            ))}
+          </div>
+        </div>
+        <div style={{marginBottom:16}}>
+          <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:8}}>메모</label>
+          <textarea style={{width:'100%',height:80,border:`1px solid ${C.border}`,borderRadius:8,padding:10,fontSize:13,fontFamily:'Pretendard',resize:'vertical'}} placeholder="이 제출에 대한 메모를 남기세요..."/>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button style={{flex:1,padding:'10px 0',background:C.primary,color:'#fff',border:'none',borderRadius:8,fontWeight:600,fontSize:14,cursor:'pointer'}}>재채점 요청</button>
+          <button onClick={onClose} style={{flex:1,padding:'10px 0',background:C.bg,color:C.text,border:`1px solid ${C.border}`,borderRadius:8,fontWeight:600,fontSize:14,cursor:'pointer'}}>닫기</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── Home ──────────────────────────────────────
+const BOOK_DATA = [
+  {id:1,title:'엑셀 실무 완성 (2026판)',publisher:'한빛미디어',chapters:12,problems:36,done:28,color:'#1E6FD9'},
+  {id:2,title:'액세스 DB 마스터',publisher:'길벗',chapters:8,problems:24,done:12,color:'#7C3AED'},
+  {id:3,title:'함수&수식 바이블',publisher:'이지스퍼블리싱',chapters:10,problems:30,done:30,color:'#059669'},
+  {id:4,title:'파워포인트 실전',publisher:'한빛미디어',chapters:6,problems:18,done:5,color:'#DC2626'},
+  {id:5,title:'VBA 자동화 입문',publisher:'영진닷컴',chapters:9,problems:27,done:0,color:'#D97706'},
+];
+const RECENT_SUBMISSIONS = [
+  {id:1,book:'엑셀 실무 완성',chapter:'3장',problem:'문제 4',status:'채점완료',score:88,time:'14:22'},
+  {id:2,book:'액세스 DB 마스터',chapter:'2장',problem:'문제 2',status:'채점완료',score:76,time:'13:55'},
+  {id:3,book:'함수&수식 바이블',chapter:'5장',problem:'문제 1',status:'채점중',score:null,time:'13:40'},
+  {id:4,book:'엑셀 실무 완성',chapter:'3장',problem:'문제 3',status:'채점완료',score:95,time:'11:18'},
+];
+
+function HomePage({setTab,setDrawer}) {
+  return (
+    <div key="home" style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:16,marginBottom:24}}>
+        {BOOK_DATA.map((b,i)=>(
+          <div key={b.id} onClick={()=>setTab('main-hero')} style={{background:C.surface,borderRadius:14,padding:20,cursor:'pointer',
+            boxShadow:'0 1px 4px rgba(0,0,0,0.07)',transition:'all 200ms',animation:`slideUp 400ms ease ${i*80}ms both`}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 6px 20px rgba(0,0,0,0.1)';}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 1px 4px rgba(0,0,0,0.07)';}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
+              <div style={{width:36,height:36,borderRadius:8,background:b.color,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>📘</div>
+              <div>
+                <div style={{fontSize:14,fontWeight:700,color:C.text,lineHeight:1.3}}>{b.title}</div>
+                <div style={{fontSize:12,color:C.textSub}}>{b.publisher} · {b.chapters}챕터 · {b.problems}문제</div>
+              </div>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:12,marginBottom:8}}>
+              <span style={{color:C.textSub}}>완료율</span>
+              <span style={{fontWeight:700,color:b.done===b.problems?C.accent:C.primary}}>{Math.round((b.done/b.problems)*100)}%</span>
+            </div>
+            <div style={{background:C.border,borderRadius:4,height:6,overflow:'hidden'}}>
+              <div style={{height:'100%',borderRadius:4,background:b.color,width:`${(b.done/b.problems)*100}%`,animation:'progressFill 1000ms ease'}}/>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{background:C.surface,borderRadius:14,padding:20,boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <div style={{fontSize:15,fontWeight:700}}>최근 제출 이력</div>
+          <button onClick={()=>setTab('history')} style={{background:'none',border:'none',color:C.primary,fontSize:13,fontWeight:600,cursor:'pointer'}}>전체 보기 →</button>
+        </div>
+        {RECENT_SUBMISSIONS.map((s,i)=>(
+          <div key={s.id} onClick={()=>setDrawer({title:`${s.book} ${s.problem}`,status:s.status,
+            filename:`${s.book.substring(0,4)}_${s.chapter}_q${s.id}.xlsx`,book:s.book,date:`2026.05.06 ${s.time}`,
+            scores:[{name:'수식 정확성',score:Math.round(s.score*0.4||0),max:40},{name:'서식 적용',score:Math.round(s.score*0.3||0),max:30},
+              {name:'개체 배치',score:Math.round(s.score*0.2||0),max:20},{name:'함수 사용',score:Math.round(s.score*0.1||0),max:10}]})}
+            style={{display:'flex',alignItems:'center',gap:12,padding:'12px 0',borderBottom:i<RECENT_SUBMISSIONS.length-1?`1px solid ${C.border}`:'',
+              cursor:'pointer',transition:'background 150ms',borderRadius:8,paddingLeft:8,paddingRight:8}}
+            onMouseEnter={e=>e.currentTarget.style.background=C.bg} onMouseLeave={e=>e.currentTarget.style.background=''}>
+            <div style={{width:36,height:36,borderRadius:8,background:C.primaryLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>
+              {s.status==='채점완료'?'✅':'⏳'}
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:13,fontWeight:600}}>{s.book} · {s.chapter} {s.problem}</div>
+              <div style={{fontSize:12,color:C.textSub}}>{s.time}</div>
+            </div>
+            <div>
+              {s.status==='채점완료'?
+                <span style={{fontSize:16,fontWeight:800,color:s.score>=80?C.accent:s.score>=60?C.warn:C.danger}}>{s.score}점</span>:
+                <span style={{fontSize:12,color:C.warn,fontWeight:600,animation:'pulse 1.5s infinite'}}>채점 중...</span>
+              }
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Upload ──────────────────────────────────────
+function UploadPage({setToast}) {
+  const [selectedBook,setSelectedBook]=useState(null);
+  const [selectedChapter,setSelectedChapter]=useState(null);
+  const [selectedProblem,setSelectedProblem]=useState(null);
+  const [dragging,setDragging]=useState(false);
+  const [file,setFile]=useState(null);
+  const [progress,setProgress]=useState(0);
+  const [uploading,setUploading]=useState(false);
+  const [uploaded,setUploaded]=useState(false);
+
+  const BOOKS=[{id:1,name:'엑셀 실무 완성 (2026판)',chapters:12},{id:2,name:'액세스 DB 마스터',chapters:8},{id:3,name:'함수&수식 바이블',chapters:10}];
+  const PROBLEMS=[{id:1,name:'문제 1 — 수식 작성'},{id:2,name:'문제 2 — 서식 적용'},{id:3,name:'문제 3 — 차트 생성'},{id:4,name:'문제 4 — 함수 응용'}];
+
+  const startUpload=()=>{
+    if(!file||!selectedProblem){setToast({msg:'파일과 문제를 선택하세요',type:'error'});return;}
+    setUploading(true);setProgress(0);
+    let p=0;
+    const t=setInterval(()=>{p+=Math.random()*12+5;if(p>=100){p=100;clearInterval(t);setProgress(100);
+      setTimeout(()=>{setUploading(false);setUploaded(true);setToast({msg:'채점이 시작됩니다. 완료 시 알림이 전송됩니다.',type:'success'});},400);
+    }else setProgress(p);},200);
+  };
+
+  return (
+    <div key="upload" style={{animation:'fadeIn 300ms ease',maxWidth:720}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:20}}>
+        <div>
+          <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:8}}>도서 선택</label>
+          <select value={selectedBook||''} onChange={e=>{setSelectedBook(e.target.value);setSelectedChapter(null);setSelectedProblem(null);}}
+            style={{width:'100%',padding:'10px 12px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,background:C.surface,cursor:'pointer'}}>
+            <option value=''>도서를 선택하세요</option>
+            {BOOKS.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:8}}>챕터 선택</label>
+          <select value={selectedChapter||''} onChange={e=>setSelectedChapter(e.target.value)} disabled={!selectedBook}
+            style={{width:'100%',padding:'10px 12px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,background:C.surface,cursor:'pointer',opacity:selectedBook?1:0.5}}>
+            <option value=''>챕터를 선택하세요</option>
+            {selectedBook&&[...Array(parseInt(BOOKS.find(b=>b.id==selectedBook)?.chapters||0))].map((_,i)=><option key={i} value={i+1}>{i+1}장</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{marginBottom:20}}>
+        <label style={{fontSize:13,fontWeight:600,color:C.textSub,display:'block',marginBottom:8}}>문제 선택</label>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:8}}>
+          {PROBLEMS.map(p=>(
+            <button key={p.id} onClick={()=>setSelectedProblem(p.id)}
+              style={{padding:'10px 14px',border:`2px solid ${selectedProblem===p.id?C.primary:C.border}`,borderRadius:10,
+                background:selectedProblem===p.id?C.primaryLight:C.surface,color:selectedProblem===p.id?C.primary:C.text,
+                fontSize:13,fontWeight:selectedProblem===p.id?700:500,cursor:'pointer',textAlign:'left',transition:'all 150ms'}}>
+              {p.name}
+            </button>
+          ))}
+        </div>
+      </div>
+      {!uploaded?(
+        <>
+          <div onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)}
+            onDrop={e=>{e.preventDefault();setDragging(false);const f=e.dataTransfer.files[0];if(f)setFile(f);}}
+            style={{border:`2px dashed ${dragging?C.primary:C.border}`,borderRadius:16,padding:'40px 24px',textAlign:'center',
+              background:dragging?C.primaryLight:C.surface,transition:'all 200ms',cursor:'pointer',marginBottom:16}}
+            onClick={()=>{const i=document.createElement('input');i.type='file';i.accept='.xlsx,.xls,.accdb,.mdb';i.onchange=e=>setFile(e.target.files[0]);i.click();}}>
+            <div style={{fontSize:36,marginBottom:12}}>📁</div>
+            <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:6}}>
+              {file?file.name:'파일을 끌어다 놓거나 클릭하여 선택'}
+            </div>
+            <div style={{fontSize:13,color:C.textSub}}>허용 형식: .xlsx, .xls, .accdb, .mdb (최대 10MB)</div>
+            {file&&<div style={{marginTop:8,fontSize:12,color:C.accent,fontWeight:600}}>✓ {(file.size/1024).toFixed(1)}KB 선택됨</div>}
+          </div>
+          {uploading&&(
+            <div style={{marginBottom:16}}>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:8}}>
+                <span style={{fontWeight:600}}>업로드 중...</span>
+                <span style={{color:C.primary,fontWeight:700}}>{Math.round(progress)}%</span>
+              </div>
+              <div style={{background:C.border,borderRadius:4,height:8,overflow:'hidden'}}>
+                <div style={{height:'100%',borderRadius:4,background:`linear-gradient(90deg,${C.primary},${C.secondary})`,
+                  width:`${progress}%`,transition:'width 200ms ease'}}/>
+              </div>
+              <div style={{fontSize:12,color:C.textSub,marginTop:6,animation:'pulse 1.5s infinite'}}>파일 형식 검증 중... 채점 큐에 등록됩니다</div>
+            </div>
+          )}
+          <button onClick={startUpload} disabled={uploading}
+            style={{width:'100%',padding:'12px 0',background:uploading?C.textLight:C.primary,color:'#fff',border:'none',borderRadius:10,
+              fontSize:15,fontWeight:700,cursor:uploading?'not-allowed':'pointer',transition:'all 200ms',
+              boxShadow:uploading?'none':`0 4px 12px ${C.primary}40`}}>
+            {uploading?'업로드 중...':'채점 제출하기'}
+          </button>
+        </>
+      ):(
+        <div style={{background:C.accentLight,border:`1px solid ${C.accent}`,borderRadius:16,padding:24,textAlign:'center',animation:'fadeInScale 300ms ease'}}>
+          <div style={{fontSize:40,marginBottom:12}}>✅</div>
+          <div style={{fontSize:18,fontWeight:800,color:C.accent,marginBottom:8}}>채점 요청 완료!</div>
+          <div style={{fontSize:14,color:C.textSub,marginBottom:16}}>자동 채점 엔진이 파일을 분석 중입니다.</div>
+          <div style={{display:'flex',gap:12,justifyContent:'center'}}>
+            <button onClick={()=>{setFile(null);setUploaded(false);setProgress(0);setSelectedBook(null);setSelectedChapter(null);setSelectedProblem(null);}}
+              style={{padding:'10px 20px',background:C.surface,color:C.text,border:`1px solid ${C.border}`,borderRadius:8,fontWeight:600,fontSize:14,cursor:'pointer'}}>
+              새 파일 제출
+            </button>
+            <button onClick={()=>{}} style={{padding:'10px 20px',background:C.accent,color:'#fff',border:'none',borderRadius:8,fontWeight:600,fontSize:14,cursor:'pointer'}}>
+              결과 확인하기
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Result ──────────────────────────────────────
+function ResultPage({setDrawer}) {
+  const canvasRef=useRef(null);
+  const scoreData=[
+    {name:'수식 정확성',score:38,max:40,color:C.accent},
+    {name:'서식 적용',score:22,max:30,color:C.primary},
+    {name:'개체 배치',score:15,max:20,color:C.secondary},
+    {name:'함수 사용',score:9,max:10,color:'#7C3AED'},
+    {name:'매크로',score:0,max:0,color:C.textLight},
+  ].filter(s=>s.max>0);
+
+  const totalScore=scoreData.reduce((a,s)=>a+s.score,0);
+  const totalMax=scoreData.reduce((a,s)=>a+s.max,0);
+
+  useEffect(()=>{
+    if(!canvasRef.current)return;
+    const ctx=canvasRef.current.getContext('2d');
+    const ch=new Chart(ctx,{type:'doughnut',data:{
+      labels:scoreData.map(s=>s.name),
+      datasets:[{data:scoreData.map(s=>s.score),backgroundColor:scoreData.map(s=>s.color),borderWidth:0,hoverOffset:6}]
+    },options:{responsive:true,maintainAspectRatio:false,cutout:'70%',plugins:{legend:{display:false},tooltip:{callbacks:{label:d=>`${d.label}: ${d.raw}점`}}}}});
+    return()=>ch.destroy();
+  },[]);
+
+  const OTHER_RESULTS=[
+    {id:2,title:'액세스 DB 마스터 2장 문제 2',score:76,date:'2026.05.06',status:'채점완료'},
+    {id:3,title:'함수&수식 바이블 5장 문제 1',score:null,date:'2026.05.06',status:'채점중'},
+    {id:4,title:'엑셀 실무 완성 3장 문제 3',score:95,date:'2026.05.05',status:'채점완료'},
+  ];
+
+  return (
+    <div key="result" style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,marginBottom:24}}>
+        <div style={{background:C.surface,borderRadius:14,padding:24,boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+          <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:4}}>엑셀 실무 완성 · 3장 · 문제 4</div>
+          <div style={{fontSize:12,color:C.textLight,marginBottom:20}}>제출: 2026.05.06 14:22 · 채점 소요: 1.2초</div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+            <div style={{textAlign:'center'}}>
+              <div style={{fontSize:40,fontWeight:900,color:totalScore/totalMax>=0.8?C.accent:totalScore/totalMax>=0.6?C.warn:C.danger}}>
+                <CountUp end={totalScore} suffix="점"/>
+              </div>
+              <div style={{fontSize:13,color:C.textSub}}>/ {totalMax}점</div>
+            </div>
+            <div style={{width:120,height:120}} className="chart-canvas-wrap">
+              <div style={{position:'relative',width:120,height:120}}>
+                <canvas ref={canvasRef} style={{width:'100%',height:'100%'}}/>
+              </div>
+            </div>
+          </div>
+          {scoreData.map((s,i)=>(
+            <div key={i} style={{marginBottom:14}}>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:6}}>
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <div style={{width:8,height:8,borderRadius:2,background:s.color}}/>
+                  <span style={{fontWeight:600}}>{s.name}</span>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <span style={{color:s.score>=s.max*0.7?C.accent:C.danger,fontWeight:700}}>{s.score}점</span>
+                  <span style={{color:C.textLight}}>/ {s.max}점</span>
+                </div>
+              </div>
+              <div style={{background:C.border,borderRadius:4,height:6,overflow:'hidden'}}>
+                <div style={{height:'100%',borderRadius:4,background:s.color,
+                  '--fill-width':`${(s.score/s.max)*100}%`,width:`${(s.score/s.max)*100}%`,animation:`progressFill 800ms ease ${i*100}ms both`}}/>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{background:C.surface,borderRadius:14,padding:24,boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+          <div style={{fontSize:14,fontWeight:700,marginBottom:16}}>오답 상세 분석</div>
+          {[
+            {item:'서식 — 셀 병합 누락',type:'오답',desc:'C3:D3 셀 병합 미적용. 채점 기준: 지정 범위 병합 필수',point:-4},
+            {item:'서식 — 열 너비 불일치',type:'경고',desc:'B열 너비 12pt 기준 대비 현재 10pt 적용',point:-2},
+            {item:'개체 — 차트 위치 오류',type:'오답',desc:'차트 삽입 위치가 E5 기준 대비 1열 벗어남',point:-2},
+            {item:'수식 — VLOOKUP 결과 정확',type:'정답',desc:'VLOOKUP 함수 인수 및 결과값 정확히 일치',point:0},
+          ].map((d,i)=>(
+            <div key={i} style={{padding:'12px 0',borderBottom:i<3?`1px solid ${C.border}`:'',animation:`slideUp 300ms ease ${i*80}ms both`}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <span style={{fontSize:13,background:d.type==='정답'?C.accentLight:d.type==='오답'?C.dangerLight:C.warnLight,
+                    color:d.type==='정답'?C.accent:d.type==='오답'?C.danger:C.warn,padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:700}}>{d.type}</span>
+                  <span style={{fontSize:13,fontWeight:600}}>{d.item}</span>
+                </div>
+                {d.point<0&&<span style={{fontSize:13,color:C.danger,fontWeight:700}}>{d.point}점</span>}
+              </div>
+              <div style={{fontSize:12,color:C.textSub,paddingLeft:4}}>{d.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:14,padding:20,boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+        <div style={{fontSize:14,fontWeight:700,marginBottom:14}}>다른 제출 결과</div>
+        {OTHER_RESULTS.map((r,i)=>(
+          <div key={r.id} onClick={()=>setDrawer({title:r.title,status:r.status,date:r.date,
+            scores:[{name:'수식 정확성',score:Math.round((r.score||0)*0.4),max:40},{name:'서식 적용',score:Math.round((r.score||0)*0.3),max:30},
+              {name:'개체 배치',score:Math.round((r.score||0)*0.2),max:20},{name:'함수 사용',score:Math.round((r.score||0)*0.1),max:10}]})}
+            style={{display:'flex',alignItems:'center',gap:12,padding:'10px 8px',borderBottom:i<OTHER_RESULTS.length-1?`1px solid ${C.border}`:'',
+              cursor:'pointer',borderRadius:8,transition:'background 150ms'}}
+            onMouseEnter={e=>e.currentTarget.style.background=C.bg} onMouseLeave={e=>e.currentTarget.style.background=''}>
+            <div style={{width:32,height:32,borderRadius:8,background:r.status==='채점완료'?C.accentLight:C.warnLight,
+              display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>{r.status==='채점완료'?'✅':'⏳'}</div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:13,fontWeight:600}}>{r.title}</div>
+              <div style={{fontSize:12,color:C.textSub}}>{r.date}</div>
+            </div>
+            {r.score!=null?<span style={{fontSize:15,fontWeight:800,color:r.score>=80?C.accent:r.score>=60?C.warn:C.danger}}>{r.score}점</span>:
+              <span style={{fontSize:12,color:C.warn,fontWeight:600,animation:'pulse 1.5s infinite'}}>채점 중</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── History ──────────────────────────────────────
+function HistoryPage() {
+  const canvasRef=useRef(null);
+  const historyData=[
+    {id:1,book:'엑셀 실무 완성',chapter:'3장 문제 4',score:84,date:'2026.05.06',file:'ch3_q4.xlsx'},
+    {id:2,book:'액세스 DB 마스터',chapter:'2장 문제 2',score:76,date:'2026.05.06',file:'ch2_q2.accdb'},
+    {id:3,book:'함수&수식 바이블',chapter:'5장 문제 3',score:92,date:'2026.05.05',file:'ch5_q3.xlsx'},
+    {id:4,book:'엑셀 실무 완성',chapter:'3장 문제 3',score:95,date:'2026.05.05',file:'ch3_q3.xlsx'},
+    {id:5,book:'엑셀 실무 완성',chapter:'2장 문제 2',score:71,date:'2026.05.04',file:'ch2_q2.xlsx'},
+    {id:6,book:'함수&수식 바이블',chapter:'4장 문제 1',score:88,date:'2026.05.03',file:'ch4_q1.xlsx'},
+    {id:7,book:'엑셀 실무 완성',chapter:'1장 문제 4',score:65,date:'2026.05.02',file:'ch1_q4.xlsx'},
+  ];
+  const [filter,setFilter]=useState('all');
+  const [selectedItem,setSelectedItem]=useState(null);
+
+  useEffect(()=>{
+    if(!canvasRef.current)return;
+    const ctx=canvasRef.current.getContext('2d');
+    const ch=new Chart(ctx,{type:'line',data:{
+      labels:historyData.slice().reverse().map(d=>d.date.slice(5)),
+      datasets:[{label:'점수',data:historyData.slice().reverse().map(d=>d.score),borderColor:C.primary,backgroundColor:`${C.primary}20`,tension:0.4,fill:true,pointRadius:5,pointBackgroundColor:C.primary}]
+    },options:{responsive:true,maintainAspectRatio:false,scales:{y:{min:0,max:100,grid:{color:C.border},ticks:{font:{size:11}}}},plugins:{legend:{display:false}}}});
+    return()=>ch.destroy();
+  },[]);
+
+  const filtered=filter==='all'?historyData:historyData.filter(h=>h.book===filter);
+
+  return (
+    <div key="history" style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{background:C.surface,borderRadius:14,padding:20,boxShadow:'0 1px 4px rgba(0,0,0,0.07)',marginBottom:20}}>
+        <div style={{fontSize:14,fontWeight:700,marginBottom:14}}>점수 추이</div>
+        <div className="chart-canvas-wrap" style={{height:200}}>
+          <canvas ref={canvasRef}/>
+        </div>
+      </div>
+      <div style={{background:C.surface,borderRadius:14,padding:20,boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <div style={{fontSize:14,fontWeight:700}}>제출 이력</div>
+          <select value={filter} onChange={e=>setFilter(e.target.value)}
+            style={{padding:'6px 10px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,background:C.surface,cursor:'pointer'}}>
+            <option value='all'>전체 도서</option>
+            {[...new Set(historyData.map(h=>h.book))].map(b=><option key={b} value={b}>{b}</option>)}
+          </select>
+        </div>
+        {filtered.map((h,i)=>(
+          <div key={h.id} onClick={()=>setSelectedItem(h)}
+            style={{display:'flex',alignItems:'center',gap:12,padding:'12px 8px',borderBottom:i<filtered.length-1?`1px solid ${C.border}`:'',
+              cursor:'pointer',borderRadius:8,transition:'background 150ms',animation:`slideUp 300ms ease ${i*60}ms both`}}
+            onMouseEnter={e=>e.currentTarget.style.background=C.bg} onMouseLeave={e=>e.currentTarget.style.background=''}>
+            <div style={{width:40,height:40,borderRadius:8,background:h.score>=80?C.accentLight:h.score>=60?C.warnLight:C.dangerLight,
+              display:'flex',alignItems:'center',justifyContent:'center',fontSize:15,fontWeight:800,color:h.score>=80?C.accent:h.score>=60?C.warn:C.danger}}>
+              {h.score}
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:13,fontWeight:600}}>{h.book} · {h.chapter}</div>
+              <div style={{fontSize:12,color:C.textSub}}>{h.file} · {h.date}</div>
+            </div>
+            <span style={{fontSize:11,padding:'3px 8px',borderRadius:12,background:C.accentLight,color:C.accent,fontWeight:600}}>채점완료</span>
+          </div>
+        ))}
+      </div>
+      {selectedItem&&(
+        <Modal title={`${selectedItem.book} · ${selectedItem.chapter}`} onClose={()=>setSelectedItem(null)} width={480}>
+          <div style={{textAlign:'center',marginBottom:20,padding:'16px 0',background:selectedItem.score>=80?C.accentLight:C.warnLight,borderRadius:12}}>
+            <div style={{fontSize:48,fontWeight:900,color:selectedItem.score>=80?C.accent:C.warn}}>{selectedItem.score}점</div>
+            <div style={{fontSize:13,color:C.textSub,marginTop:4}}>/ 100점</div>
+          </div>
+          {[['파일명',selectedItem.file],['제출일',selectedItem.date],['도서',selectedItem.book],['챕터',selectedItem.chapter]].map(([k,v])=>(
+            <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`,fontSize:14}}>
+              <span style={{color:C.textSub}}>{k}</span><span style={{fontWeight:600}}>{v}</span>
+            </div>
+          ))}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Problem List ──────────────────────────────────────
+function ProblemListPage({setTab}) {
+  const [selectedBook,setSelectedBook]=useState(null);
+  const [showModal,setShowModal]=useState(null);
+
+  const BOOK_DETAIL=[
+    {id:1,name:'엑셀 실무 완성 (2026판)',publisher:'한빛미디어',chapters:[
+      {ch:1,title:'기본 함수',problems:[{q:1,name:'SUM/AVERAGE 응용',done:true,score:85},{q:2,name:'IF/IFS 조건함수',done:true,score:92},{q:3,name:'VLOOKUP 활용',done:false,score:null}]},
+      {ch:2,title:'고급 수식',problems:[{q:1,name:'배열 수식',done:true,score:71},{q:2,name:'INDIRECT 활용',done:false,score:null}]},
+      {ch:3,title:'서식 및 차트',problems:[{q:1,name:'조건부 서식',done:true,score:88},{q:2,name:'차트 생성',done:true,score:76},{q:3,name:'스파크라인',done:false,score:null},{q:4,name:'복합 차트',done:true,score:84}]},
+    ]},
+    {id:2,name:'액세스 DB 마스터',publisher:'길벗',chapters:[
+      {ch:1,title:'테이블 설계',problems:[{q:1,name:'기본 테이블',done:true,score:82},{q:2,name:'관계 설정',done:false,score:null}]},
+      {ch:2,title:'쿼리 작성',problems:[{q:1,name:'선택 쿼리',done:true,score:78},{q:2,name:'매개변수 쿼리',done:true,score:76}]},
+    ]},
+  ];
+
+  if(!selectedBook) return (
+    <div key="problem-list" style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{fontSize:15,fontWeight:700,marginBottom:16}}>도서를 선택하세요</div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+        {BOOK_DETAIL.map((b,i)=>(
+          <div key={b.id} onClick={()=>setSelectedBook(b)} style={{background:C.surface,borderRadius:14,padding:20,cursor:'pointer',
+            boxShadow:'0 1px 4px rgba(0,0,0,0.07)',transition:'all 200ms',animation:`slideUp 400ms ease ${i*80}ms both`}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 6px 20px rgba(0,0,0,0.1)';}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='';e.currentTarget.style.boxShadow='0 1px 4px rgba(0,0,0,0.07)';}}>
+            <div style={{fontSize:28,marginBottom:12}}>📗</div>
+            <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>{b.name}</div>
+            <div style={{fontSize:12,color:C.textSub}}>{b.publisher}</div>
+            <div style={{marginTop:12,fontSize:12,color:C.primary,fontWeight:600}}>챕터 {b.chapters.length}개 →</div>
+          </div>
+        ))}
+        {BOOK_DATA.slice(2).map((b,i)=>(
+          <div key={b.id} style={{background:C.surface,borderRadius:14,padding:20,opacity:0.5,
+            boxShadow:'0 1px 4px rgba(0,0,0,0.07)',animation:`slideUp 400ms ease ${(i+2)*80}ms both`}}>
+            <div style={{fontSize:28,marginBottom:12}}>📕</div>
+            <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>{b.title}</div>
+            <div style={{fontSize:12,color:C.textSub}}>{b.publisher}</div>
+            <div style={{marginTop:12,fontSize:12,color:C.textLight,fontWeight:600}}>도서 미인증</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div key="problem-detail" style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:20}}>
+        <button onClick={()=>setSelectedBook(null)} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:'6px 12px',fontSize:13,cursor:'pointer'}}>← 도서 목록</button>
+        <div style={{fontSize:16,fontWeight:700}}>{selectedBook.name}</div>
+      </div>
+      {selectedBook.chapters.map((ch,ci)=>(
+        <div key={ci} style={{background:C.surface,borderRadius:14,padding:20,marginBottom:14,boxShadow:'0 1px 4px rgba(0,0,0,0.07)'}}>
+          <div style={{fontSize:14,fontWeight:700,marginBottom:14,color:C.text}}>{ch.ch}장 — {ch.title}</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10}}>
+            {ch.problems.map((p,pi)=>(
+              <div key={pi} onClick={()=>setShowModal({book:selectedBook.name,ch:ch.ch,title:ch.title,q:p.q,name:p.name,done:p.done,score:p.score})}
+                style={{padding:'14px',border:`1px solid ${p.done?C.accent:C.border}`,borderRadius:10,cursor:'pointer',
+                  background:p.done?C.accentLight:C.surface,transition:'all 150ms'}}
+                onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';}} onMouseLeave={e=>{e.currentTarget.style.transform='';}}>
+                <div style={{fontSize:11,color:p.done?C.accent:C.textSub,fontWeight:600,marginBottom:4}}>문제 {p.q}</div>
+                <div style={{fontSize:12,fontWeight:700,color:C.text,lineHeight:1.4,marginBottom:6}}>{p.name}</div>
+                {p.done?<span style={{fontSize:20,fontWeight:800,color:p.score>=80?C.accent:C.warn}}>{p.score}점</span>:
+                  <button onClick={e=>{e.stopPropagation();setTab('upload');}} style={{padding:'5px 10px',background:C.primary,color:'#fff',border:'none',borderRadius:6,fontSize:11,fontWeight:700,cursor:'pointer'}}>제출하기</button>}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      {showModal&&(
+        <Modal title={`${showModal.book} ${showModal.ch}장 문제 ${showModal.q}`} onClose={()=>setShowModal(null)} width={460}>
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:15,fontWeight:700,marginBottom:4}}>{showModal.name}</div>
+            <div style={{fontSize:13,color:C.textSub}}>{showModal.title} 실습</div>
+          </div>
+          {showModal.done?(
+            <>
+              <div style={{textAlign:'center',padding:'16px',background:showModal.score>=80?C.accentLight:C.warnLight,borderRadius:12,marginBottom:16}}>
+                <div style={{fontSize:40,fontWeight:900,color:showModal.score>=80?C.accent:C.warn}}>{showModal.score}점</div>
+              </div>
+              <button onClick={()=>{setShowModal(null);setTab('upload');}}
+                style={{width:'100%',padding:'10px 0',background:C.primary,color:'#fff',border:'none',borderRadius:8,fontSize:14,fontWeight:700,cursor:'pointer'}}>재제출하기</button>
+            </>
+          ):(
+            <button onClick={()=>{setShowModal(null);setTab('upload');}}
+              style={{width:'100%',padding:'12px 0',background:C.primary,color:'#fff',border:'none',borderRadius:10,fontSize:15,fontWeight:700,cursor:'pointer'}}>파일 제출하기</button>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── App ──────────────────────────────────────
+function App() {
+  const [loading,setLoading]=useState(true);
+  const [tab,setTab]=useState('home');
+  const [drawer,setDrawer]=useState(null);
+  const [toast,setToast]=useState(null);
+
+  useEffect(()=>{setTimeout(()=>setLoading(false),1200);},[]);
+
+  if(loading) return (
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh',background:C.bg}}>
+      <div style={{height:56,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',padding:'0 24px',gap:16}}>
+        {[80,60,60,60,60].map((w,i)=>(
+          <div key={i} style={{width:w,height:16,borderRadius:4,background:'linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>
+        ))}
+      </div>
+      <div style={{height:120,background:'linear-gradient(135deg,#1E6FD9,#0EA5E9)'}}/>
+      <div style={{padding:24,display:'flex',flexDirection:'column',gap:12}}>
+        {[...Array(4)].map((_,i)=>(
+          <div key={i} style={{height:100,borderRadius:12,background:'linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)',backgroundSize:'200% 100%',animation:`shimmer 1.5s infinite ${i*0.2}s`}}/>
+        ))}
+      </div>
+    </div>
+  );
+
+  const meta=PAGE_META[tab]||PAGE_META.home;
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh',background:C.bg}}>
+      {/* TopNav */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,
+        display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:4}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginRight:16}}>
+          <div style={{width:28,height:28,borderRadius:6,background:C.primary,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>📊</div>
+          <span style={{fontSize:14,fontWeight:800,color:C.text}}>채점 플랫폼</span>
+        </div>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} title={t.label}
+            style={{padding:'6px 14px',border:'none',borderRadius:8,fontSize:13,fontWeight:tab===t.id?700:500,cursor:'pointer',
+              background:tab===t.id?C.primaryLight:'none',color:tab===t.id?C.primary:C.textSub,transition:'all 150ms'}}>
+            {t.label}
+          </button>
+        ))}
+        <div style={{flex:1}}/>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <button style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:'6px 10px',fontSize:12,cursor:'pointer',color:C.textSub}}>🔔</button>
+          <div style={{width:32,height:32,borderRadius:'50%',background:`linear-gradient(135deg,${C.primary},${C.secondary})`,
+            display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,color:'#fff',fontWeight:700,cursor:'pointer'}}>김</div>
+        </div>
+      </header>
+
+      {/* Hero Banner */}
+      <div style={{background:meta.gradient,padding:'24px 32px',color:'#fff'}}>
+        <div style={{fontSize:20,fontWeight:800,marginBottom:4}}>{meta.title}</div>
+        <div style={{fontSize:13,opacity:0.85,marginBottom:14}}>{meta.subtitle}</div>
+        <div style={{display:'flex',gap:24}}>
+          {meta.kpis.map((k,i)=>(
+            <div key={i} style={{animation:`countUp 400ms ease ${i*100}ms both`}}>
+              <div style={{fontSize:24,fontWeight:900}}><CountUp end={k.val} suffix={k.suffix}/></div>
+              <div style={{fontSize:11,opacity:0.75,marginTop:2}}>{k.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Content */}
+      <main style={{flex:1,padding:24,maxWidth:1200,width:'100%',alignSelf:'center'}}>
+        {tab==='home'&&<HomePage setTab={setTab} setDrawer={setDrawer}/>}
+        {tab==='upload'&&<UploadPage setToast={(t)=>setToast(t)}/>}
+        {tab==='result'&&<ResultPage setDrawer={setDrawer}/>}
+        {tab==='history'&&<HistoryPage/>}
+        {tab==='main-hero'&&<ProblemListPage setTab={setTab}/>}
+      </main>
+
+      {drawer&&<Drawer item={drawer} onClose={()=>setDrawer(null)}/>}
+      {toast&&<Toast message={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
