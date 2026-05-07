@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>상품권 즉시 판매 & 정산 자동화 플랫폼</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;min-height:100vh;font-family:'Pretendard',sans-serif;background:#F8FAFC;}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh;}
+
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes barGrow{from{width:0%}to{width:var(--target-width)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px);max-height:0}to{opacity:1;transform:translateY(0);max-height:500px}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes slideOverIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
+
+::-webkit-scrollbar{width:6px;}
+::-webkit-scrollbar-track{background:#F1F5F9;}
+::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback} = React;
+const {AreaChart,Area,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,BarChart,Bar} = Recharts;
+
+const C = {
+  primary:'#0D9488',
+  secondary:'#14B8A6',
+  accent:'#F97316',
+  bg:'#F8FAFC',
+  surface:'#FFFFFF',
+  text:'#0F172A',
+  textSub:'#64748B',
+  border:'#E2E8F0',
+  success:'#10B981',
+  warning:'#F59E0B',
+  danger:'#EF4444',
+  info:'#3B82F6',
+};
+
+const TABS = [
+  {id:'main',label:'상품권 판매',icon:'🎁'},
+  {id:'sales-history',label:'판매 내역',icon:'📋'},
+  {id:'settlement',label:'정산 내역',icon:'💰'},
+  {id:'support',label:'고객센터',icon:'💬'},
+];
+
+const PAGE_META = {
+  main:{title:'상품권 판매',sub:'보유하신 상품권을 빠르고 안전하게 판매하세요',kpis:[
+    {label:'오늘 매입가',value:'문화상품권 93%'},{label:'즉시 입금',value:'10분 이내'},{label:'이용 가능',value:'24시간'},
+  ],gradient:'linear-gradient(135deg, #0D9488 0%, #0891B2 100%)'},
+  'sales-history':{title:'판매 내역',sub:'신청한 상품권 판매 진행 현황을 확인합니다',kpis:[
+    {label:'이번 달 판매',value:'11건'},{label:'완료',value:'8건'},{label:'대기/처리중',value:'3건'},
+  ],gradient:'linear-gradient(135deg, #7C3AED 0%, #4F46E5 100%)'},
+  settlement:{title:'정산 내역',sub:'입금 완료된 정산 현황과 이력을 확인합니다',kpis:[
+    {label:'이번 달 정산액',value:'486,200원'},{label:'총 정산 건수',value:'28건'},{label:'누적 정산액',value:'1,843,000원'},
+  ],gradient:'linear-gradient(135deg, #059669 0%, #0D9488 100%)'},
+  support:{title:'고객센터',sub:'궁금한 사항이 있으시면 언제든지 문의하세요',kpis:[
+    {label:'평균 답변 시간','value':'2시간 이내'},{label:'만족도','value':'4.8 / 5.0'},{label:'오늘 공지','value':'2건'},
+  ],gradient:'linear-gradient(135deg, #F97316 0%, #EF4444 100%)'},
+};
+
+const GIFT_TYPES = [
+  {id:1,name:'문화상품권',rate:93,icon:'📚',color:'#6366F1',formats:'16자리 숫자',desc:'도서/음반/공연 구매에 사용 가능한 상품권'},
+  {id:2,name:'해피머니',rate:93,icon:'😊',color:'#F97316',formats:'12자리 숫자',desc:'편의점, 온라인쇼핑 등 사용 가능한 상품권'},
+  {id:3,name:'컬쳐랜드',rate:93,icon:'🎮',color:'#EC4899',formats:'16자리 숫자',desc:'게임, 문화 콘텐츠 구매에 사용 가능한 상품권'},
+];
+
+const SALES = [
+  {id:'SL-0507-001',type:'문화상품권',amount:50000,net:46500,status:'완료',createdAt:'2026-05-07 09:12',paidAt:'2026-05-07 09:22',bank:'카카오뱅크',account:'3333-****-0921'},
+  {id:'SL-0507-002',type:'해피머니',amount:30000,net:27900,status:'처리중',createdAt:'2026-05-07 09:34',paidAt:null,bank:'신한은행',account:'110-****-432981'},
+  {id:'SL-0507-003',type:'문화상품권',amount:100000,net:93000,status:'완료',createdAt:'2026-05-06 15:22',paidAt:'2026-05-06 15:35',bank:'국민은행',account:'123-****-78932'},
+  {id:'SL-0507-004',type:'컬쳐랜드',amount:50000,net:46500,status:'반려',createdAt:'2026-05-06 11:08',paidAt:null,bank:'우리은행',account:'1002-****-2341'},
+  {id:'SL-0507-005',type:'해피머니',amount:20000,net:18600,status:'대기',createdAt:'2026-05-07 10:01',paidAt:null,bank:'하나은행',account:'301-****-0095'},
+  {id:'SL-0507-006',type:'문화상품권',amount:150000,net:139500,status:'완료',createdAt:'2026-05-05 16:44',paidAt:'2026-05-05 16:58',bank:'카카오뱅크',account:'3333-****-8812'},
+];
+
+const SETTLEMENT_DATA = [
+  {month:'12월',amount:124000},{month:'1월',amount:198000},{month:'2월',amount:156000},
+  {month:'3월',amount:243000},{month:'4월',amount:321000},{month:'5월',amount:486200},
+];
+
+const SETTLEMENTS = [
+  {id:'SET-042',type:'문화상품권',amount:139500,date:'2026-05-07',pin:'9921-****-****-5534',bank:'카카오뱅크 3333-****-8812',receipt:'REC-2026050701'},
+  {id:'SET-041',type:'문화상품권',amount:93000,date:'2026-05-06',pin:'9921-****-****-1122',bank:'국민은행 123-****-78932',receipt:'REC-2026050601'},
+  {id:'SET-040',type:'해피머니',amount:55800,date:'2026-05-05',pin:'7821-****-****-3342',bank:'신한은행 110-****-567234',receipt:'REC-2026050501'},
+  {id:'SET-039',type:'컬쳐랜드',amount:93000,date:'2026-05-04',pin:'1123-****-****-8801',bank:'우리은행 1002-****-5566',receipt:'REC-2026050401'},
+  {id:'SET-038',type:'문화상품권',amount:46500,date:'2026-05-03',pin:'3301-****-****-9908',bank:'하나은행 301-****-1122',receipt:'REC-2026050301'},
+];
+
+const NOTICES = [
+  {id:1,title:'[안내] 해피머니 상품권 매입 임시 중단 안내 (5/8 00:00~06:00)',date:'2026-05-07',isNew:true},
+  {id:2,title:'[이벤트] 첫 판매 고객 수수료 50% 할인 이벤트 (5/1~5/31)',date:'2026-05-01',isNew:false},
+  {id:3,title:'[공지] 개인정보처리방침 개정 안내',date:'2026-04-28',isNew:false},
+];
+
+const FAQS = [
+  {q:'핀번호를 입력했는데 오류가 납니다',a:'상품권 종류에 따라 핀번호 자리수가 다릅니다. 문화상품권은 16자리, 해피머니는 12자리입니다. 공백이나 하이픈 없이 숫자만 입력해 주세요. 이미 사용된 상품권은 매입이 불가합니다.'},
+  {q:'입금은 언제 되나요?',a:'검증 완료 후 통상 10분 이내에 등록하신 계좌로 입금됩니다. 은행 점검 시간(23:30~00:30)에는 다음 날 오전에 처리될 수 있습니다.'},
+  {q:'대량으로 여러 장을 한 번에 판매할 수 있나요?',a:'네, 가능합니다. 상품권 번호 입력란에 여러 핀번호를 붙여넣기하면 자동으로 추출하여 일괄 신청 처리됩니다. 최대 100장까지 동시 신청 가능합니다.'},
+  {q:'반려된 상품권은 어떻게 되나요?',a:'핀번호 검증에 실패하거나 잔액이 부족한 경우 반려 처리됩니다. 반려된 상품권은 다시 사용하실 수 있으며, 매입 신청만 취소됩니다.'},
+];
+
+// CountUp
+function CountUp({end,duration=1200,suffix='',prefix=''}) {
+  const [val,setVal]=useState(0);
+  useEffect(()=>{
+    let s=0;const step=end/(duration/16);
+    const t=setInterval(()=>{s+=step;if(s>=end){setVal(end);clearInterval(t);}else setVal(Math.floor(s));},16);
+    return()=>clearInterval(t);
+  },[end]);
+  return <span>{prefix}{val.toLocaleString()}{suffix}</span>;
+}
+
+// Toast
+function Toast({message,type='success',onClose}) {
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  const colors={success:C.success,error:C.danger,info:C.info};
+  return (
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:colors[type]||C.success,color:'#fff',
+      padding:'12px 20px',borderRadius:10,animation:'slideUp 300ms ease',
+      boxShadow:'0 4px 16px rgba(0,0,0,0.2)',display:'flex',alignItems:'center',gap:8,fontSize:14,fontWeight:500}}>
+      <span>{type==='success'?'✓':type==='error'?'✕':'ℹ'}</span>{message}
+    </div>
+  );
+}
+
+// Status Badge
+function Badge({status}) {
+  const map = {
+    '완료':{bg:'#D1FAE5',color:'#065F46'},
+    '처리중':{bg:'#DBEAFE',color:'#1D4ED8'},
+    '대기':{bg:'#FEF3C7',color:'#92400E'},
+    '반려':{bg:'#FEE2E2',color:'#991B1B'},
+  };
+  const s=map[status]||{bg:'#F1F5F9',color:'#64748B'};
+  return <span style={{background:s.bg,color:s.color,borderRadius:20,padding:'3px 10px',fontSize:12,fontWeight:600}}>{status}</span>;
+}
+
+// Skeleton
+function Skeleton({height=16,width='100%',borderRadius=8}) {
+  return <div style={{height,width,borderRadius,background:'linear-gradient(90deg,#E2E8F0 25%,#F1F5F9 50%,#E2E8F0 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>;
+}
+
+// Drawer
+function Drawer({item,onClose}) {
+  return (
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.35)',zIndex:200,animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:460,background:C.surface,
+        boxShadow:'-8px 0 40px rgba(0,0,0,0.12)',zIndex:201,overflowY:'auto',
+        animation:'slideOverIn 250ms ease'}}>
+        {/* 헤더 */}
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'24px 24px 16px',borderBottom:`1px solid ${C.border}`,position:'sticky',top:0,background:C.surface,zIndex:1}}>
+          <div>
+            <h3 style={{fontSize:17,fontWeight:700,color:C.text}}>판매 상세</h3>
+            <div style={{fontSize:12,color:C.textSub,marginTop:2}}>{item.id}</div>
+          </div>
+          <button onClick={onClose} style={{width:32,height:32,borderRadius:8,background:C.bg,border:'none',cursor:'pointer',fontSize:18,color:C.textSub,display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
+        </div>
+
+        <div style={{padding:24}}>
+          {/* 상태 */}
+          <div style={{background:item.status==='완료'?'#ECFDF5':item.status==='반려'?'#FEF2F2':'#EFF6FF',borderRadius:12,padding:20,marginBottom:24,textAlign:'center'}}>
+            <div style={{fontSize:36,marginBottom:8}}>{item.status==='완료'?'✅':item.status==='반려'?'❌':'⏳'}</div>
+            <Badge status={item.status}/>
+            {item.status==='완료'&&<div style={{fontSize:13,color:C.textSub,marginTop:8}}>입금 완료: {item.paidAt}</div>}
+            {item.status==='처리중'&&<div style={{fontSize:13,color:C.info,marginTop:8}}>핀번호 검증 및 송금 처리 중입니다</div>}
+            {item.status==='반려'&&<div style={{fontSize:13,color:C.danger,marginTop:8}}>핀번호 검증 실패 또는 잔액 부족</div>}
+          </div>
+
+          {/* 상세 정보 */}
+          <div style={{display:'flex',flexDirection:'column',gap:0,border:`1px solid ${C.border}`,borderRadius:10,overflow:'hidden',marginBottom:20}}>
+            {[
+              ['신청 번호',item.id],
+              ['상품권 종류',item.type],
+              ['신청 금액',`${item.amount.toLocaleString()}원`],
+              ['정산 금액',`${item.net.toLocaleString()}원 (수수료 7%)`],
+              ['입금 계좌',item.bank + ' ' + item.account],
+              ['신청 일시',item.createdAt],
+              item.paidAt&&['입금 일시',item.paidAt],
+            ].filter(Boolean).map(([k,v],i,arr)=>(
+              <div key={k} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 16px',
+                background:i%2===0?C.surface:'#FAFBFC',borderBottom:i<arr.length-1?`1px solid ${C.border}`:'none'}}>
+                <span style={{fontSize:13,color:C.textSub,fontWeight:500}}>{k}</span>
+                <span style={{fontSize:13,fontWeight:600,color:C.text}}>{v}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* 진행 과정 */}
+          <div style={{marginBottom:20}}>
+            <h4 style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:12}}>처리 과정</h4>
+            {[
+              {step:'신청 접수',done:true,time:item.createdAt},
+              {step:'핀번호 검증',done:item.status!=='대기',time:item.status!=='대기'?'자동 처리':null},
+              {step:'송금 처리',done:item.status==='완료',time:item.paidAt},
+              {step:'입금 완료',done:item.status==='완료',time:item.paidAt},
+            ].map((s,i)=>(
+              <div key={s.step} style={{display:'flex',alignItems:'flex-start',gap:12,marginBottom:8}}>
+                <div style={{width:24,height:24,borderRadius:'50%',flexShrink:0,
+                  background:s.done?C.primary:'#E2E8F0',
+                  display:'flex',alignItems:'center',justifyContent:'center',marginTop:2}}>
+                  {s.done?<span style={{color:'#fff',fontSize:12,fontWeight:700}}>✓</span>:
+                  <span style={{color:'#94A3B8',fontSize:11}}>{i+1}</span>}
+                </div>
+                <div>
+                  <div style={{fontSize:14,fontWeight:s.done?600:400,color:s.done?C.text:C.textSub}}>{s.step}</div>
+                  {s.time&&<div style={{fontSize:12,color:C.textSub}}>{s.time}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <button onClick={onClose} style={{width:'100%',padding:'12px',borderRadius:10,
+            background:`linear-gradient(135deg,${C.primary},${C.secondary})`,color:'#fff',
+            border:'none',cursor:'pointer',fontSize:15,fontWeight:700}}>
+            닫기
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// 히어로 배너
+function HeroBanner({tab}) {
+  const m = PAGE_META[tab];
+  return (
+    <div style={{background:m.gradient,padding:'28px 32px 32px',color:'#fff',animation:'fadeIn 300ms ease'}}>
+      <h2 style={{fontSize:26,fontWeight:800,letterSpacing:'-0.03em',marginBottom:4}}>{m.title}</h2>
+      <p style={{fontSize:14,opacity:0.85,marginBottom:20}}>{m.sub}</p>
+      <div style={{display:'flex',gap:32,flexWrap:'wrap'}}>
+        {m.kpis.map(k=>(
+          <div key={k.label}>
+            <div style={{fontSize:11,opacity:0.7,fontWeight:600,letterSpacing:'0.05em',textTransform:'uppercase',marginBottom:4}}>{k.label}</div>
+            <div style={{fontSize:20,fontWeight:800}}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── 상품권 판매 화면 ───
+function SellPage({onToast}) {
+  const [selectedType,setSelectedType]=useState(null);
+  const [pinText,setPinText]=useState('');
+  const [parsedPins,setParsedPins]=useState([]);
+  const [step,setStep]=useState(1); // 1:타입선택, 2:핀입력, 3:확인
+  const [loading,setLoading]=useState(true);
+
+  useEffect(()=>{const t=setTimeout(()=>setLoading(false),1200);return()=>clearTimeout(t);},[]);
+
+  const parsePins = (text) => {
+    const matches = text.match(/\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}|\d{12}/g)||[];
+    return [...new Set(matches)].slice(0,10);
+  };
+
+  const handlePaste = (e) => {
+    const text = e.clipboardData.getData('text');
+    const pins = parsePins(text);
+    if(pins.length>0){
+      setPinText(text);
+      setParsedPins(pins);
+      onToast(`${pins.length}개 핀번호가 자동 추출되었습니다`,'success');
+    }
+  };
+
+  const totalNet = parsedPins.length*(selectedType?50000*0.93:0);
+
+  if(loading) return <div style={{padding:32}}><Skeleton height={200} borderRadius={12}/></div>;
+
+  return (
+    <div style={{padding:32,maxWidth:960,margin:'0 auto',animation:'fadeIn 300ms ease'}}>
+      {/* 단계 표시 */}
+      <div style={{display:'flex',alignItems:'center',gap:4,marginBottom:32,justifyContent:'center'}}>
+        {[{n:1,label:'상품권 선택'},{n:2,label:'핀번호 입력'},{n:3,label:'신청 확인'}].map((s,i,arr)=>(
+          <React.Fragment key={s.n}>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <div style={{width:28,height:28,borderRadius:'50%',
+                background:step>=s.n?C.primary:'#E2E8F0',color:step>=s.n?'#fff':'#94A3B8',
+                display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:700,transition:'all 300ms'}}>
+                {step>s.n?'✓':s.n}
+              </div>
+              <span style={{fontSize:13,fontWeight:step===s.n?600:400,color:step>=s.n?C.text:C.textSub}}>{s.label}</span>
+            </div>
+            {i<arr.length-1&&<div style={{flex:1,height:1,background:step>s.n?C.primary:'#E2E8F0',maxWidth:60,transition:'background 300ms'}}/>}
+          </React.Fragment>
+        ))}
+      </div>
+
+      {/* Step 1: 상품권 선택 */}
+      {step===1&&(
+        <div>
+          <h3 style={{fontSize:18,fontWeight:700,color:C.text,marginBottom:4}}>판매할 상품권 종류를 선택하세요</h3>
+          <p style={{fontSize:14,color:C.textSub,marginBottom:24}}>상품권 종류에 따라 매입가와 핀번호 형식이 다릅니다</p>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:32}}>
+            {GIFT_TYPES.map((g,i)=>(
+              <div key={g.id} onClick={()=>setSelectedType(g)}
+                style={{background:C.surface,borderRadius:16,padding:24,cursor:'pointer',
+                  border:`2px solid ${selectedType?.id===g.id?C.primary:C.border}`,
+                  transition:'all 200ms',animation:`slideUp 400ms ease ${i*80}ms both`,
+                  boxShadow:selectedType?.id===g.id?`0 0 0 4px ${C.primary}20`:'0 4px 16px rgba(0,0,0,0.06)'}}
+                onMouseEnter={e=>{if(selectedType?.id!==g.id)e.currentTarget.style.transform='scale(1.02)';}}
+                onMouseLeave={e=>{e.currentTarget.style.transform='scale(1)';}}>
+                <div style={{fontSize:36,marginBottom:12}}>{g.icon}</div>
+                <div style={{fontSize:17,fontWeight:700,color:C.text,marginBottom:6}}>{g.name}</div>
+                <div style={{fontSize:13,color:C.textSub,marginBottom:12}}>{g.desc}</div>
+                <div style={{background:`${g.color}15`,borderRadius:8,padding:'8px 12px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <span style={{fontSize:12,color:g.color,fontWeight:600}}>매입률</span>
+                  <span style={{fontSize:20,fontWeight:800,color:g.color}}>{g.rate}%</span>
+                </div>
+                <div style={{fontSize:12,color:C.textSub,marginTop:8}}>형식: {g.formats}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{textAlign:'center'}}>
+            <button onClick={()=>{if(!selectedType){onToast('상품권을 선택해주세요','error');return;}setStep(2);}}
+              style={{padding:'14px 48px',borderRadius:12,background:`linear-gradient(135deg,${C.primary},${C.secondary})`,
+                color:'#fff',border:'none',cursor:'pointer',fontSize:16,fontWeight:700,
+                boxShadow:`0 4px 16px ${C.primary}40`,transition:'transform 200ms'}}
+              onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'}
+              onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>
+              다음 단계 →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 2: 핀번호 입력 */}
+      {step===2&&(
+        <div>
+          <button onClick={()=>setStep(1)} style={{background:'none',border:'none',cursor:'pointer',color:C.primary,fontSize:14,fontWeight:600,marginBottom:20}}>← 상품권 선택으로</button>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+            <div>
+              <h3 style={{fontSize:18,fontWeight:700,color:C.text,marginBottom:4}}>핀번호 입력</h3>
+              <p style={{fontSize:14,color:C.textSub,marginBottom:16}}>붙여넣기 시 자동으로 핀번호를 추출합니다</p>
+              <div style={{border:`2px dashed ${parsedPins.length>0?C.primary:C.border}`,borderRadius:12,overflow:'hidden',transition:'border-color 200ms'}}>
+                <textarea value={pinText} onChange={e=>setPinText(e.target.value)} onPaste={handlePaste}
+                  placeholder={'상품권 문자 메시지나 핀번호를 여기에 붙여넣기 하세요.\n\n예시:\n4532-1234-5678-7821\n7821-8765-4321-3342\n\n또는 카카오톡 메시지 전체를 붙여넣기 해도 됩니다.'}
+                  style={{width:'100%',height:200,padding:16,border:'none',outline:'none',fontSize:13,color:C.text,resize:'none',lineHeight:1.7,fontFamily:'monospace'}}/>
+                <div style={{borderTop:`1px solid ${C.border}`,padding:'10px 16px',background:'#F8FAFC',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <span style={{fontSize:12,color:C.textSub}}>직접 핀번호를 입력하셔도 됩니다</span>
+                  {parsedPins.length>0&&<span style={{fontSize:12,fontWeight:700,color:C.primary}}>{parsedPins.length}개 추출됨</span>}
+                </div>
+              </div>
+
+              {parsedPins.length>0&&(
+                <div style={{marginTop:16,background:C.bg,borderRadius:10,padding:16}}>
+                  <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:10}}>추출된 핀번호 ({parsedPins.length}개)</div>
+                  {parsedPins.map((p,i)=>(
+                    <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 0',borderBottom:i<parsedPins.length-1?`1px solid ${C.border}`:'none'}}>
+                      <span style={{fontFamily:'monospace',fontSize:13,color:C.text}}>{p}</span>
+                      <span style={{fontSize:12,color:C.success,fontWeight:600}}>✓ 유효 형식</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <h3 style={{fontSize:18,fontWeight:700,color:C.text,marginBottom:4}}>예상 정산금</h3>
+              <p style={{fontSize:14,color:C.textSub,marginBottom:16}}>핀번호 검증 후 실제 금액이 결정됩니다</p>
+              <div style={{background:`linear-gradient(135deg,${C.primary},${C.secondary})`,borderRadius:16,padding:24,color:'#fff',marginBottom:16}}>
+                <div style={{fontSize:13,opacity:0.8,marginBottom:4}}>{selectedType?.name} · 매입률 {selectedType?.rate}%</div>
+                <div style={{fontSize:12,opacity:0.65,marginBottom:16}}>핀번호 {parsedPins.length}개 · 장당 50,000원 기준</div>
+                <div style={{fontSize:36,fontWeight:800,letterSpacing:'-0.02em'}}>
+                  {parsedPins.length>0?`${(parsedPins.length*46500).toLocaleString()}원`:'—'}
+                </div>
+                <div style={{fontSize:13,opacity:0.75,marginTop:4}}>수수료 7% 차감 후</div>
+              </div>
+              <div style={{background:C.surface,borderRadius:12,padding:16,border:`1px solid ${C.border}`,marginBottom:16}}>
+                <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:12}}>입금 계좌</div>
+                {['은행 선택','계좌번호 입력','예금주 확인'].map((label,i)=>(
+                  <div key={i} style={{marginBottom:i<2?10:0}}>
+                    <input type="text" placeholder={label} style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,outline:'none',color:C.text}}/>
+                  </div>
+                ))}
+              </div>
+              <button onClick={()=>{if(!parsedPins.length){onToast('핀번호를 입력해주세요','error');return;}setStep(3);}}
+                style={{width:'100%',padding:'14px',borderRadius:12,background:`linear-gradient(135deg,${C.primary},${C.secondary})`,
+                  color:'#fff',border:'none',cursor:'pointer',fontSize:16,fontWeight:700,
+                  boxShadow:`0 4px 16px ${C.primary}40`}}>
+                판매 신청 확인 →
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Step 3: 확인 */}
+      {step===3&&(
+        <div style={{maxWidth:520,margin:'0 auto'}}>
+          <div style={{textAlign:'center',marginBottom:32}}>
+            <div style={{fontSize:48,marginBottom:12}}>📋</div>
+            <h3 style={{fontSize:22,fontWeight:800,color:C.text,marginBottom:6}}>신청 내용을 확인하세요</h3>
+            <p style={{fontSize:14,color:C.textSub}}>제출 후에는 취소가 어렵습니다</p>
+          </div>
+          <div style={{background:C.surface,borderRadius:16,overflow:'hidden',border:`1px solid ${C.border}`,marginBottom:24}}>
+            {[
+              ['상품권 종류',selectedType?.name],
+              ['핀번호 수',`${parsedPins.length}개`],
+              ['예상 정산금',`${(parsedPins.length*46500).toLocaleString()}원`],
+              ['입금 계좌','카카오뱅크 3333-****-0921'],
+              ['처리 예상 시간','10분 이내'],
+            ].map(([k,v],i,arr)=>(
+              <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'16px 20px',
+                background:i%2===0?C.surface:'#FAFBFC',borderBottom:i<arr.length-1?`1px solid ${C.border}`:'none'}}>
+                <span style={{fontSize:14,color:C.textSub}}>{k}</span>
+                <span style={{fontSize:14,fontWeight:700,color:C.text}}>{v}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{background:'#FFF7ED',borderRadius:10,padding:14,marginBottom:24,fontSize:13,color:'#92400E'}}>
+            ⚠️ 핀번호 검증 후 잔액 미달 또는 이미 사용된 경우 해당 핀번호는 반려될 수 있습니다
+          </div>
+          <div style={{display:'flex',gap:12}}>
+            <button onClick={()=>setStep(2)} style={{flex:1,padding:'14px',borderRadius:12,background:C.bg,color:C.textSub,border:`1px solid ${C.border}`,cursor:'pointer',fontSize:15,fontWeight:600}}>이전</button>
+            <button onClick={()=>{onToast('판매 신청이 접수되었습니다!','success');setStep(1);setSelectedType(null);setPinText('');setParsedPins([]);}}
+              style={{flex:2,padding:'14px',borderRadius:12,background:`linear-gradient(135deg,${C.primary},${C.secondary})`,
+                color:'#fff',border:'none',cursor:'pointer',fontSize:15,fontWeight:700}}>
+              판매 신청하기
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 판매 내역 ───
+function SalesHistory({onToast}) {
+  const [filter,setFilter]=useState('전체');
+  const [drawer,setDrawer]=useState(null);
+  const [loading,setLoading]=useState(true);
+
+  useEffect(()=>{const t=setTimeout(()=>setLoading(false),1200);return()=>clearTimeout(t);},[]);
+
+  const statuses=['전체','완료','처리중','대기','반려'];
+  const filtered = SALES.filter(s=>filter==='전체'||s.status===filter);
+
+  if(loading) return (
+    <div style={{padding:32,display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+      {[1,2,3,4,5,6].map(i=><Skeleton key={i} height={160} borderRadius={12}/>)}
+    </div>
+  );
+
+  return (
+    <div style={{padding:32,animation:'fadeIn 300ms ease'}}>
+      {/* 필터 */}
+      <div style={{display:'flex',gap:4,marginBottom:24,borderBottom:`1px solid ${C.border}`,paddingBottom:16}}>
+        {statuses.map(s=>(
+          <button key={s} onClick={()=>setFilter(s)} style={{
+            padding:'7px 18px',borderRadius:8,border:'none',cursor:'pointer',fontSize:13,fontWeight:600,transition:'all 150ms',
+            background:filter===s?C.primary:'transparent',color:filter===s?'#fff':C.textSub}}>
+            {s}
+            {s==='전체'&&` (${SALES.length})`}
+          </button>
+        ))}
+      </div>
+
+      {/* 카드 그리드 */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+        {filtered.map((s,i)=>(
+          <div key={s.id} onClick={()=>setDrawer(s)}
+            style={{background:C.surface,borderRadius:16,padding:20,cursor:'pointer',
+              boxShadow:'0 4px 16px rgba(0,0,0,0.06)',transition:'all 200ms',
+              animation:`slideUp 400ms ease ${i*60}ms both`,
+              border:`1px solid ${C.border}`}}
+            onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,0.1)';}}
+            onMouseLeave={e=>{e.currentTarget.style.transform='scale(1)';e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,0.06)';}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:14}}>
+              <div style={{fontSize:24}}>🎁</div>
+              <Badge status={s.status}/>
+            </div>
+            <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:4}}>{s.type}</div>
+            <div style={{fontSize:12,fontFamily:'monospace',color:C.textSub,marginBottom:12}}>{s.id}</div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-end'}}>
+              <div>
+                <div style={{fontSize:11,color:C.textSub,marginBottom:2}}>정산금</div>
+                <div style={{fontSize:20,fontWeight:800,color:C.primary}}>{s.net.toLocaleString()}원</div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:11,color:C.textSub,marginBottom:2}}>신청가</div>
+                <div style={{fontSize:13,color:C.textSub,textDecoration:'line-through'}}>{s.amount.toLocaleString()}원</div>
+              </div>
+            </div>
+            <div style={{borderTop:`1px solid ${C.border}`,marginTop:14,paddingTop:12,fontSize:12,color:C.textSub}}>
+              {s.createdAt}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {filtered.length===0&&(
+        <div style={{textAlign:'center',padding:'60px 0',color:C.textSub}}>
+          <div style={{fontSize:40,marginBottom:12}}>📭</div>
+          <div style={{fontSize:16,fontWeight:600}}>해당 상태의 내역이 없습니다</div>
+        </div>
+      )}
+
+      {drawer&&<Drawer item={drawer} onClose={()=>setDrawer(null)}/>}
+    </div>
+  );
+}
+
+// ─── 정산 내역 ───
+function Settlement({onToast}) {
+  const [period,setPeriod]=useState('이번 달');
+  const [selected,setSelected]=useState(null);
+  const [downloading,setDownloading]=useState(false);
+
+  const handleDownload = () => {
+    setDownloading(true);
+    setTimeout(()=>{setDownloading(false);onToast('CSV 파일이 다운로드되었습니다','success');},2000);
+  };
+
+  return (
+    <div style={{padding:32,animation:'fadeIn 300ms ease'}}>
+      {/* 요약 카드 */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16,marginBottom:28}}>
+        {[
+          {label:'이번 달 정산액',value:486200,suffix:'원',color:C.primary,icon:'💰'},
+          {label:'이번 달 완료 건수',value:8,suffix:'건',color:C.success,icon:'✅'},
+          {label:'누적 정산액',value:1843000,suffix:'원',color:'#7C3AED',icon:'📈'},
+        ].map((k,i)=>(
+          <div key={k.label} style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.06)',animation:`slideUp 400ms ease ${i*80}ms both`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+              <div style={{fontSize:13,color:C.textSub,fontWeight:500}}>{k.label}</div>
+              <span style={{fontSize:22}}>{k.icon}</span>
+            </div>
+            <div style={{fontSize:26,fontWeight:800,color:k.color,letterSpacing:'-0.02em'}}>
+              <CountUp end={k.value} suffix={k.suffix}/>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 월별 차트 */}
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.06)',marginBottom:24}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.text}}>월별 정산 추이</h3>
+          <div style={{display:'flex',gap:4}}>
+            {['3개월','6개월','1년'].map(p=>(
+              <button key={p} onClick={()=>setPeriod(p)} style={{padding:'5px 12px',borderRadius:6,border:'none',cursor:'pointer',fontSize:12,fontWeight:600,background:period===p?C.primary:'transparent',color:period===p?'#fff':C.textSub}}>
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{height:200}}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={SETTLEMENT_DATA} margin={{top:4,right:4,left:-10,bottom:0}}>
+              <defs>
+                <linearGradient id="tealGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={C.primary} stopOpacity={0.2}/>
+                  <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9"/>
+              <XAxis dataKey="month" tick={{fontSize:11,fill:'#94A3B8'}}/>
+              <YAxis tick={{fontSize:11,fill:'#94A3B8'}} tickFormatter={v=>`${(v/10000).toFixed(0)}만`}/>
+              <Tooltip formatter={(v)=>[`${v.toLocaleString()}원`,'정산액']}
+                contentStyle={{borderRadius:8,border:'none',boxShadow:'0 4px 12px rgba(0,0,0,0.1)',fontSize:12}}/>
+              <Area type="monotone" dataKey="amount" stroke={C.primary} strokeWidth={2} fill="url(#tealGrad)"/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 내역 테이블 */}
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.06)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <h3 style={{fontSize:15,fontWeight:700,color:C.text}}>정산 내역</h3>
+          <button onClick={handleDownload} disabled={downloading} style={{
+            padding:'8px 16px',borderRadius:8,background:downloading?C.bg:C.primary,color:downloading?C.textSub:'#fff',
+            border:'none',cursor:'pointer',fontSize:13,fontWeight:600,display:'flex',alignItems:'center',gap:6,transition:'all 200ms'}}>
+            {downloading&&<span style={{display:'inline-block',width:12,height:12,border:'2px solid',borderColor:`${C.textSub} transparent`,borderRadius:'50%',animation:'spin 0.6s linear infinite'}}/>}
+            {downloading?'생성 중...':'CSV 다운로드'}
+          </button>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{borderBottom:`2px solid ${C.border}`}}>
+              {['정산 ID','상품권 종류','정산금','정산일','입금 계좌','영수증'].map(h=>(
+                <th key={h} style={{textAlign:'left',padding:'10px 12px',fontSize:12,fontWeight:600,color:C.textSub}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {SETTLEMENTS.map((s,i)=>(
+              <tr key={s.id} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms'}}
+                onMouseEnter={e=>{e.currentTarget.style.background='rgba(13,148,136,0.04)';}}
+                onMouseLeave={e=>{e.currentTarget.style.background='transparent';}}
+                onClick={()=>setSelected(s)}>
+                <td style={{padding:'14px 12px',fontSize:12,fontFamily:'monospace',color:C.textSub}}>{s.id}</td>
+                <td style={{padding:'14px 12px',fontSize:13,fontWeight:600,color:C.text}}>{s.type}</td>
+                <td style={{padding:'14px 12px',fontSize:14,fontWeight:700,color:C.primary}}>{s.amount.toLocaleString()}원</td>
+                <td style={{padding:'14px 12px',fontSize:13,color:C.textSub}}>{s.date}</td>
+                <td style={{padding:'14px 12px',fontSize:12,color:C.textSub}}>{s.bank}</td>
+                <td style={{padding:'14px 12px'}}>
+                  <button onClick={e=>{e.stopPropagation();onToast('영수증을 불러오는 중...','info');setTimeout(()=>onToast('영수증이 준비되었습니다','success'),1500);}}
+                    style={{padding:'4px 10px',borderRadius:6,background:'#EEF2FF',color:'#4F46E5',border:'none',cursor:'pointer',fontSize:12,fontWeight:600}}>
+                    보기
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── 고객센터 ───
+function Support({onToast}) {
+  const [openFaq,setOpenFaq]=useState(null);
+  const [inquiry,setInquiry]=useState({title:'',content:''});
+  const [submitted,setSubmitted]=useState(false);
+  const [activeSection,setActiveSection]=useState('notice');
+
+  const handleSubmit = () => {
+    if(!inquiry.title||!inquiry.content){onToast('제목과 내용을 입력해주세요','error');return;}
+    setSubmitted(true);
+    onToast('문의가 접수되었습니다. 평균 2시간 이내 답변드립니다','success');
+    setTimeout(()=>{setSubmitted(false);setInquiry({title:'',content:'',});},3000);
+  };
+
+  return (
+    <div style={{padding:32,maxWidth:860,margin:'0 auto',animation:'fadeIn 300ms ease'}}>
+      {/* 탭 */}
+      <div style={{display:'flex',gap:4,marginBottom:28,borderBottom:`2px solid ${C.border}`,paddingBottom:0}}>
+        {[{id:'notice',label:'공지사항'},{id:'faq',label:'자주 묻는 질문'},{id:'inquiry',label:'1:1 문의'}].map(t=>(
+          <button key={t.id} onClick={()=>setActiveSection(t.id)} style={{
+            padding:'10px 20px',borderRadius:0,border:'none',cursor:'pointer',fontSize:14,fontWeight:600,
+            background:'transparent',color:activeSection===t.id?C.primary:C.textSub,
+            borderBottom:activeSection===t.id?`2px solid ${C.primary}`:'2px solid transparent',
+            transition:'all 150ms',marginBottom:-2}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 공지사항 */}
+      {activeSection==='notice'&&(
+        <div style={{animation:'fadeIn 300ms ease'}}>
+          {NOTICES.map((n,i)=>(
+            <div key={n.id} style={{background:C.surface,borderRadius:12,padding:'18px 24px',marginBottom:10,
+              boxShadow:'0 2px 8px rgba(0,0,0,0.05)',cursor:'pointer',transition:'all 200ms',
+              border:`1px solid ${C.border}`,animation:`slideUp 400ms ease ${i*60}ms both`}}
+              onMouseEnter={e=>{e.currentTarget.style.transform='translateX(4px)';e.currentTarget.style.borderColor=C.primary;}}
+              onMouseLeave={e=>{e.currentTarget.style.transform='translateX(0)';e.currentTarget.style.borderColor=C.border;}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  {n.isNew&&<span style={{background:C.primary,color:'#fff',borderRadius:4,padding:'2px 6px',fontSize:11,fontWeight:700}}>NEW</span>}
+                  <span style={{fontSize:15,fontWeight:n.isNew?600:400,color:C.text}}>{n.title}</span>
+                </div>
+                <span style={{fontSize:12,color:C.textSub,whiteSpace:'nowrap',marginLeft:16}}>{n.date}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* FAQ */}
+      {activeSection==='faq'&&(
+        <div style={{animation:'fadeIn 300ms ease'}}>
+          {FAQS.map((f,i)=>(
+            <div key={i} style={{background:C.surface,borderRadius:12,overflow:'hidden',marginBottom:10,
+              boxShadow:'0 2px 8px rgba(0,0,0,0.05)',border:`1px solid ${openFaq===i?C.primary:C.border}`,transition:'border 200ms',animation:`slideUp 400ms ease ${i*60}ms both`}}>
+              <button onClick={()=>setOpenFaq(openFaq===i?null:i)} style={{
+                width:'100%',display:'flex',justifyContent:'space-between',alignItems:'center',
+                padding:'18px 24px',background:'none',border:'none',cursor:'pointer',textAlign:'left'}}>
+                <div style={{display:'flex',alignItems:'center',gap:12}}>
+                  <span style={{fontSize:16,color:C.primary,fontWeight:700}}>Q</span>
+                  <span style={{fontSize:15,fontWeight:600,color:C.text}}>{f.q}</span>
+                </div>
+                <span style={{fontSize:20,color:C.textSub,transition:'transform 200ms',transform:openFaq===i?'rotate(45deg)':'rotate(0)'}}>+</span>
+              </button>
+              {openFaq===i&&(
+                <div style={{padding:'0 24px 18px',animation:'slideDown 200ms ease',borderTop:`1px solid ${C.border}`}}>
+                  <div style={{display:'flex',gap:12,paddingTop:16}}>
+                    <span style={{fontSize:16,color:C.success,fontWeight:700}}>A</span>
+                    <span style={{fontSize:14,color:C.textSub,lineHeight:1.7}}>{f.a}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 1:1 문의 */}
+      {activeSection==='inquiry'&&(
+        <div style={{animation:'fadeIn 300ms ease'}}>
+          {submitted?(
+            <div style={{textAlign:'center',padding:'60px 0',animation:'fadeInScale 300ms ease'}}>
+              <div style={{fontSize:48,marginBottom:16}}>✅</div>
+              <h3 style={{fontSize:22,fontWeight:700,color:C.text,marginBottom:8}}>문의가 접수되었습니다</h3>
+              <p style={{fontSize:14,color:C.textSub}}>평균 2시간 이내 이메일 및 문자로 답변드립니다</p>
+            </div>
+          ):(
+            <div style={{background:C.surface,borderRadius:16,padding:32,boxShadow:'0 4px 16px rgba(0,0,0,0.06)',border:`1px solid ${C.border}`}}>
+              <h3 style={{fontSize:17,fontWeight:700,color:C.text,marginBottom:20}}>1:1 문의 작성</h3>
+              <div style={{display:'flex',flexDirection:'column',gap:16}}>
+                <div>
+                  <label style={{fontSize:13,fontWeight:600,color:C.text,display:'block',marginBottom:6}}>문의 유형</label>
+                  <select style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:14,outline:'none',color:C.text,background:C.surface}}>
+                    <option>핀번호 검증 관련</option>
+                    <option>입금/정산 관련</option>
+                    <option>계좌 변경</option>
+                    <option>기타 문의</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{fontSize:13,fontWeight:600,color:C.text,display:'block',marginBottom:6}}>제목</label>
+                  <input type="text" value={inquiry.title} onChange={e=>setInquiry(p=>({...p,title:e.target.value}))}
+                    placeholder="문의 제목을 입력하세요"
+                    style={{width:'100%',padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:14,outline:'none',color:C.text}}/>
+                </div>
+                <div>
+                  <label style={{fontSize:13,fontWeight:600,color:C.text,display:'block',marginBottom:6}}>내용</label>
+                  <textarea value={inquiry.content} onChange={e=>setInquiry(p=>({...p,content:e.target.value}))}
+                    placeholder="문의 내용을 자세히 입력해 주세요"
+                    style={{width:'100%',height:160,padding:'10px 14px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:14,outline:'none',resize:'none',lineHeight:1.7,color:C.text}}/>
+                </div>
+                <div>
+                  <label style={{fontSize:13,fontWeight:600,color:C.text,display:'block',marginBottom:6}}>첨부파일 (선택)</label>
+                  <div style={{border:`2px dashed ${C.border}`,borderRadius:8,padding:'20px',textAlign:'center',cursor:'pointer',color:C.textSub,fontSize:13}}>
+                    📎 파일을 드래그하거나 클릭하여 첨부하세요
+                  </div>
+                </div>
+                <button onClick={handleSubmit} style={{padding:'14px',borderRadius:12,
+                  background:`linear-gradient(135deg,${C.primary},${C.secondary})`,color:'#fff',
+                  border:'none',cursor:'pointer',fontSize:15,fontWeight:700}}>
+                  문의 제출하기
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 메인 앱 ───
+function App() {
+  const [tab,setTab]=useState('main');
+  const [toast,setToast]=useState(null);
+  const [pageKey,setPageKey]=useState(0);
+  const [loading,setLoading]=useState(true);
+
+  useEffect(()=>{const t=setTimeout(()=>setLoading(false),900);return()=>clearTimeout(t);},[]);
+
+  const navigate = (t) => {setTab(t);setPageKey(k=>k+1);};
+  const showToast = (message,type='success') => setToast({message,type,id:Date.now()});
+
+  const renderContent = () => {
+    switch(tab){
+      case 'main': return <SellPage onToast={showToast}/>;
+      case 'sales-history': return <SalesHistory onToast={showToast}/>;
+      case 'settlement': return <Settlement onToast={showToast}/>;
+      case 'support': return <Support onToast={showToast}/>;
+      default: return <SellPage onToast={showToast}/>;
+    }
+  };
+
+  if(loading) return (
+    <div style={{display:'flex',width:'100%',height:'100vh',alignItems:'center',justifyContent:'center',background:C.bg}}>
+      <div style={{textAlign:'center'}}>
+        <div style={{width:48,height:48,border:`4px solid ${C.primary}`,borderColor:`${C.primary} transparent`,borderRadius:'50%',animation:'spin 0.8s linear infinite',margin:'0 auto 16px'}}/>
+        <div style={{fontSize:15,color:C.textSub}}>GiftPay 로딩 중...</div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh'}}>
+      {/* 상단 수평 네비 */}
+      <header style={{
+        position:'sticky',top:0,zIndex:100,
+        background:C.surface,borderBottom:`1px solid ${C.border}`,
+        display:'flex',alignItems:'center',height:56,padding:'0 32px',gap:4,
+        boxShadow:'0 1px 4px rgba(0,0,0,0.06)'}}>
+        {/* 로고 */}
+        <div style={{display:'flex',alignItems:'center',gap:8,marginRight:24}}>
+          <div style={{width:32,height:32,borderRadius:8,background:`linear-gradient(135deg,${C.primary},${C.secondary})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>🎁</div>
+          <span style={{fontSize:16,fontWeight:800,color:C.text,letterSpacing:'-0.03em'}}>GiftPay</span>
+        </div>
+
+        {/* 탭 메뉴 */}
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>navigate(t.id)}
+            title={t.label}
+            style={{
+              padding:'8px 16px',borderRadius:8,border:'none',cursor:'pointer',
+              fontSize:14,fontWeight:tab===t.id?700:500,
+              background:tab===t.id?`${C.primary}12`:'transparent',
+              color:tab===t.id?C.primary:C.textSub,
+              transition:'all 150ms',display:'flex',alignItems:'center',gap:6}}>
+            <span style={{fontSize:15}}>{t.icon}</span>
+            {t.label}
+          </button>
+        ))}
+
+        <div style={{flex:1}}/>
+
+        {/* 우측 액션 */}
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <div style={{position:'relative'}}>
+            <button style={{width:36,height:36,borderRadius:8,background:C.bg,border:'none',cursor:'pointer',fontSize:16}}>🔔</button>
+            <div style={{position:'absolute',top:6,right:6,width:8,height:8,borderRadius:'50%',background:C.danger}}/>
+          </div>
+          <div style={{width:36,height:36,borderRadius:'50%',background:`linear-gradient(135deg,${C.primary},${C.secondary})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,color:'#fff',fontWeight:700,cursor:'pointer'}}>
+            김
+          </div>
+        </div>
+      </header>
+
+      {/* 히어로 배너 */}
+      <HeroBanner tab={tab}/>
+
+      {/* 콘텐츠 */}
+      <main style={{flex:1,background:C.bg}}>
+        <div key={pageKey} style={{animation:'fadeIn 300ms ease'}}>
+          {renderContent()}
+        </div>
+      </main>
+
+      {/* 푸터 */}
+      <footer style={{background:'#0F172A',color:'rgba(255,255,255,0.7)',padding:'32px 32px 24px'}}>
+        <div style={{maxWidth:1200,margin:'0 auto',display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:32}}>
+          <div>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+              <div style={{width:28,height:28,borderRadius:6,background:`linear-gradient(135deg,${C.primary},${C.secondary})`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14}}>🎁</div>
+              <span style={{fontSize:15,fontWeight:700,color:'#fff'}}>GiftPay</span>
+            </div>
+            <p style={{fontSize:13,lineHeight:1.6,color:'rgba(255,255,255,0.5)'}}>
+              상품권을 가장 빠르고 안전하게 현금으로 전환하는 서비스입니다. 핀번호 입력부터 즉시 입금까지 10분 이내 처리를 목표로 합니다.
+            </p>
+          </div>
+          {[
+            {title:'서비스',links:['상품권 판매','이용 안내','수수료 안내','이용약관']},
+            {title:'고객지원',links:['자주 묻는 질문','1:1 문의','공지사항','개인정보처리방침']},
+          ].map(col=>(
+            <div key={col.title}>
+              <div style={{fontSize:13,fontWeight:700,color:'rgba(255,255,255,0.9)',marginBottom:12}}>{col.title}</div>
+              {col.links.map(l=>(
+                <div key={l} style={{fontSize:13,color:'rgba(255,255,255,0.5)',marginBottom:8,cursor:'pointer'}}
+                  onMouseEnter={e=>e.currentTarget.style.color='rgba(255,255,255,0.9)'}
+                  onMouseLeave={e=>e.currentTarget.style.color='rgba(255,255,255,0.5)'}>{l}</div>
+              ))}
+            </div>
+          ))}
+        </div>
+        <div style={{maxWidth:1200,margin:'24px auto 0',paddingTop:20,borderTop:'1px solid rgba(255,255,255,0.08)',fontSize:12,color:'rgba(255,255,255,0.35)'}}>
+          © 2026 GiftPay. 자체 개발 구현 데모
+        </div>
+      </footer>
+
+      {/* 토스트 */}
+      {toast&&<Toast key={toast.id} message={toast.message} type={toast.type} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
