@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>달리기 자세 AI 분석 플랫폼 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+@keyframes fadeIn { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:translateY(0) } }
+@keyframes slideInRight { from { transform:translateX(100%) } to { transform:translateX(0) } }
+@keyframes slideInUp { from { opacity:0; transform:translateY(20px) } to { opacity:1; transform:translateY(0) } }
+@keyframes pulse { 0%,100%{ opacity:1 } 50%{ opacity:.5 } }
+@keyframes spin { from{ transform:rotate(0deg) } to{ transform:rotate(360deg) } }
+@keyframes progressFill { from{ width:0 } to{ width:var(--w,70%) } }
+@keyframes blink { 0%,100%{ opacity:1 } 50%{ opacity:0 } }
+@keyframes riskGlow { 0%,100%{ box-shadow:0 0 0 0 rgba(239,68,68,.4) } 70%{ box-shadow:0 0 0 12px rgba(239,68,68,0) } }
+@keyframes gaugeGrow { from{ stroke-dashoffset:251 } to{ stroke-dashoffset:var(--offset,100) } }
+@keyframes waveAnim { 0%,100%{ transform:scaleY(.4) } 50%{ transform:scaleY(1) } }
+@keyframes tokenBlink { 0%,100%{ background:#0EA5E920 } 50%{ background:#0EA5E940 } }
+@keyframes skeletonDraw { from{ stroke-dashoffset:200 } to{ stroke-dashoffset:0 } }
+@keyframes accordionOpen { from{ opacity:0; max-height:0 } to{ opacity:1; max-height:500px } }
+@keyframes fadeInScale { from { opacity:0; transform:scale(.94) } to { opacity:1; transform:scale(1) } }
+@keyframes slideUp { from { opacity:0; transform:translateY(24px) } to { opacity:1; transform:translateY(0) } }
+@keyframes ripple { from { transform:scale(0); opacity:.6 } to { transform:scale(4); opacity:0 } }
+@keyframes countUp { 0% { opacity:0; transform:translateY(8px) } 100% { opacity:1; transform:translateY(0) } }
+@keyframes shimmer { 0% { background-position:-400px 0 } 100% { background-position:400px 0 } }
+@keyframes barGrow { from { transform:scaleX(0) } to { transform:scaleX(1) } }
+@keyframes slideDown { from { opacity:0; max-height:0 } to { opacity:1; max-height:600px } }
+.kpi-num { animation: countUp .4s ease both; }
+.shimmer-el { background:linear-gradient(90deg,#1E293B 25%,#243347 50%,#1E293B 75%); background-size:400px; animation: shimmer 1.5s infinite; }
+.bar-anim { animation: barGrow .6s ease both; transform-origin:left center; }
+.panel-fade { animation: fadeInScale .25s ease both; }
+.slide-down { animation: slideDown .3s ease both; }
+html,body{ margin:0; padding:0; width:100%; height:100%; font-family:'Pretendard',sans-serif; background:#0F172A; }
+#root{ display:flex; flex-direction:column; width:100%; min-height:100vh; }
+*{ box-sizing:border-box; }
+::-webkit-scrollbar{ width:6px; }
+::-webkit-scrollbar-track{ background:#1E293B; }
+::-webkit-scrollbar-thumb{ background:#475569; border-radius:3px; }
+button{ cursor:pointer; border:none; outline:none; font-family:'Pretendard',sans-serif; }
+input,textarea,select{ font-family:'Pretendard',sans-serif; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback} = React;
+
+const C = {
+  bg:'#0F172A', surf:'#1E293B', surf2:'#243347', border:'#334155',
+  primary:'#0EA5E9', secondary:'#6366F1', accent:'#10B981',
+  text:'#F1F5F9', textMuted:'#94A3B8', danger:'#EF4444', warning:'#F59E0B',
+  success:'#10B981',
+};
+
+const TABS = [
+  { id:'pose', label:'포즈 분석' },
+  { id:'labeling', label:'STT 라벨링' },
+  { id:'risk', label:'위험도 진단' },
+  { id:'api', label:'API 명세' },
+];
+
+const PATIENTS = [
+  { id:'P001', name:'김민준', age:32, date:'2026-05-07', status:'분석완료', risk:'주의', views:['전면','측면'] },
+  { id:'P002', name:'이서연', age:28, date:'2026-05-07', status:'분석완료', risk:'위험', views:['전면','후면','측면'] },
+  { id:'P003', name:'박지훈', age:41, date:'2026-05-06', status:'라벨링중', risk:'-', views:['전면'] },
+  { id:'P004', name:'최수아', age:35, date:'2026-05-06', status:'분석완료', risk:'정상', views:['전면','측면'] },
+  { id:'P005', name:'정태영', age:26, date:'2026-05-05', status:'분석완료', risk:'주의', views:['전면','후면'] },
+];
+
+const JOINT_DATA = [
+  { name:'무릎 굽힘각(좌)', val:165, normal:'140~170°' },
+  { name:'무릎 굽힘각(우)', val:162, normal:'140~170°' },
+  { name:'고관절 신전(좌)', val:178, normal:'170~185°' },
+  { name:'고관절 신전(우)', val:174, normal:'170~185°' },
+  { name:'발목 배굴(좌)', val:72, normal:'75~90°' },
+  { name:'발목 배굴(우)', val:80, normal:'75~90°' },
+];
+
+const RISK_PARTS = [
+  { part:'무릎', score:72, level:'주의', color:'#F59E0B' },
+  { part:'발목(좌)', score:85, level:'위험', color:'#EF4444' },
+  { part:'고관절', score:45, level:'정상', color:'#10B981' },
+  { part:'허리·척추', score:55, level:'정상', color:'#10B981' },
+  { part:'어깨·상체', score:30, level:'정상', color:'#10B981' },
+];
+
+const PRESCRIPTIONS = [
+  { part:'발목(좌)', items:['종아리 스트레칭 15분/일 권장','착지 시 발뒤꿈치 패드 사용 검토','달리기 거리를 현재의 60%로 단계적 감소','정형외과 추가 검진 예약 필요'] },
+  { part:'무릎', items:['슬개골 강화 운동 주 3회','경사 러닝 자제 (평지 훈련 전환)','쿠션감 보강 러닝화로 교체 권장'] },
+];
+
+const API_ENDPOINTS = [
+  { method:'POST', path:'/api/v1/analyze/pose', desc:'달리기 영상 포즈 분석 요청', params:'file: UploadFile, patient_id: str' },
+  { method:'GET', path:'/api/v1/analyze/{session_id}', desc:'분석 세션 결과 조회', params:'session_id: UUID' },
+  { method:'POST', path:'/api/v1/label', desc:'음성 소견 STT + 정형화 저장', params:'audio: UploadFile, session_id: UUID' },
+  { method:'GET', path:'/api/v1/risk/{session_id}', desc:'부상 위험도 산출 결과', params:'session_id: UUID' },
+  { method:'POST', path:'/api/v1/token', desc:'API 토큰 발급', params:'name: str, expires_days: int' },
+  { method:'DELETE', path:'/api/v1/token/{token_id}', desc:'API 토큰 폐기', params:'token_id: UUID' },
+];
+
+// ─── Shared components ────────────────────────────────────────
+function Badge({ text, color, bg }) {
+  return <span style={{ fontSize:11, fontWeight:600, padding:'2px 8px', borderRadius:99, color, background:bg||color+'22' }}>{text}</span>;
+}
+
+function RiskBadge({ level }) {
+  const map = { 정상:['#10B981','#10B98122'], 주의:['#F59E0B','#F59E0B22'], 위험:['#EF4444','#EF444422'] };
+  const [c,b] = map[level]||['#94A3B8','#94A3B822'];
+  return <Badge text={level} color={c} bg={b} />;
+}
+
+function KpiCard({ label, value, sub, color }) {
+  return (
+    <div style={{ background:C.surf, border:`1px solid ${C.border}`, borderRadius:12, padding:'16px 20px', flex:1, minWidth:140 }}>
+      <div style={{ fontSize:12, color:C.textMuted, marginBottom:4 }}>{label}</div>
+      <div style={{ fontSize:26, fontWeight:700, color:color||C.primary }}>{value}</div>
+      {sub && <div style={{ fontSize:11, color:C.textMuted, marginTop:2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Overlay({ onClose }) {
+  return <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.55)', zIndex:200 }} />;
+}
+
+function Modal({ title, onClose, children, width=520 }) {
+  return (
+    <>
+      <Overlay onClose={onClose} />
+      <div style={{ position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)', width, background:C.surf, border:`1px solid ${C.border}`, borderRadius:16, zIndex:201, padding:28, animation:'fadeIn .2s ease', maxHeight:'90vh', overflowY:'auto' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+          <h3 style={{ margin:0, color:C.text, fontSize:16, fontWeight:700 }}>{title}</h3>
+          <button onClick={onClose} style={{ background:'none', color:C.textMuted, fontSize:20 }}>✕</button>
+        </div>
+        {children}
+      </div>
+    </>
+  );
+}
+
+function Drawer({ onClose, children }) {
+  return (
+    <>
+      <Overlay onClose={onClose} />
+      <div style={{ position:'fixed', top:0, right:0, bottom:0, width:460, background:C.surf, borderLeft:`1px solid ${C.border}`, zIndex:201, overflowY:'auto', padding:28, animation:'slideInRight .2s ease' }}>
+        <button onClick={onClose} style={{ background:'none', color:C.textMuted, fontSize:20, marginBottom:16, display:'block', marginLeft:'auto' }}>✕</button>
+        {children}
+      </div>
+    </>
+  );
+}
+
+function Toast({ msg, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 2800); return () => clearTimeout(t); }, []);
+  return (
+    <div style={{ position:'fixed', bottom:28, right:28, background:C.accent, color:'#fff', padding:'12px 20px', borderRadius:10, fontWeight:600, zIndex:300, animation:'slideInUp .3s ease', fontSize:14 }}>
+      ✓ {msg}
+    </div>
+  );
+}
+
+// ─── Skeleton visualization ───────────────────────────────────
+function SkeletonViewer({ frame }) {
+  const joints = [
+    [200,60],[200,120],[175,115],[155,170],[140,230],[145,285],
+    [225,115],[245,170],[260,230],[255,285],
+    [195,130],[205,130],[190,210],[210,210],
+    [185,290],[215,290],[180,360],[215,360],
+  ];
+  const bones = [[0,1],[1,2],[2,3],[3,4],[4,5],[1,6],[6,7],[7,8],[8,9],[1,10],[10,11],[11,12],[12,13],[10,14],[14,16],[11,15],[15,17]];
+  const highlight = [3,4,5,14,16];
+  return (
+    <svg width="100%" viewBox="0 0 400 420" style={{ background:'#0A0F1E', borderRadius:10, maxHeight:360 }}>
+      <rect width="400" height="420" fill="#0A0F1E" rx="10"/>
+      <text x="16" y="24" fill={C.textMuted} fontSize="11">프레임 {frame}/240 | MediaPipe Pose</text>
+      {bones.map(([a,b],i) => (
+        <line key={i} x1={joints[a][0]} y1={joints[a][1]} x2={joints[b][0]} y2={joints[b][1]}
+          stroke={highlight.includes(a)||highlight.includes(b)? C.danger :'#38BDF8'} strokeWidth="2.5"
+          strokeLinecap="round" style={{animation:`skeletonDraw .8s ease ${i*.03}s both`}} strokeDasharray="200" strokeDashoffset="0"/>
+      ))}
+      {joints.map(([x,y],i) => (
+        <circle key={i} cx={x} cy={y} r={highlight.includes(i)?6:4}
+          fill={highlight.includes(i)?C.danger:C.primary}
+          style={{animation:`fadeIn .5s ease ${i*.04}s both`}}
+          stroke="#fff" strokeWidth="1.5"/>
+      ))}
+      {highlight.includes(14) && <circle cx={joints[14][0]} cy={joints[14][1]} r={10} fill="none" stroke={C.danger} strokeWidth="2" style={{animation:'riskGlow 1.5s infinite'}}/>}
+      <text x={joints[14][0]+12} y={joints[14][1]+4} fill={C.danger} fontSize="10" fontWeight="bold">⚠ 위험</text>
+      <text x="16" y="405" fill={C.textMuted} fontSize="10">보폭 1.42m | 체공시간 0.28s | 케이던스 172spm</text>
+    </svg>
+  );
+}
+
+// ─── Pose Analysis Page ───────────────────────────────────────
+function PosePage({ onDrawer }) {
+  const [frame, setFrame] = useState(47);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [selected, setSelected] = useState(null);
+
+  const startAnalysis = () => {
+    setAnalyzing(true); setProgress(0);
+    const iv = setInterval(() => {
+      setProgress(p => { if(p>=100){ clearInterval(iv); setAnalyzing(false); return 100; } return p+3; });
+    }, 80);
+  };
+
+  return (
+    <div style={{ animation:'fadeIn .3s ease' }}>
+      <div style={{ display:'flex', gap:20, flexWrap:'wrap' }}>
+        {/* Left: viewer */}
+        <div style={{ flex:'1 1 480px' }}>
+          <div style={{ background:C.surf, borderRadius:14, border:`1px solid ${C.border}`, padding:20 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+              <span style={{ fontWeight:700, color:C.text }}>포즈 분석 뷰어</span>
+              <div style={{ display:'flex', gap:8 }}>
+                <button onClick={startAnalysis} style={{ background:C.primary, color:'#fff', padding:'6px 16px', borderRadius:8, fontSize:13, fontWeight:600 }}>
+                  {analyzing ? '분석 중...' : '분석 시작'}
+                </button>
+                <button style={{ background:C.surf2, color:C.text, padding:'6px 12px', borderRadius:8, fontSize:13 }}>
+                  영상 업로드
+                </button>
+              </div>
+            </div>
+            {analyzing && (
+              <div style={{ marginBottom:12 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                  <span style={{ fontSize:12, color:C.textMuted }}>관절 추출 중...</span>
+                  <span style={{ fontSize:12, color:C.primary }}>{progress}%</span>
+                </div>
+                <div style={{ height:6, background:C.surf2, borderRadius:3, overflow:'hidden' }}>
+                  <div style={{ height:'100%', background:`linear-gradient(90deg,${C.primary},${C.secondary})`, width:`${progress}%`, transition:'width .1s linear', borderRadius:3 }}/>
+                </div>
+              </div>
+            )}
+            <SkeletonViewer frame={frame} />
+            <div style={{ marginTop:12 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                <span style={{ fontSize:12, color:C.textMuted }}>프레임 탐색 (0~240)</span>
+                <span style={{ fontSize:12, color:C.primary, fontWeight:600 }}>{frame} / 240</span>
+              </div>
+              <input type="range" min={0} max={240} value={frame} onChange={e=>setFrame(+e.target.value)}
+                style={{ width:'100%', accentColor:C.primary }} />
+            </div>
+          </div>
+
+          {/* Biomechanics */}
+          <div style={{ background:C.surf, borderRadius:14, border:`1px solid ${C.border}`, padding:20, marginTop:16 }}>
+            <div style={{ fontWeight:700, color:C.text, marginBottom:14 }}>생체역학 지표</div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10 }}>
+              {[
+                { l:'보폭', v:'1.42 m', ok:true },
+                { l:'체공시간', v:'0.28 s', ok:true },
+                { l:'케이던스', v:'172 spm', ok:true },
+                { l:'착지각도', v:'12°', ok:false },
+                { l:'수직진동', v:'9.2 cm', ok:false },
+                { l:'팔 대칭성', v:'87%', ok:true },
+              ].map((m,i) => (
+                <div key={i} style={{ background:m.ok?C.accent+'11':C.danger+'11', border:`1px solid ${m.ok?C.accent:C.danger}33`, borderRadius:10, padding:'12px 14px', textAlign:'center' }}>
+                  <div style={{ fontSize:11, color:C.textMuted, marginBottom:4 }}>{m.l}</div>
+                  <div style={{ fontSize:18, fontWeight:700, color:m.ok?C.accent:C.danger }}>{m.v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Right: table */}
+        <div style={{ flex:'0 0 320px' }}>
+          <div style={{ background:C.surf, borderRadius:14, border:`1px solid ${C.border}`, padding:20 }}>
+            <div style={{ fontWeight:700, color:C.text, marginBottom:14 }}>분석 케이스 목록</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              {PATIENTS.map(p => (
+                <div key={p.id} onClick={() => onDrawer(p)} style={{ background:C.surf2, borderRadius:10, padding:'12px 14px', cursor:'pointer', border:`1px solid ${C.border}`, transition:'all .15s' }}
+                  onMouseOver={e=>{e.currentTarget.style.borderColor=C.primary;e.currentTarget.style.background='#1E3A5F';}}
+                  onMouseOut={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background=C.surf2;}}>
+                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                    <span style={{ fontWeight:600, color:C.text }}>{p.name}</span>
+                    <RiskBadge level={p.risk} />
+                  </div>
+                  <div style={{ fontSize:12, color:C.textMuted }}>{p.id} · {p.date} · {p.views.join('/')} 촬영</div>
+                  <div style={{ marginTop:6 }}>
+                    <Badge text={p.status} color={p.status==='분석완료'?C.accent:C.warning} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Joint angles */}
+          <div style={{ background:C.surf, borderRadius:14, border:`1px solid ${C.border}`, padding:20, marginTop:16 }}>
+            <div style={{ fontWeight:700, color:C.text, marginBottom:14 }}>관절 각도 데이터</div>
+            {JOINT_DATA.map((j,i) => {
+              const ok = j.val >= 140;
+              return (
+                <div key={i} style={{ marginBottom:10 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
+                    <span style={{ fontSize:12, color:C.textMuted }}>{j.name}</span>
+                    <span style={{ fontSize:12, fontWeight:600, color:ok?C.accent:C.danger }}>{j.val}°</span>
+                  </div>
+                  <div style={{ height:4, background:C.surf2, borderRadius:2 }}>
+                    <div style={{ height:'100%', background:ok?C.accent:C.danger, width:`${Math.min((j.val/200)*100,100)}%`, borderRadius:2, transition:'width .5s ease' }}/>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── STT Labeling Page ────────────────────────────────────────
+function LabelingPage({ onToast }) {
+  const [recording, setRecording] = useState(false);
+  const [transcript, setTranscript] = useState('');
+  const [structured, setStructured] = useState(null);
+  const [editMode, setEditMode] = useState(false);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if(!recording) return;
+    const iv = setInterval(() => setTick(t=>t+1), 200);
+    return () => clearInterval(iv);
+  }, [recording]);
+
+  const SAMPLE_TEXT = '환자 발목 착지 패턴에서 과내전 소견이 관찰됩니다. 좌측 발목의 배굴 가동범위가 정상 범위인 75도 미만으로 제한되어 있으며, 착지 시 발뒤꿈치가 먼저 닿는 힐스트라이크 패턴이 확인됩니다. 부상 위험도는 주의 수준으로 판단하며, 달리기 거리를 현재의 60%로 줄이고 종아리 스트레칭을 일 15분씩 시행하도록 처방합니다.';
+
+  const simulate = () => {
+    let i = 0;
+    const iv = setInterval(() => {
+      setTranscript(SAMPLE_TEXT.slice(0,i+=4));
+      if(i>=SAMPLE_TEXT.length){ clearInterval(iv); setRecording(false); }
+    }, 30);
+  };
+
+  const toggleRecord = () => {
+    if(recording){ setRecording(false); return; }
+    setRecording(true); setTranscript(''); setStructured(null);
+    setTimeout(() => simulate(), 800);
+  };
+
+  const runLLM = () => {
+    setTimeout(() => {
+      setStructured({
+        risk:'주의', parts:['발목(좌)','무릎'], pattern:'힐스트라이크 + 과내전',
+        prescription:['달리기 거리 60% 감소','종아리 스트레칭 15분/일','힐스트라이크 → 미드풋 착지 교정','착지 시 발뒤꿈치 패드 사용'],
+        confidence:94,
+      });
+      onToast('GPT-4o-mini 정형화 완료');
+    }, 1200);
+  };
+
+  const LABELS = [
+    { date:'2026-05-07', patient:'김민준', status:'검토완료', risk:'주의' },
+    { date:'2026-05-06', patient:'이서연', status:'수정필요', risk:'위험' },
+    { date:'2026-05-06', patient:'박지훈', status:'라벨링중', risk:'-' },
+  ];
+
+  return (
+    <div style={{ animation:'fadeIn .3s ease' }}>
+      <div style={{ display:'flex', gap:20, flexWrap:'wrap' }}>
+        <div style={{ flex:'1 1 460px' }}>
+          <div style={{ background:C.surf, borderRadius:14, border:`1px solid ${C.border}`, padding:24 }}>
+            <div style={{ fontWeight:700, color:C.text, marginBottom:18, fontSize:15 }}>음성 소견 입력</div>
+            {/* Waveform */}
+            <div style={{ background:'#0A0F1E', borderRadius:10, padding:'16px 20px', marginBottom:16, minHeight:80, display:'flex', alignItems:'center', justifyContent:'center', gap:3 }}>
+              {recording
+                ? Array.from({length:32},(_,i) => (
+                    <div key={i} style={{ width:4, background:C.primary, borderRadius:2, height:Math.random()*40+8, animation:`waveAnim ${.3+Math.random()*.4}s ease-in-out ${i*.05}s infinite` }}/>
+                  ))
+                : <span style={{ color:C.textMuted, fontSize:13 }}>마이크 버튼을 눌러 음성 소견을 입력하세요</span>
+              }
+            </div>
+            <div style={{ display:'flex', gap:10, marginBottom:16 }}>
+              <button onClick={toggleRecord} style={{ flex:1, padding:'12px', borderRadius:10, fontSize:14, fontWeight:600, background:recording?C.danger:C.primary, color:'#fff', transition:'all .2s' }}>
+                {recording ? <><span style={{animation:'blink 1s infinite',display:'inline-block'}}>●</span> 녹음 중지</> : '● 녹음 시작'}
+              </button>
+              <button style={{ background:C.surf2, color:C.text, padding:'12px 18px', borderRadius:10, fontSize:13 }}>파일 업로드</button>
+            </div>
+            {recording && <div style={{ fontSize:12, color:C.textMuted, marginBottom:8, animation:'pulse 1.5s infinite' }}>🎙 Whisper API 전사 중...</div>}
+            <textarea value={transcript} onChange={e=>setTranscript(e.target.value)} rows={5}
+              placeholder="음성 인식 결과가 여기에 표시됩니다"
+              style={{ width:'100%', background:'#0A0F1E', border:`1px solid ${C.border}`, borderRadius:10, color:C.text, padding:14, fontSize:13, resize:'vertical', lineHeight:1.6 }}/>
+            {transcript && !structured && (
+              <button onClick={runLLM} style={{ width:'100%', marginTop:12, background:`linear-gradient(135deg,${C.secondary},${C.primary})`, color:'#fff', padding:'12px', borderRadius:10, fontSize:14, fontWeight:600 }}>
+                GPT-4o-mini 정형화 실행
+              </button>
+            )}
+          </div>
+
+          {structured && (
+            <div style={{ background:C.surf, borderRadius:14, border:`1px solid ${C.accent}44`, padding:24, marginTop:16, animation:'slideInUp .3s ease' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+                <span style={{ fontWeight:700, color:C.text }}>정형화 결과 <span style={{ fontSize:12, color:C.accent }}>신뢰도 {structured.confidence}%</span></span>
+                <button onClick={()=>setEditMode(!editMode)} style={{ background:C.surf2, color:C.text, padding:'6px 14px', borderRadius:8, fontSize:12 }}>
+                  {editMode?'완료':'수정'}
+                </button>
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+                <div style={{ background:C.surf2, borderRadius:10, padding:'12px 14px' }}>
+                  <div style={{ fontSize:11, color:C.textMuted, marginBottom:4 }}>부상 위험도</div>
+                  <RiskBadge level={structured.risk} />
+                </div>
+                <div style={{ background:C.surf2, borderRadius:10, padding:'12px 14px' }}>
+                  <div style={{ fontSize:11, color:C.textMuted, marginBottom:4 }}>이상 부위</div>
+                  <div style={{ fontSize:13, color:C.text, fontWeight:600 }}>{structured.parts.join(', ')}</div>
+                </div>
+              </div>
+              <div style={{ background:C.surf2, borderRadius:10, padding:'14px', marginBottom:14 }}>
+                <div style={{ fontSize:11, color:C.textMuted, marginBottom:8 }}>착지 패턴</div>
+                <div style={{ fontSize:13, color:C.warning }}>{structured.pattern}</div>
+              </div>
+              <div style={{ fontSize:11, color:C.textMuted, marginBottom:8 }}>교정 처방</div>
+              {structured.prescription.map((p,i) => (
+                <div key={i} style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
+                  <span style={{ color:C.accent, fontSize:14 }}>✓</span>
+                  {editMode
+                    ? <input defaultValue={p} style={{ flex:1, background:'#0A0F1E', border:`1px solid ${C.border}`, borderRadius:6, color:C.text, padding:'4px 10px', fontSize:12 }}/>
+                    : <span style={{ fontSize:13, color:C.text }}>{p}</span>
+                  }
+                </div>
+              ))}
+              <button onClick={()=>onToast('라벨 데이터 저장 완료')} style={{ width:'100%', marginTop:16, background:C.accent, color:'#fff', padding:'12px', borderRadius:10, fontSize:14, fontWeight:600 }}>
+                DB 저장
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Label history */}
+        <div style={{ flex:'0 0 300px' }}>
+          <div style={{ background:C.surf, borderRadius:14, border:`1px solid ${C.border}`, padding:20 }}>
+            <div style={{ fontWeight:700, color:C.text, marginBottom:14 }}>라벨링 이력</div>
+            {LABELS.map((l,i) => (
+              <div key={i} style={{ background:C.surf2, borderRadius:10, padding:'12px 14px', marginBottom:8, border:`1px solid ${C.border}` }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                  <span style={{ fontWeight:600, color:C.text, fontSize:14 }}>{l.patient}</span>
+                  <RiskBadge level={l.risk} />
+                </div>
+                <div style={{ fontSize:12, color:C.textMuted, marginBottom:6 }}>{l.date}</div>
+                <Badge text={l.status} color={l.status==='검토완료'?C.accent:l.status==='수정필요'?C.danger:C.warning} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Risk Diagnosis Page ──────────────────────────────────────
+function RiskPage({ onToast }) {
+  const [selected, setSelected] = useState(null);
+  const [showReport, setShowReport] = useState(false);
+
+  return (
+    <div style={{ animation:'fadeIn .3s ease' }}>
+      {showReport && (
+        <Modal title="진단 리포트 PDF 미리보기" onClose={()=>setShowReport(false)} width={580}>
+          <div style={{ background:'#fff', borderRadius:10, padding:24, color:'#111', minHeight:400 }}>
+            <div style={{ borderBottom:'2px solid #1D4ED8', paddingBottom:12, marginBottom:16 }}>
+              <div style={{ fontSize:18, fontWeight:800, color:'#1D4ED8' }}>달리기 자세 분석 보고서</div>
+              <div style={{ fontSize:12, color:'#666', marginTop:4 }}>발행일: 2026-05-08 | 환자: 이서연 (P002)</div>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+              {RISK_PARTS.map((r,i) => (
+                <div key={i} style={{ border:`1px solid ${r.color}44`, borderRadius:8, padding:'10px 12px' }}>
+                  <div style={{ fontSize:11, color:'#666' }}>{r.part}</div>
+                  <div style={{ fontSize:20, fontWeight:700, color:r.color }}>{r.score}점</div>
+                  <div style={{ fontSize:11, color:r.color }}>{r.level}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize:12, color:'#444', lineHeight:1.7 }}>
+              <strong>처방 요약:</strong><br/>
+              발목(좌) 고위험 소견으로 정형외과 추가 검진을 권고합니다. 종아리 스트레칭과 착지 패턴 교정 훈련을 시작하고, 달리기 거리를 60%로 제한하도록 처방합니다.
+            </div>
+          </div>
+          <button onClick={()=>{setShowReport(false);onToast('PDF 저장 완료');}} style={{ width:'100%', marginTop:16, background:C.primary, color:'#fff', padding:'12px', borderRadius:10, fontWeight:600, fontSize:14 }}>
+            PDF 다운로드
+          </button>
+        </Modal>
+      )}
+      <div style={{ display:'flex', gap:16, marginBottom:20, flexWrap:'wrap' }}>
+        <KpiCard label="총 분석 케이스" value="47건" sub="이번 달" color={C.primary} />
+        <KpiCard label="위험 케이스" value="8건" sub="전체의 17%" color={C.danger} />
+        <KpiCard label="처방 발행" value="31건" sub="이번 달" color={C.accent} />
+        <KpiCard label="평균 위험도" value="52점" color={C.warning} />
+      </div>
+      <div style={{ display:'flex', gap:20, flexWrap:'wrap' }}>
+        <div style={{ flex:'1 1 360px' }}>
+          <div style={{ background:C.surf, borderRadius:14, border:`1px solid ${C.border}`, padding:20 }}>
+            <div style={{ fontWeight:700, color:C.text, marginBottom:16 }}>신체 부위별 위험도</div>
+            {RISK_PARTS.map((r,i) => (
+              <div key={i} onClick={()=>setSelected(r)} style={{ marginBottom:16, cursor:'pointer', padding:'12px 14px', borderRadius:10, background:selected?.part===r.part?`${r.color}15`:C.surf2, border:`1px solid ${selected?.part===r.part?r.color:C.border}`, transition:'all .15s', animation:`slideUp .3s ease ${i*0.1}s both` }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
+                  <span style={{ fontWeight:600, color:C.text }}>{r.part}</span>
+                  <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                    <span style={{ fontSize:20, fontWeight:800, color:r.color }}>{r.score}</span>
+                    <Badge text={r.level} color={r.color} />
+                  </div>
+                </div>
+                <div style={{ height:8, background:'#0A0F1E', borderRadius:4, overflow:'hidden' }}>
+                  <div style={{ height:'100%', background:r.color, width:`${r.score}%`, borderRadius:4, transition:'width .8s ease', animation:r.level==='위험'?'riskGlow 2s infinite':undefined }}/>
+                </div>
+              </div>
+            ))}
+            <button onClick={()=>setShowReport(true)} style={{ width:'100%', marginTop:8, background:`linear-gradient(135deg,${C.primary},${C.secondary})`, color:'#fff', padding:'12px', borderRadius:10, fontWeight:600, fontSize:14 }}>
+              리포트 PDF 생성
+            </button>
+          </div>
+        </div>
+        <div style={{ flex:'1 1 360px' }}>
+          <div style={{ background:C.surf, borderRadius:14, border:`1px solid ${C.border}`, padding:20 }}>
+            <div style={{ fontWeight:700, color:C.text, marginBottom:14 }}>교정 처방</div>
+            {selected
+              ? (
+                <div style={{ animation:'fadeIn .25s ease' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
+                    <span style={{ fontWeight:700, color:C.text, fontSize:16 }}>{selected.part}</span>
+                    <Badge text={selected.level} color={selected.color} />
+                    <span style={{ marginLeft:'auto', fontSize:24, fontWeight:800, color:selected.color }}>{selected.score}점</span>
+                  </div>
+                  {(PRESCRIPTIONS.find(p=>p.part===selected.part)||PRESCRIPTIONS[0]).items.map((item,i) => (
+                    <div key={i} style={{ display:'flex', gap:10, marginBottom:12, background:C.surf2, borderRadius:10, padding:'12px 14px' }}>
+                      <span style={{ color:C.accent, fontSize:18, flexShrink:0 }}>✓</span>
+                      <span style={{ fontSize:13, color:C.text, lineHeight:1.5 }}>{item}</span>
+                    </div>
+                  ))}
+                </div>
+              )
+              : <div style={{ textAlign:'center', color:C.textMuted, padding:'40px 0', fontSize:14 }}>왼쪽에서 신체 부위를 선택하세요</div>
+            }
+          </div>
+          <div style={{ background:C.surf, borderRadius:14, border:`1px solid ${C.border}`, padding:20, marginTop:16 }}>
+            <div style={{ fontWeight:700, color:C.text, marginBottom:14 }}>최근 진단 이력</div>
+            {PATIENTS.slice(0,3).map((p,i) => (
+              <div key={i} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 0', borderBottom:`1px solid ${C.border}` }}>
+                <div>
+                  <div style={{ fontWeight:600, color:C.text, fontSize:13 }}>{p.name}</div>
+                  <div style={{ fontSize:11, color:C.textMuted }}>{p.date}</div>
+                </div>
+                <RiskBadge level={p.risk} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── API Console Page ─────────────────────────────────────────
+function ApiPage({ onToast }) {
+  const [expanded, setExpanded] = useState(null);
+  const [showTokenModal, setShowTokenModal] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [testing, setTesting] = useState(false);
+
+  const TOKENS = [
+    { id:'tk_001', name:'모바일 앱 연동', key:'sk-mp_X8kL92pQ...', created:'2026-05-01', expires:'2026-08-01', calls:1247, limit:5000 },
+    { id:'tk_002', name:'웹 대시보드', key:'sk-wb_M3nT47rS...', created:'2026-04-15', expires:'2026-07-15', calls:389, limit:2000 },
+  ];
+
+  const runTest = (ep) => {
+    setTesting(true); setTestResult(null);
+    setTimeout(() => {
+      setTesting(false);
+      setTestResult({ status:200, body:JSON.stringify({ session_id:'sess_7f3a2b', patient_id:'P002', joints:33, risk_score:85, prescription:['발목 스트레칭','달리기 거리 60% 감소'] }, null, 2) });
+    }, 1200);
+  };
+
+  return (
+    <div style={{ animation:'fadeIn .3s ease' }}>
+      {showTokenModal && (
+        <Modal title="API 토큰 발급" onClose={()=>setShowTokenModal(false)}>
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            <div>
+              <label style={{ display:'block', fontSize:12, color:C.textMuted, marginBottom:6 }}>토큰 이름</label>
+              <input placeholder="예: 모바일 앱 연동" style={{ width:'100%', background:'#0A0F1E', border:`1px solid ${C.border}`, borderRadius:8, color:C.text, padding:'10px 14px', fontSize:13 }}/>
+            </div>
+            <div>
+              <label style={{ display:'block', fontSize:12, color:C.textMuted, marginBottom:6 }}>만료 기간</label>
+              <select style={{ width:'100%', background:'#0A0F1E', border:`1px solid ${C.border}`, borderRadius:8, color:C.text, padding:'10px 14px', fontSize:13 }}>
+                <option>30일</option><option>90일</option><option>180일</option><option>365일</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display:'block', fontSize:12, color:C.textMuted, marginBottom:6 }}>일일 호출 한도</label>
+              <input type="number" defaultValue={1000} style={{ width:'100%', background:'#0A0F1E', border:`1px solid ${C.border}`, borderRadius:8, color:C.text, padding:'10px 14px', fontSize:13 }}/>
+            </div>
+            <button onClick={()=>{setShowTokenModal(false);onToast('API 토큰 발급 완료');}} style={{ background:C.primary, color:'#fff', padding:'12px', borderRadius:10, fontWeight:600, fontSize:14, marginTop:8 }}>
+              토큰 발급
+            </button>
+          </div>
+        </Modal>
+      )}
+      <div style={{ display:'flex', gap:20, flexWrap:'wrap' }}>
+        <div style={{ flex:'1 1 480px' }}>
+          <div style={{ background:C.surf, borderRadius:14, border:`1px solid ${C.border}`, padding:20, marginBottom:16 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+              <span style={{ fontWeight:700, color:C.text }}>API 엔드포인트</span>
+              <Badge text="v1.0.0" color={C.accent} />
+            </div>
+            {API_ENDPOINTS.map((ep,i) => (
+              <div key={i} style={{ marginBottom:8 }}>
+                <div onClick={()=>setExpanded(expanded===i?null:i)} style={{ display:'flex', gap:10, alignItems:'center', background:C.surf2, borderRadius:10, padding:'12px 14px', cursor:'pointer', border:`1px solid ${expanded===i?C.primary:C.border}`, transition:'all .15s' }}>
+                  <span style={{ fontSize:11, fontWeight:700, padding:'3px 8px', borderRadius:6, minWidth:48, textAlign:'center', background:ep.method==='POST'?C.primary+'33':C.danger+'33', color:ep.method==='POST'?C.primary:C.danger }}>
+                    {ep.method}
+                  </span>
+                  <code style={{ fontSize:12, color:C.accent, flex:1 }}>{ep.path}</code>
+                  <span style={{ color:C.textMuted, fontSize:12 }}>{expanded===i?'▲':'▼'}</span>
+                </div>
+                {expanded===i && (
+                  <div style={{ background:'#0A0F1E', borderRadius:'0 0 10px 10px', padding:'14px 16px', animation:'accordionOpen .2s ease' }}>
+                    <div style={{ fontSize:12, color:C.textMuted, marginBottom:8 }}>{ep.desc}</div>
+                    <div style={{ fontSize:11, color:C.textMuted, marginBottom:12 }}>파라미터: <code style={{ color:C.accent }}>{ep.params}</code></div>
+                    <button onClick={()=>runTest(ep)} style={{ background:C.secondary, color:'#fff', padding:'6px 16px', borderRadius:8, fontSize:12, fontWeight:600 }}>
+                      {testing?'요청 중...':'테스트'}
+                    </button>
+                    {testResult && (
+                      <div style={{ marginTop:10, background:'#0F1A2E', borderRadius:8, padding:'10px 12px' }}>
+                        <div style={{ fontSize:11, color:C.accent, marginBottom:6 }}>HTTP 200 OK</div>
+                        <pre style={{ margin:0, fontSize:11, color:C.text, overflow:'auto' }}>{testResult.body}</pre>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{ flex:'0 0 320px' }}>
+          <div style={{ background:C.surf, borderRadius:14, border:`1px solid ${C.border}`, padding:20 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+              <span style={{ fontWeight:700, color:C.text }}>API 토큰 관리</span>
+              <button onClick={()=>setShowTokenModal(true)} style={{ background:C.primary, color:'#fff', padding:'6px 14px', borderRadius:8, fontSize:12, fontWeight:600 }}>
+                + 발급
+              </button>
+            </div>
+            {TOKENS.map((t,i) => (
+              <div key={i} style={{ background:C.surf2, borderRadius:10, padding:'14px', marginBottom:10, border:`1px solid ${C.border}`, animation:i===0?'tokenBlink 3s infinite':undefined }}>
+                <div style={{ fontWeight:600, color:C.text, fontSize:13, marginBottom:4 }}>{t.name}</div>
+                <code style={{ fontSize:11, color:C.textMuted, display:'block', marginBottom:8 }}>{t.key}</code>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
+                  <span style={{ fontSize:11, color:C.textMuted }}>만료 {t.expires}</span>
+                  <Badge text="활성" color={C.accent} />
+                </div>
+                <div style={{ marginBottom:6 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:C.textMuted, marginBottom:3 }}>
+                    <span>호출량</span><span>{t.calls} / {t.limit}</span>
+                  </div>
+                  <div style={{ height:4, background:'#0A0F1E', borderRadius:2 }}>
+                    <div style={{ height:'100%', background:C.primary, width:`${(t.calls/t.limit)*100}%`, borderRadius:2 }}/>
+                  </div>
+                </div>
+                <button onClick={()=>onToast('토큰이 폐기되었습니다')} style={{ fontSize:11, color:C.danger, background:'none', padding:0, marginTop:4 }}>폐기</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────
+function App() {
+  const [tab, setTab] = useState('pose');
+  const [drawer, setDrawer] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const showToast = (msg) => { setToast(msg); };
+
+  const PAGE_META = {
+    pose: { title:'달리기 자세 AI 분석', kpis:[ {l:'분석된 케이스',v:'47건'},{l:'AI 정확도',v:'94.2%'},{l:'처리 속도',v:'~8s/영상'} ] },
+    labeling: { title:'STT 음성 소견 라벨링', kpis:[ {l:'금일 라벨링',v:'12건'},{l:'자동화율',v:'91%'},{l:'검토 대기',v:'3건'} ] },
+    risk: { title:'부상 위험도 진단', kpis:[ {l:'총 케이스',v:'47건'},{l:'위험 케이스',v:'8건'},{l:'처방 발행',v:'31건'} ] },
+    api: { title:'REST API 관리 콘솔', kpis:[ {l:'활성 토큰',v:'2개'},{l:'금일 호출',v:'341회'},{l:'엔드포인트',v:'6개'} ] },
+  };
+
+  const meta = PAGE_META[tab];
+
+  return (
+    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', width:'100%' }}>
+      {/* TopNav */}
+      <header style={{ position:'sticky', top:0, zIndex:100, background:C.surf, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', height:56, padding:'0 24px', gap:0 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:8, marginRight:24 }}>
+          <div style={{ width:28, height:28, background:`linear-gradient(135deg,${C.primary},${C.secondary})`, borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14 }}>🏃</div>
+          <span style={{ fontWeight:800, color:C.text, fontSize:15 }}>RunAI</span>
+        </div>
+        {TABS.map(t => (
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{
+            height:56, padding:'0 18px', background:'none', color:tab===t.id?C.primary:C.textMuted, fontWeight:tab===t.id?700:400,
+            fontSize:14, borderBottom:tab===t.id?`2px solid ${C.primary}`:'2px solid transparent', transition:'all .15s',
+          }}>
+            {t.label}
+          </button>
+        ))}
+        <div style={{ flex:1 }}/>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <button style={{ background:C.surf2, border:`1px solid ${C.border}`, color:C.textMuted, padding:'6px 12px', borderRadius:8, fontSize:12 }}>🔍</button>
+          <button style={{ background:C.surf2, border:`1px solid ${C.border}`, color:C.textMuted, padding:'6px 12px', borderRadius:8, fontSize:12, position:'relative' }}>
+            🔔<span style={{ position:'absolute', top:-4, right:-4, width:14, height:14, background:C.danger, borderRadius:99, fontSize:9, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center' }}>3</span>
+          </button>
+          <div style={{ width:32, height:32, background:`linear-gradient(135deg,${C.accent},${C.primary})`, borderRadius:99, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, color:'#fff', fontWeight:700 }}>박</div>
+        </div>
+      </header>
+
+      {/* Hero Banner */}
+      <div style={{ background:`linear-gradient(135deg, ${C.primary}cc, ${C.secondary}cc)`, padding:'24px 32px', color:'#fff', backdropFilter:'blur(10px)' }}>
+        <div style={{ fontSize:10, opacity:.8, marginBottom:4, letterSpacing:2, textTransform:'uppercase' }}>달리기 자세 AI 분석 플랫폼</div>
+        <h1 style={{ margin:'0 0 12px', fontSize:22, fontWeight:800 }}>{meta.title}</h1>
+        <div style={{ display:'flex', gap:32, flexWrap:'wrap' }}>
+          {meta.kpis.map((k,i) => (
+            <div key={i}>
+              <div style={{ fontSize:11, opacity:.75, marginBottom:2 }}>{k.l}</div>
+              <div style={{ fontSize:20, fontWeight:800 }}>{k.v}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Content */}
+      <main style={{ flex:1, padding:'24px 32px' }}>
+        {tab==='pose' && <PosePage onDrawer={setDrawer}/>}
+        {tab==='labeling' && <LabelingPage onToast={showToast}/>}
+        {tab==='risk' && <RiskPage onToast={showToast}/>}
+        {tab==='api' && <ApiPage onToast={showToast}/>}
+      </main>
+
+      {/* Drawer (patient detail) */}
+      {drawer && (
+        <Drawer onClose={()=>setDrawer(null)}>
+          <div style={{ animation:'fadeIn .3s ease' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:20 }}>
+              <div>
+                <div style={{ fontSize:20, fontWeight:800, color:C.text }}>{drawer.name}</div>
+                <div style={{ color:C.textMuted, fontSize:13 }}>{drawer.id} · {drawer.age}세</div>
+              </div>
+              <RiskBadge level={drawer.risk} />
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:16 }}>
+              <div style={{ background:C.surf2, borderRadius:10, padding:'12px 14px' }}>
+                <div style={{ fontSize:11, color:C.textMuted }}>분석 일자</div>
+                <div style={{ fontWeight:600, color:C.text, marginTop:4 }}>{drawer.date}</div>
+              </div>
+              <div style={{ background:C.surf2, borderRadius:10, padding:'12px 14px' }}>
+                <div style={{ fontSize:11, color:C.textMuted }}>촬영 각도</div>
+                <div style={{ fontWeight:600, color:C.text, marginTop:4 }}>{drawer.views.join(', ')}</div>
+              </div>
+              <div style={{ background:C.surf2, borderRadius:10, padding:'12px 14px' }}>
+                <div style={{ fontSize:11, color:C.textMuted }}>상태</div>
+                <div style={{ marginTop:4 }}><Badge text={drawer.status} color={drawer.status==='분석완료'?C.accent:C.warning}/></div>
+              </div>
+              <div style={{ background:C.surf2, borderRadius:10, padding:'12px 14px' }}>
+                <div style={{ fontSize:11, color:C.textMuted }}>위험도</div>
+                <div style={{ marginTop:4 }}><RiskBadge level={drawer.risk}/></div>
+              </div>
+            </div>
+            <div style={{ background:C.surf2, borderRadius:10, padding:'14px 16px', marginBottom:16 }}>
+              <div style={{ fontSize:12, color:C.textMuted, marginBottom:8 }}>메모</div>
+              <textarea rows={3} placeholder="메모를 입력하세요" style={{ width:'100%', background:'none', border:'none', color:C.text, fontSize:13, resize:'none', outline:'none' }}/>
+            </div>
+            <div style={{ display:'flex', gap:10 }}>
+              <button onClick={()=>{setDrawer(null);showToast('상세 분석 리포트를 열었습니다');}} style={{ flex:1, background:C.primary, color:'#fff', padding:'12px', borderRadius:10, fontWeight:600, fontSize:14 }}>
+                분석 리포트
+              </button>
+              <button onClick={()=>{setDrawer(null);showToast('처방 데이터 저장 완료');}} style={{ flex:1, background:C.surf2, color:C.text, padding:'12px', borderRadius:10, fontWeight:600, fontSize:14, border:`1px solid ${C.border}` }}>
+                처방 저장
+              </button>
+            </div>
+          </div>
+        </Drawer>
+      )}
+
+      {/* Toast */}
+      {toast && <Toast msg={toast} onClose={()=>setToast(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

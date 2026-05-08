@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>러닝 헬스케어 AI 관리 플랫폼 — 구현 데모</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+@keyframes fadeUp { from{ opacity:0; transform:translateY(16px) } to{ opacity:1; transform:translateY(0) } }
+@keyframes fadeIn { from{ opacity:0 } to{ opacity:1 } }
+@keyframes slideDown { from{ opacity:0; max-height:0 } to{ opacity:1; max-height:400px } }
+@keyframes scaleIn { from{ opacity:0; transform:scale(.95) } to{ opacity:1; transform:scale(1) } }
+@keyframes progressFill { from{ width:0 } to{ width:var(--pw,60%) } }
+@keyframes pulse { 0%,100%{ opacity:1 } 50%{ opacity:.6 } }
+@keyframes shimmer { 0%{ background-position:-400px 0 } 100%{ background-position:400px 0 } }
+@keyframes countUp { from{ opacity:0; transform:translateY(8px) } to{ opacity:1; transform:translateY(0) } }
+@keyframes slideRight { from{ transform:translateX(-10px); opacity:0 } to{ transform:translateX(0); opacity:1 } }
+@keyframes borderGlow { 0%,100%{ border-color:#1D4ED833 } 50%{ border-color:#1D4ED8 } }
+@keyframes checkMark { from{ stroke-dashoffset:20 } to{ stroke-dashoffset:0 } }
+@keyframes ripple { from{ transform:scale(0); opacity:.6 } to{ transform:scale(4); opacity:0 } }
+@keyframes fadeInScale { from { opacity:0; transform:scale(.94) } to { opacity:1; transform:scale(1) } }
+@keyframes slideInRight { from { transform:translateX(20px); opacity:0 } to { transform:translateX(0); opacity:1 } }
+@keyframes slideUp { from { opacity:0; transform:translateY(24px) } to { opacity:1; transform:translateY(0) } }
+@keyframes barGrow { from { transform:scaleX(0) } to { transform:scaleX(1) } }
+.kpi-num { animation: countUp .5s ease both; }
+.shimmer-el { background:linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%); background-size:400px; animation: shimmer 1.5s infinite; }
+.panel-fade { animation: fadeInScale .25s ease both; }
+.slide-in-row { animation: slideInRight .3s ease both; }
+.bar-fill { animation: barGrow .6s ease both; transform-origin:left center; }
+.ripple-effect { animation: ripple .6s ease; }
+html,body{ margin:0; padding:0; width:100%; height:100%; font-family:'Pretendard',sans-serif; background:#F8FAFC; color:#0F172A; }
+#root{ display:flex; flex-direction:column; width:100%; min-height:100vh; }
+*{ box-sizing:border-box; }
+button{ cursor:pointer; border:none; outline:none; font-family:'Pretendard',sans-serif; }
+input,select,textarea{ font-family:'Pretendard',sans-serif; }
+::-webkit-scrollbar{ width:6px; }
+::-webkit-scrollbar-track{ background:#F1F5F9; }
+::-webkit-scrollbar-thumb{ background:#CBD5E1; border-radius:3px; }
+.hover-card:hover{ transform:translateY(-2px); box-shadow:0 8px 24px rgba(0,0,0,.1); transition:all .2s; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef} = React;
+const {LineChart,Line,BarChart,Bar,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,PieChart,Pie,Cell} = Recharts;
+
+const C = {
+  bg:'#F8FAFC', surf:'#FFFFFF', surf2:'#F1F5F9', border:'#E2E8F0',
+  primary:'#1D4ED8', secondary:'#0F766E', accent:'#7C3AED',
+  text:'#0F172A', textMuted:'#64748B', danger:'#DC2626', warning:'#D97706',
+  success:'#059669',
+};
+
+const NAV = [
+  { id:'dashboard', label:'대시보드' },
+  { id:'compare', label:'영상 비교' },
+  { id:'history', label:'분석 이력' },
+  { id:'admin', label:'기관 관리' },
+];
+
+// ─── Shared ───────────────────────────────────────────────────
+function Badge({ text, color, bg }) {
+  return <span style={{ fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:99, color, background:bg||color+'20', display:'inline-block' }}>{text}</span>;
+}
+function RiskBadge({ level }) {
+  const m = { 정상:[C.success], 주의:[C.warning], 위험:[C.danger] };
+  const [c] = m[level]||[C.textMuted];
+  return <Badge text={level} color={c} />;
+}
+function StatusBadge({ s }) {
+  const m = { 분석완료:[C.success], 분석중:[C.primary], 라벨링중:[C.warning], 대기중:[C.textMuted] };
+  return <Badge text={s} color={m[s]?.[0]||C.textMuted}/>;
+}
+
+function Overlay({ onClose }) {
+  return <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(15,23,42,.4)', zIndex:200 }}/>;
+}
+function Modal({ title, onClose, children, width=520 }) {
+  return (
+    <>
+      <Overlay onClose={onClose}/>
+      <div style={{ position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)', width, background:C.surf, border:`1px solid ${C.border}`, borderRadius:20, zIndex:201, padding:32, animation:'scaleIn .2s ease', maxHeight:'90vh', overflowY:'auto', boxShadow:'0 20px 60px rgba(0,0,0,.15)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:24 }}>
+          <h3 style={{ margin:0, fontSize:18, fontWeight:800 }}>{title}</h3>
+          <button onClick={onClose} style={{ background:C.surf2, border:`1px solid ${C.border}`, color:C.textMuted, width:32, height:32, borderRadius:99, fontSize:16 }}>✕</button>
+        </div>
+        {children}
+      </div>
+    </>
+  );
+}
+function Toast({ msg, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 2800); return ()=>clearTimeout(t); }, []);
+  return (
+    <div style={{ position:'fixed', bottom:28, right:28, background:C.success, color:'#fff', padding:'14px 22px', borderRadius:12, fontWeight:700, zIndex:300, animation:'fadeUp .3s ease', fontSize:14, boxShadow:'0 4px 20px rgba(5,150,105,.3)' }}>
+      ✓ {msg}
+    </div>
+  );
+}
+
+// ─── Hero Section ─────────────────────────────────────────────
+function PageHero({ title, sub, kpis, gradient }) {
+  return (
+    <div style={{ background:gradient||`linear-gradient(135deg, ${C.primary}, ${C.accent})`, padding:'36px 40px', color:'#fff' }}>
+      <div style={{ fontSize:11, opacity:.75, letterSpacing:2, textTransform:'uppercase', marginBottom:6 }}>러닝 헬스케어 AI 플랫폼</div>
+      <h2 style={{ margin:'0 0 6px', fontSize:26, fontWeight:900 }}>{title}</h2>
+      {sub && <p style={{ margin:'0 0 20px', opacity:.8, fontSize:14 }}>{sub}</p>}
+      {kpis && (
+        <div style={{ display:'flex', gap:36, flexWrap:'wrap' }}>
+          {kpis.map((k,i) => (
+            <div key={i} style={{ animation:`countUp .4s ease ${i*.1}s both` }}>
+              <div style={{ fontSize:11, opacity:.75, marginBottom:2 }}>{k.l}</div>
+              <div style={{ fontSize:24, fontWeight:900 }}>{k.v}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── KPI Card ─────────────────────────────────────────────────
+function KpiCard({ label, value, delta, sub, color, icon }) {
+  return (
+    <div className="hover-card" style={{ background:C.surf, border:`1px solid ${C.border}`, borderRadius:16, padding:'22px 24px', flex:1, minWidth:160, boxShadow:'0 1px 4px rgba(0,0,0,.05)' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+        <div style={{ fontSize:13, color:C.textMuted, marginBottom:8 }}>{label}</div>
+        {icon && <span style={{ fontSize:22 }}>{icon}</span>}
+      </div>
+      <div style={{ fontSize:32, fontWeight:900, color:color||C.text }}>{value}</div>
+      {delta && <div style={{ fontSize:12, color:delta>0?C.success:C.danger, marginTop:4 }}>{delta>0?'↑':'↓'} {Math.abs(delta)}% 지난 달 대비</div>}
+      {sub && <div style={{ fontSize:12, color:C.textMuted, marginTop:4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// ─── Dashboard Page ───────────────────────────────────────────
+const TREND_DATA = [
+  {m:'1월',cases:12,risk:3},{m:'2월',cases:18,risk:4},{m:'3월',cases:24,risk:6},
+  {m:'4월',cases:31,risk:7},{m:'5월',cases:47,risk:8},
+];
+const PART_DATA = [
+  {name:'발목',count:18},{name:'무릎',count:14},{name:'허리',count:9},{name:'고관절',count:6},
+];
+const PIE_DATA = [
+  {name:'정상',value:28,color:C.success},{name:'주의',value:11,color:C.warning},{name:'위험',value:8,color:C.danger},
+];
+const RECENT = [
+  { id:'P002', name:'이서연', date:'2026-05-07 14:32', risk:'위험', part:'발목(좌)', org:'서울스포츠의학센터' },
+  { id:'P001', name:'김민준', date:'2026-05-07 11:15', risk:'주의', part:'무릎', org:'한강러닝클리닉' },
+  { id:'P005', name:'정태영', date:'2026-05-05 16:40', risk:'주의', part:'무릎', org:'한강러닝클리닉' },
+  { id:'P004', name:'최수아', date:'2026-05-06 09:22', risk:'정상', part:'-', org:'강남스포츠센터' },
+];
+
+function DashboardPage({ onSelect }) {
+  return (
+    <div style={{ padding:'32px 40px', animation:'fadeUp .3s ease' }}>
+      <div style={{ display:'flex', gap:16, marginBottom:24, flexWrap:'wrap' }}>
+        <KpiCard label="총 분석 케이스" value="47" delta={24} sub="이번 달 누적" icon="🏃" color={C.primary}/>
+        <KpiCard label="위험 케이스" value="8" sub="전체의 17%" icon="⚠️" color={C.danger}/>
+        <KpiCard label="처방 발행" value="31" delta={12} icon="📋" color={C.success}/>
+        <KpiCard label="등록 기관" value="3" sub="활성 API 2개" icon="🏥" color={C.accent}/>
+      </div>
+      <div style={{ display:'flex', gap:20, marginBottom:24, flexWrap:'wrap' }}>
+        {/* Line chart */}
+        <div style={{ flex:'1 1 400px', background:C.surf, border:`1px solid ${C.border}`, borderRadius:16, padding:'22px 24px', boxShadow:'0 1px 4px rgba(0,0,0,.05)' }}>
+          <div style={{ fontWeight:800, fontSize:15, marginBottom:16 }}>월별 분석 추이</div>
+          <div style={{ height:200 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={TREND_DATA}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                <XAxis dataKey="m" tick={{fontSize:12,fill:C.textMuted}}/>
+                <YAxis tick={{fontSize:12,fill:C.textMuted}}/>
+                <Tooltip contentStyle={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}}/>
+                <Line type="monotone" dataKey="cases" stroke={C.primary} strokeWidth={2.5} dot={{fill:C.primary,r:4}} name="전체"/>
+                <Line type="monotone" dataKey="risk" stroke={C.danger} strokeWidth={2} dot={{fill:C.danger,r:3}} name="위험"/>
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        {/* Pie */}
+        <div style={{ flex:'0 0 280px', background:C.surf, border:`1px solid ${C.border}`, borderRadius:16, padding:'22px 24px', boxShadow:'0 1px 4px rgba(0,0,0,.05)' }}>
+          <div style={{ fontWeight:800, fontSize:15, marginBottom:16 }}>위험도 분포</div>
+          <div style={{ height:160, display:'flex', justifyContent:'center' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={PIE_DATA} dataKey="value" cx="50%" cy="50%" innerRadius={50} outerRadius={76}>
+                  {PIE_DATA.map((d,i) => <Cell key={i} fill={d.color}/>)}
+                </Pie>
+                <Tooltip contentStyle={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}}/>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display:'flex', gap:12, justifyContent:'center', flexWrap:'wrap', marginTop:8 }}>
+            {PIE_DATA.map((d,i) => (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:4, fontSize:12, color:C.textMuted }}>
+                <div style={{ width:10, height:10, borderRadius:99, background:d.color }}/>
+                {d.name} {d.value}
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Bar */}
+        <div style={{ flex:'1 1 300px', background:C.surf, border:`1px solid ${C.border}`, borderRadius:16, padding:'22px 24px', boxShadow:'0 1px 4px rgba(0,0,0,.05)' }}>
+          <div style={{ fontWeight:800, fontSize:15, marginBottom:16 }}>부위별 발생 빈도</div>
+          <div style={{ height:180 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={PART_DATA} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                <XAxis type="number" tick={{fontSize:11,fill:C.textMuted}}/>
+                <YAxis type="category" dataKey="name" tick={{fontSize:12,fill:C.textMuted}} width={45}/>
+                <Tooltip contentStyle={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}}/>
+                <Bar dataKey="count" fill={C.primary} radius={[0,6,6,0]} name="건수"/>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+      {/* Recent cases */}
+      <div style={{ background:C.surf, border:`1px solid ${C.border}`, borderRadius:16, padding:'22px 24px', boxShadow:'0 1px 4px rgba(0,0,0,.05)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+          <span style={{ fontWeight:800, fontSize:15 }}>최근 분석 케이스</span>
+          <button style={{ background:C.surf2, border:`1px solid ${C.border}`, color:C.textMuted, padding:'6px 14px', borderRadius:8, fontSize:12 }}>전체 보기</button>
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom:`2px solid ${C.border}` }}>
+              {['환자','기관','일시','이상 부위','위험도',''].map((h,i) => (
+                <th key={i} style={{ padding:'10px 12px', textAlign:'left', fontSize:12, color:C.textMuted, fontWeight:600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {RECENT.map((r,i) => (
+              <tr key={i} onClick={()=>onSelect(r)} style={{ borderBottom:`1px solid ${C.border}`, cursor:'pointer', transition:'background .15s' }}
+                onMouseOver={e=>e.currentTarget.style.background=C.surf2}
+                onMouseOut={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{ padding:'12px 12px', fontWeight:600, fontSize:14 }}>{r.name}<div style={{ fontSize:11, color:C.textMuted }}>{r.id}</div></td>
+                <td style={{ padding:'12px 12px', fontSize:13, color:C.textMuted }}>{r.org}</td>
+                <td style={{ padding:'12px 12px', fontSize:12, color:C.textMuted }}>{r.date}</td>
+                <td style={{ padding:'12px 12px', fontSize:13 }}>{r.part}</td>
+                <td style={{ padding:'12px 12px' }}><RiskBadge level={r.risk}/></td>
+                <td style={{ padding:'12px 12px' }}><button style={{ background:'none', color:C.primary, fontSize:12, fontWeight:600 }}>상세 →</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Compare Page ─────────────────────────────────────────────
+function ComparePage() {
+  const [angle, setAngle] = useState('전면');
+  const [synced, setSynced] = useState(true);
+  const [frame, setFrame] = useState(60);
+  const ANGLES = ['전면','측면','후면'];
+  const SESSIONS = [
+    { id:'S001', name:'이서연 (2026-05-07)', color:'#1D4ED8' },
+    { id:'S002', name:'이서연 (2026-04-14)', color:'#7C3AED' },
+  ];
+
+  const SkeletonChannel = ({ color, label, flip }) => {
+    const pts = flip
+      ? [[200,60],[200,120],[175,115],[155,170],[135,240],[140,295],[225,115],[248,170],[265,238],[260,295],[195,130],[205,130],[190,210],[210,210],[185,295],[215,295],[178,370],[217,370]]
+      : [[200,60],[200,120],[175,115],[155,170],[140,230],[145,285],[225,115],[245,170],[260,230],[255,285],[195,130],[205,130],[190,210],[210,210],[185,290],[215,290],[180,360],[215,360]];
+    const bones = [[0,1],[1,2],[2,3],[3,4],[4,5],[1,6],[6,7],[7,8],[8,9],[1,10],[10,11],[11,12],[12,13],[10,14],[14,16],[11,15],[15,17]];
+    return (
+      <div style={{ flex:1, background:'#0A0F1E', borderRadius:12, overflow:'hidden', position:'relative' }}>
+        <div style={{ position:'absolute', top:10, left:12, fontSize:11, color:'#64748B', zIndex:1 }}>{label}</div>
+        <svg width="100%" viewBox="0 0 400 430" style={{ display:'block' }}>
+          <rect width="400" height="430" fill="#0A0F1E"/>
+          {bones.map(([a,b],i) => <line key={i} x1={pts[a][0]} y1={pts[a][1]} x2={pts[b][0]} y2={pts[b][1]} stroke={color} strokeWidth="2.5" strokeLinecap="round" opacity={.85}/>)}
+          {pts.map(([x,y],i) => <circle key={i} cx={x} cy={y} r={i<2?6:4} fill={color} stroke="#fff" strokeWidth="1.5"/>)}
+          <text x="16" y="418" fill="#475569" fontSize="10">프레임 {frame} | {color==='#1D4ED8'?'과내전 패턴':'정상 착지'}</text>
+        </svg>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ padding:'32px 40px', animation:'fadeUp .3s ease' }}>
+      <div style={{ display:'flex', gap:12, marginBottom:20, alignItems:'center', flexWrap:'wrap' }}>
+        <span style={{ fontWeight:800, fontSize:15 }}>비교 세션 선택</span>
+        {SESSIONS.map((s,i) => (
+          <div key={i} style={{ display:'flex', alignItems:'center', gap:6, background:C.surf, border:`1px solid ${C.border}`, borderRadius:10, padding:'8px 14px' }}>
+            <div style={{ width:12, height:12, borderRadius:99, background:s.color }}/>
+            <span style={{ fontSize:13, fontWeight:600 }}>{s.name}</span>
+          </div>
+        ))}
+        <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
+          {ANGLES.map(a => (
+            <button key={a} onClick={()=>setAngle(a)} style={{ background:angle===a?C.primary:C.surf2, color:angle===a?'#fff':C.textMuted, border:`1px solid ${angle===a?C.primary:C.border}`, padding:'6px 14px', borderRadius:8, fontSize:12, fontWeight:600 }}>
+              {a}
+            </button>
+          ))}
+        </div>
+      </div>
+      {/* Dual viewer */}
+      <div style={{ display:'flex', gap:16, marginBottom:20 }}>
+        <SkeletonChannel color="#1D4ED8" label={`${SESSIONS[0].name} | ${angle}`} flip={false}/>
+        <SkeletonChannel color="#7C3AED" label={`${SESSIONS[1].name} | ${angle}`} flip={true}/>
+      </div>
+      {/* Sync control */}
+      <div style={{ background:C.surf, border:`1px solid ${C.border}`, borderRadius:14, padding:'18px 24px', marginBottom:20 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <span style={{ fontWeight:700, fontSize:14 }}>프레임 동기화</span>
+            <button onClick={()=>setSynced(!synced)} style={{ background:synced?C.success:C.surf2, color:synced?'#fff':C.textMuted, border:`1px solid ${synced?C.success:C.border}`, padding:'4px 12px', borderRadius:99, fontSize:11, fontWeight:600 }}>
+              {synced?'동기화 켜짐':'동기화 꺼짐'}
+            </button>
+          </div>
+          <span style={{ fontSize:13, color:C.textMuted }}>프레임 {frame} / 240</span>
+        </div>
+        <input type="range" min={0} max={240} value={frame} onChange={e=>setFrame(+e.target.value)} style={{ width:'100%', accentColor:C.primary }}/>
+      </div>
+      {/* Comparison table */}
+      <div style={{ background:C.surf, border:`1px solid ${C.border}`, borderRadius:14, padding:'20px 24px' }}>
+        <div style={{ fontWeight:800, fontSize:15, marginBottom:14 }}>지표 비교</div>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom:`2px solid ${C.border}` }}>
+              <th style={{ padding:'10px 12px', textAlign:'left', fontSize:12, color:C.textMuted }}>지표</th>
+              <th style={{ padding:'10px 12px', textAlign:'center', fontSize:12, color:'#1D4ED8' }}>2026-05-07</th>
+              <th style={{ padding:'10px 12px', textAlign:'center', fontSize:12, color:'#7C3AED' }}>2026-04-14</th>
+              <th style={{ padding:'10px 12px', textAlign:'center', fontSize:12, color:C.textMuted }}>변화</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[
+              ['발목 배굴각(좌)','72°','68°','+4°',C.success],
+              ['무릎 굽힘각','163°','161°','+2°',C.success],
+              ['착지 패턴','힐스트라이크','힐스트라이크','변화없음',C.warning],
+              ['보폭','1.42m','1.38m','+0.04m',C.success],
+              ['케이던스','172spm','168spm','+4spm',C.success],
+            ].map(([l,v1,v2,d,c],i) => (
+              <tr key={i} style={{ borderBottom:`1px solid ${C.border}` }}>
+                <td style={{ padding:'12px 12px', fontSize:13, fontWeight:600 }}>{l}</td>
+                <td style={{ padding:'12px 12px', fontSize:14, textAlign:'center', color:'#1D4ED8', fontWeight:700 }}>{v1}</td>
+                <td style={{ padding:'12px 12px', fontSize:14, textAlign:'center', color:'#7C3AED', fontWeight:700 }}>{v2}</td>
+                <td style={{ padding:'12px 12px', textAlign:'center' }}><Badge text={d} color={c}/></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── History Page ─────────────────────────────────────────────
+const HISTORY = [
+  { id:'P001', name:'김민준', age:32, org:'한강러닝클리닉', sessions:8, lastDate:'2026-05-07', risk:'주의', parts:['무릎'], trend:'개선' },
+  { id:'P002', name:'이서연', age:28, org:'서울스포츠의학센터', sessions:12, lastDate:'2026-05-07', risk:'위험', parts:['발목(좌)','무릎'], trend:'악화' },
+  { id:'P003', name:'박지훈', age:41, org:'강남스포츠센터', sessions:3, lastDate:'2026-05-06', risk:'정상', parts:[], trend:'유지' },
+  { id:'P004', name:'최수아', age:35, org:'서울스포츠의학센터', sessions:6, lastDate:'2026-05-06', risk:'정상', parts:[], trend:'개선' },
+  { id:'P005', name:'정태영', age:26, org:'한강러닝클리닉', sessions:5, lastDate:'2026-05-05', risk:'주의', parts:['무릎'], trend:'유지' },
+];
+const HIST_TREND = [
+  {w:'W1',s:85},{w:'W2',s:82},{w:'W3',s:79},{w:'W4',s:76},{w:'W5',s:72},
+  {w:'W6',s:75},{w:'W7',s:71},{w:'W8',s:68},
+];
+
+function HistoryPage({ onToast }) {
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('전체');
+  const [selected, setSelected] = useState(null);
+
+  const filtered = HISTORY.filter(h => {
+    const m = !search || h.name.includes(search)||h.id.includes(search);
+    const r = filter==='전체'||h.risk===filter;
+    return m && r;
+  });
+
+  return (
+    <div style={{ padding:'32px 40px', animation:'fadeUp .3s ease' }}>
+      {selected && (
+        <Modal title={`${selected.name} 상세 이력`} onClose={()=>setSelected(null)} width={620}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:20 }}>
+            {[['환자 ID',selected.id],['나이',`${selected.age}세`],['소속 기관',selected.org],['총 세션',`${selected.sessions}회`]].map(([l,v],i) => (
+              <div key={i} style={{ background:C.surf2, borderRadius:10, padding:'12px 14px' }}>
+                <div style={{ fontSize:11, color:C.textMuted, marginBottom:4 }}>{l}</div>
+                <div style={{ fontWeight:700, fontSize:14 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginBottom:20 }}>
+            <div style={{ fontWeight:700, fontSize:14, marginBottom:12 }}>위험도 추이 (8주)</div>
+            <div style={{ height:160 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={HIST_TREND}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                  <XAxis dataKey="w" tick={{fontSize:11,fill:C.textMuted}}/>
+                  <YAxis domain={[60,100]} tick={{fontSize:11,fill:C.textMuted}}/>
+                  <Tooltip contentStyle={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}}/>
+                  <Line type="monotone" dataKey="s" stroke={C.primary} strokeWidth={2.5} dot={{fill:C.primary,r:4}} name="위험도 점수"/>
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          <div style={{ display:'flex', gap:10, alignItems:'center', marginBottom:20 }}>
+            <span style={{ fontWeight:700, fontSize:14 }}>현재 위험도:</span>
+            <RiskBadge level={selected.risk}/>
+            <span style={{ fontWeight:700, fontSize:14, marginLeft:16 }}>추세:</span>
+            <Badge text={selected.trend} color={selected.trend==='개선'?C.success:selected.trend==='악화'?C.danger:C.warning}/>
+          </div>
+          <button onClick={()=>{setSelected(null);onToast('리포트 PDF 생성 완료');}} style={{ width:'100%', background:C.primary, color:'#fff', padding:'12px', borderRadius:10, fontWeight:700, fontSize:14 }}>
+            리포트 PDF 생성
+          </button>
+        </Modal>
+      )}
+      <div style={{ display:'flex', gap:12, marginBottom:20, flexWrap:'wrap', alignItems:'center' }}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="이름 또는 환자 ID 검색" style={{ background:C.surf, border:`1px solid ${C.border}`, borderRadius:10, padding:'10px 16px', fontSize:13, width:240, color:C.text, outline:'none' }}/>
+        <div style={{ display:'flex', gap:8 }}>
+          {['전체','정상','주의','위험'].map(f => (
+            <button key={f} onClick={()=>setFilter(f)} style={{ background:filter===f?C.primary:C.surf, color:filter===f?'#fff':C.textMuted, border:`1px solid ${filter===f?C.primary:C.border}`, padding:'8px 16px', borderRadius:8, fontSize:12, fontWeight:600 }}>
+              {f}
+            </button>
+          ))}
+        </div>
+        <span style={{ marginLeft:'auto', fontSize:13, color:C.textMuted }}>{filtered.length}명</span>
+      </div>
+      <div style={{ background:C.surf, border:`1px solid ${C.border}`, borderRadius:16, overflow:'hidden', boxShadow:'0 1px 4px rgba(0,0,0,.05)' }}>
+        <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          <thead>
+            <tr style={{ borderBottom:`2px solid ${C.border}`, background:C.surf2 }}>
+              {['환자','기관','세션 수','마지막 분석','위험 부위','위험도','추세',''].map((h,i) => (
+                <th key={i} style={{ padding:'12px 16px', textAlign:'left', fontSize:12, color:C.textMuted, fontWeight:600 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((h,i) => (
+              <tr key={i} style={{ borderBottom:`1px solid ${C.border}`, cursor:'pointer', transition:'background .1s' }}
+                onMouseOver={e=>e.currentTarget.style.background=C.surf2}
+                onMouseOut={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{ padding:'14px 16px' }}>
+                  <div style={{ fontWeight:700, fontSize:14 }}>{h.name}</div>
+                  <div style={{ fontSize:11, color:C.textMuted }}>{h.id} · {h.age}세</div>
+                </td>
+                <td style={{ padding:'14px 16px', fontSize:13, color:C.textMuted }}>{h.org}</td>
+                <td style={{ padding:'14px 16px', fontSize:14, fontWeight:700 }}>{h.sessions}회</td>
+                <td style={{ padding:'14px 16px', fontSize:12, color:C.textMuted }}>{h.lastDate}</td>
+                <td style={{ padding:'14px 16px', fontSize:13 }}>{h.parts.length?h.parts.join(', '):<span style={{ color:C.textMuted }}>-</span>}</td>
+                <td style={{ padding:'14px 16px' }}><RiskBadge level={h.risk}/></td>
+                <td style={{ padding:'14px 16px' }}><Badge text={h.trend} color={h.trend==='개선'?C.success:h.trend==='악화'?C.danger:C.warning}/></td>
+                <td style={{ padding:'14px 16px' }}>
+                  <button onClick={()=>setSelected(h)} style={{ background:C.surf2, border:`1px solid ${C.border}`, color:C.primary, padding:'6px 14px', borderRadius:8, fontSize:12, fontWeight:600 }}>
+                    상세
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Admin Page ───────────────────────────────────────────────
+function AdminPage({ onToast }) {
+  const [showNewOrg, setShowNewOrg] = useState(false);
+  const [showToken, setShowToken] = useState(false);
+
+  const ORGS = [
+    { name:'서울스포츠의학센터', patients:14, api:'sk-ss_K2mN...', calls:891, limit:2000, status:'활성', plan:'Pro' },
+    { name:'한강러닝클리닉', patients:9, api:'sk-hr_P7qR...', calls:356, limit:1000, status:'활성', plan:'Standard' },
+    { name:'강남스포츠센터', patients:5, api:'sk-gs_W4tY...', calls:124, limit:500, status:'활성', plan:'Basic' },
+  ];
+
+  return (
+    <div style={{ padding:'32px 40px', animation:'fadeUp .3s ease' }}>
+      {showNewOrg && (
+        <Modal title="기관 등록" onClose={()=>setShowNewOrg(false)}>
+          <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+            {[['기관명','예: 강남정형외과'],['담당자','예: 홍길동'],['이메일','예: admin@clinic.com'],['플랜',null]].map(([l,p],i) => (
+              <div key={i}>
+                <label style={{ display:'block', fontSize:12, color:C.textMuted, marginBottom:6, fontWeight:600 }}>{l}</label>
+                {l==='플랜'
+                  ? <select style={{ width:'100%', background:C.surf2, border:`1px solid ${C.border}`, borderRadius:10, padding:'10px 14px', fontSize:13, color:C.text, outline:'none' }}>
+                      <option>Basic (500회/월)</option><option>Standard (1,000회/월)</option><option>Pro (2,000회/월)</option>
+                    </select>
+                  : <input placeholder={p} style={{ width:'100%', background:C.surf2, border:`1px solid ${C.border}`, borderRadius:10, padding:'10px 14px', fontSize:13, color:C.text, outline:'none' }}/>
+                }
+              </div>
+            ))}
+            <button onClick={()=>{setShowNewOrg(false);onToast('기관 등록 완료');}} style={{ background:C.primary, color:'#fff', padding:'12px', borderRadius:10, fontWeight:700, fontSize:14, marginTop:4 }}>
+              등록
+            </button>
+          </div>
+        </Modal>
+      )}
+      {showToken && (
+        <Modal title="API 키 재발급" onClose={()=>setShowToken(false)}>
+          <p style={{ color:C.textMuted, fontSize:14, lineHeight:1.6 }}>재발급 시 기존 API 키는 즉시 폐기됩니다. 연동된 시스템에서 새 키로 업데이트해야 합니다.</p>
+          <div style={{ background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:10, padding:'12px 16px', marginBottom:20 }}>
+            <span style={{ fontSize:13, color:C.danger, fontWeight:600 }}>⚠ 기존 API 키 폐기 후 복구 불가</span>
+          </div>
+          <div style={{ display:'flex', gap:10 }}>
+            <button onClick={()=>{setShowToken(false);}} style={{ flex:1, background:C.surf2, border:`1px solid ${C.border}`, color:C.text, padding:'12px', borderRadius:10, fontWeight:600 }}>취소</button>
+            <button onClick={()=>{setShowToken(false);onToast('API 키 재발급 완료');}} style={{ flex:1, background:C.danger, color:'#fff', padding:'12px', borderRadius:10, fontWeight:700 }}>재발급</button>
+          </div>
+        </Modal>
+      )}
+      <div style={{ display:'flex', gap:16, marginBottom:24, flexWrap:'wrap' }}>
+        <KpiCard label="등록 기관" value="3" icon="🏥" color={C.primary}/>
+        <KpiCard label="총 API 호출" value="1,371" sub="이번 달" icon="📡" color={C.accent}/>
+        <KpiCard label="활성 토큰" value="3" sub="전체 활성" icon="🔑" color={C.success}/>
+        <KpiCard label="총 환자 수" value="28" delta={15} icon="👥" color={C.secondary}/>
+      </div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <span style={{ fontWeight:800, fontSize:16 }}>기관 목록</span>
+        <button onClick={()=>setShowNewOrg(true)} style={{ background:C.primary, color:'#fff', padding:'10px 20px', borderRadius:10, fontSize:13, fontWeight:700 }}>
+          + 기관 등록
+        </button>
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+        {ORGS.map((o,i) => (
+          <div key={i} className="hover-card" style={{ background:C.surf, border:`1px solid ${C.border}`, borderRadius:16, padding:'20px 24px', boxShadow:'0 1px 4px rgba(0,0,0,.05)', animation:`fadeUp .4s ease ${i*.1}s both` }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:12 }}>
+              <div>
+                <div style={{ display:'flex', gap:10, alignItems:'center', marginBottom:6 }}>
+                  <span style={{ fontWeight:800, fontSize:16 }}>{o.name}</span>
+                  <Badge text={o.plan} color={C.primary}/>
+                  <Badge text={o.status} color={C.success}/>
+                </div>
+                <div style={{ fontSize:13, color:C.textMuted }}>환자 {o.patients}명 등록</div>
+              </div>
+              <div style={{ display:'flex', gap:8 }}>
+                <button onClick={()=>setShowToken(true)} style={{ background:C.surf2, border:`1px solid ${C.border}`, color:C.text, padding:'8px 16px', borderRadius:8, fontSize:12, fontWeight:600 }}>
+                  API 키 재발급
+                </button>
+                <button onClick={()=>onToast('기관 설정을 저장했습니다')} style={{ background:C.primary, color:'#fff', padding:'8px 16px', borderRadius:8, fontSize:12, fontWeight:600 }}>
+                  설정
+                </button>
+              </div>
+            </div>
+            <div style={{ marginTop:16 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                <code style={{ fontSize:12, color:C.textMuted }}>{o.api}</code>
+                <span style={{ fontSize:12, color:C.textMuted }}>{o.calls.toLocaleString()} / {o.limit.toLocaleString()}회</span>
+              </div>
+              <div style={{ height:8, background:C.surf2, borderRadius:4, overflow:'hidden' }}>
+                <div style={{ height:'100%', background:C.primary, width:`${(o.calls/o.limit)*100}%`, borderRadius:4, transition:'width .6s ease' }}/>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────
+function App() {
+  const [route, setRoute] = useState('dashboard');
+  const [selected, setSelected] = useState(null);
+  const [toast, setToast] = useState(null);
+  const showToast = msg => setToast(msg);
+
+  return (
+    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column', width:'100%' }}>
+      {/* Global Nav */}
+      <header style={{ position:'sticky', top:0, zIndex:100, background:C.surf, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', height:64, padding:'0 32px', gap:24, boxShadow:'0 1px 8px rgba(0,0,0,.06)' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, marginRight:8 }}>
+          <div style={{ width:36, height:36, background:`linear-gradient(135deg,${C.primary},${C.accent})`, borderRadius:10, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>🏃</div>
+          <div>
+            <div style={{ fontWeight:900, fontSize:15, color:C.text, lineHeight:1.2 }}>RunHealth AI</div>
+            <div style={{ fontSize:10, color:C.textMuted }}>헬스케어 플랫폼</div>
+          </div>
+        </div>
+        <nav style={{ display:'flex', gap:2 }}>
+          {NAV.map(n => (
+            <button key={n.id} onClick={()=>setRoute(n.id)} style={{
+              padding:'8px 18px', background:'none', border:'none', fontWeight:route===n.id?700:400,
+              color:route===n.id?C.primary:C.textMuted, fontSize:14,
+              borderBottom:route===n.id?`2px solid ${C.primary}`:'2px solid transparent',
+              borderRadius:0, transition:'all .15s',
+            }}>
+              {n.label}
+            </button>
+          ))}
+        </nav>
+        <div style={{ flex:1 }}/>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <button style={{ background:C.surf2, border:`1px solid ${C.border}`, padding:'8px 16px', borderRadius:10, fontSize:12, color:C.textMuted }}>🔍 검색</button>
+          <button style={{ background:C.surf2, border:`1px solid ${C.border}`, padding:'8px 12px', borderRadius:10, fontSize:14, color:C.textMuted, position:'relative' }}>
+            🔔<span style={{ position:'absolute', top:-4, right:-4, width:14, height:14, background:C.danger, borderRadius:99, fontSize:9, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center' }}>2</span>
+          </button>
+          <div style={{ display:'flex', alignItems:'center', gap:8, background:C.surf2, border:`1px solid ${C.border}`, borderRadius:10, padding:'6px 14px' }}>
+            <div style={{ width:28, height:28, background:`linear-gradient(135deg,${C.primary},${C.accent})`, borderRadius:99, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, color:'#fff', fontWeight:800 }}>박</div>
+            <div>
+              <div style={{ fontSize:13, fontWeight:700, color:C.text }}>박정우</div>
+              <div style={{ fontSize:10, color:C.textMuted }}>관리자</div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Hero */}
+      {route==='dashboard' && <PageHero title="통합 분석 대시보드" sub="등록된 기관의 달리기 분석 현황과 위험도 추이를 확인합니다" kpis={[{l:'총 케이스',v:'47건'},{l:'위험 케이스',v:'8건'},{l:'이번 달 처방',v:'31건'}]} gradient={`linear-gradient(135deg,${C.primary},${C.secondary})`}/>}
+      {route==='compare' && <PageHero title="다채널 영상 비교 뷰어" sub="동일 환자의 세션별 포즈를 나란히 비교하여 자세 변화를 추적합니다" kpis={[{l:'비교 채널',v:'3각도'},{l:'동기화',v:'ON'},{l:'현재 세션',v:'이서연'}]} gradient={`linear-gradient(135deg,${C.accent},${C.primary})`}/>}
+      {route==='history' && <PageHero title="분석 이력 관리" sub="환자·선수별 장기 분석 데이터와 위험도 추이를 관리합니다" kpis={[{l:'등록 환자',v:'28명'},{l:'총 세션',v:'143회'},{l:'처방 발행',v:'89건'}]} gradient={`linear-gradient(135deg,${C.secondary},${C.accent})`}/>}
+      {route==='admin' && <PageHero title="기관 관리" sub="등록된 의료기관·스포츠센터의 API 키와 사용량을 관리합니다" kpis={[{l:'등록 기관',v:'3곳'},{l:'API 호출',v:'1,371회'},{l:'활성 토큰',v:'3개'}]} gradient={`linear-gradient(135deg,${C.primary},${C.accent})`}/>}
+
+      {/* Main content */}
+      <main style={{ flex:1 }}>
+        {route==='dashboard' && <DashboardPage onSelect={setSelected}/>}
+        {route==='compare' && <ComparePage/>}
+        {route==='history' && <HistoryPage onToast={showToast}/>}
+        {route==='admin' && <AdminPage onToast={showToast}/>}
+      </main>
+
+      {/* Patient detail modal */}
+      {selected && (
+        <Modal title="분석 케이스 상세" onClose={()=>setSelected(null)}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:20 }}>
+            {[['환자명',selected.name],['환자 ID',selected.id],['기관',selected.org],['위험도',null]].map(([l,v],i) => (
+              <div key={i} style={{ background:C.surf2, borderRadius:10, padding:'12px 14px' }}>
+                <div style={{ fontSize:11, color:C.textMuted, marginBottom:4 }}>{l}</div>
+                {v ? <div style={{ fontWeight:700, fontSize:14 }}>{v}</div> : <RiskBadge level={selected.risk}/>}
+              </div>
+            ))}
+          </div>
+          <div style={{ background:C.surf2, borderRadius:10, padding:'14px 16px', marginBottom:16 }}>
+            <div style={{ fontSize:12, color:C.textMuted, marginBottom:6 }}>이상 부위</div>
+            <div style={{ fontWeight:600, fontSize:14 }}>{selected.part}</div>
+          </div>
+          <div style={{ background:C.surf2, borderRadius:10, padding:'14px 16px', marginBottom:20 }}>
+            <div style={{ fontSize:12, color:C.textMuted, marginBottom:6 }}>코멘트</div>
+            <textarea rows={3} placeholder="코멘트를 입력하세요" style={{ width:'100%', background:'none', border:'none', color:C.text, fontSize:13, resize:'none', outline:'none' }}/>
+          </div>
+          <div style={{ display:'flex', gap:10 }}>
+            <button onClick={()=>{setSelected(null);showToast('리포트를 생성했습니다');}} style={{ flex:1, background:C.primary, color:'#fff', padding:'12px', borderRadius:10, fontWeight:700, fontSize:14 }}>리포트 생성</button>
+            <button onClick={()=>setSelected(null)} style={{ flex:1, background:C.surf2, border:`1px solid ${C.border}`, color:C.text, padding:'12px', borderRadius:10, fontWeight:600, fontSize:14 }}>닫기</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Footer */}
+      <footer style={{ background:C.surf, borderTop:`1px solid ${C.border}`, padding:'24px 40px' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:12 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ width:28, height:28, background:`linear-gradient(135deg,${C.primary},${C.accent})`, borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14 }}>🏃</div>
+            <span style={{ fontWeight:900, color:C.text }}>RunHealth AI</span>
+          </div>
+          <div style={{ display:'flex', gap:24, fontSize:12, color:C.textMuted }}>
+            <span>FastAPI + PostgreSQL + Redis</span>
+            <span>MediaPipe + OpenCV</span>
+            <span>Whisper API + GPT-4o-mini</span>
+          </div>
+          <div style={{ fontSize:12, color:C.textMuted }}>© 2026 RunHealth AI — 구현 데모</div>
+        </div>
+      </footer>
+
+      {toast && <Toast msg={toast} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
