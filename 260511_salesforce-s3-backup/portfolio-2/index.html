@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DataVault Platform — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;min-height:100vh;font-family:'Pretendard',sans-serif;background:#0D1B2E;color:#F0F9FF;}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh;}
+
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.96)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(400px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+@keyframes barGrow{from{width:0%}to{width:var(--w)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+
+.shimmer-dark{background:linear-gradient(90deg,#1E2D40 25%,#243347 50%,#1E2D40 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;}
+::-webkit-scrollbar{width:5px;height:5px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:rgba(148,163,184,0.3);border-radius:3px;}
+.scale-card{transition:transform 0.2s ease,box-shadow 0.2s ease;}
+.scale-card:hover{transform:scale(1.02);box-shadow:0 8px 32px rgba(14,165,233,0.18);}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useMemo}=React;
+const {AreaChart,Area,BarChart,Bar,LineChart,Line,XAxis,YAxis,CartesianGrid,Tooltip,ResponsiveContainer,ComposedChart,RadialBarChart,RadialBar}=Recharts;
+
+const C={
+  primary:'#0EA5E9',secondary:'#0F172A',accent:'#38BDF8',
+  bg:'#0D1B2E',surface:'#162032',card:'#1E2D40',
+  border:'rgba(255,255,255,0.09)',borderBright:'rgba(14,165,233,0.25)',
+  text:'#F0F9FF',textSub:'#94A3B8',textLight:'#64748B',
+  success:'#34D399',warning:'#FBBF24',danger:'#F87171',info:'#60A5FA',
+  gradient:'linear-gradient(135deg,#0EA5E9,#0369A1)',
+};
+
+/* ─── Mock Data ─── */
+const OBJECTS_META=[
+  {name:'Account',label:'거래처',type:'Standard',fields:127,relations:43,cached:true,lastSync:'09:12'},
+  {name:'Contact',label:'연락처',type:'Standard',fields:93,relations:28,cached:true,lastSync:'09:12'},
+  {name:'Opportunity',label:'영업 기회',type:'Standard',fields:84,relations:31,cached:true,lastSync:'09:13'},
+  {name:'Lead',label:'잠재 고객',type:'Standard',fields:71,relations:19,cached:true,lastSync:'09:13'},
+  {name:'Case',label:'케이스',type:'Standard',fields:62,relations:22,cached:true,lastSync:'09:14'},
+  {name:'Contract',label:'계약',type:'Standard',fields:54,relations:15,cached:false,lastSync:'-'},
+  {name:'Asset',label:'자산',type:'Standard',fields:47,relations:12,cached:false,lastSync:'-'},
+  {name:'CustomProduct__c',label:'맞춤 제품',type:'Custom',fields:43,relations:8,cached:true,lastSync:'09:15'},
+  {name:'OrderHistory__c',label:'주문 이력',type:'Custom',fields:38,relations:5,cached:true,lastSync:'09:15'},
+  {name:'SalesRegion__c',label:'영업 지역',type:'Custom',fields:29,relations:3,cached:false,lastSync:'-'},
+  {name:'ContractLog__c',label:'계약 이력',type:'Custom',fields:35,relations:7,cached:true,lastSync:'09:16'},
+  {name:'CustomerFeedback__c',label:'고객 피드백',type:'Custom',fields:21,relations:4,cached:false,lastSync:'-'},
+];
+
+const FIELDS_META=[
+  {name:'Id',label:'레코드 ID',type:'id',required:true,backup:true},
+  {name:'Name',label:'이름',type:'string',required:true,backup:true},
+  {name:'Phone',label:'전화번호',type:'phone',required:false,backup:true},
+  {name:'Email',label:'이메일',type:'email',required:false,backup:true},
+  {name:'OwnerId',label:'소유자',type:'reference',ref:'User',required:true,backup:true},
+  {name:'AccountId',label:'거래처 ID',type:'reference',ref:'Account',required:false,backup:true},
+  {name:'CreatedDate',label:'생성일',type:'datetime',required:true,backup:true},
+  {name:'LastModifiedDate',label:'수정일',type:'datetime',required:true,backup:true},
+  {name:'Industry',label:'업종',type:'picklist',required:false,backup:true},
+  {name:'AnnualRevenue',label:'연간 매출',type:'currency',required:false,backup:false},
+  {name:'Description',label:'설명',type:'textarea',required:false,backup:true},
+  {name:'Website',label:'웹사이트',type:'url',required:false,backup:false},
+];
+
+const REPORT_TREE=[
+  {id:'f1',name:'영업 보고서',type:'folder',expanded:true,children:[
+    {id:'r1',name:'월별 영업 현황',type:'report',format:'matrix',lastMod:'2026-05-10',selected:true},
+    {id:'r2',name:'파이프라인 분석',type:'report',format:'summary',lastMod:'2026-05-09',selected:true},
+    {id:'f2',name:'지역별 분석',type:'folder',expanded:false,children:[
+      {id:'r3',name:'서울 지역 현황',type:'report',format:'tabular',lastMod:'2026-05-08',selected:true},
+      {id:'r4',name:'부산 지역 현황',type:'report',format:'tabular',lastMod:'2026-05-07',selected:false},
+    ]},
+  ]},
+  {id:'f3',name:'마케팅 대시보드',type:'folder',expanded:false,children:[
+    {id:'r5',name:'캠페인 효율',type:'dashboard',format:'dashboard',lastMod:'2026-05-11',selected:true},
+    {id:'r6',name:'리드 전환 퍼널',type:'report',format:'funnel',lastMod:'2026-05-06',selected:false},
+  ]},
+  {id:'f4',name:'고객 서비스',type:'folder',expanded:false,children:[
+    {id:'r7',name:'케이스 처리 현황',type:'report',format:'summary',lastMod:'2026-05-10',selected:true},
+    {id:'r8',name:'CS 팀별 성과',type:'dashboard',format:'dashboard',lastMod:'2026-05-05',selected:true},
+  ]},
+];
+
+const PROFILES=[
+  {name:'System Administrator',label:'시스템 관리자',users:3},
+  {name:'Standard User',label:'표준 사용자',users:47},
+  {name:'Sales Manager',label:'영업 매니저',users:12},
+  {name:'Sales Rep',label:'영업 담당자',users:38},
+  {name:'Read Only',label:'읽기 전용',users:8},
+];
+
+const FLOWS=[
+  {id:'FL-001',name:'신규 리드 자동 할당',type:'Flow',status:'active',triggers:'리드 생성',lastMod:'2026-04-15',selected:true},
+  {id:'FL-002',name:'영업 기회 단계 알림',type:'Flow',status:'active',triggers:'영업 기회 업데이트',lastMod:'2026-04-12',selected:true},
+  {id:'FL-003',name:'케이스 자동 에스컬레이션',type:'Flow',status:'active',triggers:'케이스 생성',lastMod:'2026-03-28',selected:false},
+  {id:'WF-001',name:'계약 만료 알림',type:'Workflow',status:'active',triggers:'계약 갱신일-30일',lastMod:'2026-02-10',selected:true},
+  {id:'WF-002',name:'고객 등급 자동 갱신',type:'Workflow',status:'inactive',triggers:'매출 달성 조건',lastMod:'2026-01-22',selected:false},
+  {id:'AP-001',name:'할인 승인 프로세스',type:'Approval',status:'active',triggers:'할인율 10% 초과',lastMod:'2026-03-05',selected:true},
+];
+
+const ENVS=[
+  {id:'env-prod',name:'Production',label:'프로덕션',icon:'🏭',status:'connected',lastSync:'09:45',
+    objects:697,records:'2.4M',storage:'2.3 TB',backupSuccess:97.2,color:'#34D399'},
+  {id:'env-sandbox',name:'Sandbox (Developer)',label:'개발 샌드박스',icon:'🧪',status:'connected',lastSync:'09:42',
+    objects:412,records:'180K',storage:'340 GB',backupSuccess:94.5,color:'#FBBF24'},
+];
+
+const ENV_COMPARE_DATA=[
+  {date:'05/05',prod:97,sandbox:93},{date:'05/06',prod:98,sandbox:95},
+  {date:'05/07',prod:96,sandbox:91},{date:'05/08',prod:99,sandbox:96},
+  {date:'05/09',prod:97,sandbox:94},{date:'05/10',prod:98,sandbox:92},{date:'05/11',prod:97,sandbox:94},
+];
+
+/* ─── Utility Components ─── */
+function CountUp({end,duration=1100,suffix='',prefix=''}){
+  const [v,setV]=useState(0);
+  useEffect(()=>{let s=0;const step=end/(duration/16);const t=setInterval(()=>{s+=step;if(s>=end){setV(end);clearInterval(t);}else setV(Math.floor(s));},16);return()=>clearInterval(t);},[end]);
+  return <span>{prefix}{v.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({message,type='success',onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  const bg=type==='success'?'#0F766E':type==='danger'?'#991B1B':'#1D4ED8';
+  return(
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:bg,color:'#fff',
+      padding:'12px 20px',borderRadius:10,animation:'slideUp 280ms ease',
+      boxShadow:'0 8px 32px rgba(0,0,0,0.4)',display:'flex',alignItems:'center',gap:10,fontSize:14,fontWeight:500}}>
+      <span>{type==='success'?'✓':'ℹ'}</span><span>{message}</span>
+    </div>
+  );
+}
+
+function Drawer({title,onClose,children,width=480}){
+  return(
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:200,animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width,background:C.surface,
+        boxShadow:'-8px 0 48px rgba(0,0,0,0.4)',zIndex:201,overflowY:'auto',
+        animation:'slideInRight 220ms ease',display:'flex',flexDirection:'column',
+        borderLeft:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+          padding:'20px 24px',borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+          <h3 style={{fontSize:16,fontWeight:700,color:C.text}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',
+            color:C.textSub,fontSize:20,padding:4}}>✕</button>
+        </div>
+        <div style={{flex:1,padding:24,overflowY:'auto'}}>{children}</div>
+      </div>
+    </>
+  );
+}
+
+function Modal({title,onClose,children,width=560}){
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.7)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:C.surface,borderRadius:14,zIndex:501,
+        animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',
+        boxShadow:'0 32px 80px rgba(0,0,0,0.5)',border:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+          padding:'20px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:700}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:C.textSub,fontSize:20}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Badge({label,color}){
+  const map={active:{bg:'rgba(52,211,153,0.15)',text:'#34D399'},inactive:{bg:'rgba(148,163,184,0.12)',text:'#94A3B8'},
+    connected:{bg:'rgba(52,211,153,0.15)',text:'#34D399'},disconnected:{bg:'rgba(248,113,113,0.15)',text:'#F87171'},
+    Standard:{bg:'rgba(14,165,233,0.15)',text:'#38BDF8'},Custom:{bg:'rgba(167,139,250,0.15)',text:'#A78BFA'}};
+  const s=map[color||label]||{bg:'rgba(148,163,184,0.12)',text:'#94A3B8'};
+  return <span style={{background:s.bg,color:s.text,padding:'3px 10px',borderRadius:20,fontSize:11,fontWeight:600}}>{label}</span>;
+}
+
+/* ─── TopNav ─── */
+function TopNav({tab,setTab}){
+  const tabs=[
+    {id:'metadata',label:'메타데이터 탐색기'},
+    {id:'reports',label:'보고서 백업'},
+    {id:'permissions',label:'권한 구조 맵'},
+    {id:'multienv',label:'멀티 환경 관리'},
+  ];
+  return(
+    <header style={{position:'sticky',top:0,zIndex:100,background:'rgba(13,27,46,0.92)',
+      backdropFilter:'blur(12px)',borderBottom:`1px solid ${C.border}`,
+      display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:4,flexShrink:0}}>
+      {/* Logo */}
+      <div style={{display:'flex',alignItems:'center',gap:8,marginRight:16}}>
+        <div style={{width:30,height:30,borderRadius:8,background:'linear-gradient(135deg,#0EA5E9,#0369A1)',
+          display:'flex',alignItems:'center',justifyContent:'center',fontSize:15}}>⬡</div>
+        <span style={{fontWeight:800,fontSize:15,color:C.text,letterSpacing:'-0.02em'}}>DataVault</span>
+        <span style={{fontSize:10,color:C.accent,background:'rgba(14,165,233,0.12)',
+          padding:'1px 7px',borderRadius:10,fontWeight:700}}>Platform</span>
+      </div>
+      {/* Tabs */}
+      {tabs.map(t=>(
+        <button key={t.id} onClick={()=>setTab(t.id)} style={{
+          padding:'6px 14px',borderRadius:7,border:'none',cursor:'pointer',
+          background:tab===t.id?'rgba(14,165,233,0.15)':'transparent',
+          color:tab===t.id?C.accent:C.textSub,fontSize:13,fontWeight:tab===t.id?700:400,
+          transition:'all 150ms',whiteSpace:'nowrap',
+          borderBottom:tab===t.id?`2px solid ${C.accent}`:'2px solid transparent',
+        }}
+        onMouseEnter={e=>{if(tab!==t.id){e.currentTarget.style.color=C.text;e.currentTarget.style.background='rgba(255,255,255,0.05)';}}}
+        onMouseLeave={e=>{if(tab!==t.id){e.currentTarget.style.color=C.textSub;e.currentTarget.style.background='transparent';}}}>
+          {t.label}
+        </button>
+      ))}
+      <div style={{flex:1}}/>
+      {/* Right icons */}
+      <div style={{display:'flex',alignItems:'center',gap:8}}>
+        <div style={{position:'relative',display:'flex',alignItems:'center'}}>
+          <span style={{position:'absolute',left:9,color:C.textLight,fontSize:13}}>🔍</span>
+          <input placeholder="Object / 보고서 검색..." style={{paddingLeft:28,paddingRight:10,height:32,borderRadius:7,
+            border:`1px solid ${C.border}`,fontSize:12,color:C.text,background:'rgba(255,255,255,0.05)',outline:'none',
+            width:180}}/>
+        </div>
+        <button style={{background:'rgba(255,255,255,0.06)',border:`1px solid ${C.border}`,
+          width:32,height:32,borderRadius:7,cursor:'pointer',fontSize:15,display:'flex',alignItems:'center',justifyContent:'center',position:'relative'}}>
+          🔔
+          <span style={{position:'absolute',top:4,right:4,width:7,height:7,borderRadius:'50%',
+            background:C.danger,border:'2px solid #0D1B2E'}}/>
+        </button>
+        <div style={{width:30,height:30,borderRadius:7,background:'linear-gradient(135deg,#0EA5E9,#0369A1)',
+          display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>김</div>
+      </div>
+    </header>
+  );
+}
+
+/* ─── Hero Banner ─── */
+function HeroBanner({tab}){
+  const meta={
+    metadata:{title:'메타데이터 탐색기',sub:'Salesforce Object 구조 및 관계 탐색',icon:'🗂',
+      kpis:[{label:'총 Objects',val:697},{label:'캐시됨',val:412},{label:'관계 수',val:2315}]},
+    reports:{title:'보고서 백업',sub:'보고서 · 대시보드 폴더 구조 보존 백업',icon:'📊',
+      kpis:[{label:'보고서',val:808},{label:'대시보드',val:124},{label:'선택됨',val:487}]},
+    permissions:{title:'권한 구조 맵',sub:'프로필 · 권한집합 · 자동화 로직 관리',icon:'🔐',
+      kpis:[{label:'프로필',val:18},{label:'권한 집합',val:34},{label:'자동화 로직',val:87}]},
+    multienv:{title:'멀티 환경 관리',sub:'Sandbox · Production 통합 비교 관리',icon:'🌐',
+      kpis:[{label:'연결된 환경',val:2},{label:'오늘 백업',val:1166},{label:'성공률',val:95,suffix:'%'}]},
+  };
+  const m=meta[tab]||meta.metadata;
+  return(
+    <div style={{background:`linear-gradient(135deg,#0369A1 0%,#0EA5E9 50%,#0284C7 100%)`,
+      padding:'26px 32px',flexShrink:0,position:'relative',overflow:'hidden'}}>
+      <div style={{position:'absolute',top:-40,right:-40,width:200,height:200,borderRadius:'50%',
+        background:'rgba(255,255,255,0.05)',pointerEvents:'none'}}/>
+      <div style={{position:'absolute',bottom:-30,left:'40%',width:140,height:140,borderRadius:'50%',
+        background:'rgba(255,255,255,0.04)',pointerEvents:'none'}}/>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
+        <div style={{width:40,height:40,borderRadius:10,background:'rgba(255,255,255,0.15)',
+          display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}}>{m.icon}</div>
+        <div>
+          <h1 style={{fontSize:22,fontWeight:800,color:'#fff',letterSpacing:'-0.02em'}}>{m.title}</h1>
+          <p style={{fontSize:12,color:'rgba(255,255,255,0.75)',marginTop:2}}>{m.sub}</p>
+        </div>
+      </div>
+      <div style={{display:'flex',gap:24}}>
+        {m.kpis.map((k,i)=>(
+          <div key={i} style={{background:'rgba(255,255,255,0.12)',borderRadius:10,padding:'10px 18px',backdropFilter:'blur(4px)'}}>
+            <div style={{fontSize:11,color:'rgba(255,255,255,0.7)',marginBottom:3}}>{k.label}</div>
+            <div style={{fontSize:22,fontWeight:800,color:'#fff',letterSpacing:'-0.02em'}}>
+              <CountUp end={k.val} suffix={k.suffix||''}/>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Metadata Explorer ─── */
+function MetadataPage({toast}){
+  const [selected,setSelected]=useState(OBJECTS_META[0]);
+  const [drawer,setDrawer]=useState(null);
+  const [search,setSearch]=useState('');
+  const [filter,setFilter]=useState('all');
+  const [showRelation,setShowRelation]=useState(false);
+
+  const filtered=OBJECTS_META.filter(o=>{
+    if(filter==='standard'&&o.type!=='Standard')return false;
+    if(filter==='custom'&&o.type!=='Custom')return false;
+    if(search&&!o.name.toLowerCase().includes(search.toLowerCase())&&!o.label.includes(search))return false;
+    return true;
+  });
+
+  return(
+    <div style={{display:'flex',gap:0,height:'calc(100vh - 56px - 122px)',animation:'fadeIn 280ms ease'}}>
+      {/* Left: Object List */}
+      <div style={{width:280,flexShrink:0,background:C.surface,borderRight:`1px solid ${C.border}`,
+        display:'flex',flexDirection:'column',overflow:'hidden'}}>
+        <div style={{padding:'14px 16px',borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Object 검색..."
+            style={{width:'100%',padding:'7px 12px',borderRadius:8,border:`1px solid ${C.border}`,
+              fontSize:12,color:C.text,background:'rgba(255,255,255,0.05)',outline:'none'}}
+            onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+          <div style={{display:'flex',gap:6,marginTop:10}}>
+            {[{id:'all',label:'전체'},{id:'standard',label:'Standard'},{id:'custom',label:'Custom'}].map(f=>(
+              <button key={f.id} onClick={()=>setFilter(f.id)} style={{
+                flex:1,padding:'5px 0',borderRadius:6,border:'none',cursor:'pointer',fontSize:11,fontWeight:600,
+                background:filter===f.id?C.primary:'rgba(255,255,255,0.06)',
+                color:filter===f.id?'#fff':C.textSub,transition:'all 150ms'}}>
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{flex:1,overflowY:'auto',padding:8}}>
+          {filtered.map((obj,i)=>(
+            <div key={obj.name} onClick={()=>setSelected(obj)} style={{
+              padding:'10px 12px',borderRadius:8,cursor:'pointer',marginBottom:2,
+              background:selected?.name===obj.name?'rgba(14,165,233,0.15)':'transparent',
+              border:`1px solid ${selected?.name===obj.name?C.borderBright:'transparent'}`,
+              animation:`slideUp 280ms ease ${i*25}ms both`,transition:'all 150ms'}}
+              onMouseEnter={e=>{if(selected?.name!==obj.name)e.currentTarget.style.background='rgba(255,255,255,0.05)';}}
+              onMouseLeave={e=>{if(selected?.name!==obj.name)e.currentTarget.style.background='transparent';}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                <span style={{fontSize:13,fontWeight:selected?.name===obj.name?700:500,
+                  color:selected?.name===obj.name?C.accent:C.text,fontFamily:'monospace'}}>{obj.name}</span>
+                <Badge label={obj.type} color={obj.type}/>
+              </div>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:C.textSub}}>
+                <span>{obj.label}</span>
+                <span>{obj.cached?`🔴 캐시됨`:`○ 미캐시`}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Right: Field Detail + Relation */}
+      <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',background:'#0F1E30'}}>
+        {selected&&(
+          <>
+            {/* Header */}
+            <div style={{padding:'16px 24px',borderBottom:`1px solid ${C.border}`,flexShrink:0,
+              display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <h2 style={{fontSize:17,fontWeight:800,color:C.text}}>{selected.name}</h2>
+                  <Badge label={selected.type} color={selected.type}/>
+                  {selected.cached&&<span style={{fontSize:10,color:C.success,background:'rgba(52,211,153,0.12)',
+                    padding:'2px 8px',borderRadius:10}}>✓ 캐시됨 {selected.lastSync}</span>}
+                </div>
+                <div style={{fontSize:12,color:C.textSub,marginTop:3}}>
+                  {selected.label} · 필드 {selected.fields}개 · 참조 관계 {selected.relations}개
+                </div>
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>setShowRelation(!showRelation)} style={{
+                  background:showRelation?'rgba(14,165,233,0.15)':'rgba(255,255,255,0.06)',
+                  border:`1px solid ${showRelation?C.borderBright:C.border}`,
+                  color:showRelation?C.accent:C.textSub,padding:'7px 14px',borderRadius:8,
+                  fontSize:12,fontWeight:600,cursor:'pointer',transition:'all 150ms'}}>
+                  관계 다이어그램
+                </button>
+                <button onClick={()=>setDrawer(selected)} style={{
+                  background:C.primary,color:'#fff',border:'none',padding:'7px 14px',borderRadius:8,
+                  fontSize:12,fontWeight:600,cursor:'pointer'}}>상세 보기</button>
+                <button onClick={()=>toast('메타데이터 캐시 갱신 완료','success')} style={{
+                  background:'rgba(255,255,255,0.06)',border:`1px solid ${C.border}`,
+                  color:C.textSub,padding:'7px 14px',borderRadius:8,fontSize:12,cursor:'pointer'}}>캐시 갱신</button>
+              </div>
+            </div>
+
+            {showRelation?(
+              /* Relation Diagram (SVG) */
+              <div style={{flex:1,overflow:'hidden',display:'flex',alignItems:'center',justifyContent:'center',padding:24}}>
+                <svg width="100%" height="100%" viewBox="0 0 700 400" style={{maxWidth:700,maxHeight:400}}>
+                  {/* Center node */}
+                  <rect x="280" y="150" width="140" height="60" rx="10" fill="rgba(14,165,233,0.25)" stroke={C.accent} strokeWidth="2"/>
+                  <text x="350" y="177" textAnchor="middle" fill={C.accent} fontSize="13" fontWeight="800">{selected.name}</text>
+                  <text x="350" y="197" textAnchor="middle" fill={C.textSub} fontSize="10">{selected.fields}개 필드</text>
+                  {/* Related nodes */}
+                  {[
+                    {x:60,y:60,name:'Account',rel:'참조(Lookup)',color:'rgba(96,165,250,0.2)'},
+                    {x:490,y:60,name:'Contact',rel:'마스터-디테일',color:'rgba(167,139,250,0.2)'},
+                    {x:60,y:280,name:'User',rel:'소유자 참조',color:'rgba(52,211,153,0.2)'},
+                    {x:490,y:280,name:'Case',rel:'참조(Lookup)',color:'rgba(251,191,36,0.2)'},
+                    {x:270,y:20,name:'Pricebook',rel:'제품 참조',color:'rgba(248,113,113,0.2)'},
+                  ].map((n,i)=>(
+                    <g key={i}>
+                      <line x1={350} y1={i<2?150:i===4?150:210} x2={n.x+60} y2={n.y+30}
+                        stroke="rgba(148,163,184,0.3)" strokeWidth="1.5" strokeDasharray="4,3"/>
+                      <rect x={n.x} y={n.y} width="120" height="50" rx="8" fill={n.color} stroke="rgba(148,163,184,0.3)" strokeWidth="1"/>
+                      <text x={n.x+60} y={n.y+22} textAnchor="middle" fill={C.text} fontSize="11" fontWeight="700">{n.name}</text>
+                      <text x={n.x+60} y={n.y+37} textAnchor="middle" fill={C.textSub} fontSize="9">{n.rel}</text>
+                    </g>
+                  ))}
+                </svg>
+              </div>
+            ):(
+              /* Field Table */
+              <div style={{flex:1,overflowY:'auto'}}>
+                <table style={{width:'100%',borderCollapse:'collapse'}}>
+                  <thead>
+                    <tr style={{background:C.surface,position:'sticky',top:0}}>
+                      {['Field API명','레이블','타입','참조 Object','필수','백업 포함'].map((h,i)=>(
+                        <th key={i} style={{padding:'10px 16px',textAlign:'left',fontSize:11,color:C.textSub,
+                          fontWeight:600,borderBottom:`1px solid ${C.border}`,whiteSpace:'nowrap'}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {FIELDS_META.map((f,i)=>(
+                      <tr key={f.name} onClick={()=>setDrawer({...selected,field:f})} style={{
+                        borderBottom:`1px solid rgba(255,255,255,0.04)`,cursor:'pointer',
+                        animation:`slideUp 260ms ease ${i*30}ms both`,transition:'background 130ms'}}
+                        onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.04)'}
+                        onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                        <td style={{padding:'10px 16px',fontSize:12,fontFamily:'monospace',color:C.accent}}>{f.name}</td>
+                        <td style={{padding:'10px 16px',fontSize:12,color:C.text}}>{f.label}</td>
+                        <td style={{padding:'10px 16px'}}>
+                          <span style={{fontSize:11,padding:'2px 8px',borderRadius:12,
+                            background:'rgba(96,165,250,0.12)',color:C.info,fontWeight:600}}>{f.type}</span>
+                        </td>
+                        <td style={{padding:'10px 16px',fontSize:12,color:f.ref?C.accent:C.textLight}}>{f.ref||'-'}</td>
+                        <td style={{padding:'10px 16px'}}>{f.required?<span style={{color:C.danger,fontSize:12}}>필수</span>:<span style={{color:C.textLight,fontSize:12}}>선택</span>}</td>
+                        <td style={{padding:'10px 16px'}}>
+                          <span style={{color:f.backup?C.success:C.textLight,fontSize:12,fontWeight:600}}>{f.backup?'✓ 포함':'제외'}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Object Detail Drawer */}
+      {drawer&&(
+        <Drawer title={`${drawer.field?'필드 상세':'Object 상세'}: ${drawer.field?.name||drawer.name}`} onClose={()=>setDrawer(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {drawer.field?(
+              <>
+                {[
+                  {label:'Field API명',value:drawer.field.name},{label:'레이블',value:drawer.field.label},
+                  {label:'데이터 타입',value:drawer.field.type},{label:'참조 Object',value:drawer.field.ref||'-'},
+                  {label:'필수 여부',value:drawer.field.required?'필수':'선택'},
+                  {label:'백업 포함',value:drawer.field.backup?'포함':'제외'},
+                ].map((r,i)=>(
+                  <div key={i} style={{background:C.card,borderRadius:8,padding:'10px 14px'}}>
+                    <div style={{fontSize:11,color:C.textSub,marginBottom:3}}>{r.label}</div>
+                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>{r.value}</div>
+                  </div>
+                ))}
+                <button onClick={()=>{toast('필드 백업 제외 설정 변경됨','success');setDrawer(null);}} style={{
+                  background:'rgba(248,113,113,0.12)',color:C.danger,border:`1px solid rgba(248,113,113,0.3)`,
+                  padding:'9px',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer',width:'100%',marginTop:8}}>
+                  백업 제외 목록에 추가
+                </button>
+              </>
+            ):(
+              <>
+                {[
+                  {label:'API명',value:drawer.name},{label:'한글명',value:drawer.label},
+                  {label:'Object 유형',value:drawer.type},{label:'필드 수',value:`${drawer.fields}개`},
+                  {label:'참조 관계',value:`${drawer.relations}개`},{label:'캐시 상태',value:drawer.cached?`캐시됨 (${drawer.lastSync})`:'미캐시'},
+                ].map((r,i)=>(
+                  <div key={i} style={{background:C.card,borderRadius:8,padding:'10px 14px'}}>
+                    <div style={{fontSize:11,color:C.textSub,marginBottom:3}}>{r.label}</div>
+                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>{r.value}</div>
+                  </div>
+                ))}
+                <button onClick={()=>{toast(`${drawer.name} 메타데이터 캐시 갱신 완료`,'success');setDrawer(null);}} style={{
+                  background:C.primary,color:'#fff',border:'none',padding:'10px',borderRadius:8,
+                  fontSize:13,fontWeight:600,cursor:'pointer',width:'100%',marginTop:8}}>캐시 갱신</button>
+              </>
+            )}
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+/* ─── Reports Page ─── */
+function ReportsPage({toast}){
+  const [tree,setTree]=useState(REPORT_TREE);
+  const [selected,setSelected]=useState(null);
+  const [backing,setBacking]=useState(false);
+
+  function countSelected(nodes){return nodes.reduce((acc,n)=>acc+(n.type!=='folder'?n.selected?1:0:0)+
+    (n.children?countSelected(n.children):0),0);}
+
+  function toggleNode(nodes,id){
+    return nodes.map(n=>{
+      if(n.id===id){
+        const ns=!n.selected;
+        return {...n,selected:ns,children:n.children?n.children.map(c=>({...c,selected:ns,
+          children:c.children?c.children.map(gc=>({...gc,selected:ns})):c.children})):n.children};
+      }
+      if(n.children)return {...n,children:toggleNode(n.children,id)};
+      return n;
+    });
+  }
+
+  function toggleExpand(nodes,id){
+    return nodes.map(n=>{
+      if(n.id===id)return {...n,expanded:!n.expanded};
+      if(n.children)return {...n,children:toggleExpand(n.children,id)};
+      return n;
+    });
+  }
+
+  function renderNodes(nodes,depth=0){
+    return nodes.map((node,i)=>(
+      <div key={node.id} style={{animation:`slideUp 280ms ease ${i*30}ms both`}}>
+        <div onClick={()=>{
+          if(node.type==='folder')setTree(p=>toggleExpand(p,node.id));
+          else setSelected(node);
+        }} style={{
+          display:'flex',alignItems:'center',gap:8,padding:`8px ${12+depth*20}px 8px 12px`,
+          borderRadius:7,cursor:'pointer',marginBottom:2,
+          background:selected?.id===node.id?'rgba(14,165,233,0.12)':'transparent',
+          transition:'background 130ms'}}
+          onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.04)'}
+          onMouseLeave={e=>e.currentTarget.style.background=selected?.id===node.id?'rgba(14,165,233,0.12)':'transparent'}>
+          <input type="checkbox" checked={node.selected||false}
+            onChange={e=>{e.stopPropagation();setTree(p=>toggleNode(p,node.id));}}
+            onClick={e=>e.stopPropagation()}
+            style={{cursor:'pointer',accentColor:C.primary,width:14,height:14}}/>
+          <span style={{fontSize:15,width:18}}>{node.type==='folder'?(node.expanded?'📂':'📁'):'📄'}</span>
+          <span style={{flex:1,fontSize:13,color:node.type==='folder'?C.text:C.textSub,
+            fontWeight:node.type==='folder'?600:400}}>{node.name}</span>
+          {node.type!=='folder'&&(
+            <span style={{fontSize:10,color:C.textLight,marginLeft:4}}>
+              {node.format==='dashboard'?'대시보드':node.format==='matrix'?'매트릭스':node.format==='summary'?'요약':'표'}</span>
+          )}
+        </div>
+        {node.type==='folder'&&node.expanded&&node.children&&(
+          <div style={{paddingLeft:16}}>{renderNodes(node.children,depth+1)}</div>
+        )}
+      </div>
+    ));
+  }
+
+  return(
+    <div style={{display:'grid',gridTemplateColumns:'1fr 340px',height:'calc(100vh - 56px - 122px)',
+      gap:0,animation:'fadeIn 280ms ease'}}>
+      {/* Tree */}
+      <div style={{background:C.surface,overflow:'auto',padding:16,borderRight:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+          <div style={{fontSize:14,fontWeight:700,color:C.text}}>보고서 폴더 구조</div>
+          <div style={{fontSize:12,color:C.textSub}}>선택됨 <b style={{color:C.accent}}>{countSelected(tree)}</b>개</div>
+        </div>
+        {renderNodes(tree)}
+      </div>
+
+      {/* Panel */}
+      <div style={{display:'flex',flexDirection:'column',gap:0,overflow:'auto'}}>
+        {/* Selected detail */}
+        <div style={{background:C.card,padding:20,borderBottom:`1px solid ${C.border}`}}>
+          {selected?(
+            <div style={{animation:'fadeIn 200ms ease'}}>
+              <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:12}}>{selected.name}</div>
+              {[
+                {label:'유형',value:selected.type==='dashboard'?'대시보드':'보고서'},
+                {label:'형식',value:selected.format},
+                {label:'최종 수정',value:selected.lastMod},
+                {label:'백업 상태',value:selected.selected?'백업 대상':'미선택'},
+              ].map((r,i)=>(
+                <div key={i} style={{display:'flex',justifyContent:'space-between',
+                  padding:'7px 0',borderBottom:`1px solid ${C.border}`,fontSize:12}}>
+                  <span style={{color:C.textSub}}>{r.label}</span>
+                  <span style={{color:C.text,fontWeight:600}}>{r.value}</span>
+                </div>
+              ))}
+              <button onClick={()=>{toast(`${selected.name} 즉시 백업 요청됨`,'success');}} style={{
+                width:'100%',marginTop:12,padding:'9px',background:C.primary,color:'#fff',
+                border:'none',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer'}}>선택 항목 즉시 백업</button>
+            </div>
+          ):(
+            <div style={{textAlign:'center',padding:'20px 0',color:C.textSub}}>
+              <div style={{fontSize:28,marginBottom:8}}>📄</div>
+              <div style={{fontSize:12}}>좌측에서 보고서를 클릭하면<br/>상세 정보가 표시됩니다</div>
+            </div>
+          )}
+        </div>
+        {/* Backup stats */}
+        <div style={{padding:20,flex:1}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:14}}>백업 통계</div>
+          {[
+            {label:'보고서',total:808,done:487,color:C.primary},
+            {label:'대시보드',total:124,done:76,color:C.accent},
+          ].map((item,i)=>(
+            <div key={i} style={{marginBottom:14}}>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:6}}>
+                <span style={{color:C.textSub}}>{item.label}</span>
+                <span style={{color:C.text,fontWeight:600}}>{item.done}/{item.total}</span>
+              </div>
+              <div style={{height:6,background:'rgba(255,255,255,0.08)',borderRadius:3}}>
+                <div style={{height:'100%',borderRadius:3,background:item.color,
+                  animation:'barGrow 800ms ease both','--w':`${Math.round(item.done/item.total*100)}%`,
+                  width:`${Math.round(item.done/item.total*100)}%`}}/>
+              </div>
+            </div>
+          ))}
+          <div style={{background:'rgba(14,165,233,0.08)',border:'1px solid rgba(14,165,233,0.2)',borderRadius:8,padding:'10px 14px',fontSize:12,color:C.accent}}>
+            ℹ 폴더 계층 구조를 그대로 유지하여 S3에 경로 매핑 저장됩니다
+          </div>
+          <button onClick={()=>{setBacking(true);setTimeout(()=>{setBacking(false);toast('보고서 백업 완료','success');},2000);}}
+            disabled={backing} style={{width:'100%',marginTop:14,padding:'10px',
+            background:backing?'rgba(14,165,233,0.3)':C.primary,color:'#fff',border:'none',borderRadius:9,
+            fontSize:13,fontWeight:600,cursor:'pointer',transition:'all 200ms'}}>
+            {backing?'백업 진행 중...':'선택된 항목 전체 백업'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Permissions Page ─── */
+function PermissionsPage({toast}){
+  const [flows,setFlows]=useState(FLOWS);
+  const [drawer,setDrawer]=useState(null);
+  const [profileSearch,setProfileSearch]=useState('');
+  const [activeTab,setActiveTab]=useState('profiles');
+
+  const filteredProfiles=PROFILES.filter(p=>p.name.toLowerCase().includes(profileSearch.toLowerCase())||p.label.includes(profileSearch));
+
+  return(
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,padding:20,
+      height:'calc(100vh - 56px - 122px)',overflowY:'auto',animation:'fadeIn 280ms ease'}}>
+      {/* Profile Permission Matrix */}
+      <div style={{background:C.surface,borderRadius:12,padding:20,border:`1px solid ${C.border}`,display:'flex',flexDirection:'column',gap:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontSize:14,fontWeight:700,color:C.text}}>프로필 권한 구조</div>
+            <div style={{fontSize:11,color:C.textSub}}>18개 프로필 · 34개 권한 집합</div>
+          </div>
+          <button onClick={()=>toast('권한 구조 백업 완료','success')} style={{
+            background:C.primary,color:'#fff',border:'none',padding:'7px 14px',borderRadius:7,
+            fontSize:12,fontWeight:600,cursor:'pointer'}}>권한 백업</button>
+        </div>
+        <input value={profileSearch} onChange={e=>setProfileSearch(e.target.value)} placeholder="프로필 검색..."
+          style={{padding:'7px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:12,
+            color:C.text,background:'rgba(255,255,255,0.05)',outline:'none'}}
+          onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',minWidth:380}}>
+            <thead>
+              <tr>
+                <th style={{padding:'8px 12px',textAlign:'left',fontSize:11,color:C.textSub,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>프로필</th>
+                <th style={{padding:'8px 12px',textAlign:'center',fontSize:11,color:C.textSub,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>Account</th>
+                <th style={{padding:'8px 12px',textAlign:'center',fontSize:11,color:C.textSub,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>Contact</th>
+                <th style={{padding:'8px 12px',textAlign:'center',fontSize:11,color:C.textSub,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>Opportunity</th>
+                <th style={{padding:'8px 12px',textAlign:'right',fontSize:11,color:C.textSub,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>사용자</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredProfiles.map((p,i)=>{
+                const perms={
+                  'System Administrator':['CRUD','CRUD','CRUD'],
+                  'Standard User':['RU','RU','RU'],
+                  'Sales Manager':['CRUD','CRUD','CRUD'],
+                  'Sales Rep':['RU','RU','CRU'],
+                  'Read Only':['R','R','R'],
+                };
+                const pp=perms[p.name]||['R','R','R'];
+                return(
+                  <tr key={p.name} onClick={()=>setDrawer(p)} style={{
+                    cursor:'pointer',animation:`slideUp 250ms ease ${i*40}ms both`,
+                    transition:'background 130ms'}}
+                    onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.04)'}
+                    onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                    <td style={{padding:'10px 12px'}}>
+                      <div style={{fontSize:13,fontWeight:600,color:C.text}}>{p.label}</div>
+                      <div style={{fontSize:10,color:C.textSub,fontFamily:'monospace'}}>{p.name}</div>
+                    </td>
+                    {pp.map((perm,j)=>(
+                      <td key={j} style={{padding:'10px 12px',textAlign:'center'}}>
+                        <span style={{fontSize:10,padding:'2px 6px',borderRadius:5,
+                          background:perm==='CRUD'?'rgba(52,211,153,0.12)':perm.includes('C')&&perm.includes('U')?'rgba(96,165,250,0.12)':'rgba(148,163,184,0.1)',
+                          color:perm==='CRUD'?C.success:perm.includes('C')&&perm.includes('U')?C.info:C.textSub,
+                          fontWeight:700,fontFamily:'monospace'}}>{perm}</span>
+                      </td>
+                    ))}
+                    <td style={{padding:'10px 12px',textAlign:'right',fontSize:12,color:C.textSub}}>{p.users}명</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Automation Logic */}
+      <div style={{background:C.surface,borderRadius:12,padding:20,border:`1px solid ${C.border}`,display:'flex',flexDirection:'column',gap:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontSize:14,fontWeight:700,color:C.text}}>자동화 로직 목록</div>
+            <div style={{fontSize:11,color:C.textSub}}>Flow · Workflow · Approval Process</div>
+          </div>
+          <button onClick={()=>{
+            const sel=flows.filter(f=>f.selected);
+            toast(`${sel.length}개 자동화 로직 백업 완료`,'success');
+          }} style={{background:C.primary,color:'#fff',border:'none',padding:'7px 14px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer'}}>선택 백업</button>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          {['전체','Flow','Workflow','Approval'].map(f=>(
+            <button key={f} style={{padding:'4px 12px',borderRadius:6,border:'none',cursor:'pointer',fontSize:11,fontWeight:600,
+              background:activeTab===f?C.primary:'rgba(255,255,255,0.06)',
+              color:activeTab===f?'#fff':C.textSub,transition:'all 150ms'}}
+              onClick={()=>setActiveTab(f)}>{f}</button>
+          ))}
+        </div>
+        <div style={{flex:1,overflowY:'auto',display:'flex',flexDirection:'column',gap:8}}>
+          {flows.filter(f=>activeTab==='전체'||f.type===activeTab||f.type===activeTab.replace('Approval','Approval')).map((f,i)=>(
+            <div key={f.id} onClick={()=>setDrawer(f)} style={{
+              border:`1px solid ${f.selected?C.borderBright:C.border}`,borderRadius:9,
+              padding:'12px 14px',cursor:'pointer',transition:'all 150ms',
+              background:f.selected?'rgba(14,165,233,0.06)':C.card,
+              animation:`slideUp 250ms ease ${i*40}ms both`}}
+              onMouseEnter={e=>{e.currentTarget.style.borderColor=C.primary;}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor=f.selected?C.borderBright:C.border;}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <input type="checkbox" checked={f.selected}
+                    onChange={e=>{e.stopPropagation();setFlows(p=>p.map(fl=>fl.id===f.id?{...fl,selected:!fl.selected}:fl));}}
+                    onClick={e=>e.stopPropagation()} style={{cursor:'pointer',accentColor:C.primary,width:14,height:14}}/>
+                  <span style={{fontSize:13,fontWeight:600,color:C.text}}>{f.name}</span>
+                </div>
+                <div style={{display:'flex',gap:6}}>
+                  <Badge label={f.type} color={f.type==='Flow'?'Standard':f.type==='Workflow'?'Custom':'connected'}/>
+                  <Badge label={f.status==='active'?'활성':'비활성'} color={f.status}/>
+                </div>
+              </div>
+              <div style={{display:'flex',gap:16,fontSize:11,color:C.textSub}}>
+                <span>트리거: {f.triggers}</span>
+                <span>수정: {f.lastMod}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Drawer */}
+      {drawer&&(
+        <Drawer title={drawer.users?`프로필 상세: ${drawer.label}`:`자동화 로직: ${drawer.name}`} onClose={()=>setDrawer(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {drawer.users?[
+              {label:'프로필명',value:drawer.name},{label:'한글명',value:drawer.label},
+              {label:'사용자 수',value:`${drawer.users}명`},{label:'권한 수준',value:'상세 권한 설정 확인 필요'},
+            ].map((r,i)=>(
+              <div key={i} style={{background:C.card,borderRadius:8,padding:'10px 14px'}}>
+                <div style={{fontSize:11,color:C.textSub,marginBottom:3}}>{r.label}</div>
+                <div style={{fontSize:13,fontWeight:600,color:C.text}}>{r.value}</div>
+              </div>
+            )):[
+              {label:'ID',value:drawer.id},{label:'이름',value:drawer.name},
+              {label:'유형',value:drawer.type},{label:'상태',value:drawer.status==='active'?'활성':'비활성'},
+              {label:'트리거',value:drawer.triggers},{label:'마지막 수정',value:drawer.lastMod},
+            ].map((r,i)=>(
+              <div key={i} style={{background:C.card,borderRadius:8,padding:'10px 14px'}}>
+                <div style={{fontSize:11,color:C.textSub,marginBottom:3}}>{r.label}</div>
+                <div style={{fontSize:13,fontWeight:600,color:C.text}}>{r.value}</div>
+              </div>
+            ))}
+            <button onClick={()=>{toast('백업 완료','success');setDrawer(null);}} style={{
+              background:C.primary,color:'#fff',border:'none',padding:'10px',borderRadius:8,
+              fontSize:13,fontWeight:600,cursor:'pointer',width:'100%',marginTop:8}}>백업 실행</button>
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+/* ─── Multi Env Page ─── */
+function MultiEnvPage({toast}){
+  const [envs,setEnvs]=useState(ENVS);
+  const [selected,setSelected]=useState(null);
+  const [showAdd,setShowAdd]=useState(false);
+  const [range,setRange]=useState('7d');
+
+  return(
+    <div style={{padding:20,display:'flex',flexDirection:'column',gap:20,
+      height:'calc(100vh - 56px - 122px)',overflowY:'auto',animation:'fadeIn 280ms ease'}}>
+      {/* Env Cards */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:16}}>
+        {envs.map((env,i)=>(
+          <div key={env.id} className="scale-card" onClick={()=>setSelected(env)} style={{
+            background:C.surface,borderRadius:12,padding:20,cursor:'pointer',
+            border:`1px solid ${selected?.id===env.id?C.borderBright:C.border}`,
+            animation:`slideUp 320ms ease ${i*80}ms both`,transition:'all 200ms',
+            boxShadow:selected?.id===env.id?`0 0 0 1px ${C.primary}40`:'none'}}
+            onMouseEnter={e=>{if(selected?.id!==env.id)e.currentTarget.style.borderColor=C.primary;}}
+            onMouseLeave={e=>{if(selected?.id!==env.id)e.currentTarget.style.borderColor=C.border;}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16}}>
+              <div style={{display:'flex',gap:10,alignItems:'center'}}>
+                <div style={{width:44,height:44,borderRadius:10,
+                  background:`${env.color}20`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22}}>{env.icon}</div>
+                <div>
+                  <div style={{fontSize:15,fontWeight:800,color:C.text}}>{env.name}</div>
+                  <div style={{fontSize:12,color:C.textSub}}>{env.label}</div>
+                </div>
+              </div>
+              <Badge label={env.status==='connected'?'연결됨':'연결 오류'} color={env.status}/>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10}}>
+              {[
+                {label:'Objects',value:env.objects},
+                {label:'레코드',value:env.records},
+                {label:'저장 용량',value:env.storage},
+                {label:'성공률',value:`${env.backupSuccess}%`},
+              ].map(({label,value},j)=>(
+                <div key={j} style={{background:C.card,borderRadius:8,padding:'8px 10px'}}>
+                  <div style={{fontSize:10,color:C.textSub,marginBottom:3}}>{label}</div>
+                  <div style={{fontSize:14,fontWeight:700,color:C.text}}>{value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:12,
+              padding:'10px 0',borderTop:`1px solid ${C.border}`}}>
+              <span style={{fontSize:11,color:C.textSub}}>마지막 동기화: {env.lastSync}</span>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={e=>{e.stopPropagation();toast(`${env.name} 즉시 백업 시작`,'success');}} style={{
+                  background:'rgba(14,165,233,0.12)',color:C.accent,border:`1px solid rgba(14,165,233,0.2)`,
+                  padding:'5px 12px',borderRadius:6,fontSize:12,fontWeight:600,cursor:'pointer'}}>즉시 백업</button>
+                <button onClick={e=>{e.stopPropagation();
+                  setEnvs(p=>p.map(ev=>ev.id===env.id?{...ev,status:ev.status==='connected'?'disconnected':'connected'}:ev));
+                  toast('환경 상태 변경됨','success');}} style={{
+                  background:'rgba(255,255,255,0.06)',color:C.textSub,border:`1px solid ${C.border}`,
+                  padding:'5px 12px',borderRadius:6,fontSize:12,cursor:'pointer'}}>
+                  {env.status==='connected'?'비활성화':'활성화'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+        {/* Add Env */}
+        <div onClick={()=>setShowAdd(true)} style={{
+          background:'transparent',borderRadius:12,padding:20,cursor:'pointer',
+          border:`2px dashed ${C.border}`,display:'flex',flexDirection:'column',
+          alignItems:'center',justifyContent:'center',gap:10,minHeight:180,
+          transition:'all 200ms'}}
+          onMouseEnter={e=>{e.currentTarget.style.borderColor=C.primary;e.currentTarget.style.background='rgba(14,165,233,0.04)';}}
+          onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background='transparent';}}>
+          <span style={{fontSize:32}}>+</span>
+          <span style={{fontSize:13,color:C.textSub,fontWeight:600}}>환경 추가</span>
+          <span style={{fontSize:11,color:C.textLight,textAlign:'center'}}>Sandbox · Production · Staging<br/>환경을 독립적으로 연결합니다</span>
+        </div>
+      </div>
+
+      {/* Comparison Chart */}
+      <div style={{background:C.surface,borderRadius:12,padding:20,border:`1px solid ${C.border}`}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <div>
+            <div style={{fontSize:14,fontWeight:700,color:C.text}}>환경별 백업 성공률 비교</div>
+            <div style={{fontSize:12,color:C.textSub}}>Production vs Sandbox 추이</div>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            {['7d','30d'].map(r=>(
+              <button key={r} onClick={()=>setRange(r)} style={{
+                padding:'5px 12px',borderRadius:6,border:'none',cursor:'pointer',fontSize:11,fontWeight:600,
+                background:range===r?C.primary:'rgba(255,255,255,0.06)',
+                color:range===r?'#fff':C.textSub,transition:'all 150ms'}}>
+                {r==='7d'?'최근 7일':'최근 30일'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{height:200}}>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={ENV_COMPARE_DATA} margin={{top:5,right:10,bottom:0,left:-20}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)"/>
+              <XAxis dataKey="date" tick={{fontSize:11,fill:'#64748B'}} tickLine={false} axisLine={false}/>
+              <YAxis tick={{fontSize:11,fill:'#64748B'}} tickLine={false} axisLine={false} domain={[85,100]}/>
+              <Tooltip contentStyle={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}}
+                labelStyle={{color:C.text}} itemStyle={{color:C.textSub}}
+                formatter={(v)=>`${v}%`}/>
+              <Line type="monotone" dataKey="prod" stroke={C.success} strokeWidth={2.5}
+                dot={{fill:C.success,r:3}} name="Production"/>
+              <Line type="monotone" dataKey="sandbox" stroke={C.warning} strokeWidth={2}
+                strokeDasharray="5 3" dot={{fill:C.warning,r:3}} name="Sandbox"/>
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        {/* S3 Storage usage */}
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginTop:16,paddingTop:16,borderTop:`1px solid ${C.border}`}}>
+          {envs.map((env,i)=>(
+            <div key={i} style={{background:C.card,borderRadius:9,padding:'12px 14px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:8}}>
+                <span style={{color:C.textSub}}>{env.name} S3 용량</span>
+                <span style={{color:env.color,fontWeight:700}}>{env.storage}</span>
+              </div>
+              <div style={{height:5,background:'rgba(255,255,255,0.08)',borderRadius:3}}>
+                <div style={{height:'100%',borderRadius:3,background:env.color,
+                  animation:'barGrow 1s ease both','--w':i===0?'76%':'22%',width:i===0?'76%':'22%'}}/>
+              </div>
+              <div style={{fontSize:10,color:C.textLight,marginTop:4}}>임계값: 3 TB · {i===0?'76%':'22%'} 사용</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Add Env Modal */}
+      {showAdd&&(
+        <Modal title="새 환경 연결" onClose={()=>setShowAdd(false)} width={480}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            {[
+              {label:'환경 이름',placeholder:'예: Sandbox (Full)'},
+              {label:'Salesforce Instance URL',placeholder:'https://myorg--test.sandbox.my.salesforce.com'},
+              {label:'Client ID',placeholder:'3MVG9n_...'},
+              {label:'Client Secret (암호화 저장)',placeholder:'••••••••••••'},
+            ].map(({label,placeholder},i)=>(
+              <div key={i}>
+                <label style={{fontSize:12,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>{label}</label>
+                <input placeholder={placeholder} style={{width:'100%',padding:'9px 12px',borderRadius:8,
+                  border:`1px solid ${C.border}`,fontSize:13,color:C.text,background:'rgba(255,255,255,0.05)',outline:'none'}}
+                  onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border}/>
+              </div>
+            ))}
+            <div>
+              <label style={{fontSize:12,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>환경 유형</label>
+              <select style={{width:'100%',padding:'9px 12px',borderRadius:8,border:`1px solid ${C.border}`,
+                fontSize:13,color:C.text,background:'rgba(30,45,64,1)'}}>
+                <option>Sandbox (Developer)</option>
+                <option>Sandbox (Full)</option>
+                <option>Production</option>
+              </select>
+            </div>
+            <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:4}}>
+              <button onClick={()=>{
+                setEnvs(p=>[...p,{id:`env-new-${Date.now()}`,name:'Sandbox (Full)',label:'전체 샌드박스',icon:'🔬',status:'connected',lastSync:'연결 중...',objects:697,records:'1.8M',storage:'1.1 TB',backupSuccess:92.3,color:C.info}]);
+                setShowAdd(false);toast('새 환경이 연결되었습니다','success');
+              }} style={{background:C.primary,color:'#fff',border:'none',padding:'9px 18px',borderRadius:8,fontSize:13,fontWeight:600,cursor:'pointer'}}>연결 추가</button>
+              <button onClick={()=>setShowAdd(false)} style={{background:'rgba(255,255,255,0.08)',color:C.textSub,
+                border:`1px solid ${C.border}`,padding:'9px 18px',borderRadius:8,fontSize:13,cursor:'pointer'}}>취소</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Env detail drawer */}
+      {selected&&(
+        <Drawer title={`${selected.name} 상세 현황`} onClose={()=>setSelected(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div style={{width:44,height:44,borderRadius:10,background:`${selected.color}20`,
+              display:'flex',alignItems:'center',justifyContent:'center',fontSize:24}}>{selected.icon}</div>
+            {[
+              {label:'환경 이름',value:selected.name},{label:'환경 유형',value:selected.label},
+              {label:'연결 상태',value:<Badge label={selected.status==='connected'?'연결됨':'오류'} color={selected.status}/>},
+              {label:'Objects 수',value:`${selected.objects}개`},
+              {label:'총 레코드',value:selected.records},
+              {label:'S3 용량',value:selected.storage},
+              {label:'백업 성공률',value:`${selected.backupSuccess}%`},
+              {label:'마지막 동기화',value:selected.lastSync},
+            ].map((r,i)=>(
+              <div key={i} style={{background:C.card,borderRadius:8,padding:'10px 14px'}}>
+                <div style={{fontSize:11,color:C.textSub,marginBottom:3}}>{r.label}</div>
+                <div style={{fontSize:13,fontWeight:600,color:C.text}}>{r.value}</div>
+              </div>
+            ))}
+            <button onClick={()=>{toast(`${selected.name} 백업 시작`,'success');setSelected(null);}} style={{
+              background:C.primary,color:'#fff',border:'none',padding:'10px',borderRadius:8,
+              fontSize:13,fontWeight:600,cursor:'pointer',width:'100%',marginTop:8}}>즉시 백업 실행</button>
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+/* ─── App ─── */
+function App(){
+  const [tab,setTab]=useState('metadata');
+  const [loading,setLoading]=useState(true);
+  const [toast,setToast]=useState(null);
+
+  useEffect(()=>{setTimeout(()=>setLoading(false),1200);},[]);
+
+  function showToast(msg,type='success'){setToast({msg,type,id:Date.now()});}
+
+  if(loading){
+    return(
+      <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh'}}>
+        <div className="shimmer-dark" style={{height:56,flexShrink:0}}/>
+        <div className="shimmer-dark" style={{height:122,flexShrink:0}}/>
+        <div style={{flex:1,padding:20,display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16}}>
+            {[0,1].map(i=><div key={i} className="shimmer-dark" style={{height:180,borderRadius:12}}/>)}
+          </div>
+          <div className="shimmer-dark" style={{height:240,borderRadius:12}}/>
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh'}}>
+      <TopNav tab={tab} setTab={t=>{setTab(t);}}/>
+      <HeroBanner tab={tab}/>
+      <main style={{flex:1}}>
+        {tab==='metadata'&&<MetadataPage toast={showToast}/>}
+        {tab==='reports'&&<ReportsPage toast={showToast}/>}
+        {tab==='permissions'&&<PermissionsPage toast={showToast}/>}
+        {tab==='multienv'&&<MultiEnvPage toast={showToast}/>}
+      </main>
+      {toast&&<Toast key={toast.id} message={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
