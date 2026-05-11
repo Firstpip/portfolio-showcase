@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 방송 콘텐츠 플랫폼 — 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; min-height: 100%; font-family: 'Pretendard', sans-serif; background: #F4F7F6; color: #1A2D2A; }
+#root { display: flex; flex-direction: column; width: 100%; min-height: 100vh; }
+
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+@keyframes fadeInScale { from { opacity: 0; transform: scale(0.95) } to { opacity: 1; transform: scale(1) } }
+@keyframes slideInRight { from { opacity: 0; transform: translateX(30px) } to { opacity: 1; transform: translateX(0) } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(20px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes ripple { 0% { transform: scale(0); opacity: 0.5 } 100% { transform: scale(4); opacity: 0 } }
+@keyframes countUp { from { opacity: 0; transform: translateY(10px) } to { opacity: 1; transform: translateY(0) } }
+@keyframes shimmer { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+@keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+@keyframes barGrow { from { width: 0% } to { width: var(--target-width) } }
+@keyframes slideDown { from { opacity: 0; transform: translateY(-10px); max-height: 0 } to { opacity: 1; transform: translateY(0); max-height: 500px } }
+@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
+@keyframes heartBeat { 0%, 100% { transform: scale(1) } 50% { transform: scale(1.15) } }
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: #F4F7F6; }
+::-webkit-scrollbar-thumb { background: #C8D8D2; border-radius: 3px; }
+button { cursor: pointer; font-family: 'Pretendard', sans-serif; }
+input, textarea, select { font-family: 'Pretendard', sans-serif; }
+.chart-wrap { position: relative; height: 240px; }
+.chart-wrap canvas { width: 100% !important; height: 100% !important; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const C = {
+  bg: '#F4F7F6', surface: '#FFFFFF', surface2: '#F0F5F3', surfaceHover: '#E8F3EF',
+  border: '#DCE8E4', borderMid: '#C5DDD6',
+  primary: '#00B96B', primaryDark: '#009458', primaryLight: 'rgba(0,185,107,0.1)',
+  accent: '#FFB800', accentLight: 'rgba(255,184,0,0.1)',
+  secondary: '#1A3A4A',
+  info: '#0EA5E9', infoLight: 'rgba(14,165,233,0.1)',
+  danger: '#EF4444', dangerLight: 'rgba(239,68,68,0.1)',
+  text: '#1A2D2A', textSub: '#5A7A70', textMuted: '#8BA89E',
+};
+
+const AVATARS_DATA = [
+  { id: 1, name: '박지현', style: '전문적', lang: '한국어', gender: '여성', uses: 34, lastUsed: '1시간 전', tags: ['비즈니스', '한국어'], fav: true, status: 'active' },
+  { id: 2, name: '이민준', style: '친근한', lang: '한국어', gender: '남성', uses: 28, lastUsed: '3시간 전', tags: ['캐주얼', '한국어'], fav: false, status: 'active' },
+  { id: 3, name: 'Sarah K.', style: '글로벌', lang: '영어', gender: '여성', uses: 12, lastUsed: '1일 전', tags: ['글로벌', '영어'], fav: false, status: 'active' },
+  { id: 4, name: '김수연', style: '활기찬', lang: '한국어', gender: '여성', uses: 19, lastUsed: '5시간 전', tags: ['엔터테인먼트', '한국어'], fav: true, status: 'active' },
+  { id: 5, name: '정현우', style: '차분한', lang: '한국어', gender: '남성', uses: 8, lastUsed: '2일 전', tags: ['정보전달', '한국어'], fav: false, status: 'syncing' },
+  { id: 6, name: 'James L.', style: '비즈니스', lang: '영어', gender: '남성', uses: 5, lastUsed: '3일 전', tags: ['글로벌', '영어'], fav: false, status: 'active' },
+  { id: 7, name: '최은영', style: '따뜻한', lang: '한국어', gender: '여성', uses: 15, lastUsed: '6시간 전', tags: ['뷰티', '한국어'], fav: true, status: 'active' },
+  { id: 8, name: '한도윤', style: '역동적', lang: '한국어', gender: '남성', uses: 9, lastUsed: '1일 전', tags: ['스포츠', '한국어'], fav: false, status: 'active' },
+];
+
+const QUEUE_DATA = [
+  { id: 'JOB-2847', product: '초특가 에어팟 프로 4세대', avatar: '박지현', priority: 'urgent', status: 'active', progress: 72, created: '14:32', eta: '7분' },
+  { id: 'JOB-2846', product: '여름 한정 선크림 세트', avatar: '이민준', priority: 'normal', status: 'active', progress: 45, created: '14:28', eta: '14분' },
+  { id: 'JOB-2845', product: '홈카페 커피머신 드롱기', avatar: '김수연', priority: 'normal', status: 'waiting', progress: 0, created: '14:20', eta: '25분' },
+  { id: 'JOB-2844', product: '프리미엄 샤워기 필터', avatar: '정현우', priority: 'low', status: 'waiting', progress: 0, created: '14:15', eta: '38분' },
+  { id: 'JOB-2843', product: '오가닉 비건 영양제', avatar: '최은영', priority: 'normal', status: 'completed', progress: 100, created: '13:55', eta: '완료' },
+  { id: 'JOB-2842', product: '스마트 홈 IoT 허브', avatar: '박지현', priority: 'urgent', status: 'completed', progress: 100, created: '13:40', eta: '완료' },
+  { id: 'JOB-2841', product: '반려견 자동 급식기', avatar: '이민준', priority: 'normal', status: 'failed', progress: 35, created: '13:20', eta: '실패' },
+];
+
+const AUDIT_LOG = [
+  { time: '14:28', user: '김마케터', action: 'API Key 수정', target: 'OpenAI API Key', before: 'sk-proj-abc...', after: 'sk-proj-xyz...' },
+  { time: '13:45', user: '이담당', action: '동시성 변경', target: 'concurrency', before: '2', after: '3' },
+  { time: '12:30', user: '김마케터', action: '재시도 횟수 변경', target: 'maxRetry', before: '3', after: '5' },
+  { time: '11:15', user: '박관리자', action: 'HeyGen API Key 갱신', target: 'HeyGen API Key', before: 'hg-old...', after: 'hg-new...' },
+];
+
+function CountUp({ end, duration = 1200, suffix = '' }) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    let s = 0; const step = end / (duration / 16);
+    const t = setInterval(() => {
+      s += step; if (s >= end) { setVal(end); clearInterval(t); } else setVal(Math.floor(s));
+    }, 16);
+    return () => clearInterval(t);
+  }, [end]);
+  return <span style={{ animation: 'countUp 400ms ease' }}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({ message, type = 'success', onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  const bg = type === 'success' ? C.primary : type === 'error' ? C.danger : C.info;
+  return (
+    <div style={{ position: 'fixed', bottom: 28, right: 28, zIndex: 9999, background: bg, color: '#fff', padding: '13px 22px', borderRadius: 12, animation: 'slideUp 300ms ease', boxShadow: `0 8px 32px ${bg}44`, fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+      {type === 'success' ? '✓' : '!'} {message}
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, width = 560 }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(26,45,42,0.5)', animation: 'fadeIn 200ms ease' }} />
+      <div style={{ position: 'relative', width, maxHeight: '88vh', background: C.surface, borderRadius: 20, zIndex: 501, animation: 'fadeInScale 200ms ease', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 80px rgba(0,0,0,0.15)', border: `1px solid ${C.border}` }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 28px', borderBottom: `1px solid ${C.border}` }}>
+          <h3 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>{title}</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.textSub, fontSize: 22, lineHeight: 1 }}>✕</button>
+        </div>
+        <div style={{ padding: '24px 28px', overflowY: 'auto', flex: 1 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* Chart component using Chart.js */
+function LineChart({ data, labels }) {
+  const ref = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const ctx = ref.current.getContext('2d');
+    if (chartRef.current) chartRef.current.destroy();
+    chartRef.current = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: '렌더링 건수',
+          data,
+          borderColor: C.primary,
+          backgroundColor: 'rgba(0,185,107,0.1)',
+          fill: true,
+          tension: 0.4,
+          pointRadius: 4,
+          pointBackgroundColor: C.primary,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { backgroundColor: C.secondary } },
+        scales: {
+          x: { grid: { color: C.border }, ticks: { color: C.textSub, font: { size: 11 } } },
+          y: { grid: { color: C.border }, ticks: { color: C.textSub, font: { size: 11 } } }
+        }
+      }
+    });
+    return () => chartRef.current?.destroy();
+  }, []);
+  return <div className="chart-wrap"><canvas ref={ref} /></div>;
+}
+
+function BarChart({ data, labels }) {
+  const ref = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const ctx = ref.current.getContext('2d');
+    if (chartRef.current) chartRef.current.destroy();
+    chartRef.current = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: '아바타별 사용',
+          data,
+          backgroundColor: [C.primary + 'CC', C.primary + '99', C.accent + 'CC', C.primary + '66', C.info + 'CC', C.primary + '80'],
+          borderRadius: 8,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { color: 'transparent' }, ticks: { color: C.textSub, font: { size: 11 } } },
+          y: { grid: { color: C.border }, ticks: { color: C.textSub, font: { size: 11 } } }
+        }
+      }
+    });
+    return () => chartRef.current?.destroy();
+  }, []);
+  return <div className="chart-wrap"><canvas ref={ref} /></div>;
+}
+
+function DonutChart({ data, labels }) {
+  const ref = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const ctx = ref.current.getContext('2d');
+    if (chartRef.current) chartRef.current.destroy();
+    chartRef.current = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets: [{ data, backgroundColor: [C.primary, C.accent, C.info, C.danger], borderWidth: 0 }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '65%',
+        plugins: { legend: { position: 'right', labels: { color: C.text, font: { size: 12 }, padding: 16 } } }
+      }
+    });
+    return () => chartRef.current?.destroy();
+  }, []);
+  return <div className="chart-wrap"><canvas ref={ref} /></div>;
+}
+
+/* ═══════════════════════════════════════════════════
+   대시보드 (HOME)
+═══════════════════════════════════════════════════ */
+function DashboardPage({ onNavigate }) {
+  const KPIs = [
+    { label: '이번 달 렌더링', val: 127, sub: '전월 대비 +23건', color: C.primary, icon: '🎬' },
+    { label: '큐 성공률', val: 96, sub: '실패 4건', color: C.accent, icon: '✓', suffix: '%' },
+    { label: '활성 큐 잡', val: 2, sub: '대기 2건', color: C.info, icon: '⟳' },
+    { label: '월 예상 API 비용', val: 284, sub: 'USD (HeyGen + OpenAI)', color: '#9B59B6', icon: '💰', suffix: '$' },
+  ];
+
+  const recentActivity = [
+    { id: 'JOB-2847', product: '초특가 에어팟 프로 4세대', status: 'active', time: '14:32', icon: '⟳' },
+    { id: 'JOB-2843', product: '오가닉 비건 영양제', status: 'completed', time: '14:18', icon: '✓' },
+    { id: 'JOB-2841', product: '반려견 자동 급식기', status: 'failed', time: '13:22', icon: '✕' },
+    { id: 'JOB-2840', product: '스마트 공기청정기', status: 'completed', time: '13:05', icon: '✓' },
+    { id: 'JOB-2839', product: '홈트레이닝 저항밴드', status: 'completed', time: '12:48', icon: '✓' },
+  ];
+
+  const statusColor = { active: C.info, completed: C.primary, failed: C.danger, waiting: C.accent };
+
+  return (
+    <div>
+      {/* KPI Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20, marginBottom: 28 }}>
+        {KPIs.map((k, i) => (
+          <div key={k.label} style={{ background: C.surface, borderRadius: 16, padding: '22px 24px', border: `1px solid ${C.border}`, animation: `slideUp 400ms ease ${i * 80}ms both`, boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.textSub, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{k.label}</span>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: k.color + '15', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{k.icon}</div>
+            </div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: k.color, letterSpacing: '-0.02em', marginBottom: 4 }}>
+              <CountUp end={k.val} suffix={k.suffix || ''} />
+            </div>
+            <div style={{ fontSize: 12, color: C.textSub }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Alert banner if failed jobs */}
+      <div style={{ background: C.dangerLight, border: `1px solid ${C.danger}33`, borderRadius: 12, padding: '12px 18px', marginBottom: 24, display: 'flex', alignItems: 'center', gap: 12, animation: 'slideUp 400ms ease 320ms both' }}>
+        <span style={{ fontSize: 18 }}>⚠️</span>
+        <div style={{ flex: 1 }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: C.danger }}>실패 잡 1건 감지</span>
+          <span style={{ fontSize: 13, color: C.textSub, marginLeft: 8 }}>JOB-2841 반려견 자동 급식기 — HeyGen API 타임아웃</span>
+        </div>
+        <button onClick={() => onNavigate('queue')} style={{ padding: '7px 16px', borderRadius: 8, border: `1px solid ${C.danger}`, background: 'transparent', color: C.danger, fontSize: 13, fontWeight: 700 }}>큐 확인</button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 360px', gap: 24 }}>
+        {/* Line chart */}
+        <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 2px 8px rgba(0,0,0,0.04)', animation: 'slideUp 400ms ease 200ms both' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <h3 style={{ fontSize: 15, fontWeight: 700 }}>일별 렌더링 현황</h3>
+            <select style={{ fontSize: 12, border: `1px solid ${C.border}`, borderRadius: 8, padding: '4px 8px', color: C.textSub, background: C.surface }}>
+              <option>최근 7일</option><option>최근 30일</option>
+            </select>
+          </div>
+          <LineChart data={[8, 12, 6, 15, 18, 14, 22]} labels={['5/5','5/6','5/7','5/8','5/9','5/10','5/11']} />
+        </div>
+
+        {/* Bar chart */}
+        <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 2px 8px rgba(0,0,0,0.04)', animation: 'slideUp 400ms ease 280ms both' }}>
+          <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>아바타별 사용 현황</h3>
+          <BarChart data={[34, 28, 19, 15, 12, 8]} labels={['박지현','이민준','김수연','최은영','Sarah','정현우']} />
+        </div>
+
+        {/* Recent activity */}
+        <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 2px 8px rgba(0,0,0,0.04)', animation: 'slideUp 400ms ease 360ms both' }}>
+          <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>최근 활동</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {recentActivity.map((a, i) => (
+              <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 12, animation: `slideUp 300ms ease ${i * 60}ms both` }}>
+                <div style={{ width: 32, height: 32, borderRadius: 10, background: statusColor[a.status] + '15', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, color: statusColor[a.status], flexShrink: 0, fontWeight: 700 }}>
+                  {a.status === 'active' ? <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>{a.icon}</span> : a.icon}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.product}</div>
+                  <div style={{ fontSize: 11, color: C.textSub }}>{a.id}</div>
+                </div>
+                <div style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{a.time}</div>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => onNavigate('queue')} style={{ width: '100%', marginTop: 16, padding: '10px', borderRadius: 10, border: `1px solid ${C.border}`, background: 'transparent', color: C.textSub, fontSize: 13, fontWeight: 600 }}>
+            전체 큐 보기 →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
+   멀티 아바타 관리
+═══════════════════════════════════════════════════ */
+function AvatarPage({ onToast }) {
+  const [favs, setFavs] = useState({ 1: true, 4: true, 7: true });
+  const [filterLang, setFilterLang] = useState('all');
+  const [filterStyle, setFilterStyle] = useState('all');
+  const [syncModal, setSyncModal] = useState(false);
+  const [detailAv, setDetailAv] = useState(null);
+
+  const filtered = AVATARS_DATA.filter(a => {
+    const langOk = filterLang === 'all' || a.lang === filterLang;
+    const styleOk = filterStyle === 'all' || a.tags.includes(filterStyle);
+    return langOk && styleOk;
+  });
+
+  const toggleFav = (id, e) => { e.stopPropagation(); setFavs(f => ({ ...f, [id]: !f[id] })); };
+
+  return (
+    <div>
+      {/* Filter bar */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 24, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {[['all', '전체 언어'], ['한국어', '한국어'], ['영어', '영어']].map(([val, label]) => (
+            <button key={val} onClick={() => setFilterLang(val)} style={{ padding: '7px 14px', borderRadius: 20, border: `1px solid ${filterLang === val ? C.primary : C.border}`, background: filterLang === val ? C.primaryLight : 'transparent', color: filterLang === val ? C.primary : C.textSub, fontSize: 13, fontWeight: filterLang === val ? 700 : 400, transition: 'all 150ms' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div style={{ width: 1, height: 24, background: C.border }} />
+        <div style={{ display: 'flex', gap: 6 }}>
+          {['all', '비즈니스', '캐주얼', '뷰티', '글로벌'].map(tag => (
+            <button key={tag} onClick={() => setFilterStyle(tag)} style={{ padding: '7px 14px', borderRadius: 20, border: `1px solid ${filterStyle === tag ? C.accent : C.border}`, background: filterStyle === tag ? C.accentLight : 'transparent', color: filterStyle === tag ? '#B87A00' : C.textSub, fontSize: 13, fontWeight: filterStyle === tag ? 700 : 400, transition: 'all 150ms' }}>
+              {tag === 'all' ? '전체 스타일' : tag}
+            </button>
+          ))}
+        </div>
+        <div style={{ flex: 1 }} />
+        <button onClick={() => setSyncModal(true)} style={{ padding: '8px 18px', borderRadius: 10, border: `1px solid ${C.primary}`, background: C.primaryLight, color: C.primary, fontSize: 13, fontWeight: 700 }}>
+          ↺ HeyGen 동기화
+        </button>
+      </div>
+
+      {/* Avatar grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20 }}>
+        {filtered.map((av, i) => (
+          <div key={av.id} onClick={() => setDetailAv(av)} style={{ background: C.surface, borderRadius: 16, overflow: 'hidden', border: `1px solid ${C.border}`, cursor: 'pointer', transition: 'all 200ms', animation: `slideUp 400ms ease ${i * 60}ms both`, boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }} onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-4px)'; e.currentTarget.style.boxShadow = '0 12px 32px rgba(0,0,0,0.10)'; }} onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.04)'; }}>
+            <div style={{ height: 140, background: `linear-gradient(135deg, ${C.primary}22, ${C.accent}22)`, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+              <div style={{ width: 72, height: 72, borderRadius: '50%', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30 }}>👤</div>
+              <button onClick={(e) => toggleFav(av.id, e)} style={{ position: 'absolute', top: 10, right: 10, background: 'rgba(255,255,255,0.9)', border: 'none', borderRadius: '50%', width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, animation: favs[av.id] ? 'heartBeat 300ms ease' : 'none' }}>
+                {favs[av.id] ? '❤️' : '🤍'}
+              </button>
+              {av.status === 'syncing' && <div style={{ position: 'absolute', bottom: 10, left: 10, background: C.accent, color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20 }}>동기화 중</div>}
+            </div>
+            <div style={{ padding: '14px 16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>{av.name}</div>
+                <div style={{ fontSize: 11, color: C.textSub }}>{av.lang}</div>
+              </div>
+              <div style={{ fontSize: 12, color: C.textSub, marginBottom: 10 }}>{av.style} · {av.gender}</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 10 }}>
+                {av.tags.map(t => <span key={t} style={{ fontSize: 10, padding: '2px 8px', borderRadius: 20, background: C.surface2, color: C.textSub, border: `1px solid ${C.border}` }}>{t}</span>)}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: C.textMuted, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+                <span>사용 {av.uses}회</span>
+                <span>{av.lastUsed}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {syncModal && (
+        <Modal title="HeyGen 아바타 동기화" onClose={() => setSyncModal(false)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ background: C.surface2, borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 13, color: C.textSub, lineHeight: 1.7 }}>HeyGen Avatar List API에서 최신 아바타 목록을 동기화합니다. 신규 아바타가 카탈로그에 추가되고, 삭제된 아바타는 비활성 처리됩니다.</div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {['Redis 캐시 TTL 초기화', 'HeyGen Avatar List API 호출', 'PostgreSQL JSONB 업데이트', 'GIN 인덱스 재구성'].map((step, i) => (
+                <div key={step} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: C.textSub, padding: '8px 12px', background: C.surface2, borderRadius: 8 }}>
+                  <span style={{ color: C.primary, fontSize: 10 }}>{i + 1}</span> {step}
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setSyncModal(false)} style={{ flex: 1, padding: '12px', borderRadius: 10, border: `1px solid ${C.border}`, background: 'transparent', color: C.textSub, fontSize: 14 }}>취소</button>
+              <button onClick={() => { setSyncModal(false); onToast('동기화가 완료되었습니다. 아바타 8개 확인됨.'); }} style={{ flex: 1, padding: '12px', borderRadius: 10, border: 'none', background: C.primary, color: '#fff', fontSize: 14, fontWeight: 700 }}>동기화 실행</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {detailAv && (
+        <Modal title="아바타 상세" onClose={() => setDetailAv(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
+              <div style={{ width: 80, height: 80, borderRadius: '50%', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36 }}>👤</div>
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{detailAv.name}</div>
+                <div style={{ fontSize: 13, color: C.textSub }}>{detailAv.style} · {detailAv.lang} · {detailAv.gender}</div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                  {detailAv.tags.map(t => <span key={t} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: C.primaryLight, color: C.primary, fontWeight: 600 }}>{t}</span>)}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              {[['총 사용 횟수', `${detailAv.uses}회`], ['마지막 사용', detailAv.lastUsed], ['API 상태', '활성'], ['HeyGen ID', `av_${detailAv.id.toString().padStart(6, '0')}`]].map(([k, v]) => (
+                <div key={k} style={{ background: C.surface2, padding: '12px 16px', borderRadius: 10 }}>
+                  <div style={{ fontSize: 11, color: C.textSub, marginBottom: 4 }}>{k}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => { setDetailAv(null); onToast('아바타를 즐겨찾기에 추가했습니다.'); }} style={{ padding: '12px', borderRadius: 10, border: 'none', background: C.primary, color: '#fff', fontSize: 14, fontWeight: 700 }}>
+              ❤️ 즐겨찾기에 추가
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
+   배치 영상 생성 큐 관리
+═══════════════════════════════════════════════════ */
+function QueuePage({ onToast }) {
+  const [jobs, setJobs] = useState(QUEUE_DATA);
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [detailJob, setDetailJob] = useState(null);
+  const [bulkModal, setBulkModal] = useState(false);
+
+  const filtered = filterStatus === 'all' ? jobs : jobs.filter(j => j.status === filterStatus);
+
+  const retryJob = (id, e) => {
+    e.stopPropagation();
+    setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'waiting', progress: 0, eta: '20분' } : j));
+    onToast('재시도 잡이 큐에 등록되었습니다.');
+  };
+
+  const cancelJob = (id, e) => {
+    e.stopPropagation();
+    setJobs(prev => prev.map(j => j.id === id ? { ...j, status: 'failed', eta: '취소됨' } : j));
+    onToast('잡이 취소되었습니다.', 'error');
+  };
+
+  const statusBadge = { active: { bg: C.infoLight, color: C.info, label: '처리 중' }, waiting: { bg: C.accentLight, color: '#B87A00', label: '대기 중' }, completed: { bg: C.primaryLight, color: C.primaryDark, label: '완료' }, failed: { bg: C.dangerLight, color: C.danger, label: '실패' } };
+  const priorityBadge = { urgent: { bg: 'rgba(239,68,68,0.08)', color: C.danger, label: '긴급' }, normal: { bg: C.surface2, color: C.textSub, label: '일반' }, low: { bg: C.surface2, color: C.textMuted, label: '낮음' } };
+
+  const statusCounts = jobs.reduce((acc, j) => { acc[j.status] = (acc[j.status] || 0) + 1; return acc; }, {});
+
+  return (
+    <div>
+      {/* Status summary */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+        {[['waiting', '대기 중', C.accent], ['active', '처리 중', C.info], ['completed', '완료', C.primary], ['failed', '실패', C.danger]].map(([key, label, color]) => (
+          <div key={key} onClick={() => setFilterStatus(key === filterStatus ? 'all' : key)} style={{ background: C.surface, borderRadius: 14, padding: '16px 20px', border: `1px solid ${filterStatus === key ? color : C.border}`, cursor: 'pointer', transition: 'all 150ms', animation: 'slideUp 400ms ease both' }}>
+            <div style={{ fontSize: 26, fontWeight: 800, color }}>{statusCounts[key] || 0}</div>
+            <div style={{ fontSize: 13, color: C.textSub, marginTop: 2 }}>{label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Toolbar */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, alignItems: 'center' }}>
+        <button onClick={() => setFilterStatus('all')} style={{ padding: '8px 16px', borderRadius: 10, border: `1px solid ${C.border}`, background: filterStatus === 'all' ? C.primaryLight : 'transparent', color: filterStatus === 'all' ? C.primary : C.textSub, fontSize: 13, fontWeight: 700 }}>전체</button>
+        <div style={{ flex: 1 }} />
+        {jobs.some(j => j.status === 'failed') && (
+          <button onClick={() => setBulkModal(true)} style={{ padding: '8px 16px', borderRadius: 10, border: `1px solid ${C.danger}`, background: C.dangerLight, color: C.danger, fontSize: 13, fontWeight: 700 }}>
+            ↺ 실패 잡 일괄 재시도
+          </button>
+        )}
+      </div>
+
+      {/* Queue table */}
+      <div style={{ background: C.surface, borderRadius: 16, border: `1px solid ${C.border}`, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '0.8fr 2fr 1fr 0.8fr 1fr 1fr 1.2fr', padding: '12px 20px', background: C.surface2, fontSize: 11, fontWeight: 700, color: C.textSub, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          {['잡 ID', '상품명', '아바타', '우선순위', '상태', '진행률', '액션'].map(h => <div key={h}>{h}</div>)}
+        </div>
+        {filtered.map((job, i) => {
+          const sb = statusBadge[job.status]; const pb = priorityBadge[job.priority];
+          return (
+            <div key={job.id} onClick={() => setDetailJob(job)} style={{ display: 'grid', gridTemplateColumns: '0.8fr 2fr 1fr 0.8fr 1fr 1fr 1.2fr', padding: '16px 20px', borderTop: `1px solid ${C.border}`, cursor: 'pointer', transition: 'background 150ms', animation: `slideUp 300ms ease ${i * 50}ms both` }} onMouseEnter={e => e.currentTarget.style.background = C.surfaceHover} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+              <div style={{ fontSize: 12, fontFamily: 'monospace', color: C.primary, display: 'flex', alignItems: 'center' }}>{job.id}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{job.product}</div>
+                <div style={{ fontSize: 11, color: C.textSub }}>생성: {job.created} · ETA: {job.eta}</div>
+              </div>
+              <div style={{ fontSize: 13, display: 'flex', alignItems: 'center', color: C.textSub }}>{job.avatar}</div>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 20, background: pb.bg, color: pb.color, fontWeight: 700 }}>{pb.label}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: sb.bg, color: sb.color, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {job.status === 'active' && <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⟳</span>}
+                  {sb.label}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', paddingRight: 12 }}>
+                {job.status !== 'waiting' && job.status !== 'failed' ? (
+                  <div style={{ width: '100%' }}>
+                    <div style={{ background: C.border, borderRadius: 3, height: 6, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', background: job.status === 'completed' ? C.primary : C.info, width: `${job.progress}%`, borderRadius: 3, transition: 'width 1s ease', animation: 'barGrow 1000ms ease both', '--target-width': `${job.progress}%` }} />
+                    </div>
+                    <div style={{ fontSize: 10, color: C.textSub, marginTop: 3 }}>{job.progress}%</div>
+                  </div>
+                ) : <span style={{ fontSize: 12, color: C.textMuted }}>—</span>}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={e => e.stopPropagation()}>
+                {job.status === 'failed' && <button onClick={(e) => retryJob(job.id, e)} style={{ padding: '5px 10px', borderRadius: 7, border: `1px solid ${C.primary}`, background: C.primaryLight, color: C.primary, fontSize: 11, fontWeight: 700 }}>재시도</button>}
+                {(job.status === 'waiting' || job.status === 'active') && <button onClick={(e) => cancelJob(job.id, e)} style={{ padding: '5px 10px', borderRadius: 7, border: `1px solid ${C.border}`, background: 'transparent', color: C.textSub, fontSize: 11 }}>취소</button>}
+                {job.status === 'completed' && <button onClick={() => onToast('다운로드가 시작됩니다.')} style={{ padding: '5px 10px', borderRadius: 7, border: `1px solid ${C.primary}`, background: C.primaryLight, color: C.primary, fontSize: 11, fontWeight: 700 }}>↓ 다운로드</button>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {bulkModal && (
+        <Modal title="실패 잡 일괄 재시도" onClose={() => setBulkModal(false)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ background: C.dangerLight, borderRadius: 10, padding: 14, fontSize: 13, color: C.danger }}>
+              실패 잡 {jobs.filter(j => j.status === 'failed').length}건을 일괄 재시도합니다. 잡이 대기 큐에 추가됩니다.
+            </div>
+            {jobs.filter(j => j.status === 'failed').map(j => (
+              <div key={j.id} style={{ display: 'flex', gap: 10, fontSize: 13, padding: '8px 12px', background: C.surface2, borderRadius: 8 }}>
+                <span style={{ color: C.primary, fontFamily: 'monospace' }}>{j.id}</span>
+                <span>{j.product}</span>
+              </div>
+            ))}
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setBulkModal(false)} style={{ flex: 1, padding: '12px', borderRadius: 10, border: `1px solid ${C.border}`, background: 'transparent', color: C.textSub, fontSize: 14 }}>취소</button>
+              <button onClick={() => { setJobs(prev => prev.map(j => j.status === 'failed' ? { ...j, status: 'waiting', progress: 0, eta: '20분' } : j)); setBulkModal(false); onToast('실패 잡을 일괄 재시도합니다.'); }} style={{ flex: 1, padding: '12px', borderRadius: 10, border: 'none', background: C.primary, color: '#fff', fontSize: 14, fontWeight: 700 }}>일괄 재시도</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {detailJob && (
+        <Modal title={`잡 상세 — ${detailJob.id}`} onClose={() => setDetailJob(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {[['상품명', detailJob.product], ['아바타', detailJob.avatar], ['우선순위', priorityBadge[detailJob.priority]?.label], ['생성 시각', detailJob.created], ['진행률', `${detailJob.progress}%`], ['예상/완료', detailJob.eta]].map(([k, v]) => (
+                <div key={k} style={{ background: C.surface2, padding: '10px 14px', borderRadius: 10 }}>
+                  <div style={{ fontSize: 11, color: C.textSub, marginBottom: 3 }}>{k}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ background: C.surface2, borderRadius: 10, padding: '12px 14px', fontFamily: 'monospace', fontSize: 11, color: C.textSub, lineHeight: 1.8 }}>
+              [Bull] Job {detailJob.id} created at {detailJob.created}<br />
+              [HeyGen] Video render request sent — avatar: {detailJob.avatar}<br />
+              {detailJob.status === 'failed' ? '[Error] HeyGen API timeout after 30s — retry queued' : '[Progress] ' + detailJob.progress + '% complete'}
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
+   시스템 설정 및 API Key 관리
+═══════════════════════════════════════════════════ */
+function ConfigPage({ onToast }) {
+  const [concurrency, setConcurrency] = useState(2);
+  const [maxRetry, setMaxRetry] = useState(3);
+  const [showKey, setShowKey] = useState({});
+  const [testing, setTesting] = useState({});
+  const [confirmApply, setConfirmApply] = useState(false);
+
+  const testAPI = (type) => {
+    setTesting(t => ({ ...t, [type]: true }));
+    setTimeout(() => { setTesting(t => ({ ...t, [type]: false })); onToast(`${type} API 연결 성공 ✓`); }, 1500);
+  };
+
+  const inputStyle = { width: '100%', background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 10, padding: '11px 14px', color: C.text, fontSize: 13, outline: 'none', transition: 'border-color 150ms' };
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+      {/* OpenAI */}
+      <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 2px 8px rgba(0,0,0,0.04)', animation: 'slideUp 400ms ease 80ms both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: '#10a37f22', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>🤖</div>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>OpenAI API</div>
+            <div style={{ fontSize: 11, color: C.primary, display: 'flex', alignItems: 'center', gap: 4 }}>● 연결됨</div>
+          </div>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: C.textSub, display: 'block', marginBottom: 6 }}>API Key <span style={{ color: C.danger }}>*</span></label>
+          <div style={{ position: 'relative' }}>
+            <input type={showKey.openai ? 'text' : 'password'} style={inputStyle} defaultValue="sk-proj-••••••••••••••••••••••••••••••" />
+            <button onClick={() => setShowKey(s => ({ ...s, openai: !s.openai }))} style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.textSub, fontSize: 14 }}>{showKey.openai ? '🙈' : '👁'}</button>
+          </div>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: C.textSub, display: 'block', marginBottom: 6 }}>기본 모델</label>
+          <select style={{ ...inputStyle }}>
+            <option>gpt-4o</option><option>gpt-4o-mini</option><option>gpt-4-turbo</option>
+          </select>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => testAPI('OpenAI')} disabled={testing.openai} style={{ flex: 1, padding: '10px', borderRadius: 10, border: `1px solid ${C.border}`, background: 'transparent', color: testing.openai ? C.textMuted : C.textSub, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+            {testing.openai ? <><span style={{ display: 'inline-block', animation: 'spin 600ms linear infinite' }}>⟳</span> 테스트 중</> : '연결 테스트'}
+          </button>
+          <button onClick={() => onToast('OpenAI 설정이 저장되었습니다.')} style={{ flex: 1, padding: '10px', borderRadius: 10, border: 'none', background: C.primary, color: '#fff', fontSize: 13, fontWeight: 700 }}>저장</button>
+        </div>
+      </div>
+
+      {/* HeyGen */}
+      <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 2px 8px rgba(0,0,0,0.04)', animation: 'slideUp 400ms ease 160ms both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: C.primaryLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>🎭</div>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>HeyGen API</div>
+            <div style={{ fontSize: 11, color: C.primary }}>● 연결됨 · Business 플랜</div>
+          </div>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: C.textSub, display: 'block', marginBottom: 6 }}>API Key <span style={{ color: C.danger }}>*</span></label>
+          <div style={{ position: 'relative' }}>
+            <input type={showKey.heygen ? 'text' : 'password'} style={inputStyle} defaultValue="hg-••••••••••••••••••••••••••••••" />
+            <button onClick={() => setShowKey(s => ({ ...s, heygen: !s.heygen }))} style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.textSub, fontSize: 14 }}>{showKey.heygen ? '🙈' : '👁'}</button>
+          </div>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: C.textSub, display: 'block', marginBottom: 6 }}>구독 플랜</label>
+          <select style={{ ...inputStyle }}>
+            <option>Business</option><option>Personal</option><option>Enterprise</option>
+          </select>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => testAPI('HeyGen')} disabled={testing.heygen} style={{ flex: 1, padding: '10px', borderRadius: 10, border: `1px solid ${C.border}`, background: 'transparent', color: testing.heygen ? C.textMuted : C.textSub, fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+            {testing.heygen ? <><span style={{ display: 'inline-block', animation: 'spin 600ms linear infinite' }}>⟳</span> 테스트 중</> : '연결 테스트'}
+          </button>
+          <button onClick={() => onToast('HeyGen 설정이 저장되었습니다.')} style={{ flex: 1, padding: '10px', borderRadius: 10, border: 'none', background: C.primary, color: '#fff', fontSize: 13, fontWeight: 700 }}>저장</button>
+        </div>
+      </div>
+
+      {/* Queue settings */}
+      <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 2px 8px rgba(0,0,0,0.04)', animation: 'slideUp 400ms ease 240ms both' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 22 }}>⚙️ Bull Queue 운영 설정</div>
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: C.textSub, display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+            <span>렌더링 동시성 (concurrency)</span>
+            <span style={{ color: C.primary, fontWeight: 800 }}>{concurrency}개</span>
+          </label>
+          <input type="range" min={1} max={5} value={concurrency} onChange={e => setConcurrency(+e.target.value)} style={{ width: '100%', accentColor: C.primary, height: 6 }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: C.textMuted, marginTop: 6 }}>
+            <span>1 (낮음)</span><span>3 (권장)</span><span>5 (최대)</span>
+          </div>
+        </div>
+        <div style={{ marginBottom: 22 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: C.textSub, display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+            <span>최대 재시도 횟수</span>
+            <span style={{ color: C.accent, fontWeight: 800 }}>{maxRetry}회</span>
+          </label>
+          <input type="range" min={1} max={5} value={maxRetry} onChange={e => setMaxRetry(+e.target.value)} style={{ width: '100%', accentColor: C.accent, height: 6 }} />
+        </div>
+        <div style={{ background: C.accentLight, borderRadius: 10, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#B87A00', border: `1px solid ${C.accent}44` }}>
+          ⚡ 설정 즉시 적용 — Redis Pub/Sub 브로드캐스트로 서버 재시작 없이 반영됩니다
+        </div>
+        <button onClick={() => setConfirmApply(true)} style={{ width: '100%', padding: '11px', borderRadius: 10, border: 'none', background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})`, color: '#fff', fontSize: 14, fontWeight: 700 }}>
+          설정 즉시 적용
+        </button>
+      </div>
+
+      {/* Audit log */}
+      <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, boxShadow: '0 2px 8px rgba(0,0,0,0.04)', animation: 'slideUp 400ms ease 320ms both' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>📋 설정 변경 감사 로그</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {AUDIT_LOG.map((log, i) => (
+            <div key={i} style={{ display: 'flex', gap: 12, fontSize: 12, padding: '10px 12px', background: C.surface2, borderRadius: 10, animation: `slideUp 300ms ease ${i * 60}ms both` }}>
+              <div style={{ color: C.textMuted, flexShrink: 0, fontFamily: 'monospace' }}>{log.time}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, marginBottom: 3 }}>{log.user} · {log.action}</div>
+                <div style={{ color: C.textSub }}>{log.target}: <span style={{ color: C.danger }}>{log.before}</span> → <span style={{ color: C.primary }}>{log.after}</span></div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {confirmApply && (
+        <Modal title="설정 적용 확인" onClose={() => setConfirmApply(false)} width={440}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ background: C.accentLight, borderRadius: 10, padding: 14, fontSize: 13, color: '#B87A00' }}>
+              동시성 {concurrency}개, 재시도 {maxRetry}회로 설정이 변경됩니다. 현재 진행 중인 잡에는 영향이 없습니다.
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setConfirmApply(false)} style={{ flex: 1, padding: '12px', borderRadius: 10, border: `1px solid ${C.border}`, background: 'transparent', color: C.textSub, fontSize: 14 }}>취소</button>
+              <button onClick={() => { setConfirmApply(false); onToast(`동시성 ${concurrency}개, 재시도 ${maxRetry}회 — 즉시 적용 완료`); }} style={{ flex: 1, padding: '12px', borderRadius: 10, border: 'none', background: C.primary, color: '#fff', fontSize: 14, fontWeight: 700 }}>적용</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
+   사용량 통계
+═══════════════════════════════════════════════════ */
+function StatsPage() {
+  const [period, setPeriod] = useState('7d');
+
+  const RENDER_DATA = {
+    '7d': { data: [8, 12, 6, 15, 18, 14, 22], labels: ['5/5','5/6','5/7','5/8','5/9','5/10','5/11'] },
+    '30d': { data: [42, 38, 56, 45, 62, 58, 74, 48, 55, 67], labels: Array.from({length:10}, (_,i) => `5/${i+1}`) },
+  };
+  const renderData = RENDER_DATA[period] || RENDER_DATA['7d'];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 24, alignItems: 'center' }}>
+        <h2 style={{ fontSize: 18, fontWeight: 700, flex: 1 }}>사용량 통계 분석</h2>
+        {['7d', '30d'].map(p => (
+          <button key={p} onClick={() => setPeriod(p)} style={{ padding: '8px 16px', borderRadius: 10, border: `1px solid ${period === p ? C.primary : C.border}`, background: period === p ? C.primaryLight : 'transparent', color: period === p ? C.primary : C.textSub, fontSize: 13, fontWeight: period === p ? 700 : 400 }}>
+            {p === '7d' ? '최근 7일' : '최근 30일'}
+          </button>
+        ))}
+      </div>
+
+      {/* Summary KPIs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+        {[['총 렌더링', '127건', C.primary], ['성공률', '96.1%', C.primary], ['총 영상 시간', '88시간', C.accent], ['API 비용', '$284', '#9B59B6']].map(([label, val, color], i) => (
+          <div key={label} style={{ background: C.surface, borderRadius: 14, padding: '18px 20px', border: `1px solid ${C.border}`, animation: `slideUp 400ms ease ${i * 80}ms both` }}>
+            <div style={{ fontSize: 11, color: C.textSub, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>{label}</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+        <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, animation: 'slideUp 400ms ease 200ms both' }}>
+          <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>일별 렌더링 건수</h3>
+          <LineChart key={period} data={renderData.data} labels={renderData.labels} />
+        </div>
+
+        <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, animation: 'slideUp 400ms ease 280ms both' }}>
+          <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>아바타별 사용 비율</h3>
+          <DonutChart data={[34, 28, 19, 15, 12, 8, 5]} labels={['박지현', '이민준', '김수연', '최은영', 'Sarah', '정현우', '기타']} />
+        </div>
+
+        <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, animation: 'slideUp 400ms ease 360ms both' }}>
+          <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>카테고리별 API 비용</h3>
+          <BarChart data={[124, 98, 42, 20]} labels={['HeyGen 렌더링', 'OpenAI 대본', 'AWS S3', '기타']} />
+        </div>
+
+        <div style={{ background: C.surface, borderRadius: 16, padding: 24, border: `1px solid ${C.border}`, animation: 'slideUp 400ms ease 440ms both' }}>
+          <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16 }}>월별 누적 통계</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 8 }}>
+            {[['HeyGen API 렌더링', 127, 150, C.primary], ['OpenAI 대본 생성', 127, 200, C.info], ['FFmpeg 병합 처리', 112, 150, C.accent], ['S3 업로드 완료', 112, 150, '#9B59B6']].map(([label, val, max, color]) => (
+              <div key={label}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
+                  <span style={{ fontWeight: 600 }}>{label}</span>
+                  <span style={{ color: C.textSub }}>{val}건</span>
+                </div>
+                <div style={{ background: C.surface2, borderRadius: 4, height: 8, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', background: color, width: `${(val/max)*100}%`, borderRadius: 4, animation: 'barGrow 1000ms ease 200ms both', '--target-width': `${(val/max)*100}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
+   MAIN APP (spa-modern)
+═══════════════════════════════════════════════════ */
+const NAV_ITEMS = [
+  { id: 'home', label: '대시보드', exact: true },
+  { id: 'avatar', label: '멀티 아바타 관리', exact: true },
+  { id: 'queue', label: '배치 큐', title: '배치 영상 생성 큐 관리', exact: false },
+  { id: 'config', label: '시스템 설정', title: '시스템 설정 및 API Key 관리', exact: false },
+  { id: 'stats', label: '사용량 통계', exact: true },
+];
+
+function App() {
+  const [route, setRoute] = useState('home');
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState(null);
+  const [contentKey, setContentKey] = useState(0);
+
+  useEffect(() => { setTimeout(() => setLoading(false), 1400); }, []);
+
+  const handleNav = (id) => { setRoute(id); setContentKey(k => k + 1); };
+  const handleToast = (msg, type = 'success') => setToast({ msg, type });
+
+  if (loading) return (
+    <div style={{ width: '100%', minHeight: '100vh', background: C.bg }}>
+      <div style={{ height: 64, background: C.surface, borderBottom: `1px solid ${C.border}` }} />
+      <div style={{ padding: 32 }}>
+        {[...Array(3)].map((_, i) => (
+          <div key={i} style={{ height: 140, borderRadius: 16, background: `linear-gradient(90deg, #EDF2F0 25%, #E0EDE8 50%, #EDF2F0 75%)`, backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite', marginBottom: 20 }} />
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', minHeight: '100vh', background: C.bg }}>
+      {/* Global Nav */}
+      <header style={{ position: 'sticky', top: 0, zIndex: 100, background: C.surface, borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', height: 64, padding: '0 32px', gap: 8, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginRight: 28 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 10, background: `linear-gradient(135deg, ${C.primary}, ${C.primaryDark})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>📡</div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.text, letterSpacing: '-0.02em' }}>BroadcastAI</div>
+            <div style={{ fontSize: 10, color: C.textSub }}>라이브커머스 AI 플랫폼</div>
+          </div>
+        </div>
+        <nav style={{ display: 'flex', gap: 2, flex: 1 }}>
+          {NAV_ITEMS.map(item => (
+            <button key={item.id} onClick={() => handleNav(item.id)}
+              {...(item.title ? { title: item.title } : {})}
+              style={{ padding: '8px 16px', borderRadius: 10, border: 'none', background: route === item.id ? C.primaryLight : 'transparent', color: route === item.id ? C.primary : C.textSub, fontSize: 14, fontWeight: route === item.id ? 700 : 500, transition: 'all 200ms', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              {item.label}
+            </button>
+          ))}
+        </nav>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ fontSize: 12, color: C.primary, background: C.primaryLight, padding: '5px 12px', borderRadius: 20, fontWeight: 700, border: `1px solid ${C.primary}44` }}>
+            ● 큐 정상
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <div style={{ width: 34, height: 34, borderRadius: '50%', background: `linear-gradient(135deg, ${C.primary}, ${C.accent})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, color: '#fff', fontWeight: 700 }}>김</div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>김마케터</div>
+              <div style={{ fontSize: 11, color: C.textSub }}>마케팅팀</div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main content */}
+      <main style={{ flex: 1, padding: '32px', maxWidth: 1400, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+        <div key={contentKey} style={{ animation: 'fadeIn 300ms ease' }}>
+          {route === 'home' && <DashboardPage onNavigate={handleNav} />}
+          {route === 'avatar' && <AvatarPage onToast={handleToast} />}
+          {route === 'queue' && <QueuePage onToast={handleToast} />}
+          {route === 'config' && <ConfigPage onToast={handleToast} />}
+          {route === 'stats' && <StatsPage />}
+        </div>
+      </main>
+
+      {/* Footer */}
+      <footer style={{ background: C.secondary, color: 'rgba(255,255,255,0.8)', padding: '36px 32px 24px', marginTop: 48 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 32, maxWidth: 1400, margin: '0 auto' }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: '#fff', marginBottom: 10 }}>📡 BroadcastAI</div>
+            <p style={{ fontSize: 13, lineHeight: 1.7, opacity: 0.7 }}>OpenAI + HeyGen API 기반 라이브커머스<br />AI 쇼호스트 영상 자동 생성 플랫폼</p>
+            <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
+              {['OpenAI', 'HeyGen', 'FFmpeg'].map(b => <span key={b} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.7)' }}>{b}</span>)}
+            </div>
+          </div>
+          {[['플랫폼', ['대본 생성', '영상 렌더링', '배치 처리', '사용량 분석']], ['지원', ['자주 묻는 질문', 'API 문서', '사용 가이드', '문의하기']], ['법적 고지', ['이용약관', '개인정보처리방침', '쿠키 정책', '면책 조항']]].map(([title, items]) => (
+            <div key={title}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#fff', marginBottom: 14, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{title}</div>
+              {items.map(item => <div key={item} style={{ fontSize: 13, opacity: 0.6, marginBottom: 8, cursor: 'pointer' }}>{item}</div>)}
+            </div>
+          ))}
+        </div>
+        <div style={{ maxWidth: 1400, margin: '28px auto 0', paddingTop: 20, borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', fontSize: 12, opacity: 0.5 }}>
+          <span>© 2026 BroadcastAI. 자체 개발 프로젝트 구현 데모.</span>
+          <span>React · Node.js · PostgreSQL · Redis · Chart.js</span>
+        </div>
+      </footer>
+
+      {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
