@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>전시회 현장 QR 주문 플랫폼 — 맞춤 구현 데모</title>
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.15.0/umd/Recharts.min.js"></script>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html, body { width:100%; height:100%; font-family:'Pretendard',-apple-system,sans-serif; background:#F8FAFC; }
+    #root { display:flex; flex-direction:column; width:100%; min-height:100vh; }
+
+    @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+    @keyframes fadeInScale { from{opacity:0;transform:scale(0.95)} to{opacity:1;transform:scale(1)} }
+    @keyframes slideInRight { from{opacity:0;transform:translateX(30px)} to{opacity:1;transform:translateX(0)} }
+    @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes ripple { 0%{transform:scale(0);opacity:0.5} 100%{transform:scale(4);opacity:0} }
+    @keyframes countUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+    @keyframes barGrow { from{width:0%} to{width:var(--target-width,100%)} }
+    @keyframes slideDown { from{opacity:0;transform:translateY(-10px);max-height:0} to{opacity:1;transform:translateY(0);max-height:500px} }
+    @keyframes scanLine { 0%{top:15%} 100%{top:80%} }
+    @keyframes borderPulse { 0%,100%{border-color:#2563EB} 50%{border-color:#93C5FD} }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;
+
+const C = {
+  primary:'#2563EB', secondary:'#0EA5E9', accent:'#F59E0B',
+  bg:'#F8FAFC', surface:'#FFFFFF', border:'#E2E8F0',
+  textPrimary:'#0F172A', textSecondary:'#64748B',
+  success:'#10B981', error:'#EF4444', warning:'#F59E0B',
+};
+
+const products = [
+  { id:1, name:'제주 유기농 감귤 선물세트 3kg', company:'제주한라농협', price:38000, stock:48, cat:'식품', img:'🍊', sales:127, rating:4.8, qr:'QR-001', status:'active' },
+  { id:2, name:'6년근 흑삼 정 한방 보양 세트', company:'고려홍삼원', price:75000, stock:32, cat:'건강식품', img:'🌿', sales:89, rating:4.7, qr:'QR-002', status:'active' },
+  { id:3, name:'국내산 천연 꿀 모듬 선물세트', company:'금강양봉', price:52000, stock:0, cat:'식품', img:'🍯', sales:203, rating:4.9, qr:'QR-003', status:'soldout' },
+  { id:4, name:'강원도 명태·황태 건어물 혼합', company:'동해수산', price:45000, stock:61, cat:'수산물', img:'🐟', sales:56, rating:4.5, qr:'QR-004', status:'active' },
+  { id:5, name:'유기농 친환경 햅쌀 20kg', company:'충청미작', price:68000, stock:28, cat:'식품', img:'🌾', sales:74, rating:4.6, qr:'QR-005', status:'active' },
+  { id:6, name:'제주 흑돼지 구이 프리미엄 세트', company:'제주흑돈', price:89000, stock:15, cat:'육류', img:'🐷', sales:42, rating:4.7, qr:'QR-006', status:'active' },
+];
+
+const orders = [
+  { id:'ORD-2841', visitor:'김민수', product:'제주 유기농 감귤 선물세트 3kg', qty:2, amount:76000, status:'접수', time:'14:23', address:'서울 강남구 역삼동 123-4' },
+  { id:'ORD-2842', visitor:'이지은', product:'6년근 흑삼 정 한방 보양 세트', qty:1, amount:75000, status:'준비중', time:'14:18', address:'경기 성남시 분당구 서현동' },
+  { id:'ORD-2840', visitor:'박서준', product:'유기농 친환경 햅쌀 20kg', qty:1, amount:68000, status:'완료', time:'14:05', address:'서울 송파구 잠실동 456' },
+  { id:'ORD-2839', visitor:'최유나', product:'제주 흑돼지 구이 프리미엄 세트', qty:1, amount:89000, status:'접수', time:'13:58', address:'서울 마포구 합정동 78' },
+  { id:'ORD-2838', visitor:'정태양', product:'강원도 명태·황태 건어물 혼합', qty:3, amount:135000, status:'완료', time:'13:45', address:'경기 고양시 일산동구' },
+];
+
+const preRegs = [
+  { id:'PRE-1001', name:'홍길동', phone:'010-1234-5678', company:'삼성전자(주)', interest:'식품·건강식품', date:'2026-05-20' },
+  { id:'PRE-1002', name:'김영희', phone:'010-9876-5432', company:'개인', interest:'수산물·육류', date:'2026-05-20' },
+  { id:'PRE-1003', name:'이정훈', phone:'010-5555-7777', company:'(주)아모레퍼시픽', interest:'건강식품·기타', date:'2026-05-20' },
+];
+
+const hourly = [
+  {t:'09시',n:12},{t:'10시',n:28},{t:'11시',n:45},{t:'12시',n:38},{t:'13시',n:52},{t:'14시',n:41},
+];
+
+function CountUp({ end, suffix='', prefix='' }) {
+  const [v, setV] = useState(0);
+  useEffect(() => {
+    let s=0; const step=end/60;
+    const id=setInterval(()=>{ s+=step; if(s>=end){setV(end);clearInterval(id);}else setV(Math.floor(s)); },20);
+    return ()=>clearInterval(id);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{prefix}{v.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({ msg, onClose }) {
+  useEffect(()=>{ const t=setTimeout(onClose,3000); return()=>clearTimeout(t); },[]);
+  return (
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:C.textPrimary,color:'#fff',padding:'12px 24px',borderRadius:10,animation:'slideUp 300ms ease',boxShadow:'0 4px 16px rgba(0,0,0,0.2)',display:'flex',alignItems:'center',gap:8,fontSize:14}}>
+      ✅ {msg}
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, width=560 }) {
+  return (
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.45)',animation:'fadeIn 200ms ease'}} />
+      <div style={{position:'relative',width,maxHeight:'88vh',background:C.surface,borderRadius:16,zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',boxShadow:'0 24px 64px rgba(0,0,0,0.18)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'18px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:700,color:C.textPrimary}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:C.textSecondary,lineHeight:1,padding:'0 4px'}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Drawer({ title, onClose, children }) {
+  return (
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:200,animation:'fadeIn 200ms ease'}} />
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:480,background:C.surface,boxShadow:'-8px 0 40px rgba(0,0,0,0.14)',zIndex:201,overflowY:'auto',animation:'slideInRight 220ms ease',display:'flex',flexDirection:'column'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'18px 24px',borderBottom:`1px solid ${C.border}`,position:'sticky',top:0,background:C.surface,zIndex:1}}>
+          <h3 style={{fontSize:16,fontWeight:700,color:C.textPrimary}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:C.textSecondary}}>✕</button>
+        </div>
+        <div style={{padding:24,flex:1,overflowY:'auto'}}>{children}</div>
+      </div>
+    </>
+  );
+}
+
+function KpiCard({ label, val, icon, color, delay=0 }) {
+  return (
+    <div style={{background:C.surface,borderRadius:14,padding:'18px 20px',boxShadow:'0 4px 16px rgba(0,0,0,0.10)',animation:`slideUp 400ms ease ${delay}ms both`,border:`1px solid ${C.border}`,transition:'all 200ms',cursor:'default'}}
+      onMouseEnter={e=>{e.currentTarget.style.transform='translateY(-3px)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,0.15)';}}
+      onMouseLeave={e=>{e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,0.10)';}}>
+      <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
+        <div style={{fontSize:12,color:C.textSecondary,fontWeight:500}}>{label}</div>
+        <div style={{fontSize:20}}>{icon}</div>
+      </div>
+      <div style={{fontSize:26,fontWeight:800,color:color||C.primary}}><CountUp end={val} /></div>
+    </div>
+  );
+}
+
+// QR Scanner
+function QrScanner({ onScan }) {
+  const [state, setState] = useState('idle'); // idle | scanning | done
+  const start = () => {
+    setState('scanning');
+    setTimeout(()=>{ setState('done'); onScan(products[0]); }, 2200);
+  };
+  return (
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:16}}>
+      <div style={{position:'relative',width:220,height:220,border:`3px solid ${state==='scanning'?C.primary:state==='done'?C.success:C.border}`,borderRadius:14,overflow:'hidden',background:state==='done'?'#ECFDF5':'#F1F5F9',transition:'all 300ms',animation:state==='scanning'?'borderPulse 1s infinite':undefined}}>
+        {state==='idle' && <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%',gap:8}}><div style={{fontSize:44}}>📷</div><div style={{fontSize:12,color:C.textSecondary}}>카메라 대기 중</div></div>}
+        {state==='scanning' && (
+          <>
+            <div style={{position:'absolute',left:0,right:0,height:3,background:`linear-gradient(90deg,transparent,${C.primary},transparent)`,animation:'scanLine 1.4s ease-in-out infinite alternate',top:'40%'}} />
+            <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100%',fontSize:44,opacity:0.25}}>📦</div>
+            {[[0,0],[0,'auto'],['auto',0],['auto','auto']].map(([t,b],i)=>(
+              <div key={i} style={{position:'absolute',top:t,bottom:b,left:i%2===0?8:undefined,right:i%2===1?8:undefined,width:22,height:22,
+                borderTop:typeof t==='number'?`3px solid ${C.primary}`:undefined,
+                borderBottom:typeof b==='number'?`3px solid ${C.primary}`:undefined,
+                borderLeft:i%2===0?`3px solid ${C.primary}`:undefined,
+                borderRight:i%2===1?`3px solid ${C.primary}`:undefined}} />
+            ))}
+          </>
+        )}
+        {state==='done' && <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%',gap:8}}><div style={{fontSize:44}}>✅</div><div style={{fontSize:13,color:C.success,fontWeight:700}}>스캔 완료!</div></div>}
+      </div>
+      <button onClick={state==='done'?()=>setState('idle'):start} disabled={state==='scanning'} style={{padding:'12px 28px',background:state==='scanning'?C.textSecondary:state==='done'?C.success:C.primary,color:'#fff',border:'none',borderRadius:12,fontWeight:700,fontSize:15,cursor:state==='scanning'?'default':'pointer',transition:'all 200ms',animation:state==='scanning'?'pulse 1s infinite':undefined}}>
+        {state==='idle'?'QR 스캔 시작':state==='scanning'?'스캔 중...':'다시 스캔'}
+      </button>
+      {state==='done' && (
+        <div style={{background:'#ECFDF5',border:'1px solid #6EE7B7',borderRadius:10,padding:14,width:'100%',animation:'fadeInScale 300ms ease',fontSize:13}}>
+          <div style={{fontWeight:600,color:C.success,marginBottom:3}}>QR-001 | 제주한라농협 A-12 부스</div>
+          <div style={{color:C.textSecondary,fontSize:12}}>상품 페이지 이동 준비 완료 → 하단에서 선택하세요</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// === PAGES ===
+
+function MainPage({ onToast }) {
+  const [subTab, setSubTab] = useState('qr');
+  const [drawer, setDrawer] = useState(null);
+  const [cart, setCart] = useState(0);
+  const [qty, setQty] = useState(1);
+
+  return (
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',gap:8,marginBottom:20}}>
+        {[['qr','🏷️ QR 스캐너'],['products','🛍️ 상품 둘러보기']].map(([id,label])=>(
+          <button key={id} onClick={()=>setSubTab(id)} style={{padding:'8px 18px',borderRadius:999,border:'none',background:subTab===id?C.primary:C.surface,color:subTab===id?'#fff':C.textSecondary,fontWeight:600,fontSize:13,cursor:'pointer',boxShadow:subTab===id?'0 2px 8px rgba(37,99,235,0.3)':'0 1px 3px rgba(0,0,0,0.08)',transition:'all 200ms'}}>
+            {label}
+          </button>
+        ))}
+        {cart>0 && <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:6,background:'#FEF3C7',border:'1px solid #FCD34D',borderRadius:999,padding:'6px 14px',fontSize:13,fontWeight:600,color:'#92400E'}}>🛒 {cart}개</div>}
+      </div>
+
+      {subTab==='qr' && (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+          <div style={{background:C.surface,borderRadius:16,padding:28,boxShadow:'0 4px 16px rgba(0,0,0,0.08)',display:'flex',flexDirection:'column',alignItems:'center',gap:20}}>
+            <div style={{textAlign:'center'}}>
+              <div style={{fontSize:17,fontWeight:700,color:C.textPrimary,marginBottom:4}}>현장 QR 스캔</div>
+              <div style={{fontSize:13,color:C.textSecondary}}>부스 상품 QR → 상품 페이지 즉시 이동<br/>앱 설치 없이 모바일 웹에서 동작합니다</div>
+            </div>
+            <QrScanner onScan={(p)=>setDrawer(p)} />
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <div style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.08)'}}>
+              <div style={{fontSize:14,fontWeight:700,color:C.textPrimary,marginBottom:14}}>📊 오늘 현황</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                {[{label:'총 주문',val:216,icon:'📦',color:C.primary},{label:'총 매출(만원)',val:942,icon:'💰',color:C.success},{label:'관람객',val:1847,icon:'👥',color:C.secondary},{label:'참가업체',val:48,icon:'🏪',color:C.accent}].map((k,i)=>(
+                  <KpiCard key={i} {...k} delay={i*80} />
+                ))}
+              </div>
+            </div>
+            <div style={{background:C.surface,borderRadius:16,padding:20,boxShadow:'0 4px 16px rgba(0,0,0,0.08)'}}>
+              <div style={{fontSize:14,fontWeight:700,color:C.textPrimary,marginBottom:12}}>⏰ 시간대별 주문량</div>
+              <ResponsiveContainer width="100%" height={140}>
+                <BarChart data={hourly}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAxis dataKey="t" tick={{fontSize:11}} />
+                  <YAxis tick={{fontSize:11}} />
+                  <Tooltip formatter={v=>[v+'건','주문']} />
+                  <Bar dataKey="n" fill={C.primary} radius={[4,4,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {subTab==='products' && (
+        <div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+            <div style={{fontSize:16,fontWeight:700,color:C.textPrimary}}>전체 상품 목록</div>
+            <div style={{display:'flex',gap:6}}>
+              {['전체','식품','건강식품','수산물','육류'].map(c=>(
+                <button key={c} style={{padding:'6px 13px',borderRadius:999,border:`1px solid ${C.border}`,background:C.surface,fontSize:12,cursor:'pointer',fontWeight:500,color:C.textSecondary}}>{c}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:18}}>
+            {products.map((p,i)=>(
+              <div key={p.id} onClick={()=>setDrawer(p)} style={{background:C.surface,borderRadius:16,overflow:'hidden',boxShadow:'0 4px 16px rgba(0,0,0,0.10)',cursor:'pointer',animation:`slideUp 400ms ease ${i*80}ms both`,transition:'all 200ms'}}
+                onMouseEnter={e=>{e.currentTarget.style.transform='scale(1.02)';e.currentTarget.style.boxShadow='0 8px 24px rgba(0,0,0,0.15)';}}
+                onMouseLeave={e=>{e.currentTarget.style.transform='scale(1)';e.currentTarget.style.boxShadow='0 4px 16px rgba(0,0,0,0.10)';}}>
+                <div style={{height:110,background:`linear-gradient(135deg,${C.primary}18,${C.secondary}18)`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:46,position:'relative'}}>
+                  {p.img}
+                  {p.status==='soldout' && <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:700,fontSize:13}}>품절</div>}
+                </div>
+                <div style={{padding:14}}>
+                  <div style={{fontSize:11,color:C.textSecondary,marginBottom:3}}>{p.company} · {p.cat}</div>
+                  <div style={{fontSize:13,fontWeight:600,color:C.textPrimary,marginBottom:8,lineHeight:1.4}}>{p.name}</div>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <div style={{fontSize:16,fontWeight:800,color:C.primary}}>{p.price.toLocaleString()}원</div>
+                    <div style={{fontSize:11,color:C.textSecondary}}>⭐ {p.rating}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {drawer && (
+        <Drawer title={drawer.name} onClose={()=>setDrawer(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:18}}>
+            <div style={{background:`linear-gradient(135deg,${C.primary}12,${C.secondary}12)`,borderRadius:12,padding:24,textAlign:'center',fontSize:56}}>{drawer.img}</div>
+            <div>
+              <div style={{fontSize:11,color:C.textSecondary,marginBottom:3}}>{drawer.company} · {drawer.cat}</div>
+              <div style={{fontSize:18,fontWeight:700,color:C.textPrimary,marginBottom:8}}>{drawer.name}</div>
+              <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                <span style={{fontSize:24,fontWeight:800,color:C.primary}}>{drawer.price.toLocaleString()}원</span>
+                <span style={{background:'#FEF3C7',color:'#92400E',fontSize:11,fontWeight:600,padding:'2px 8px',borderRadius:999}}>재고 {drawer.stock}개</span>
+              </div>
+            </div>
+            <div style={{background:C.bg,borderRadius:10,padding:14,display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              {[['판매량',`${drawer.sales}건`],['평점',`⭐ ${drawer.rating}`],['QR 코드',drawer.qr],['상태',drawer.status==='active'?'판매중':'품절']].map(([l,v])=>(
+                <div key={l}><div style={{fontSize:11,color:C.textSecondary}}>{l}</div><div style={{fontSize:14,fontWeight:700,marginTop:2}}>{v}</div></div>
+              ))}
+            </div>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,color:C.textPrimary,marginBottom:8}}>수량 선택</div>
+              <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                {[1,2,3].map(n=>(
+                  <button key={n} onClick={()=>setQty(n)} style={{width:38,height:38,borderRadius:8,border:`2px solid ${qty===n?C.primary:C.border}`,background:qty===n?`${C.primary}12`:C.surface,fontSize:14,fontWeight:700,cursor:'pointer',color:qty===n?C.primary:C.textPrimary}}>{n}</button>
+                ))}
+                <input type="number" min="1" value={qty} onChange={e=>setQty(parseInt(e.target.value)||1)} style={{width:58,height:38,borderRadius:8,border:`1px solid ${C.border}`,textAlign:'center',fontSize:14,outline:'none'}} />
+              </div>
+            </div>
+            <button disabled={drawer.status==='soldout'} onClick={()=>{setCart(c=>c+qty);setDrawer(null);onToast(`장바구니에 ${qty}개 담았습니다`);}} style={{width:'100%',padding:15,background:drawer.status==='soldout'?C.textSecondary:`linear-gradient(135deg,${C.primary},${C.secondary})`,color:'#fff',border:'none',borderRadius:12,fontWeight:700,fontSize:15,cursor:drawer.status==='soldout'?'default':'pointer',transition:'all 200ms'}}>
+              {drawer.status==='soldout'?'품절 (주문 불가)':'🛒 장바구니 담기'}
+            </button>
+            <button style={{width:'100%',padding:15,background:C.accent,color:'#fff',border:'none',borderRadius:12,fontWeight:700,fontSize:15,cursor:'pointer'}}>⚡ 바로 결제 (토스페이먼츠)</button>
+            <div style={{background:'#F0F9FF',border:'1px solid #BAE6FD',borderRadius:10,padding:14}}>
+              <div style={{fontSize:12,fontWeight:600,color:'#0284C7',marginBottom:4}}>결제 안내</div>
+              <div style={{fontSize:11,color:'#0369A1',lineHeight:1.6}}>신용카드·카카오페이·네이버페이·토스페이 이용 가능<br/>배송은 행사 종료 후 5-7일 이내 발송됩니다</div>
+            </div>
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+function ProductMgmtPage({ onToast }) {
+  const [items, setItems] = useState(products);
+  const [drawer, setDrawer] = useState(null);
+  const [addModal, setAddModal] = useState(false);
+  const [qrModal, setQrModal] = useState(null);
+  const [search, setSearch] = useState('');
+  const filtered = items.filter(p=>p.name.includes(search)||p.company.includes(search));
+
+  return (
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div style={{display:'flex',gap:8}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="상품명 또는 업체명 검색..." style={{padding:'10px 16px',borderRadius:10,border:`1px solid ${C.border}`,width:260,outline:'none',fontSize:13}} />
+          <select style={{padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:13,color:C.textPrimary,outline:'none'}}>
+            <option>전체 카테고리</option>
+            {['식품','건강식품','수산물','육류'].map(c=><option key={c}>{c}</option>)}
+          </select>
+        </div>
+        <button onClick={()=>setAddModal(true)} style={{padding:'10px 20px',background:C.primary,color:'#fff',border:'none',borderRadius:10,fontWeight:700,fontSize:13,cursor:'pointer',transition:'all 200ms'}}
+          onMouseEnter={e=>e.currentTarget.style.background='#1D4ED8'}
+          onMouseLeave={e=>e.currentTarget.style.background=C.primary}>
+          + 상품 등록
+        </button>
+      </div>
+
+      <div style={{background:C.surface,borderRadius:16,boxShadow:'0 4px 16px rgba(0,0,0,0.08)',overflow:'hidden'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:C.bg,borderBottom:`1px solid ${C.border}`}}>
+              {['상품명','업체','카테고리','가격','재고','판매','QR','상태','관리'].map(h=>(
+                <th key={h} style={{padding:'12px 16px',textAlign:'left',fontSize:11,fontWeight:600,color:C.textSecondary}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((p,i)=>(
+              <tr key={p.id} onClick={()=>setDrawer(p)} style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background 150ms',animation:`slideUp 250ms ease ${i*50}ms both`}}
+                onMouseEnter={e=>e.currentTarget.style.background='#F8FAFC'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'13px 16px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:20}}>{p.img}</span>
+                    <span style={{fontSize:13,fontWeight:600,color:C.textPrimary}}>{p.name}</span>
+                  </div>
+                </td>
+                <td style={{padding:'13px 16px',fontSize:12,color:C.textSecondary}}>{p.company}</td>
+                <td style={{padding:'13px 16px'}}><span style={{background:`${C.primary}15`,color:C.primary,fontSize:11,fontWeight:600,padding:'2px 8px',borderRadius:999}}>{p.cat}</span></td>
+                <td style={{padding:'13px 16px',fontSize:13,fontWeight:700}}>{p.price.toLocaleString()}원</td>
+                <td style={{padding:'13px 16px',fontSize:13,fontWeight:600,color:p.stock===0?C.error:p.stock<20?C.warning:C.success}}>{p.stock}개</td>
+                <td style={{padding:'13px 16px',fontSize:12,color:C.textSecondary}}>{p.sales}건</td>
+                <td style={{padding:'13px 16px'}}>
+                  <button onClick={e=>{e.stopPropagation();setQrModal(p);}} style={{padding:'4px 10px',background:`${C.primary}15`,color:C.primary,border:'none',borderRadius:6,fontSize:11,fontWeight:600,cursor:'pointer'}}>QR 발급</button>
+                </td>
+                <td style={{padding:'13px 16px'}}>
+                  <span style={{background:p.status==='active'?'#ECFDF5':'#FEF2F2',color:p.status==='active'?C.success:C.error,fontSize:11,fontWeight:600,padding:'4px 10px',borderRadius:999}}>
+                    {p.status==='active'?'판매중':'품절'}
+                  </span>
+                </td>
+                <td style={{padding:'13px 16px'}}>
+                  <button onClick={e=>{e.stopPropagation();setDrawer(p);}} style={{padding:'4px 10px',border:`1px solid ${C.border}`,borderRadius:6,fontSize:11,background:C.surface,cursor:'pointer',marginRight:4}}>수정</button>
+                  <button onClick={e=>{e.stopPropagation();onToast('상품이 삭제되었습니다');}} style={{padding:'4px 10px',border:'none',borderRadius:6,fontSize:11,background:'#FEF2F2',color:C.error,cursor:'pointer'}}>삭제</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {drawer && (
+        <Drawer title="상품 상세 / 수정" onClose={()=>setDrawer(null)}>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <div style={{fontSize:48,textAlign:'center',background:`${C.primary}08`,borderRadius:12,padding:24}}>{drawer.img}</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              {[['상품명',drawer.name],['업체',drawer.company],['카테고리',drawer.cat],['가격',`${drawer.price.toLocaleString()}원`],['재고 수량',`${drawer.stock}개`],['QR 코드',drawer.qr]].map(([l,v])=>(
+                <div key={l}><div style={{fontSize:11,color:C.textSecondary,marginBottom:4}}>{l}</div><input defaultValue={v} style={{width:'100%',padding:'8px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,outline:'none'}} /></div>
+              ))}
+            </div>
+            <div><div style={{fontSize:11,color:C.textSecondary,marginBottom:4}}>상품 설명</div>
+            <textarea rows={4} defaultValue="엄선된 원료로 제조한 고품질 선물세트입니다. 전시회 특별 구성으로 합리적인 가격에 제공합니다." style={{width:'100%',padding:'10px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,outline:'none',resize:'vertical',lineHeight:1.6}} /></div>
+            <div><div style={{fontSize:11,color:C.textSecondary,marginBottom:4}}>상품 이미지 업로드</div>
+            <div style={{border:`2px dashed ${C.border}`,borderRadius:8,padding:20,textAlign:'center',cursor:'pointer',background:C.bg}}>
+              <div style={{fontSize:28}}>📁</div>
+              <div style={{fontSize:12,color:C.textSecondary,marginTop:6}}>JPG·PNG 드래그 앤 드롭 / 클릭 업로드 (최대 10MB)</div>
+            </div></div>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>{setDrawer(null);onToast('상품 정보가 수정되었습니다');}} style={{flex:1,padding:13,background:C.primary,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer'}}>저장</button>
+              <button onClick={()=>setDrawer(null)} style={{flex:1,padding:13,background:C.surface,color:C.textSecondary,border:`1px solid ${C.border}`,borderRadius:10,fontWeight:600,cursor:'pointer'}}>취소</button>
+            </div>
+          </div>
+        </Drawer>
+      )}
+
+      {qrModal && (
+        <Modal title="QR 코드 발급" onClose={()=>setQrModal(null)} width={380}>
+          <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:16}}>
+            <div style={{fontSize:15,fontWeight:600,color:C.textPrimary,textAlign:'center'}}>{qrModal.name}</div>
+            <div style={{width:180,height:180,background:'#F8FAFC',borderRadius:12,border:`2px solid ${C.border}`,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:12,gap:8}}>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(8,1fr)',gap:2}}>
+                {Array.from({length:64}).map((_,i)=><div key={i} style={{width:9,height:9,background:Math.random()>0.45?'#0F172A':'transparent',borderRadius:1}} />)}
+              </div>
+              <div style={{fontSize:10,color:C.textSecondary,fontFamily:'monospace'}}>{qrModal.qr}</div>
+            </div>
+            <div style={{fontSize:12,color:C.textSecondary,textAlign:'center'}}>스캔 시 {qrModal.name} 상세 페이지로 연결됩니다</div>
+            <div style={{display:'flex',gap:8,width:'100%'}}>
+              <button onClick={()=>{setQrModal(null);onToast('QR 코드 PNG 저장 완료');}} style={{flex:1,padding:12,background:C.primary,color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer'}}>PNG 저장</button>
+              <button onClick={()=>{setQrModal(null);onToast('인쇄 대화상자 열림');}} style={{flex:1,padding:12,background:C.surface,color:C.textPrimary,border:`1px solid ${C.border}`,borderRadius:8,fontWeight:600,cursor:'pointer'}}>인쇄</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {addModal && (
+        <Modal title="새 상품 등록" onClose={()=>setAddModal(false)}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              {[['상품명 *'],['업체명 *'],['카테고리 *'],['가격 (원) *'],['재고 수량 *']].map(([l])=>(
+                <div key={l}><div style={{fontSize:11,color:C.textSecondary,marginBottom:4}}>{l}</div><input placeholder={l.replace(' *','')} style={{width:'100%',padding:'10px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,outline:'none'}} /></div>
+              ))}
+              <div><div style={{fontSize:11,color:C.textSecondary,marginBottom:4}}>판매 상태</div>
+              <select style={{width:'100%',padding:'10px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,outline:'none'}}><option>판매중</option><option>품절</option></select></div>
+            </div>
+            <div><div style={{fontSize:11,color:C.textSecondary,marginBottom:4}}>상품 설명</div><textarea rows={3} placeholder="상품에 대한 상세 설명을 입력하세요" style={{width:'100%',padding:'10px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,outline:'none',resize:'vertical'}} /></div>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>{setAddModal(false);onToast('상품이 등록되었습니다');}} style={{flex:1,padding:13,background:C.primary,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer'}}>등록하기</button>
+              <button onClick={()=>setAddModal(false)} style={{flex:1,padding:13,background:C.surface,color:C.textSecondary,border:`1px solid ${C.border}`,borderRadius:10,fontWeight:600,cursor:'pointer'}}>취소</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function OrderMgmtPage({ onToast }) {
+  const [list, setList] = useState(orders);
+  const [selected, setSelected] = useState(null);
+
+  useEffect(()=>{
+    const id=setInterval(()=>{
+      if(Math.random()>0.65){
+        const names=['박지훈','김소연','이준혁','최서연','한도윤'];
+        const newOrd={
+          id:`ORD-${2843+Math.floor(Math.random()*200)}`,
+          visitor:names[Math.floor(Math.random()*names.length)],
+          product:products[Math.floor(Math.random()*products.length)].name,
+          qty:Math.floor(Math.random()*3)+1,
+          amount:Math.floor(Math.random()*60000)+30000,
+          status:'접수',
+          time:new Date().toLocaleTimeString('ko',{hour:'2-digit',minute:'2-digit'}),
+          address:'서울 강남구 역삼동',
+        };
+        setList(prev=>[newOrd,...prev].slice(0,10));
+      }
+    },4500);
+    return()=>clearInterval(id);
+  },[]);
+
+  const statuses=['접수','준비중','완료'];
+  const scfg={'접수':[C.warning,'#FEF3C7'],'준비중':[C.secondary,'#EFF6FF'],'완료':[C.success,'#ECFDF5']};
+
+  const changeStatus=(id,s)=>{
+    setList(prev=>prev.map(o=>o.id===id?{...o,status:s}:o));
+    onToast(`주문 상태 → ${s}`);
+  };
+
+  return (
+    <div style={{animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:18}}>
+        <div style={{width:8,height:8,borderRadius:'50%',background:C.success,animation:'pulse 1.5s infinite'}} />
+        <span style={{fontSize:13,color:C.success,fontWeight:600}}>실시간 주문 수신 중 (Socket.io 연결됨)</span>
+        <span style={{marginLeft:'auto',fontSize:12,color:C.textSecondary}}>자동 갱신 활성</span>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:18}}>
+        {statuses.map(status=>{
+          const cols=list.filter(o=>o.status===status);
+          const [col,bg]=scfg[status];
+          return (
+            <div key={status} style={{background:C.surface,borderRadius:16,padding:16,boxShadow:'0 4px 16px rgba(0,0,0,0.08)',minHeight:380}}>
+              <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14}}>
+                <div style={{width:10,height:10,borderRadius:'50%',background:col}} />
+                <span style={{fontSize:14,fontWeight:700,color:C.textPrimary}}>{status}</span>
+                <span style={{marginLeft:'auto',background:bg,color:col,fontSize:12,fontWeight:700,padding:'2px 8px',borderRadius:999}}>{cols.length}</span>
+              </div>
+              <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                {cols.map((o,i)=>(
+                  <div key={o.id} onClick={()=>setSelected(o)} style={{background:bg,borderRadius:12,padding:13,cursor:'pointer',animation:`slideUp 300ms ease ${i*60}ms both`,transition:'all 200ms',border:`1px solid ${col}33`}}
+                    onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'}
+                    onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:5}}>
+                      <span style={{fontSize:11,fontWeight:700,color:col,fontFamily:'monospace'}}>{o.id}</span>
+                      <span style={{fontSize:11,color:C.textSecondary}}>{o.time}</span>
+                    </div>
+                    <div style={{fontSize:13,fontWeight:600,color:C.textPrimary,marginBottom:3}}>{o.visitor}</div>
+                    <div style={{fontSize:12,color:C.textSecondary,marginBottom:8,lineHeight:1.4}}>{o.product} × {o.qty}</div>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                      <span style={{fontSize:13,fontWeight:700,color:C.textPrimary}}>{o.amount.toLocaleString()}원</span>
+                      {status!=='완료' && (
+                        <button onClick={e=>{e.stopPropagation();changeStatus(o.id,status==='접수'?'준비중':'완료');}} style={{padding:'4px 10px',background:col,color:'#fff',border:'none',borderRadius:6,fontSize:11,fontWeight:600,cursor:'pointer'}}>
+                          {status==='접수'?'준비 시작':'완료 처리'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {cols.length===0 && <div style={{textAlign:'center',padding:28,color:C.textSecondary,fontSize:13}}>없음</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {selected && (
+        <Modal title={`주문 상세 — ${selected.id}`} onClose={()=>setSelected(null)} width={480}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            {[['주문번호',selected.id],['주문자',selected.visitor],['상품명',selected.product],['수량',`${selected.qty}개`],['결제 금액',`${selected.amount.toLocaleString()}원`],['주문 시각',selected.time],['배송지',selected.address],['현재 상태',selected.status]].map(([l,v])=>(
+              <div key={l} style={{display:'flex',gap:12,paddingBottom:10,borderBottom:`1px solid ${C.border}`}}>
+                <span style={{width:80,fontSize:12,color:C.textSecondary,flexShrink:0}}>{l}</span>
+                <span style={{fontSize:13,fontWeight:600,color:C.textPrimary}}>{v}</span>
+              </div>
+            ))}
+            <div>
+              <div style={{fontSize:12,color:C.textSecondary,marginBottom:6}}>운송장 번호 입력</div>
+              <div style={{display:'flex',gap:8}}>
+                <input placeholder="1234567890123" style={{flex:1,padding:'10px 12px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,outline:'none'}} />
+                <button onClick={()=>{setSelected(null);onToast('운송장이 등록되었습니다');}} style={{padding:'10px 16px',background:C.primary,color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:13}}>등록</button>
+              </div>
+            </div>
+            <button onClick={()=>{onToast(`${selected.id} 환불 처리 완료`);setSelected(null);}} style={{padding:12,background:'#FEF2F2',color:C.error,border:`1px solid ${C.error}33`,borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:13}}>결제 취소 / 환불 처리</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function PreRegPage({ onToast }) {
+  const [list, setList] = useState(preRegs);
+  const [form, setForm] = useState({name:'',phone:'',company:'',interest:''});
+  const [done, setDone] = useState(false);
+  const [ticket, setTicket] = useState(null);
+  const [modal, setModal] = useState(null);
+
+  const submit = () => {
+    if(!form.name||!form.phone) return;
+    const id=`PRE-${1004+list.length}`;
+    const t={...form,id,date:'2026-05-20'};
+    setTicket(t);
+    setList(prev=>[t,...prev]);
+    setDone(true);
+    onToast('사전등록 완료! QR 입장권이 발급되었습니다');
+  };
+
+  return (
+    <div style={{animation:'fadeIn 300ms ease',display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+      <div style={{background:C.surface,borderRadius:16,padding:28,boxShadow:'0 4px 16px rgba(0,0,0,0.08)'}}>
+        <div style={{fontSize:17,fontWeight:700,color:C.textPrimary,marginBottom:4}}>전시회 사전등록</div>
+        <div style={{fontSize:12,color:C.textSecondary,marginBottom:22}}>2026 대한민국 식품산업대전 | 05.20~05.23 | 코엑스 B홀</div>
+        {!done ? (
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            {[['성함 *','name','홍길동'],['연락처 *','phone','010-0000-0000'],['소속 기관/회사','company','(주)OO기업'],['관심 카테고리','interest','식품, 건강식품 등']].map(([l,k,ph])=>(
+              <div key={k}><div style={{fontSize:12,fontWeight:600,color:C.textPrimary,marginBottom:5}}>{l}</div>
+              <input value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} style={{width:'100%',padding:'11px 13px',borderRadius:10,border:`1px solid ${C.border}`,fontSize:13,outline:'none'}} onFocus={e=>e.target.style.borderColor=C.primary} onBlur={e=>e.target.style.borderColor=C.border} /></div>
+            ))}
+            <button onClick={submit} style={{padding:15,background:`linear-gradient(135deg,${C.primary},${C.secondary})`,color:'#fff',border:'none',borderRadius:12,fontWeight:700,fontSize:15,cursor:'pointer',transition:'all 200ms',marginTop:4}}
+              onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'}
+              onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>
+              사전등록 신청하기
+            </button>
+          </div>
+        ) : (
+          <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:16,animation:'fadeInScale 400ms ease'}}>
+            <div style={{width:64,height:64,background:'#ECFDF5',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:30}}>✅</div>
+            <div style={{textAlign:'center'}}>
+              <div style={{fontSize:17,fontWeight:700,color:C.textPrimary}}>사전등록 완료!</div>
+              <div style={{fontSize:12,color:C.textSecondary,marginTop:3}}>{ticket?.id}</div>
+            </div>
+            {ticket && (
+              <div style={{width:'100%',background:'#F0F9FF',border:'1px solid #BAE6FD',borderRadius:12,padding:16}}>
+                <div style={{fontSize:12,fontWeight:600,color:'#0284C7',marginBottom:10}}>발급된 QR 입장권</div>
+                <div style={{display:'flex',gap:12,alignItems:'center'}}>
+                  <div style={{width:80,height:80,background:'#fff',borderRadius:8,border:'2px solid #0EA5E9',display:'grid',placeItems:'center',flexShrink:0}}>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(6,1fr)',gap:1.5}}>
+                      {Array.from({length:36}).map((_,i)=><div key={i} style={{width:7,height:7,background:Math.random()>0.5?'#0F172A':'transparent',borderRadius:0.5}} />)}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:14,fontWeight:700}}>{ticket.name}</div>
+                    <div style={{fontSize:12,color:C.textSecondary,marginTop:2}}>{ticket.company||'개인'}</div>
+                    <div style={{fontSize:11,color:'#0284C7',marginTop:4,fontFamily:'monospace'}}>{ticket.id}</div>
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:8,marginTop:12}}>
+                  <button onClick={()=>onToast('PNG로 저장되었습니다')} style={{flex:1,padding:'8px',background:'#0284C7',color:'#fff',border:'none',borderRadius:8,fontSize:12,fontWeight:600,cursor:'pointer'}}>PNG 저장</button>
+                  <button onClick={()=>onToast('카카오톡 공유 링크 복사됨')} style={{flex:1,padding:'8px',background:'#FAE100',color:'#1A1A1A',border:'none',borderRadius:8,fontSize:12,fontWeight:600,cursor:'pointer'}}>카카오 공유</button>
+                </div>
+              </div>
+            )}
+            <button onClick={()=>{setDone(false);setForm({name:'',phone:'',company:'',interest:''});}} style={{padding:'10px 24px',background:C.surface,color:C.textPrimary,border:`1px solid ${C.border}`,borderRadius:10,fontWeight:600,cursor:'pointer',fontSize:13}}>추가 등록하기</button>
+          </div>
+        )}
+      </div>
+
+      <div style={{background:C.surface,borderRadius:16,padding:24,boxShadow:'0 4px 16px rgba(0,0,0,0.08)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
+          <div>
+            <div style={{fontSize:16,fontWeight:700,color:C.textPrimary}}>사전등록 내역</div>
+            <div style={{fontSize:12,color:C.textSecondary,marginTop:2}}>총 {list.length}명 등록</div>
+          </div>
+          <button onClick={()=>onToast('엑셀 파일 다운로드 완료')} style={{padding:'8px 14px',border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,background:C.surface,cursor:'pointer',fontWeight:500,color:C.textPrimary}}>📊 엑셀 다운로드</button>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {list.map((r,i)=>(
+            <div key={r.id} onClick={()=>setModal(r)} style={{display:'flex',alignItems:'center',gap:12,padding:'13px',borderRadius:12,border:`1px solid ${C.border}`,cursor:'pointer',animation:`slideUp 300ms ease ${i*60}ms both`,transition:'all 200ms'}}
+              onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+              onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+              <div style={{width:38,height:38,borderRadius:'50%',background:`linear-gradient(135deg,${C.primary},${C.secondary})`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:700,fontSize:14,flexShrink:0}}>{r.name[0]}</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,fontWeight:600,color:C.textPrimary}}>{r.name}</div>
+                <div style={{fontSize:11,color:C.textSecondary}}>{r.company||'개인'} · {r.interest||'-'}</div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:11,fontFamily:'monospace',color:C.primary,fontWeight:600}}>{r.id}</div>
+                <div style={{fontSize:11,color:C.textSecondary,marginTop:2}}>{r.date}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {modal && (
+        <Modal title="등록자 상세" onClose={()=>setModal(null)} width={420}>
+          <div style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,marginBottom:8}}>
+              <div style={{width:56,height:56,borderRadius:'50%',background:`linear-gradient(135deg,${C.primary},${C.secondary})`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:700,fontSize:20}}>{modal.name[0]}</div>
+              <div style={{fontSize:17,fontWeight:700}}>{modal.name}</div>
+              <div style={{fontSize:12,color:C.textSecondary}}>{modal.id}</div>
+            </div>
+            {[['연락처',modal.phone],['소속',modal.company||'개인'],['관심 카테고리',modal.interest||'-'],['등록일',modal.date]].map(([l,v])=>(
+              <div key={l} style={{display:'flex',gap:12,padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{width:100,fontSize:12,color:C.textSecondary}}>{l}</span>
+                <span style={{fontSize:13,fontWeight:600,color:C.textPrimary}}>{v}</span>
+              </div>
+            ))}
+            <button onClick={()=>{setModal(null);onToast('입장 처리가 완료되었습니다');}} style={{padding:12,background:C.success,color:'#fff',border:'none',borderRadius:10,fontWeight:700,cursor:'pointer',marginTop:4}}>QR 입장 처리</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// === MAIN APP ===
+const TABS = [
+  {id:'main',label:'QR 주문 시작',icon:'🏷️'},
+  {id:'product-mgmt',label:'상품 관리',icon:'📦'},
+  {id:'order-mgmt',label:'주문 관리',icon:'📋'},
+  {id:'prereg',label:'사전등록',icon:'🎫'},
+];
+
+const META = {
+  'main':{title:'QR 스캔 주문 플랫폼',desc:'현장 QR 스캔으로 즉시 주문·결제 · jsQR + 토스페이먼츠',kpis:[{l:'오늘 주문',v:'216건'},{l:'총 매출',v:'942만원'},{l:'관람객',v:'1,847명'}]},
+  'product-mgmt':{title:'상품 관리',desc:'참가업체 상품 등록 · 재고 · QR 코드 발급',kpis:[{l:'전체 상품',v:'48개'},{l:'판매중',v:'41개'},{l:'품절',v:'7개'}]},
+  'order-mgmt':{title:'실시간 주문 접수',desc:'Socket.io 연결 · 실시간 주문 모니터링 및 상태 관리',kpis:[{l:'접수 대기',v:'12건'},{l:'처리중',v:'8건'},{l:'완료',v:'196건'}]},
+  'prereg':{title:'사전등록 / QR 입장권',desc:'UUID 기반 QR 입장권 발급 · 카카오 공유 지원',kpis:[{l:'사전등록',v:'2,841명'},{l:'입장 완료',v:'1,847명'},{l:'대기중',v:'994명'}]},
+};
+
+function App() {
+  const [tab, setTab] = useState('main');
+  const [toast, setToast] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(()=>{ setTimeout(()=>setLoading(false),1200); },[]);
+
+  if(loading) return (
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh'}}>
+      <div style={{height:56,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',padding:'0 24px',gap:8}}>
+        {[100,80,60,70].map((w,i)=><div key={i} style={{width:w,height:16,borderRadius:4,background:'linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}} />)}
+      </div>
+      <div style={{height:90,background:`linear-gradient(135deg,${C.primary},${C.secondary})`}} />
+      {[...Array(3)].map((_,i)=><div key={i} style={{height:100,margin:'16px 24px',borderRadius:12,background:'linear-gradient(90deg,#F1F5F9 25%,#E2E8F0 50%,#F1F5F9 75%)',backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}} />)}
+    </div>
+  );
+
+  const meta = META[tab];
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh',background:C.bg}}>
+      {/* TopNav */}
+      <header style={{position:'sticky',top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'center',height:56,padding:'0 24px',gap:2,boxShadow:'0 1px 3px rgba(0,0,0,0.04)'}}>
+        <div style={{marginRight:16,display:'flex',alignItems:'center',gap:8}}>
+          <div style={{width:28,height:28,borderRadius:8,background:`linear-gradient(135deg,${C.primary},${C.secondary})`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:14}}>📍</div>
+          <span style={{fontSize:15,fontWeight:800,color:C.textPrimary}}>ExpoOrder</span>
+        </div>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{padding:'6px 14px',borderRadius:8,border:'none',background:tab===t.id?`${C.primary}15`:'transparent',color:tab===t.id?C.primary:C.textSecondary,fontWeight:tab===t.id?700:500,fontSize:14,cursor:'pointer',transition:'all 150ms',display:'flex',alignItems:'center',gap:5}}>
+            <span style={{fontSize:13}}>{t.icon}</span>{t.label}
+          </button>
+        ))}
+        <div style={{flex:1}} />
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <button style={{background:'none',border:'none',fontSize:18,cursor:'pointer',color:C.textSecondary,position:'relative'}}>
+            🔔<span style={{position:'absolute',top:0,right:0,width:7,height:7,borderRadius:'50%',background:C.success,animation:'pulse 2s infinite'}} />
+          </button>
+          <div style={{width:32,height:32,borderRadius:'50%',background:`linear-gradient(135deg,${C.primary},${C.secondary})`,display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:13,fontWeight:700,cursor:'pointer'}}>관</div>
+        </div>
+      </header>
+
+      {/* Hero Banner */}
+      <div style={{background:`linear-gradient(135deg,${C.primary},${C.secondary})`,padding:'22px 32px',color:'#fff'}}>
+        <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',maxWidth:1200,margin:'0 auto'}}>
+          <div>
+            <h1 style={{fontSize:20,fontWeight:800,marginBottom:3}}>{meta.title}</h1>
+            <p style={{fontSize:12,opacity:0.82}}>{meta.desc}</p>
+          </div>
+          <div style={{display:'flex',gap:28}}>
+            {meta.kpis.map((k,i)=>(
+              <div key={i} style={{textAlign:'right'}}>
+                <div style={{fontSize:11,opacity:0.72}}>{k.l}</div>
+                <div style={{fontSize:20,fontWeight:800,marginTop:1}}>{k.v}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <main style={{flex:1,padding:'24px 32px',maxWidth:1200,margin:'0 auto',width:'100%'}}>
+        <div key={tab} style={{animation:'fadeIn 300ms ease'}}>
+          {tab==='main' && <MainPage onToast={setToast} />}
+          {tab==='product-mgmt' && <ProductMgmtPage onToast={setToast} />}
+          {tab==='order-mgmt' && <OrderMgmtPage onToast={setToast} />}
+          {tab==='prereg' && <PreRegPage onToast={setToast} />}
+        </div>
+      </main>
+
+      {toast && <Toast msg={toast} onClose={()=>setToast(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
