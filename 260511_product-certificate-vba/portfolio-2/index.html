@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>제품 성적서 통합 품질관리 플랫폼 — 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;min-height:100%;font-family:'Pretendard',sans-serif;background:#F8FAFC;}
+#root{display:flex;flex-direction:column;width:100%;min-height:100vh;}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes ripple{0%{transform:scale(0);opacity:0.5}100%{transform:scale(4);opacity:0}}
+@keyframes countUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+@keyframes barGrow{from{width:0%}to{width:var(--target-width)}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-10px);max-height:0}to{opacity:1;transform:translateY(0);max-height:500px}}
+@keyframes progressFill{from{width:0%}to{width:var(--target-width)}}
+.tab-btn{padding:0 20px;height:100%;background:transparent;border:none;font-size:14px;font-weight:500;font-family:'Pretendard',sans-serif;cursor:pointer;color:#64748B;position:relative;transition:color 150ms;white-space:nowrap;}
+.tab-btn.active{color:#0D9488;font-weight:700;}
+.tab-btn.active::after{content:'';position:absolute;bottom:0;left:16px;right:16px;height:2px;background:#0D9488;border-radius:2px 2px 0 0;}
+.tab-btn:hover:not(.active){color:#0F172A;}
+.card{background:#fff;border-radius:16px;padding:20px;box-shadow:0 4px 16px rgba(0,0,0,0.08);transition:all 200ms;cursor:default;}
+.card:hover{transform:scale(1.02);box-shadow:0 8px 24px rgba(0,0,0,0.12);}
+.btn-primary{background:linear-gradient(135deg,#0D9488,#0F766E);color:#fff;border:none;border-radius:10px;padding:10px 20px;font-size:14px;font-family:'Pretendard',sans-serif;font-weight:700;cursor:pointer;transition:all 150ms;}
+.btn-primary:hover{box-shadow:0 4px 16px rgba(13,148,136,0.35);transform:translateY(-1px);}
+.btn-secondary{background:#F0FDFA;color:#0D9488;border:1px solid #CCFBF1;border-radius:10px;padding:10px 20px;font-size:14px;font-family:'Pretendard',sans-serif;font-weight:600;cursor:pointer;transition:all 150ms;}
+.btn-secondary:hover{background:#CCFBF1;}
+.btn-ghost{background:transparent;color:#64748B;border:1px solid #E2E8F0;border-radius:10px;padding:8px 16px;font-size:13px;font-family:'Pretendard',sans-serif;cursor:pointer;transition:all 150ms;}
+.btn-ghost:hover{background:#F1F5F9;border-color:#CBD5E1;}
+.input-field{width:100%;padding:10px 14px;border:1px solid #E2E8F0;border-radius:10px;font-size:14px;font-family:'Pretendard',sans-serif;color:#0F172A;outline:none;transition:all 150ms;}
+.input-field:focus{border-color:#0D9488;box-shadow:0 0 0 3px rgba(13,148,136,0.1);}
+.select-field{width:100%;padding:10px 14px;border:1px solid #E2E8F0;border-radius:10px;font-size:14px;font-family:'Pretendard',sans-serif;color:#0F172A;outline:none;background:#fff;cursor:pointer;}
+.select-field:focus{border-color:#0D9488;}
+.table-row:hover{background:rgba(13,148,136,0.04);}
+::-webkit-scrollbar{width:6px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:3px;}
+.chart-canvas-wrap{position:relative;height:240px;}
+.chart-canvas-wrap canvas{width:100%!important;height:100%!important;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef} = React;
+
+const C = {
+  primary:'#0D9488', secondary:'#134E4A', accent:'#14B8A6',
+  bg:'#F8FAFC', surface:'#FFFFFF', textPrimary:'#0F172A', textSecondary:'#475569',
+  border:'#E2E8F0', success:'#10B981', warning:'#F59E0B', error:'#EF4444',
+  navBg:'#fff',
+};
+
+const BATCH_JOBS = [
+  {id:'BATCH-001',name:'알루미늄 계열 재질 성적서 일괄 발급',products:24,template:'재질 성적서',status:'완료',progress:100,created:'2024-03-25 14:00',completed:'2024-03-25 14:18',inspector:'김민준'},
+  {id:'BATCH-002',name:'스테인리스 치수 검사 일괄',products:18,template:'치수 검사 성적서',status:'처리중',progress:67,created:'2024-03-25 15:30',completed:'-',inspector:'이수진'},
+  {id:'BATCH-003',name:'3월 정기 외관 검사 성적서',products:45,template:'외관 검사 성적서',status:'대기중',progress:0,created:'2024-03-25 16:00',completed:'-',inspector:'박현우'},
+  {id:'BATCH-004',name:'구리/황동 화학성분 분석 배치',products:12,template:'화학성분 분석서',status:'실패',progress:40,created:'2024-03-24 10:00',completed:'-',inspector:'최다연'},
+  {id:'BATCH-005',name:'탄소강 기계적 특성 배치 발급',products:8,template:'인장 강도 성적서',status:'완료',progress:100,created:'2024-03-24 09:00',completed:'2024-03-24 09:32',inspector:'정승호'},
+];
+
+const TEMPLATE_VERSIONS = [
+  {id:1,name:'재질 성적서',currentVer:'v3.2',versions:[
+    {ver:'v3.2',date:'2024-03-10',author:'김민준',changes:'화학성분 항목 3개 추가, 판정 기준 강화',fields:11},
+    {ver:'v3.1',date:'2024-02-15',author:'이수진',changes:'Lot 번호 필드 필수 설정 변경',fields:8},
+    {ver:'v3.0',date:'2024-01-20',author:'박현우',changes:'양식 전면 재설계, 규격코드 체계 변경',fields:8},
+  ]},
+  {id:2,name:'치수 검사 성적서',currentVer:'v2.4',versions:[
+    {ver:'v2.4',date:'2024-03-15',author:'최다연',changes:'3D 측정 허용공차 컬럼 추가',fields:14},
+    {ver:'v2.3',date:'2024-02-10',author:'김민준',changes:'검사 장비 코드 체계 업데이트',fields:12},
+    {ver:'v2.2',date:'2024-01-05',author:'이수진',changes:'기준치/실측치 소수점 2자리로 확장',fields:12},
+  ]},
+  {id:3,name:'인장 강도 성적서',currentVer:'v1.5',versions:[
+    {ver:'v1.5',date:'2024-03-01',author:'정승호',changes:'연신율(%) 측정 컬럼 세분화',fields:11},
+    {ver:'v1.4',date:'2024-01-30',author:'박현우',changes:'항복강도 계산식 컬럼 추가',fields:10},
+  ]},
+  {id:4,name:'경도 검사 성적서',currentVer:'v2.0',versions:[
+    {ver:'v2.0',date:'2024-02-20',author:'김민준',changes:'HRC/HRB 이중 측정 지원 추가',fields:8},
+    {ver:'v1.9',date:'2023-12-10',author:'최다연',changes:'측정 위치 도식 필드 추가',fields:7},
+  ]},
+];
+
+const HISTORY = [
+  {id:'CERT-240325-001',product:'알루미늄 플레이트',material:'A6061-T6',template:'재질 성적서',ver:'v3.2',lot:'LOT-2024-0325-A',inspector:'김민준',date:'2024-03-25',status:'유효'},
+  {id:'CERT-240325-002',product:'스테인리스 봉재',material:'SUS304',template:'치수 검사 성적서',ver:'v2.4',lot:'LOT-2024-0325-B',inspector:'이수진',date:'2024-03-25',status:'유효'},
+  {id:'CERT-240325-003',product:'탄소강 판재',material:'SS400',template:'인장 강도 성적서',ver:'v1.5',lot:'LOT-2024-0325-C',inspector:'박현우',date:'2024-03-25',status:'유효'},
+  {id:'CERT-240324-008',product:'SUS316L 파이프',material:'SUS316L',template:'외관 검사 성적서',ver:'v1.2',lot:'LOT-2024-0324-H',inspector:'최다연',date:'2024-03-24',status:'유효'},
+  {id:'CERT-240324-007',product:'황동 봉재',material:'C3604BD',template:'화학성분 분석서',ver:'v2.1',lot:'LOT-2024-0324-G',inspector:'정승호',date:'2024-03-24',status:'유효'},
+  {id:'CERT-240323-005',product:'티타늄 판재',material:'Ti-6Al-4V',template:'재질 성적서',ver:'v3.1',lot:'LOT-2024-0323-E',inspector:'김민준',date:'2024-03-23',status:'만료예정'},
+  {id:'CERT-240322-004',product:'구리 파이프',material:'C1220P',template:'경도 검사 성적서',ver:'v2.0',lot:'LOT-2024-0322-D',inspector:'이수진',date:'2024-03-22',status:'유효'},
+  {id:'CERT-240321-003',product:'GC200 주물',material:'GC200',template:'외관 검사 성적서',ver:'v1.2',lot:'LOT-2024-0321-C',inspector:'박현우',date:'2024-03-21',status:'유효'},
+];
+
+const MONTHLY_ISSUES = [
+  {month:'10월',count:198},{month:'11월',count:224},{month:'12월',count:187},
+  {month:'1월',count:253},{month:'2월',count:276},{month:'3월',count:312},
+];
+
+function CountUp({end,duration=1200,suffix=''}) {
+  const [val,setVal] = useState(0);
+  useEffect(()=>{
+    let start=0;const step=end/(duration/16);
+    const timer=setInterval(()=>{
+      start+=step;
+      if(start>=end){setVal(end);clearInterval(timer);}
+      else setVal(Math.floor(start));
+    },16);
+    return ()=>clearInterval(timer);
+  },[end]);
+  return <span style={{animation:'countUp 400ms ease'}}>{val.toLocaleString()}{suffix}</span>;
+}
+
+function Toast({message,type='success',onClose}) {
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  const bg=type==='success'?'#0D9488':type==='error'?'#EF4444':'#0F172A';
+  return (
+    <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,background:bg,color:'#fff',
+      padding:'12px 24px',borderRadius:12,animation:'slideUp 300ms ease',
+      boxShadow:'0 4px 20px rgba(0,0,0,0.2)',fontSize:14,fontWeight:500,display:'flex',alignItems:'center',gap:8}}>
+      <span>{type==='success'?'✓':'✕'}</span>{message}
+    </div>
+  );
+}
+
+function Modal({title,onClose,children,width=560}) {
+  return (
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.5)',animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'relative',width,maxHeight:'85vh',background:'#fff',borderRadius:16,
+        zIndex:501,animation:'fadeInScale 200ms ease',display:'flex',flexDirection:'column',
+        boxShadow:'0 24px 72px rgba(0,0,0,0.2)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+          padding:'20px 24px',borderBottom:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:17,fontWeight:800,color:C.textPrimary}}>{title}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSecondary,lineHeight:1}}>✕</button>
+        </div>
+        <div style={{padding:24,overflowY:'auto',flex:1}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Drawer({item,onClose,children}) {
+  return (
+    <>
+      <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:200,animation:'fadeIn 200ms ease'}}/>
+      <div style={{position:'fixed',top:0,right:0,bottom:0,width:480,background:'#fff',
+        boxShadow:'-8px 0 40px rgba(0,0,0,0.15)',zIndex:201,overflowY:'auto',
+        animation:'slideInRight 200ms ease'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+          padding:'20px 24px',borderBottom:`1px solid ${C.border}`,position:'sticky',top:0,background:'#fff',zIndex:1}}>
+          <h3 style={{fontSize:16,fontWeight:800,color:C.textPrimary}}>{item?.title||'상세 정보'}</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.textSecondary}}>✕</button>
+        </div>
+        <div style={{padding:24}}>{children}</div>
+      </div>
+    </>
+  );
+}
+
+function Badge({label,color='green'}) {
+  const map={
+    green:['#D1FAE5','#065F46'],blue:['#DBEAFE','#1E40AF'],
+    teal:['#CCFBF1','#0F766E'],yellow:['#FEF9C3','#92400E'],
+    gray:['#F1F5F9','#475569'],red:['#FEE2E2','#991B1B'],orange:['#FEF3C7','#92400E']
+  };
+  const [bg,txt]=map[color]||map.gray;
+  return <span style={{background:bg,color:txt,padding:'3px 10px',borderRadius:999,fontSize:12,fontWeight:600}}>{label}</span>;
+}
+
+function HeroBanner({tab}) {
+  const meta = {
+    dashboard:{title:'발급 현황 분석 대시보드',sub:'성적서 발급 추이와 KPI를 한눈에 파악합니다',
+      kpis:[{label:'이번달 발급',val:312,suffix:'건'},{label:'활성 템플릿',val:37,suffix:'종'},{label:'처리중 배치',val:2,suffix:'건'}]},
+    batch:{title:'배치 성적서 생성 큐',sub:'대량 성적서를 비동기로 생성하고 진행 상태를 실시간 모니터링합니다',
+      kpis:[{label:'오늘 배치',val:5,suffix:'건'},{label:'처리 완료',val:3,suffix:'건'},{label:'평균 처리',val:18,suffix:'분'}]},
+    'template-version':{title:'템플릿 버전 관리',sub:'양식 변경 이력을 버전 단위로 관리하고 롤백합니다',
+      kpis:[{label:'관리 양식',val:10,suffix:'종'},{label:'총 버전',val:28,suffix:'개'},{label:'이번달 수정',val:4,suffix:'회'}]},
+    history:{title:'성적서 발급 이력',sub:'모든 발급 내역을 조회하고 재다운로드합니다',
+      kpis:[{label:'전체 이력',val:1842,suffix:'건'},{label:'이번달',val:312,suffix:'건'},{label:'재발급',val:15,suffix:'건'}]},
+  };
+  const m = meta[tab]||meta.dashboard;
+  return (
+    <div style={{background:'linear-gradient(135deg,#0D9488,#14B8A6,#134E4A)',padding:'28px 32px',color:'#fff',animation:'fadeIn 300ms ease'}}>
+      <div style={{maxWidth:1200,margin:'0 auto'}}>
+        <h2 style={{fontSize:24,fontWeight:800,marginBottom:4,letterSpacing:'-0.02em'}}>{m.title}</h2>
+        <div style={{fontSize:13,opacity:0.85,marginBottom:16}}>{m.sub}</div>
+        <div style={{display:'flex',gap:32}}>
+          {m.kpis.map((k,i)=>(
+            <div key={k.label} style={{animation:`slideUp 400ms ease ${i*80}ms both`}}>
+              <div style={{fontSize:11,opacity:0.8,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:2}}>{k.label}</div>
+              <div style={{fontSize:28,fontWeight:800,lineHeight:1}}><CountUp end={k.val} suffix={k.suffix}/></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChartLine() {
+  const ref = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(()=>{
+    if(!ref.current||!window.Chart) return;
+    if(chartRef.current) chartRef.current.destroy();
+    const ctx = ref.current.getContext('2d');
+    chartRef.current = new window.Chart(ctx, {
+      type:'line',
+      data:{
+        labels: MONTHLY_ISSUES.map(d=>d.month),
+        datasets:[{
+          label:'발급 건수',
+          data: MONTHLY_ISSUES.map(d=>d.count),
+          borderColor:'#0D9488',backgroundColor:'rgba(13,148,136,0.08)',
+          tension:0.4,fill:true,pointBackgroundColor:'#0D9488',pointRadius:5,pointHoverRadius:7,
+        }],
+      },
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`${ctx.raw}건`}}},
+        scales:{
+          x:{grid:{display:false},ticks:{font:{family:'Pretendard',size:12},color:'#64748B'}},
+          y:{grid:{color:'#F1F5F9'},ticks:{font:{family:'Pretendard',size:11},color:'#64748B'},beginAtZero:false},
+        },
+      },
+    });
+    return ()=>{if(chartRef.current)chartRef.current.destroy();};
+  },[]);
+  return (
+    <div className="chart-canvas-wrap">
+      <canvas ref={ref}/>
+    </div>
+  );
+}
+
+function ChartDoughnut() {
+  const ref = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(()=>{
+    if(!ref.current||!window.Chart) return;
+    if(chartRef.current) chartRef.current.destroy();
+    const ctx = ref.current.getContext('2d');
+    chartRef.current = new window.Chart(ctx, {
+      type:'doughnut',
+      data:{
+        labels:['재질/성분','치수 검사','기계적 특성','외관/표면','기능 검사'],
+        datasets:[{
+          data:[35,28,22,10,5],
+          backgroundColor:['#0D9488','#14B8A6','#2DD4BF','#99F6E4','#CCFBF1'],
+          borderWidth:2,borderColor:'#fff',
+        }],
+      },
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{position:'right',labels:{font:{family:'Pretendard',size:12},color:'#475569'}}},
+        cutout:'65%',
+      },
+    });
+    return ()=>{if(chartRef.current)chartRef.current.destroy();};
+  },[]);
+  return (
+    <div className="chart-canvas-wrap">
+      <canvas ref={ref}/>
+    </div>
+  );
+}
+
+function DashboardPage({setDrawer}) {
+  const [loaded,setLoaded] = useState(false);
+  useEffect(()=>{const t=setTimeout(()=>setLoaded(true),1000);return()=>clearTimeout(t);},[]);
+
+  const monthStats = [
+    {month:'1월',val:253,pct:81},{month:'2월',val:276,pct:88},{month:'3월',val:312,pct:100},
+  ];
+
+  if(!loaded) return (
+    <div style={{padding:'24px 32px',maxWidth:1200,margin:'0 auto'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:16}}>
+        {[0,1,2].map(i=>(
+          <div key={i} style={{height:200,borderRadius:16,
+            background:'linear-gradient(90deg,#F0FDFA 25%,#CCFBF1 50%,#F0FDFA 75%)',
+            backgroundSize:'200% 100%',animation:'shimmer 1.5s infinite'}}/>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{padding:'24px 32px',maxWidth:1200,margin:'0 auto',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:20,marginBottom:20}}>
+        <div className="card" style={{animation:'slideUp 400ms ease 0ms both'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+            <div>
+              <div style={{fontSize:11,fontWeight:700,color:C.textSecondary,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4}}>월별 발급 추이</div>
+              <div style={{fontSize:16,fontWeight:800,color:C.textPrimary}}>성적서 발급 현황</div>
+            </div>
+            <select className="select-field" style={{width:130,padding:'6px 10px',fontSize:12}}>
+              <option>최근 6개월</option><option>최근 12개월</option>
+            </select>
+          </div>
+          <ChartLine/>
+        </div>
+
+        <div className="card" style={{animation:'slideUp 400ms ease 80ms both'}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.textSecondary,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4}}>양식 유형 분포</div>
+          <div style={{fontSize:16,fontWeight:800,color:C.textPrimary,marginBottom:16}}>템플릿별 사용</div>
+          <ChartDoughnut/>
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:20}}>
+        <div className="card" style={{animation:'slideUp 400ms ease 160ms both'}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.textSecondary,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4}}>이번달 발급 추이</div>
+          <div style={{fontSize:16,fontWeight:800,color:C.textPrimary,marginBottom:16}}>주별 발급량</div>
+          {[{label:'1주차',val:68,pct:55},{label:'2주차',val:82,pct:66},{label:'3주차',val:94,pct:76},{label:'4주차',val:68,pct:55}].map((w,i)=>(
+            <div key={w.label} style={{marginBottom:12}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                <span style={{fontSize:12,color:C.textPrimary,fontWeight:500}}>{w.label}</span>
+                <span style={{fontSize:12,fontWeight:700,color:C.primary}}>{w.val}건</span>
+              </div>
+              <div style={{height:8,background:'#F0FDFA',borderRadius:4,overflow:'hidden'}}>
+                <div style={{height:'100%',background:`linear-gradient(90deg,#0D9488,#14B8A6)`,borderRadius:4,
+                  animation:`barGrow 800ms ease ${i*100}ms both`,'--target-width':`${w.pct}%`,width:`${w.pct}%`}}/>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="card" style={{animation:'slideUp 400ms ease 240ms both'}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.textSecondary,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4}}>진행 중</div>
+          <div style={{fontSize:16,fontWeight:800,color:C.textPrimary,marginBottom:16}}>배치 처리 현황</div>
+          {BATCH_JOBS.slice(0,3).map((b,i)=>(
+            <div key={b.id} onClick={()=>setDrawer({title:b.name,data:b,type:'batch'})}
+              style={{marginBottom:14,padding:12,background:'#F8FAFC',borderRadius:10,cursor:'pointer',
+                transition:'all 150ms',animation:`slideUp 300ms ease ${i*60}ms both`}}
+              onMouseEnter={e=>e.currentTarget.style.background='#F0FDFA'}
+              onMouseLeave={e=>e.currentTarget.style.background='#F8FAFC'}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                <span style={{fontSize:12,fontWeight:600,color:C.textPrimary}}>{b.products}개 제품</span>
+                <Badge label={b.status} color={b.status==='완료'?'green':b.status==='처리중'?'teal':b.status==='실패'?'red':'yellow'}/>
+              </div>
+              <div style={{height:6,background:'#E2E8F0',borderRadius:3,overflow:'hidden'}}>
+                <div style={{height:'100%',background:b.status==='완료'?'#10B981':b.status==='실패'?'#EF4444':'#0D9488',
+                  width:`${b.progress}%`,borderRadius:3,transition:'width 1s ease'}}/>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="card" style={{animation:'slideUp 400ms ease 320ms both'}}>
+          <div style={{fontSize:11,fontWeight:700,color:C.textSecondary,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:4}}>최근 활동</div>
+          <div style={{fontSize:16,fontWeight:800,color:C.textPrimary,marginBottom:16}}>발급 이력</div>
+          {HISTORY.slice(0,5).map((h,i)=>(
+            <div key={h.id} onClick={()=>setDrawer({title:h.id,data:h,type:'history'})}
+              style={{display:'flex',alignItems:'center',gap:10,padding:'8px 0',cursor:'pointer',
+                borderBottom:`1px solid ${C.border}`,animation:`slideUp 300ms ease ${i*50}ms both`}}>
+              <div style={{width:8,height:8,borderRadius:'50%',background:h.status==='유효'?C.primary:'#F59E0B',flexShrink:0}}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12,fontWeight:600,color:C.textPrimary,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{h.product}</div>
+                <div style={{fontSize:11,color:C.textSecondary}}>{h.template} · {h.date}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BatchPage({setDrawer,addToast}) {
+  const [jobs,setJobs] = useState(BATCH_JOBS);
+  const [modal,setModal] = useState(null);
+  const [form,setForm] = useState({name:'',template:'재질 성적서',inspector:'',products:10});
+
+  useEffect(()=>{
+    const t = setInterval(()=>{
+      setJobs(prev=>prev.map(j=>j.status==='처리중'&&j.progress<95?{...j,progress:Math.min(j.progress+3,100)}:j));
+    },500);
+    return ()=>clearInterval(t);
+  },[]);
+
+  function handleCreate() {
+    if(!form.name){addToast('배치명을 입력해 주세요.','error');return;}
+    const newJob = {id:`BATCH-00${jobs.length+1}`,name:form.name,products:Number(form.products),
+      template:form.template,status:'처리중',progress:0,created:new Date().toLocaleString('ko'),completed:'-',inspector:form.inspector};
+    setJobs(prev=>[newJob,...prev]);
+    addToast('배치 작업이 등록되었습니다.');
+    setModal(null);
+  }
+  function retryJob(id) {
+    setJobs(prev=>prev.map(j=>j.id===id?{...j,status:'처리중',progress:0}:j));
+    addToast('배치 작업을 재시도합니다.');
+  }
+
+  return (
+    <div style={{padding:'24px 32px',maxWidth:1200,margin:'0 auto',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',justifyContent:'flex-end',marginBottom:20}}>
+        <button className="btn-primary" onClick={()=>setModal({type:'create'})}>+ 새 배치 생성</button>
+      </div>
+
+      <div style={{display:'flex',flexDirection:'column',gap:16}}>
+        {jobs.map((job,i)=>(
+          <div key={job.id} className="card" style={{padding:20,cursor:'pointer',
+            animation:`slideUp 400ms ease ${i*60}ms both`}}
+            onClick={()=>setDrawer({title:job.name,data:job,type:'batch'})}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:4}}>
+                  <div style={{fontSize:15,fontWeight:700,color:C.textPrimary}}>{job.name}</div>
+                  <Badge label={job.status}
+                    color={job.status==='완료'?'green':job.status==='처리중'?'teal':job.status==='실패'?'red':'yellow'}/>
+                </div>
+                <div style={{fontSize:12,color:C.textSecondary}}>
+                  {job.template} · 제품 {job.products}개 · 생성: {job.created}
+                  {job.inspector&&` · 검사자: ${job.inspector}`}
+                </div>
+              </div>
+              <div style={{display:'flex',gap:8,flexShrink:0,marginLeft:16}} onClick={e=>e.stopPropagation()}>
+                {job.status==='완료'&&(
+                  <button className="btn-secondary" onClick={()=>addToast('ZIP 파일을 다운로드합니다.')} style={{padding:'6px 14px',fontSize:12}}>
+                    📥 다운로드
+                  </button>
+                )}
+                {job.status==='실패'&&(
+                  <button className="btn-primary" onClick={()=>retryJob(job.id)} style={{padding:'6px 14px',fontSize:12,background:'#EF4444'}}>
+                    재시도
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div style={{marginBottom:6}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+                <span style={{fontSize:12,color:C.textSecondary}}>
+                  {job.status==='처리중'?`처리 중 (${Math.floor(job.progress*job.products/100)}/${job.products}개 완료)`:
+                   job.status==='완료'?`${job.products}개 완료 · ${job.completed}`:
+                   job.status==='실패'?`${Math.floor(job.progress*job.products/100)}개 완료 후 실패`:
+                   '대기 중 (큐 순번 대기)'}
+                </span>
+                <span style={{fontSize:12,fontWeight:700,color:job.status==='실패'?C.error:C.primary}}>{job.progress}%</span>
+              </div>
+              <div style={{height:10,background:'#F0FDFA',borderRadius:5,overflow:'hidden'}}>
+                <div style={{height:'100%',borderRadius:5,transition:'width 0.5s ease',
+                  background:job.status==='완료'?'#10B981':job.status==='실패'?'#EF4444':`linear-gradient(90deg,#0D9488,#14B8A6)`,
+                  width:`${job.progress}%`}}/>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {modal&&(
+        <Modal title="새 배치 작업 생성" onClose={()=>setModal(null)} width={500}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div>
+              <label style={{fontSize:13,fontWeight:700,color:C.textPrimary,display:'block',marginBottom:6}}>배치 작업명 <span style={{color:C.error}}>*</span></label>
+              <input className="input-field" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="예: 3월 알루미늄 재질 성적서 일괄 발급"/>
+            </div>
+            <div>
+              <label style={{fontSize:13,fontWeight:700,color:C.textPrimary,display:'block',marginBottom:6}}>성적서 양식</label>
+              <select className="select-field" value={form.template} onChange={e=>setForm(f=>({...f,template:e.target.value}))}>
+                {['재질 성적서','치수 검사 성적서','인장 강도 성적서','외관 검사 성적서','화학성분 분석서'].map(t=><option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+              <div>
+                <label style={{fontSize:13,fontWeight:700,color:C.textPrimary,display:'block',marginBottom:6}}>처리 제품 수</label>
+                <input className="input-field" type="number" value={form.products} onChange={e=>setForm(f=>({...f,products:e.target.value}))} min="1" max="200"/>
+              </div>
+              <div>
+                <label style={{fontSize:13,fontWeight:700,color:C.textPrimary,display:'block',marginBottom:6}}>검사자</label>
+                <input className="input-field" value={form.inspector} onChange={e=>setForm(f=>({...f,inspector:e.target.value}))} placeholder="성명 입력"/>
+              </div>
+            </div>
+            <div style={{padding:12,background:'#F0FDFA',borderRadius:10,border:`1px solid #CCFBF1`}}>
+              <div style={{fontSize:12,color:'#0F766E',fontWeight:600}}>📋 예상 처리 시간</div>
+              <div style={{fontSize:12,color:'#475569',marginTop:4}}>
+                {form.products}개 × 평균 45초 ≈ <strong>{Math.ceil(form.products*45/60)}분</strong> 소요 예상
+              </div>
+            </div>
+          </div>
+          <div style={{display:'flex',justifyContent:'flex-end',gap:10,marginTop:20}}>
+            <button className="btn-ghost" onClick={()=>setModal(null)}>취소</button>
+            <button className="btn-primary" onClick={handleCreate}>배치 등록</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function TemplateVersionPage({setDrawer,addToast}) {
+  const [templates,setTemplates] = useState(TEMPLATE_VERSIONS);
+  const [modal,setModal] = useState(null);
+
+  function handleRollback(tplId,ver) {
+    addToast(`${ver}으로 롤백되었습니다.`);
+    setModal(null);
+  }
+
+  return (
+    <div style={{padding:'24px 32px',maxWidth:1200,margin:'0 auto',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:20}}>
+        {templates.map((tpl,i)=>(
+          <div key={tpl.id} className="card" style={{animation:`slideUp 400ms ease ${i*80}ms both`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16}}>
+              <div>
+                <div style={{fontSize:16,fontWeight:800,color:C.textPrimary,marginBottom:4}}>{tpl.name}</div>
+                <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                  <Badge label={tpl.currentVer} color='teal'/>
+                  <span style={{fontSize:12,color:C.textSecondary}}>현재 버전</span>
+                </div>
+              </div>
+              <button className="btn-secondary" style={{padding:'6px 12px',fontSize:12}}
+                onClick={()=>setDrawer({title:`${tpl.name} 버전 비교`,data:tpl,type:'version'})}>
+                버전 비교
+              </button>
+            </div>
+
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:11,fontWeight:700,color:C.textSecondary,textTransform:'uppercase',letterSpacing:'0.06em',marginBottom:8}}>변경 이력</div>
+              {tpl.versions.map((v,vi)=>(
+                <div key={v.ver} style={{display:'flex',gap:12,padding:'10px 0',
+                  borderBottom:vi<tpl.versions.length-1?`1px solid ${C.border}`:'none',
+                  animation:`slideUp 200ms ease ${vi*50}ms both`}}>
+                  <div style={{width:2,flexShrink:0,background:vi===0?C.primary:'#E2E8F0',borderRadius:1,alignSelf:'stretch'}}/>
+                  <div style={{flex:1}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:3}}>
+                      <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                        <Badge label={v.ver} color={vi===0?'teal':'gray'}/>
+                        <span style={{fontSize:11,color:C.textSecondary}}>필드 {v.fields}개</span>
+                      </div>
+                      <span style={{fontSize:11,color:C.textSecondary}}>{v.date} · {v.author}</span>
+                    </div>
+                    <div style={{fontSize:12,color:C.textPrimary}}>{v.changes}</div>
+                  </div>
+                  {vi>0&&(
+                    <button onClick={()=>setModal({type:'rollback',tpl,ver:v})}
+                      style={{background:'none',border:`1px solid #E2E8F0`,borderRadius:8,padding:'4px 10px',
+                        fontSize:11,color:C.textSecondary,cursor:'pointer',flexShrink:0,transition:'all 150ms',
+                        fontFamily:'Pretendard'}}
+                      onMouseEnter={e=>{e.target.style.borderColor=C.primary;e.target.style.color=C.primary;}}
+                      onMouseLeave={e=>{e.target.style.borderColor='#E2E8F0';e.target.style.color=C.textSecondary;}}>
+                      롤백
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {modal&&modal.type==='rollback'&&(
+        <Modal title="버전 롤백 확인" onClose={()=>setModal(null)} width={440}>
+          <div style={{textAlign:'center',padding:'8px 0 20px'}}>
+            <div style={{fontSize:40,marginBottom:12}}>🔄</div>
+            <div style={{fontSize:15,fontWeight:700,color:C.textPrimary,marginBottom:8}}>
+              {modal.tpl.name}을 <Badge label={modal.ver.ver} color='teal'/> 으로 롤백하시겠습니까?
+            </div>
+            <div style={{fontSize:13,color:C.textSecondary,lineHeight:1.6}}>
+              현재 버전({modal.tpl.currentVer})이 {modal.ver.ver}({modal.ver.date})으로 교체됩니다.<br/>
+              이후 발급되는 성적서는 {modal.ver.ver} 양식을 사용합니다.
+            </div>
+          </div>
+          <div style={{display:'flex',justifyContent:'flex-end',gap:10}}>
+            <button className="btn-ghost" onClick={()=>setModal(null)}>취소</button>
+            <button className="btn-primary" onClick={()=>handleRollback(modal.tpl.id,modal.ver.ver)}>롤백 실행</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function HistoryPage({setDrawer}) {
+  const [history,setHistory] = useState(HISTORY);
+  const [search,setSearch] = useState('');
+  const [dateFrom,setDateFrom] = useState('');
+  const [statusFilter,setStatusFilter] = useState('전체');
+
+  const filtered = history.filter(h=>{
+    const q=search.toLowerCase();
+    const matchSearch = !q||h.product.toLowerCase().includes(q)||h.template.toLowerCase().includes(q)||h.id.toLowerCase().includes(q);
+    const matchStatus = statusFilter==='전체'||h.status===statusFilter;
+    return matchSearch&&matchStatus;
+  });
+
+  return (
+    <div style={{padding:'24px 32px',maxWidth:1200,margin:'0 auto',animation:'fadeIn 300ms ease'}}>
+      <div style={{display:'flex',gap:12,marginBottom:20,alignItems:'center',flexWrap:'wrap'}}>
+        <div style={{position:'relative',flex:'1 1 240px',maxWidth:320}}>
+          <input className="input-field" placeholder="제품명, 양식, 번호 검색..."
+            value={search} onChange={e=>setSearch(e.target.value)} style={{paddingLeft:36}}/>
+          <span style={{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',color:C.textSecondary}}>🔍</span>
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          {['전체','유효','만료예정'].map(s=>(
+            <button key={s} onClick={()=>setStatusFilter(s)}
+              style={{padding:'8px 14px',borderRadius:8,fontSize:12,fontWeight:statusFilter===s?700:500,cursor:'pointer',
+                background:statusFilter===s?C.primary:'#fff',color:statusFilter===s?'#fff':C.textSecondary,
+                border:`1px solid ${statusFilter===s?C.primary:C.border}`,transition:'all 150ms',fontFamily:'Pretendard'}}>
+              {s}
+            </button>
+          ))}
+        </div>
+        <button className="btn-secondary" style={{marginLeft:'auto',padding:'8px 16px',fontSize:12}}>📊 내보내기</button>
+      </div>
+
+      <div style={{background:'#fff',borderRadius:16,boxShadow:'0 4px 16px rgba(0,0,0,0.06)',overflow:'hidden'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:'#F0FDFA',borderBottom:`2px solid #CCFBF1`}}>
+              {['성적서 번호','제품명','재질','양식','버전','Lot 번호','검사자','발급일','상태','작업'].map(h=>(
+                <th key={h} style={{padding:'12px 14px',textAlign:'left',fontSize:11,fontWeight:700,
+                  color:'#0F766E',textTransform:'uppercase',letterSpacing:'0.04em',whiteSpace:'nowrap'}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((h,i)=>(
+              <tr key={h.id} className="table-row"
+                style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',
+                  animation:`slideUp 200ms ease ${Math.min(i,8)*30}ms both`}}
+                onClick={()=>setDrawer({title:h.id,data:h,type:'history'})}>
+                <td style={{padding:'11px 14px',fontSize:12,color:C.primary,fontWeight:700,fontFamily:'monospace'}}>{h.id}</td>
+                <td style={{padding:'11px 14px',fontSize:13,fontWeight:600,color:C.textPrimary}}>{h.product}</td>
+                <td style={{padding:'11px 14px',fontSize:12,color:C.textSecondary,fontFamily:'monospace'}}>{h.material}</td>
+                <td style={{padding:'11px 14px',fontSize:12,color:C.textSecondary}}>{h.template}</td>
+                <td style={{padding:'11px 14px'}}><Badge label={h.ver} color='gray'/></td>
+                <td style={{padding:'11px 14px',fontSize:11,color:C.textSecondary,fontFamily:'monospace'}}>{h.lot}</td>
+                <td style={{padding:'11px 14px',fontSize:12,color:C.textSecondary}}>{h.inspector}</td>
+                <td style={{padding:'11px 14px',fontSize:12,color:C.textSecondary,whiteSpace:'nowrap'}}>{h.date}</td>
+                <td style={{padding:'11px 14px'}}><Badge label={h.status} color={h.status==='유효'?'teal':'orange'}/></td>
+                <td style={{padding:'11px 14px'}} onClick={e=>e.stopPropagation()}>
+                  <button className="btn-ghost" style={{padding:'4px 10px',fontSize:11}}>📥 재다운로드</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{padding:'14px 20px',borderTop:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <span style={{fontSize:13,color:C.textSecondary}}>총 <strong>{filtered.length}</strong>건</span>
+          <div style={{display:'flex',gap:4}}>
+            {[1,2,3,'...'].map(p=>(
+              <button key={p} style={{width:32,height:32,borderRadius:8,border:`1px solid ${p===1?C.primary:C.border}`,
+                background:p===1?C.primary:'#fff',color:p===1?'#fff':C.textSecondary,
+                fontSize:13,cursor:'pointer',fontFamily:'Pretendard'}}>{p}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DrawerContent({drawer,addToast}) {
+  if(!drawer) return null;
+  if(drawer.type==='history') {
+    const h = drawer.data;
+    return (
+      <div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
+          {[['성적서 번호',h.id],['발급일',h.date],['제품명',h.product],['재질',h.material],
+            ['양식',h.template],['버전',h.ver],['Lot 번호',h.lot],['검사자',h.inspector]].map(([k,v])=>(
+            <div key={k} style={{background:'#F8FAFC',borderRadius:10,padding:12}}>
+              <div style={{fontSize:11,color:C.textSecondary,fontWeight:700,marginBottom:3}}>{k}</div>
+              <div style={{fontSize:13,fontWeight:600,color:C.textPrimary}}>{v}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{padding:14,background:'#F0FDFA',borderRadius:10,border:`1px solid #CCFBF1`,marginBottom:16}}>
+          <div style={{fontSize:12,color:C.primary,fontWeight:700,marginBottom:4}}>📋 성적서 상태</div>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <Badge label={h.status} color={h.status==='유효'?'teal':'orange'}/>
+            <span style={{fontSize:12,color:C.textSecondary}}>
+              {h.status==='유효'?'현재 유효한 성적서입니다.':'30일 이내 만료 예정입니다.'}
+            </span>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:10}}>
+          <button className="btn-primary" style={{flex:1}} onClick={()=>addToast('Excel 파일을 다운로드합니다.')}>📥 Excel 다운로드</button>
+          <button className="btn-secondary" style={{flex:1}} onClick={()=>addToast('PDF 파일을 다운로드합니다.')}>📄 PDF 다운로드</button>
+        </div>
+      </div>
+    );
+  }
+  if(drawer.type==='batch') {
+    const b = drawer.data;
+    return (
+      <div>
+        <div style={{padding:16,background:'#F0FDFA',borderRadius:12,marginBottom:16}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.textPrimary,marginBottom:4}}>{b.name}</div>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            <Badge label={b.status} color={b.status==='완료'?'green':b.status==='처리중'?'teal':b.status==='실패'?'red':'yellow'}/>
+            <Badge label={`${b.products}개 제품`} color='gray'/>
+            <Badge label={b.template} color='blue'/>
+          </div>
+        </div>
+        <div style={{marginBottom:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+            <span style={{fontSize:13,fontWeight:700,color:C.textPrimary}}>처리 진행률</span>
+            <span style={{fontSize:13,fontWeight:700,color:C.primary}}>{b.progress}%</span>
+          </div>
+          <div style={{height:12,background:'#E2E8F0',borderRadius:6,overflow:'hidden'}}>
+            <div style={{height:'100%',background:`linear-gradient(90deg,#0D9488,#14B8A6)`,
+              borderRadius:6,width:`${b.progress}%`,transition:'width 1s ease'}}/>
+          </div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+          {[['생성일시',b.created],['완료일시',b.completed],['검사자',b.inspector||'미지정']].map(([k,v])=>(
+            <div key={k} style={{background:'#F8FAFC',borderRadius:10,padding:12}}>
+              <div style={{fontSize:11,color:C.textSecondary,fontWeight:700,marginBottom:3}}>{k}</div>
+              <div style={{fontSize:12,fontWeight:600,color:C.textPrimary}}>{v}</div>
+            </div>
+          ))}
+        </div>
+        {b.status==='완료'&&(
+          <button className="btn-primary" style={{width:'100%'}} onClick={()=>addToast('ZIP 파일을 다운로드합니다.')}>
+            📥 전체 ZIP 다운로드
+          </button>
+        )}
+      </div>
+    );
+  }
+  return null;
+}
+
+const TABS = [
+  {id:'dashboard',label:'대시보드'},
+  {id:'batch',label:'배치 생성'},
+  {id:'template-version',label:'템플릿 관리'},
+  {id:'history',label:'발급 이력'},
+];
+
+function App() {
+  const [tab,setTab] = useState('dashboard');
+  const [drawer,setDrawer] = useState(null);
+  const [toasts,setToasts] = useState([]);
+  const [key,setKey] = useState(0);
+
+  function addToast(message,type='success') {
+    const id=Date.now();
+    setToasts(t=>[...t,{id,message,type}]);
+  }
+  function removeToast(id){setToasts(t=>t.filter(x=>x.id!==id));}
+  function handleTab(t){setTab(t);setKey(k=>k+1);setDrawer(null);}
+
+  function renderPage() {
+    switch(tab) {
+      case 'dashboard': return <DashboardPage setDrawer={setDrawer}/>;
+      case 'batch': return <BatchPage setDrawer={setDrawer} addToast={addToast}/>;
+      case 'template-version': return <TemplateVersionPage setDrawer={setDrawer} addToast={addToast}/>;
+      case 'history': return <HistoryPage setDrawer={setDrawer}/>;
+      default: return <DashboardPage setDrawer={setDrawer}/>;
+    }
+  }
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',width:'100%',minHeight:'100vh'}}>
+      <header style={{position:'sticky',top:0,zIndex:100,background:'#fff',
+        borderBottom:`1px solid ${C.border}`,display:'flex',alignItems:'stretch',
+        height:56,padding:'0 32px',boxShadow:'0 1px 8px rgba(0,0,0,0.06)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginRight:32}}>
+          <div style={{width:32,height:32,borderRadius:8,background:'linear-gradient(135deg,#0D9488,#134E4A)',
+            display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:14,fontWeight:800}}>Q</div>
+          <span style={{fontSize:14,fontWeight:800,color:C.textPrimary,letterSpacing:'-0.02em'}}>품질관리 플랫폼</span>
+        </div>
+        <nav style={{display:'flex',alignItems:'stretch',flex:1}}>
+          {TABS.map(t=>(
+            <button key={t.id} title={t.label}
+              className={`tab-btn${tab===t.id?' active':''}`}
+              onClick={()=>handleTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </nav>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <div style={{position:'relative'}}>
+            <input placeholder="검색..." className="input-field" style={{width:180,padding:'7px 12px 7px 32px',fontSize:13}}/>
+            <span style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',color:C.textSecondary,fontSize:13}}>🔍</span>
+          </div>
+          <button style={{background:'none',border:'none',cursor:'pointer',fontSize:18,position:'relative'}}>
+            🔔
+            <span style={{position:'absolute',top:0,right:-2,width:8,height:8,background:C.error,borderRadius:'50%',border:'2px solid #fff'}}/>
+          </button>
+          <div style={{width:32,height:32,borderRadius:'50%',background:`linear-gradient(135deg,${C.primary},${C.accent})`,
+            display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,fontWeight:800,cursor:'pointer'}}>
+            이
+          </div>
+        </div>
+      </header>
+
+      <HeroBanner tab={tab}/>
+
+      <main style={{flex:1}}>
+        <div key={key} style={{animation:'fadeIn 300ms ease'}}>
+          {renderPage()}
+        </div>
+      </main>
+
+      {drawer&&(
+        <Drawer item={drawer} onClose={()=>setDrawer(null)}>
+          <DrawerContent drawer={drawer} addToast={addToast}/>
+        </Drawer>
+      )}
+
+      {toasts.map(t=><Toast key={t.id} message={t.message} type={t.type} onClose={()=>removeToast(t.id)}/>)}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
