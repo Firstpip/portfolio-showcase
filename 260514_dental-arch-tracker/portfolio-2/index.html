@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>치과 악궁확장 환자 관리 플랫폼 — 구현 데모</title>
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css" />
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; min-height: 100vh; font-family: 'Pretendard Variable', 'Pretendard', -apple-system, sans-serif; background: #F4F5FB; color: #1C1F4A; }
+    #root { width: 100%; min-height: 100vh; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes rowAppear {
+      from { opacity: 0; transform: translateX(-8px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes toastIn {
+      0%  { opacity: 0; transform: translateY(20px) scale(0.96); }
+      15% { opacity: 1; transform: translateY(0) scale(1); }
+      85% { opacity: 1; transform: translateY(0) scale(1); }
+      100%{ opacity: 0; transform: translateY(20px) scale(0.96); }
+    }
+    @keyframes drawerSlide {
+      from { transform: translateX(100%); opacity: 0; }
+      to   { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .fade-in  { animation: fadeIn 0.3s ease both; }
+    .slide-up { animation: slideUp 0.35s ease both; }
+
+    .toast-wrap {
+      position: fixed; bottom: 24px; right: 24px; z-index: 9999; pointer-events: none;
+    }
+    .toast {
+      background: #1C1F4A; color: #fff; padding: 12px 20px;
+      border-radius: 10px; font-size: 13px; font-weight: 600;
+      box-shadow: 0 8px 28px rgba(28,31,74,0.3);
+      animation: toastIn 3s ease forwards;
+    }
+
+    .overlay {
+      position: fixed; inset: 0; background: rgba(28,31,74,0.4);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 500; animation: fadeIn 0.18s ease;
+    }
+
+    /* Drawer */
+    .drawer {
+      position: fixed; top: 0; right: 0; bottom: 0; width: 420px;
+      background: #fff; z-index: 501; overflow-y: auto;
+      animation: drawerSlide 0.28s cubic-bezier(0.25,0.46,0.45,0.94) both;
+      box-shadow: -12px 0 40px rgba(28,31,74,0.18);
+    }
+
+    /* Table */
+    .data-table { width: 100%; border-collapse: collapse; }
+    .data-table th { background: #F4F5FB; padding: 10px 14px; font-size: 12px; font-weight: 700; color: #5B60A0; text-align: left; border-bottom: 1px solid #E4E5F5; }
+    .data-table td { padding: 12px 14px; font-size: 13px; color: #1C1F4A; border-bottom: 1px solid #EEEEF8; }
+    .data-table tr:hover td { background: #F9F9FD; cursor: pointer; }
+    .data-table tr { animation: rowAppear 0.25s ease both; }
+
+    /* Badge */
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-thumb { background: #C8CAE8; border-radius: 4px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ─── Tabler icon helper ──────────────────────
+const ICON_MAP = {
+  'layout-dashboard': 'layout-dashboard',
+  'users': 'users',
+  'bell': 'bell',
+  'bar-chart-2': 'chart-bar',
+  'settings': 'settings',
+  'activity': 'activity',
+  'user-circle': 'user-circle',
+  'trending-up': 'trending-up',
+  'check-circle': 'circle-check',
+  'alert-circle': 'alert-circle',
+  'pie-chart': 'chart-pie',
+  'bar-chart': 'chart-bar',
+  'search': 'search',
+  'user-plus': 'user-plus',
+  'x': 'x',
+  'alert-triangle': 'alert-triangle',
+  'image': 'photo',
+  'key': 'key',
+  'building-2': 'building',
+  'sort-ascending': 'sort-ascending',
+  'sort-descending': 'sort-descending',
+};
+
+const Icon = ({ name, size=16, color='currentColor', style={} }) => {
+  const t = ICON_MAP[name] || name;
+  return <i className={`ti ti-${t}`} style={{ fontSize:size, color, display:'inline-flex', alignItems:'center', lineHeight:1, ...style }}></i>;
+};
+
+// ─── Mock Data ──────────────────────────────
+const MODELS = ['MSE1','MSE2','NEW MSE2','MSE3','KBE','KBE2'];
+const STATUS_MAP = {
+  '치료중':  { bg:'#EEF0FF', color:'#3D4FC8' },
+  '완료':    { bg:'#E6F9F2', color:'#1A8A5C' },
+  '중단':    { bg:'#FFF0F0', color:'#C0392B' },
+  '초기':    { bg:'#FFF9E6', color:'#B7860B' },
+};
+
+const makePatients = () => [
+  { id:'PT001', name:'김민준', code:'ARC-2026-A01', model:'MSE2', cum:6.25, max:12, pain:2, started:'2026-03-01', status:'치료중', lastRecord:'2026-05-13' },
+  { id:'PT002', name:'이서연', code:'ARC-2026-A02', model:'KBE2', cum:10.50, max:12, pain:3, started:'2026-01-15', status:'치료중', lastRecord:'2026-05-13' },
+  { id:'PT003', name:'박지후', code:'ARC-2026-A03', model:'MSE1', cum:9.75, max:10, pain:1, started:'2025-11-20', status:'치료중', lastRecord:'2026-05-12' },
+  { id:'PT004', name:'최다은', code:'ARC-2026-A04', model:'NEW MSE2', cum:12.00, max:12, pain:1, started:'2025-09-10', status:'완료', lastRecord:'2026-04-30' },
+  { id:'PT005', name:'정우진', code:'ARC-2026-A05', model:'MSE3', cum:3.60, max:14, pain:4, started:'2026-04-05', status:'치료중', lastRecord:'2026-05-13' },
+  { id:'PT006', name:'윤하늘', code:'ARC-2026-A06', model:'KBE', cum:0.00, max:10, pain:0, started:'2026-05-12', status:'초기', lastRecord:'—' },
+  { id:'PT007', name:'임수아', code:'ARC-2026-A07', model:'MSE2', cum:8.00, max:12, pain:2, started:'2026-02-01', status:'치료중', lastRecord:'2026-05-11' },
+  { id:'PT008', name:'강도윤', code:'ARC-2026-A08', model:'MSE3', cum:1.80, max:14, pain:3, started:'2026-05-01', status:'치료중', lastRecord:'2026-05-13' },
+];
+
+const SYMPTOMS = [
+  { id:1, patient:'김민준', patientId:'PT001', date:'2026-05-13', type:'통증 이상', message:'오늘 확장 후 왼쪽 상악 어금니 주변이 평소보다 많이 아픕니다. 내일까지 지속될 것 같아 보고드립니다.', hasImage:true, read:false },
+  { id:2, patient:'정우진', patientId:'PT005', date:'2026-05-12', type:'장치 이상', message:'어제 확장할 때 스크류가 평소보다 뻑뻑한 느낌이 들었습니다. 장치 점검이 필요할 것 같습니다.', hasImage:false, read:false },
+  { id:3, patient:'박지후', patientId:'PT003', date:'2026-05-11', type:'치아/잇몸 이상', message:'왼쪽 앞니 잇몸이 살짝 붓고 빨갛습니다. 자극이 있는 건지 확인 부탁드립니다.', hasImage:true, read:true },
+  { id:4, patient:'이서연', patientId:'PT002', date:'2026-05-09', type:'기타', message:'간혹 확장기가 음식 씹을 때 이상한 소리가 납니다. 정상 범위인지 확인해 주시면 감사하겠습니다.', hasImage:false, read:true },
+];
+
+// ─── Toast ──────────────────────────────────
+function Toast({ msg, onDone }) {
+  useEffect(() => { const t = setTimeout(onDone, 3000); return () => clearTimeout(t); }, []);
+  return <div className="toast-wrap"><div className="toast">{msg}</div></div>;
+}
+
+// ─── Global Nav ─────────────────────────────
+function GlobalNav({ page, setPage, unread }) {
+  const links = [
+    { id:'main',     label:'대시보드',  icon:'layout-dashboard' },
+    { id:'patients', label:'환자 등록 및 코드 발급 관리', icon:'users' },
+    { id:'symptoms', label:'이상 증상 수신함', icon:'bell' },
+    { id:'analytics',label:'확장량 추이 분석 리포트', icon:'bar-chart-2' },
+    { id:'settings', label:'병원 설정', icon:'settings' },
+  ];
+  return (
+    <nav style={{ background:'#fff', borderBottom:'1px solid #E4E5F5', position:'sticky', top:0, zIndex:100 }}>
+      <div style={{ maxWidth:1280, margin:'0 auto', padding:'0 24px', display:'flex', alignItems:'center', justifyContent:'space-between', height:56 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:30, height:30, borderRadius:8, background:'linear-gradient(135deg, #3D4FC8, #6B7DE8)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <Icon name="activity" size={16} color="#fff" />
+          </div>
+          <span style={{ fontSize:15, fontWeight:800, color:'#1C1F4A', letterSpacing:-0.3 }}>ArchAdmin</span>
+          <span style={{ fontSize:11, background:'#EEF0FF', color:'#3D4FC8', padding:'2px 8px', borderRadius:20, fontWeight:700 }}>병원 관리자</span>
+        </div>
+        <div style={{ display:'flex', gap:4, overflowX:'auto' }}>
+          {links.map(l => (
+            <button key={l.id} onClick={() => setPage(l.id)}
+              style={{
+                display:'flex', alignItems:'center', gap:6, padding:'6px 14px',
+                background:page===l.id ? '#EEF0FF' : 'transparent',
+                color:page===l.id ? '#3D4FC8' : '#5B60A0',
+                border:'none', borderRadius:8, cursor:'pointer', fontFamily:'inherit',
+                fontSize:13, fontWeight:page===l.id ? 700 : 500, whiteSpace:'nowrap',
+                transition:'all 0.18s', position:'relative',
+              }}
+            >
+              <Icon name={l.icon} size={15} color={page===l.id ? '#3D4FC8' : '#5B60A0'} />
+              {l.label}
+              {l.id==='symptoms' && unread>0 && (
+                <span style={{ position:'absolute', top:4, right:4, width:18, height:18, borderRadius:'50%', background:'#C0392B', color:'#fff', fontSize:10, fontWeight:800, display:'flex', alignItems:'center', justifyContent:'center' }}>{unread}</span>
+              )}
+            </button>
+          ))}
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:8, background:'#F4F5FB', padding:'6px 12px', borderRadius:8, border:'1px solid #E4E5F5' }}>
+          <Icon name="user-circle" size={16} color="#3D4FC8" />
+          <span style={{ fontSize:12, color:'#5B60A0', fontWeight:600 }}>강치과의원</span>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+// ─── DASHBOARD ───────────────────────────────
+function DashboardPage({ patients, symptoms, setPage }) {
+  const chartRef = useRef(null);
+  const chartInst = useRef(null);
+  const barRef = useRef(null);
+  const barInst = useRef(null);
+
+  const active = patients.filter(p => p.status==='치료중').length;
+  const completed = patients.filter(p => p.status==='완료').length;
+  const unread = symptoms.filter(s => !s.read).length;
+
+  useEffect(() => {
+    if (!chartRef.current) return;
+    if (chartInst.current) chartInst.current.destroy();
+    const modelCounts = MODELS.reduce((a,m) => { a[m] = patients.filter(p=>p.model===m).length; return a; }, {});
+    chartInst.current = new Chart(chartRef.current, {
+      type:'doughnut',
+      data: {
+        labels: MODELS,
+        datasets:[{ data: MODELS.map(m=>modelCounts[m]||0), backgroundColor:['#3D4FC8','#6B7DE8','#E8A030','#1A8A5C','#C0392B','#9B59B6'], borderWidth:0, hoverOffset:6 }],
+      },
+      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'right', labels:{ font:{family:'Pretendard Variable', size:12}, color:'#5B60A0', boxWidth:12, padding:12 } } }, animation:{duration:900,easing:'easeOutQuart'} },
+    });
+    return () => { if (chartInst.current) chartInst.current.destroy(); };
+  }, []);
+
+  useEffect(() => {
+    if (!barRef.current) return;
+    if (barInst.current) barInst.current.destroy();
+    const progs = patients.filter(p=>p.status==='치료중').slice(0,6);
+    barInst.current = new Chart(barRef.current, {
+      type:'bar',
+      data: {
+        labels: progs.map(p=>p.name),
+        datasets:[{ label:'진행률(%)', data: progs.map(p=>parseFloat((p.cum/p.max*100).toFixed(1))), backgroundColor:'rgba(61,79,200,0.75)', borderRadius:5, borderSkipped:false }],
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false, indexAxis:'y',
+        plugins:{legend:{display:false}},
+        scales:{
+          x:{min:0,max:100,grid:{color:'#EEEEF8'},ticks:{color:'#5B60A0',font:{family:'Pretendard Variable',size:11},callback:v=>v+'%'}},
+          y:{grid:{display:false},ticks:{color:'#1C1F4A',font:{family:'Pretendard Variable',size:12}}},
+        },
+        animation:{duration:800,easing:'easeOutQuart'},
+      },
+    });
+    return () => { if (barInst.current) barInst.current.destroy(); };
+  }, []);
+
+  const kpis = [
+    { icon:'users', label:'전체 환자', value:patients.length+'명', sub:'등록 환자 수', color:'#3D4FC8', bg:'#EEF0FF' },
+    { icon:'activity', label:'치료 중', value:active+'명', sub:'활성 치료 환자', color:'#1A8A5C', bg:'#E6F9F2' },
+    { icon:'check-circle', label:'치료 완료', value:completed+'명', sub:'목표 달성', color:'#6B7DE8', bg:'#F0F1FF' },
+    { icon:'alert-circle', label:'미확인 증상', value:unread+'건', sub:'즉시 확인 필요', color:'#C0392B', bg:'#FFF0F0' },
+  ];
+
+  return (
+    <div style={{ maxWidth:1280, margin:'0 auto', padding:'28px 24px' }} className="fade-in">
+      <div style={{ marginBottom:24 }}>
+        <h1 style={{ fontSize:22, fontWeight:800, color:'#1C1F4A', marginBottom:4 }}>대시보드</h1>
+        <p style={{ fontSize:13, color:'#5B60A0' }}>전체 환자 치료 현황을 한눈에 확인합니다.</p>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:16, marginBottom:24 }}>
+        {kpis.map((k,i) => (
+          <div key={i} className="slide-up" style={{ animationDelay:`${i*0.07}s`, background:'#fff', borderRadius:10, padding:'18px 20px', border:'1px solid #E4E5F5', boxShadow:'0 2px 10px rgba(61,79,200,0.06)' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+              <span style={{ fontSize:12, color:'#5B60A0', fontWeight:600 }}>{k.label}</span>
+              <div style={{ width:32, height:32, borderRadius:8, background:k.bg, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <Icon name={k.icon} size={16} color={k.color} />
+              </div>
+            </div>
+            <div style={{ fontSize:28, fontWeight:800, color:k.color, letterSpacing:-1 }}>{k.value}</div>
+            <div style={{ fontSize:11, color:'#5B60A0', marginTop:4 }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1.4fr', gap:20, marginBottom:24 }}>
+        <div style={{ background:'#fff', borderRadius:10, padding:20, border:'1px solid #E4E5F5', boxShadow:'0 2px 10px rgba(61,79,200,0.05)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:16 }}>
+            <Icon name="pie-chart" size={16} color="#3D4FC8" />
+            <span style={{ fontSize:14, fontWeight:700, color:'#1C1F4A' }}>모델별 환자 분포</span>
+          </div>
+          <div style={{ position:'relative', height:180 }}>
+            <canvas ref={chartRef}></canvas>
+          </div>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:20, border:'1px solid #E4E5F5', boxShadow:'0 2px 10px rgba(61,79,200,0.05)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:16 }}>
+            <Icon name="bar-chart" size={16} color="#3D4FC8" />
+            <span style={{ fontSize:14, fontWeight:700, color:'#1C1F4A' }}>환자별 치료 진행률</span>
+          </div>
+          <div style={{ position:'relative', height:180 }}>
+            <canvas ref={barRef}></canvas>
+          </div>
+        </div>
+      </div>
+
+      {/* Recent unread */}
+      {unread > 0 && (
+        <div style={{ background:'#fff', borderRadius:10, border:'1.5px solid #FFD2D2', padding:20 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <Icon name="alert-triangle" size={16} color="#C0392B" />
+              <span style={{ fontSize:14, fontWeight:700, color:'#C0392B' }}>미확인 이상 증상 {unread}건</span>
+            </div>
+            <button onClick={() => setPage('symptoms')}
+              style={{ background:'#C0392B', color:'#fff', border:'none', borderRadius:6, padding:'6px 14px', fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+              수신함 보기
+            </button>
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {symptoms.filter(s=>!s.read).map(s => (
+              <div key={s.id} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 14px', background:'#FFF5F5', borderRadius:8, border:'1px solid #FFD2D2' }}>
+                <div style={{ display:'flex', gap:12, alignItems:'center' }}>
+                  <span style={{ fontWeight:700, fontSize:13, color:'#1C1F4A' }}>{s.patient}</span>
+                  <span style={{ background:'#FFF0F0', color:'#C0392B', fontSize:11, fontWeight:700, padding:'2px 8px', borderRadius:20 }}>{s.type}</span>
+                </div>
+                <span style={{ fontSize:12, color:'#5B60A0' }}>{s.date}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PATIENTS ────────────────────────────────
+function PatientsPage({ patients, setPatients, showToast }) {
+  const [search, setSearch] = useState('');
+  const [modelFilter, setModelFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [detail, setDetail] = useState(null);
+  const [showAdd, setShowAdd] = useState(null);
+  const [form, setForm] = useState({ name:'', model:'MSE1', started:'' });
+
+  const filtered = patients.filter(p =>
+    (p.name.includes(search) || p.code.includes(search)) &&
+    (!modelFilter || p.model===modelFilter) &&
+    (!statusFilter || p.status===statusFilter)
+  );
+
+  const addPatient = () => {
+    if (!form.name.trim() || !form.started) { showToast('이름과 시작일을 입력해주세요.'); return; }
+    const idx = patients.length + 1;
+    const code = `ARC-2026-B${String(idx).padStart(2,'0')}`;
+    const m = MODELS.find(m=>m===form.model) ? form.model : 'MSE1';
+    const maxMap = {'MSE1':10,'MSE2':12,'NEW MSE2':12,'MSE3':14,'KBE':10,'KBE2':12};
+    setPatients(prev => [...prev, {
+      id:`PT${String(100+idx).padStart(3,'0')}`, name:form.name, code,
+      model:m, cum:0, max:maxMap[m]||12, pain:0, started:form.started, status:'초기', lastRecord:'—'
+    }]);
+    setShowAdd(false); setForm({ name:'', model:'MSE1', started:'' });
+    showToast(`${form.name} 환자가 등록되었습니다. 코드: ${code}`);
+  };
+
+  return (
+    <div style={{ maxWidth:1280, margin:'0 auto', padding:'28px 24px' }} className="fade-in">
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+        <div>
+          <h1 style={{ fontSize:22, fontWeight:800, color:'#1C1F4A', marginBottom:4 }}>환자 등록 및 코드 발급 관리</h1>
+          <p style={{ fontSize:13, color:'#5B60A0' }}>총 {patients.length}명 등록, 활성 {patients.filter(p=>p.status==='치료중').length}명</p>
+        </div>
+        <button onClick={() => setShowAdd(true)}
+          style={{ display:'flex', alignItems:'center', gap:6, background:'#3D4FC8', color:'#fff', border:'none', borderRadius:8, padding:'10px 18px', fontSize:13, fontWeight:700, cursor:'pointer', fontFamily:'inherit', boxShadow:'0 4px 14px rgba(61,79,200,0.3)' }}>
+          <Icon name="user-plus" size={16} color="#fff" />
+          신규 환자 등록
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display:'flex', gap:10, marginBottom:16 }}>
+        <div style={{ flex:1, position:'relative' }}>
+          <span style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)' }}>
+            <Icon name="search" size={15} color="#5B60A0" />
+          </span>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="이름 또는 코드 검색"
+            style={{ width:'100%', padding:'9px 12px 9px 34px', borderRadius:8, border:'1.5px solid #E4E5F5', fontSize:13, fontFamily:'inherit', color:'#1C1F4A', outline:'none' }}
+          />
+        </div>
+        <select value={modelFilter} onChange={e=>setModelFilter(e.target.value)}
+          style={{ padding:'9px 12px', borderRadius:8, border:'1.5px solid #E4E5F5', fontSize:13, fontFamily:'inherit', color:'#1C1F4A', outline:'none', background:'#fff', cursor:'pointer' }}>
+          <option value="">모든 모델</option>
+          {MODELS.map(m => <option key={m}>{m}</option>)}
+        </select>
+        <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}
+          style={{ padding:'9px 12px', borderRadius:8, border:'1.5px solid #E4E5F5', fontSize:13, fontFamily:'inherit', color:'#1C1F4A', outline:'none', background:'#fff', cursor:'pointer' }}>
+          <option value="">모든 상태</option>
+          {Object.keys(STATUS_MAP).map(s=><option key={s}>{s}</option>)}
+        </select>
+      </div>
+
+      {/* Table */}
+      <div style={{ background:'#fff', borderRadius:10, border:'1px solid #E4E5F5', overflow:'hidden', boxShadow:'0 2px 10px rgba(61,79,200,0.05)' }}>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>환자명</th>
+              <th>고유 코드</th>
+              <th>모델</th>
+              <th>치료 진행률</th>
+              <th>통증 등급</th>
+              <th>마지막 기록</th>
+              <th>상태</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((p,i) => {
+              const prog = Math.min((p.cum/p.max*100),100);
+              const st = STATUS_MAP[p.status] || { bg:'#F4F5FB', color:'#5B60A0' };
+              return (
+                <tr key={p.id} style={{ animationDelay:`${i*0.04}s` }} onClick={() => setDetail(p)}>
+                  <td><span style={{ fontWeight:700 }}>{p.name}</span></td>
+                  <td><code style={{ background:'#F4F5FB', padding:'2px 8px', borderRadius:6, fontSize:12, color:'#3D4FC8', fontWeight:700 }}>{p.code}</code></td>
+                  <td>{p.model}</td>
+                  <td>
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <div style={{ flex:1, height:6, background:'#E4E5F5', borderRadius:20 }}>
+                        <div style={{ height:'100%', width:`${prog}%`, background:`linear-gradient(90deg, #3D4FC8, #6B7DE8)`, borderRadius:20 }}></div>
+                      </div>
+                      <span style={{ fontSize:11, fontWeight:700, color:'#3D4FC8', minWidth:36 }}>{prog.toFixed(0)}%</span>
+                    </div>
+                  </td>
+                  <td>
+                    {p.pain > 0 ? (
+                      <span style={{ fontWeight:700, color:['','#1A8A5C','#5A9E1A','#B7860B','#D35400','#C0392B'][p.pain] }}>{p.pain}단계</span>
+                    ) : <span style={{ color:'#5B60A0' }}>—</span>}
+                  </td>
+                  <td style={{ color:'#5B60A0', fontSize:12 }}>{p.lastRecord}</td>
+                  <td><span className="badge" style={{ background:st.bg, color:st.color }}>{p.status}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {filtered.length === 0 && (
+          <div style={{ padding:'40px 0', textAlign:'center', color:'#5B60A0', fontSize:13 }}>검색 결과가 없습니다.</div>
+        )}
+      </div>
+
+      {/* Drawer: Patient Detail */}
+      {detail && (
+        <>
+          <div style={{ position:'fixed', inset:0, background:'rgba(28,31,74,0.3)', zIndex:500 }} onClick={() => setDetail(null)} />
+          <div className="drawer" style={{ padding:0 }}>
+            <div style={{ padding:'20px 24px', borderBottom:'1px solid #E4E5F5', display:'flex', alignItems:'center', justifyContent:'space-between', position:'sticky', top:0, background:'#fff', zIndex:1 }}>
+              <span style={{ fontSize:16, fontWeight:800, color:'#1C1F4A' }}>{detail.name} 환자 상세</span>
+              <button onClick={() => setDetail(null)} style={{ background:'#F4F5FB', border:'none', borderRadius:6, width:32, height:32, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <Icon name="x" size={18} color="#5B60A0" />
+              </button>
+            </div>
+            <div style={{ padding:24 }}>
+              <div style={{ background:'linear-gradient(135deg, #3D4FC8, #6B7DE8)', borderRadius:10, padding:'18px 20px', marginBottom:20, color:'#fff' }}>
+                <div style={{ fontSize:24, fontWeight:800, marginBottom:4 }}>{detail.name}</div>
+                <code style={{ fontSize:13, opacity:0.85 }}>{detail.code}</code>
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:20 }}>
+                {[
+                  { l:'처방 모델', v:detail.model },
+                  { l:'상태', v:detail.status },
+                  { l:'치료 시작일', v:detail.started },
+                  { l:'마지막 기록', v:detail.lastRecord },
+                  { l:'누적 확장량', v:`${detail.cum.toFixed(2)} mm` },
+                  { l:'목표 확장량', v:`${detail.max} mm` },
+                ].map((item,i) => (
+                  <div key={i} style={{ background:'#F4F5FB', borderRadius:8, padding:'12px 14px' }}>
+                    <div style={{ fontSize:11, color:'#5B60A0', marginBottom:3 }}>{item.l}</div>
+                    <div style={{ fontSize:14, fontWeight:700, color:'#1C1F4A' }}>{item.v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginBottom:20 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:'#5B60A0', marginBottom:8 }}>치료 진행률</div>
+                <div style={{ height:10, background:'#E4E5F5', borderRadius:20 }}>
+                  <div style={{ height:'100%', width:`${Math.min(detail.cum/detail.max*100,100)}%`, background:'linear-gradient(90deg, #3D4FC8, #6B7DE8)', borderRadius:20, transition:'width 0.8s ease' }}></div>
+                </div>
+                <div style={{ display:'flex', justifyContent:'space-between', marginTop:4 }}>
+                  <span style={{ fontSize:11, color:'#5B60A0' }}>{detail.cum.toFixed(2)}mm</span>
+                  <span style={{ fontSize:11, fontWeight:700, color:'#3D4FC8' }}>{Math.min(detail.cum/detail.max*100,100).toFixed(1)}%</span>
+                </div>
+              </div>
+              <div style={{ display:'flex', gap:10 }}>
+                <button onClick={() => { showToast(`${detail.name} 코드가 재발급되었습니다.`); setDetail(null); }}
+                  style={{ flex:1, padding:'10px', background:'#EEF0FF', color:'#3D4FC8', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                  코드 재발급
+                </button>
+                <button onClick={() => setDetail(null)}
+                  style={{ flex:1, padding:'10px', background:'#3D4FC8', color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                  닫기
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Add Patient Modal */}
+      {showAdd && (
+        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowAdd(false)}>
+          <div className="slide-up" style={{ background:'#fff', borderRadius:12, padding:28, width:'90%', maxWidth:420, boxShadow:'0 20px 60px rgba(28,31,74,0.2)' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+              <h3 style={{ fontSize:16, fontWeight:800, color:'#1C1F4A' }}>신규 환자 등록</h3>
+              <button onClick={()=>setShowAdd(false)} style={{ background:'none', border:'none', cursor:'pointer' }}>
+                <Icon name="x" size={20} color="#5B60A0" />
+              </button>
+            </div>
+            {[
+              { label:'환자 이름', type:'text', key:'name', placeholder:'예: 홍길동' },
+              { label:'치료 시작일', type:'date', key:'started', placeholder:'' },
+            ].map(f => (
+              <div key={f.key} style={{ marginBottom:14 }}>
+                <label style={{ fontSize:12, fontWeight:700, color:'#5B60A0', display:'block', marginBottom:6 }}>{f.label}</label>
+                <input type={f.type} value={form[f.key]} onChange={e=>setForm(prev=>({...prev,[f.key]:e.target.value}))} placeholder={f.placeholder}
+                  style={{ width:'100%', padding:'10px 12px', borderRadius:8, border:'1.5px solid #E4E5F5', fontSize:13, fontFamily:'inherit', color:'#1C1F4A', outline:'none' }}
+                />
+              </div>
+            ))}
+            <div style={{ marginBottom:20 }}>
+              <label style={{ fontSize:12, fontWeight:700, color:'#5B60A0', display:'block', marginBottom:6 }}>처방 모델</label>
+              <select value={form.model} onChange={e=>setForm(prev=>({...prev,model:e.target.value}))}
+                style={{ width:'100%', padding:'10px 12px', borderRadius:8, border:'1.5px solid #E4E5F5', fontSize:13, fontFamily:'inherit', color:'#1C1F4A', outline:'none', background:'#fff' }}>
+                {MODELS.map(m=><option key={m}>{m}</option>)}
+              </select>
+            </div>
+            <div style={{ background:'#EEF0FF', borderRadius:8, padding:'12px 14px', marginBottom:20 }}>
+              <div style={{ fontSize:11, color:'#5B60A0', marginBottom:4 }}>고유 코드</div>
+              <div style={{ fontSize:14, fontWeight:800, color:'#3D4FC8', letterSpacing:1 }}>ARC-2026-B{String(patients.length+1).padStart(2,'0')} (자동 발급)</div>
+            </div>
+            <div style={{ display:'flex', gap:10 }}>
+              <button onClick={()=>setShowAdd(false)}
+                style={{ flex:1, padding:'11px', background:'#F4F5FB', color:'#5B60A0', border:'1px solid #E4E5F5', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                취소
+              </button>
+              <button onClick={addPatient}
+                style={{ flex:2, padding:'11px', background:'#3D4FC8', color:'#fff', border:'none', borderRadius:8, fontSize:13, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                등록 완료
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SYMPTOMS ────────────────────────────────
+function SymptomsPage({ symptoms, setSymptoms, showToast }) {
+  const [filter, setFilter] = useState('전체');
+  const [detail, setDetail] = useState(null);
+
+  const markRead = (id) => {
+    setSymptoms(prev => prev.map(s => s.id===id ? {...s, read:true} : s));
+    if (detail?.id === id) setDetail(prev => ({...prev, read:true}));
+    showToast('확인 처리되었습니다.');
+  };
+
+  const filtered = symptoms.filter(s => filter==='전체' || (filter==='미확인' && !s.read) || (filter==='확인됨' && s.read));
+
+  return (
+    <div style={{ maxWidth:1280, margin:'0 auto', padding:'28px 24px' }} className="fade-in">
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+        <div>
+          <h1 style={{ fontSize:22, fontWeight:800, color:'#1C1F4A', marginBottom:4 }}>이상 증상 수신함</h1>
+          <p style={{ fontSize:13, color:'#5B60A0' }}>미확인 {symptoms.filter(s=>!s.read).length}건 / 전체 {symptoms.length}건</p>
+        </div>
+        <div style={{ display:'flex', gap:6 }}>
+          {['전체','미확인','확인됨'].map(f => (
+            <button key={f} onClick={()=>setFilter(f)}
+              style={{ padding:'7px 16px', borderRadius:8, border:`1.5px solid ${filter===f?'#3D4FC8':'#E4E5F5'}`, background:filter===f?'#EEF0FF':'#fff', color:filter===f?'#3D4FC8':'#5B60A0', fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+              {f}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {filtered.map((s,i) => (
+          <div key={s.id} className="fade-in" style={{ animationDelay:`${i*0.06}s`, background:'#fff', borderRadius:10, padding:'16px 20px', border:`1.5px solid ${s.read?'#E4E5F5':'#FFD2D2'}`, cursor:'pointer', transition:'all 0.18s', boxShadow:s.read?'0 2px 8px rgba(61,79,200,0.04)':'0 4px 16px rgba(192,57,43,0.1)' }}
+            onClick={() => setDetail(s)}
+            onMouseEnter={e=>{ e.currentTarget.style.boxShadow='0 6px 20px rgba(61,79,200,0.12)'; e.currentTarget.style.transform='translateY(-1px)'; }}
+            onMouseLeave={e=>{ e.currentTarget.style.boxShadow=s.read?'0 2px 8px rgba(61,79,200,0.04)':'0 4px 16px rgba(192,57,43,0.1)'; e.currentTarget.style.transform='translateY(0)'; }}
+          >
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                {!s.read && <div style={{ width:8, height:8, borderRadius:'50%', background:'#C0392B', flexShrink:0 }}></div>}
+                <span style={{ fontWeight:700, fontSize:14, color:'#1C1F4A' }}>{s.patient}</span>
+                <span className="badge" style={{ background:s.type.includes('통증')?'#FFF0F0':s.type.includes('장치')?'#FFF9E6':'#EEF0FF', color:s.type.includes('통증')?'#C0392B':s.type.includes('장치')?'#B7860B':'#3D4FC8' }}>{s.type}</span>
+                {s.hasImage && <span style={{ display:'flex', alignItems:'center', gap:4, fontSize:11, color:'#5B60A0', background:'#F4F5FB', padding:'2px 8px', borderRadius:20 }}><Icon name="image" size={12} color="#5B60A0"/>첨부 이미지</span>}
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                <span style={{ fontSize:12, color:'#5B60A0' }}>{s.date}</span>
+                <span className="badge" style={{ background:s.read?'#E6F9F2':'#FFF0F0', color:s.read?'#1A8A5C':'#C0392B' }}>{s.read?'확인됨':'미확인'}</span>
+              </div>
+            </div>
+            <p style={{ fontSize:13, color:'#5B60A0', marginTop:8, lineHeight:1.6, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{s.message}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Detail Drawer */}
+      {detail && (
+        <>
+          <div style={{ position:'fixed', inset:0, background:'rgba(28,31,74,0.3)', zIndex:500 }} onClick={() => setDetail(null)} />
+          <div className="drawer" style={{ padding:0 }}>
+            <div style={{ padding:'20px 24px', borderBottom:'1px solid #E4E5F5', display:'flex', alignItems:'center', justifyContent:'space-between', position:'sticky', top:0, background:'#fff', zIndex:1 }}>
+              <span style={{ fontSize:16, fontWeight:800, color:'#1C1F4A' }}>증상 상세</span>
+              <button onClick={() => setDetail(null)} style={{ background:'#F4F5FB', border:'none', borderRadius:6, width:32, height:32, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                <Icon name="x" size={18} color="#5B60A0" />
+              </button>
+            </div>
+            <div style={{ padding:24 }}>
+              <div style={{ display:'flex', gap:10, marginBottom:20, flexWrap:'wrap' }}>
+                <span className="badge" style={{ background:'#EEF0FF', color:'#3D4FC8', fontSize:13, padding:'6px 14px' }}>{detail.patient}</span>
+                <span className="badge" style={{ background:'#FFF0F0', color:'#C0392B', fontSize:13, padding:'6px 14px' }}>{detail.type}</span>
+                <span style={{ fontSize:12, color:'#5B60A0', alignSelf:'center' }}>{detail.date}</span>
+              </div>
+              <div style={{ background:'#F4F5FB', borderRadius:10, padding:'16px 18px', marginBottom:20 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:'#5B60A0', marginBottom:8 }}>증상 내용</div>
+                <p style={{ fontSize:14, color:'#1C1F4A', lineHeight:1.7 }}>{detail.message}</p>
+              </div>
+              {detail.hasImage && (
+                <div style={{ background:'#EEF0FF', borderRadius:10, padding:'16px 18px', marginBottom:20, display:'flex', alignItems:'center', gap:12 }}>
+                  <Icon name="image" size={20} color="#3D4FC8" />
+                  <div>
+                    <div style={{ fontSize:12, fontWeight:700, color:'#3D4FC8' }}>첨부 이미지</div>
+                    <div style={{ fontSize:12, color:'#5B60A0', marginTop:2 }}>symptom-{detail.id}.jpg (AWS S3 Pre-signed URL 만료 전)</div>
+                  </div>
+                </div>
+              )}
+              <div style={{ marginBottom:20 }}>
+                <label style={{ fontSize:12, fontWeight:700, color:'#5B60A0', display:'block', marginBottom:6 }}>관리자 메모</label>
+                <textarea placeholder="확인 후 메모를 남겨주세요." rows={3}
+                  style={{ width:'100%', padding:'10px 12px', borderRadius:8, border:'1.5px solid #E4E5F5', fontSize:13, fontFamily:'inherit', resize:'none', outline:'none', color:'#1C1F4A' }}
+                />
+              </div>
+              {!detail.read && (
+                <button onClick={() => markRead(detail.id)}
+                  style={{ width:'100%', padding:'12px', background:'#3D4FC8', color:'#fff', border:'none', borderRadius:8, fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:'inherit' }}>
+                  확인 처리
+                </button>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── ANALYTICS ───────────────────────────────
+function AnalyticsPage({ patients }) {
+  const lineRef = useRef(null);
+  const lineInst = useRef(null);
+  const stackRef = useRef(null);
+  const stackInst = useRef(null);
+  const [selectedPts, setSelectedPts] = useState(['PT001','PT002','PT003']);
+
+  const COLORS = ['#3D4FC8','#E8A030','#1A8A5C','#C0392B','#9B59B6','#2C3E50'];
+
+  const genExpansion = (p) => {
+    const days = 30; const arr = [];
+    let cum = 0;
+    for (let i = days; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate()-i);
+      if (Math.random() > 0.15) { cum = Math.min(cum + (Math.random()*0.5+0.1), p.max); }
+      arr.push({ date:d.toISOString().slice(0,10), cum:parseFloat(cum.toFixed(2)) });
+    }
+    return arr;
+  };
+
+  const ptData = {};
+  patients.forEach(p => { ptData[p.id] = genExpansion(p); });
+  const dates = ptData[patients[0]?.id]?.map(d=>d.date.slice(5)) || [];
+
+  useEffect(() => {
+    if (!lineRef.current) return;
+    if (lineInst.current) lineInst.current.destroy();
+    const selPts = patients.filter(p => selectedPts.includes(p.id));
+    lineInst.current = new Chart(lineRef.current, {
+      type:'line',
+      data: {
+        labels: dates,
+        datasets: selPts.map((p,i) => ({
+          label: p.name,
+          data: (ptData[p.id]||[]).map(d=>d.cum),
+          borderColor: COLORS[i%COLORS.length],
+          backgroundColor: COLORS[i%COLORS.length]+'22',
+          pointRadius: 0, tension: 0.4, borderWidth: 2.5,
+          fill: false,
+        })),
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false,
+        plugins:{ legend:{ position:'top', labels:{ font:{family:'Pretendard Variable',size:12}, color:'#5B60A0', boxWidth:12 } } },
+        scales:{
+          x:{ grid:{display:false}, ticks:{ color:'#5B60A0', font:{size:10}, maxTicksLimit:8 } },
+          y:{ beginAtZero:true, grid:{color:'#EEEEF8'}, ticks:{ color:'#5B60A0', font:{size:11}, callback:v=>v+'mm' } },
+        },
+        animation:{duration:800,easing:'easeOutQuart'},
+      },
+    });
+    return () => { if (lineInst.current) lineInst.current.destroy(); };
+  }, [selectedPts]);
+
+  useEffect(() => {
+    if (!stackRef.current) return;
+    if (stackInst.current) stackInst.current.destroy();
+    const painDist = [0,0,0,0,0,0];
+    patients.forEach(p => { if(p.pain>=1&&p.pain<=5) painDist[p.pain]++; });
+    stackInst.current = new Chart(stackRef.current, {
+      type:'bar',
+      data:{
+        labels:['1단계','2단계','3단계','4단계','5단계'],
+        datasets:[{ label:'환자 수', data:painDist.slice(1), backgroundColor:['#4CAF50','#8BC34A','#FFC107','#FF9800','#F44336'], borderRadius:6, borderSkipped:false }],
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false,
+        plugins:{legend:{display:false}},
+        scales:{
+          x:{grid:{display:false}, ticks:{color:'#5B60A0', font:{size:11}}},
+          y:{beginAtZero:true, grid:{color:'#EEEEF8'}, ticks:{stepSize:1, color:'#5B60A0', font:{size:11}}},
+        },
+        animation:{duration:800,easing:'easeOutQuart'},
+      },
+    });
+    return () => { if (stackInst.current) stackInst.current.destroy(); };
+  }, []);
+
+  const togglePt = (id) => {
+    if (selectedPts.includes(id)) {
+      if (selectedPts.length === 1) return;
+      setSelectedPts(prev => prev.filter(p=>p!==id));
+    } else {
+      if (selectedPts.length >= 5) { return; }
+      setSelectedPts(prev => [...prev, id]);
+    }
+  };
+
+  const completionRate = patients.filter(p => p.cum >= p.max).length / patients.length * 100;
+
+  return (
+    <div style={{ maxWidth:1280, margin:'0 auto', padding:'28px 24px' }} className="fade-in">
+      <div style={{ marginBottom:24 }}>
+        <h1 style={{ fontSize:22, fontWeight:800, color:'#1C1F4A', marginBottom:4 }}>확장량 추이 분석 리포트</h1>
+        <p style={{ fontSize:13, color:'#5B60A0' }}>환자별 누적 확장량 추이와 통증 분포를 분석합니다.</p>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:16, marginBottom:24 }}>
+        {[
+          { l:'평균 치료 진행률', v:`${(patients.reduce((a,p)=>a+p.cum/p.max,0)/patients.length*100).toFixed(1)}%`, c:'#3D4FC8', icon:'trending-up' },
+          { l:'치료 완료율', v:`${completionRate.toFixed(0)}%`, c:'#1A8A5C', icon:'check-circle' },
+          { l:'평균 통증 등급', v:`${(patients.filter(p=>p.pain>0).reduce((a,p)=>a+p.pain,0)/patients.filter(p=>p.pain>0).length||0).toFixed(1)}단계`, c:'#E8A030', icon:'activity' },
+        ].map((k,i) => (
+          <div key={i} style={{ background:'#fff', borderRadius:10, padding:'18px 20px', border:'1px solid #E4E5F5', boxShadow:'0 2px 8px rgba(61,79,200,0.05)' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+              <Icon name={k.icon} size={16} color={k.c} />
+              <span style={{ fontSize:12, color:'#5B60A0', fontWeight:600 }}>{k.l}</span>
+            </div>
+            <div style={{ fontSize:28, fontWeight:800, color:k.c }}>{k.v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Line chart */}
+      <div style={{ background:'#fff', borderRadius:10, padding:20, border:'1px solid #E4E5F5', marginBottom:20, boxShadow:'0 2px 8px rgba(61,79,200,0.05)' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <Icon name="trending-up" size={16} color="#3D4FC8" />
+            <span style={{ fontSize:14, fontWeight:700, color:'#1C1F4A' }}>환자별 누적 확장량 추이 (최근 30일)</span>
+          </div>
+          <span style={{ fontSize:11, color:'#5B60A0' }}>최대 5명 선택</span>
+        </div>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:14 }}>
+          {patients.filter(p=>p.status==='치료중').map((p,i) => (
+            <button key={p.id} onClick={()=>togglePt(p.id)}
+              style={{ padding:'5px 12px', borderRadius:20, border:`1.5px solid ${selectedPts.includes(p.id)?COLORS[i%COLORS.length]:'#E4E5F5'}`, background:selectedPts.includes(p.id)?COLORS[i%COLORS.length]+'15':'#fff', color:selectedPts.includes(p.id)?COLORS[i%COLORS.length]:'#5B60A0', fontSize:12, fontWeight:selectedPts.includes(p.id)?700:400, cursor:'pointer', fontFamily:'inherit', transition:'all 0.18s' }}>
+              {p.name}
+            </button>
+          ))}
+        </div>
+        <div style={{ position:'relative', height:240 }}>
+          <canvas ref={lineRef}></canvas>
+        </div>
+      </div>
+
+      {/* Pain dist */}
+      <div style={{ background:'#fff', borderRadius:10, padding:20, border:'1px solid #E4E5F5', boxShadow:'0 2px 8px rgba(61,79,200,0.05)' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:16 }}>
+          <Icon name="bar-chart-2" size={16} color="#3D4FC8" />
+          <span style={{ fontSize:14, fontWeight:700, color:'#1C1F4A' }}>통증 등급 분포</span>
+        </div>
+        <div style={{ position:'relative', height:180 }}>
+          <canvas ref={stackRef}></canvas>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── SETTINGS ────────────────────────────────
+function SettingsPage({ showToast }) {
+  const [clinicName, setClinicName] = useState('강치과의원');
+  const [email, setEmail] = useState('admin@gangdental.co.kr');
+  const [notifEmail, setNotifEmail] = useState(true);
+  const [codeLen, setCodeLen] = useState(12);
+
+  return (
+    <div style={{ maxWidth:800, margin:'0 auto', padding:'28px 24px' }} className="fade-in">
+      <div style={{ marginBottom:24 }}>
+        <h1 style={{ fontSize:22, fontWeight:800, color:'#1C1F4A', marginBottom:4 }}>병원 설정</h1>
+        <p style={{ fontSize:13, color:'#5B60A0' }}>병원 정보 및 시스템 알림 설정을 관리합니다.</p>
+      </div>
+
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+        {[
+          { title:'병원 기본 정보', icon:'building-2', content: (
+            <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+              {[
+                { label:'병원명', value:clinicName, setter:setClinicName },
+                { label:'관리자 이메일', value:email, setter:setEmail },
+              ].map((f,i) => (
+                <div key={i}>
+                  <label style={{ fontSize:12, fontWeight:700, color:'#5B60A0', display:'block', marginBottom:6 }}>{f.label}</label>
+                  <input value={f.value} onChange={e=>f.setter(e.target.value)}
+                    style={{ width:'100%', padding:'10px 12px', borderRadius:8, border:'1.5px solid #E4E5F5', fontSize:13, fontFamily:'inherit', color:'#1C1F4A', outline:'none' }}
+                  />
+                </div>
+              ))}
+            </div>
+          )},
+          { title:'알림 설정', icon:'bell', content: (
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'4px 0' }}>
+              <div>
+                <div style={{ fontSize:13, fontWeight:700, color:'#1C1F4A' }}>이상 증상 수신 이메일 알림</div>
+                <div style={{ fontSize:12, color:'#5B60A0', marginTop:2 }}>새 증상 보고 수신 시 관리자 이메일로 즉시 발송</div>
+              </div>
+              <div onClick={() => setNotifEmail(!notifEmail)}
+                style={{ width:48, height:28, borderRadius:40, background:notifEmail?'#3D4FC8':'#C8CAE8', cursor:'pointer', position:'relative', transition:'all 0.2s' }}>
+                <div style={{ width:22, height:22, borderRadius:'50%', background:'#fff', position:'absolute', top:3, left:notifEmail?23:3, transition:'all 0.2s', boxShadow:'0 2px 4px rgba(0,0,0,0.2)' }}></div>
+              </div>
+            </div>
+          )},
+          { title:'환자 코드 설정', icon:'key', content: (
+            <div>
+              <label style={{ fontSize:12, fontWeight:700, color:'#5B60A0', display:'block', marginBottom:6 }}>코드 자릿수</label>
+              <div style={{ display:'flex', gap:8 }}>
+                {[8,10,12].map(n => (
+                  <button key={n} onClick={() => setCodeLen(n)}
+                    style={{ flex:1, padding:'10px', borderRadius:8, border:`1.5px solid ${codeLen===n?'#3D4FC8':'#E4E5F5'}`, background:codeLen===n?'#EEF0FF':'#fff', color:codeLen===n?'#3D4FC8':'#5B60A0', fontWeight:700, fontSize:14, cursor:'pointer', fontFamily:'inherit', transition:'all 0.18s' }}>
+                    {n}자리
+                  </button>
+                ))}
+              </div>
+              <p style={{ fontSize:12, color:'#5B60A0', marginTop:8 }}>코드 변경 시 기존 환자의 코드는 유지됩니다.</p>
+            </div>
+          )},
+        ].map((section,i) => (
+          <div key={i} style={{ background:'#fff', borderRadius:10, padding:20, border:'1px solid #E4E5F5', boxShadow:'0 2px 8px rgba(61,79,200,0.04)' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:16 }}>
+              <Icon name={section.icon} size={16} color="#3D4FC8" />
+              <span style={{ fontSize:14, fontWeight:700, color:'#1C1F4A' }}>{section.title}</span>
+            </div>
+            {section.content}
+          </div>
+        ))}
+
+        <button onClick={() => showToast('설정이 저장되었습니다.')}
+          style={{ padding:'13px', background:'#3D4FC8', color:'#fff', border:'none', borderRadius:10, fontSize:14, fontWeight:700, cursor:'pointer', fontFamily:'inherit', boxShadow:'0 4px 16px rgba(61,79,200,0.3)' }}>
+          설정 저장
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── FOOTER ─────────────────────────────────
+function Footer() {
+  return (
+    <footer style={{ background:'#fff', borderTop:'1px solid #E4E5F5', padding:'20px 24px', marginTop:'auto' }}>
+      <div style={{ maxWidth:1280, margin:'0 auto', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <span style={{ fontSize:12, color:'#5B60A0' }}>ArchAdmin — 악궁확장 환자 관리 플랫폼 구현 데모</span>
+        <span style={{ fontSize:12, color:'#5B60A0' }}>React · Node.js · Express · PostgreSQL · Prisma · Redis</span>
+      </div>
+    </footer>
+  );
+}
+
+// ─── APP ─────────────────────────────────────
+function App() {
+  const [page, setPage] = useState('main');
+  const [patients, setPatients] = useState(makePatients());
+  const [symptoms, setSymptoms] = useState(SYMPTOMS);
+  const [toast, setToast] = useState(null);
+
+  const showToast = useCallback(msg => {
+    setToast(null);
+    setTimeout(() => setToast(msg), 10);
+  }, []);
+
+  const unread = symptoms.filter(s => !s.read).length;
+
+  return (
+    <div style={{ width:'100%', minHeight:'100vh', display:'flex', flexDirection:'column', background:'#F4F5FB' }}>
+      {toast && <Toast msg={toast} onDone={() => setToast(null)} />}
+      <GlobalNav page={page} setPage={setPage} unread={unread} />
+      <div style={{ flex:1 }}>
+        {page==='main'      && <DashboardPage patients={patients} symptoms={symptoms} setPage={setPage} />}
+        {page==='patients'  && <PatientsPage patients={patients} setPatients={setPatients} showToast={showToast} />}
+        {page==='symptoms'  && <SymptomsPage symptoms={symptoms} setSymptoms={setSymptoms} showToast={showToast} />}
+        {page==='analytics' && <AnalyticsPage patients={patients} />}
+        {page==='settings'  && <SettingsPage showToast={showToast} />}
+      </div>
+      <Footer />
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>

@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>악궁확장기 치료 기록 트래커 — 맞춤 구현 데모</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css" />
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; min-height: 100vh; font-family: 'Pretendard Variable', 'Pretendard', -apple-system, sans-serif; background: #F5FAFA; color: #1A3533; }
+    #root { width: 100%; min-height: 100vh; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes countUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes progressGrow {
+      from { width: 0%; }
+      to { width: var(--progress-w); }
+    }
+    @keyframes slideInRight {
+      from { opacity: 0; transform: translateX(24px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes toastSlide {
+      0% { opacity: 0; transform: translateY(-16px); }
+      15% { opacity: 1; transform: translateY(0); }
+      85% { opacity: 1; transform: translateY(0); }
+      100% { opacity: 0; transform: translateY(-16px); }
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+    @keyframes cardAppear {
+      from { opacity: 0; transform: translateY(16px) scale(0.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes shimmer {
+      from { background-position: -200% 0; }
+      to { background-position: 200% 0; }
+    }
+
+    .fade-in { animation: fadeIn 0.35s ease both; }
+    .card-appear { animation: cardAppear 0.4s cubic-bezier(0.34,1.56,0.64,1) both; }
+
+    .toast-container {
+      position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+      z-index: 9999; pointer-events: none;
+    }
+    .toast {
+      background: #1A3533; color: #fff; padding: 12px 20px;
+      border-radius: 40px; font-size: 14px; white-space: nowrap;
+      animation: toastSlide 2.8s ease forwards;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+    }
+
+    .overlay {
+      position: fixed; inset: 0; background: rgba(26,53,51,0.45);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 500; animation: fadeIn 0.2s ease;
+    }
+
+    /* Pain level colors */
+    .pain-1 { background: #4CAF50; }
+    .pain-2 { background: #8BC34A; }
+    .pain-3 { background: #FFC107; }
+    .pain-4 { background: #FF9800; }
+    .pain-5 { background: #F44336; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #C5DDD8; border-radius: 4px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ─────────────────────────────────────────────
+// 모델 데이터
+// ─────────────────────────────────────────────
+const MODELS = [
+  { id: 'MSE1',    name: 'MSE1',     expandPerTurn: 0.25, maxExpand: 10.0, desc: '표준 악궁확장기. 4개의 스크류 구조로 좌우 균형 확장에 최적화.' },
+  { id: 'MSE2',    name: 'MSE2',     expandPerTurn: 0.25, maxExpand: 12.0, desc: 'MSE1 개선형. 치수 정밀도가 높아 적은 힘으로 균일한 확장이 가능.' },
+  { id: 'NEW_MSE2',name: 'NEW MSE2', expandPerTurn: 0.20, maxExpand: 12.0, desc: '신형 MSE2. 슬라이딩 메커니즘 적용으로 통증 감소 설계.' },
+  { id: 'MSE3',    name: 'MSE3',     expandPerTurn: 0.30, maxExpand: 14.0, desc: '소아·청소년용 강화형. 성장기 악궁 구조에 맞춘 탄성 설계.' },
+  { id: 'KBE',     name: 'KBE',      expandPerTurn: 0.25, maxExpand: 10.0, desc: '한국형 악궁확장기 표준 모델. 내구성과 위생 관리 편의성 강화.' },
+  { id: 'KBE2',    name: 'KBE2',     expandPerTurn: 0.25, maxExpand: 12.0, desc: 'KBE 2세대. 초박형 스크류 헤드로 구강 내 이물감 최소화.' },
+];
+
+// ─────────────────────────────────────────────
+// Mock 기록 데이터
+// ─────────────────────────────────────────────
+const genHistory = (model) => {
+  const base = [];
+  for (let i = 29; i >= 1; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const turns = Math.floor(Math.random() * 3) + 1;
+    base.push({
+      id: i,
+      date: d.toISOString().slice(0,10),
+      turns,
+      expand: turns * model.expandPerTurn,
+      pain: Math.floor(Math.random() * 3) + 1,
+      memo: i % 4 === 0 ? '오늘은 비교적 편했습니다.' : '',
+    });
+  }
+  const cum = []; let acc = 0;
+  base.forEach(r => { acc += r.expand; cum.push({...r, cumExpand: parseFloat(acc.toFixed(2))}); });
+  return cum;
+};
+
+// ─────────────────────────────────────────────
+// Mock 증상 보고 데이터
+// ─────────────────────────────────────────────
+const MOCK_REPORTS = [
+  { id: 1, date: '2026-05-12', type: '통증 이상', message: '오늘 확장 후 왼쪽 어금니 주변이 평소보다 많이 아픕니다.', imageUrl: null, status: '확인 완료' },
+  { id: 2, date: '2026-05-08', type: '장치 이상', message: '스크류가 잘 돌아가지 않는 것 같습니다. 확인 부탁드립니다.', imageUrl: null, status: '대기 중' },
+];
+
+// ─────────────────────────────────────────────
+// Toast
+// ─────────────────────────────────────────────
+function Toast({ message, onDone }) {
+  useEffect(() => { const t = setTimeout(onDone, 2800); return () => clearTimeout(t); }, []);
+  return (
+    <div className="toast-container">
+      <div className="toast">{message}</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// HEADER
+// ─────────────────────────────────────────────
+function Header({ activeTab, setActiveTab, patientCode }) {
+  const tabs = [
+    { id: 'main',    label: '오늘 기록' },
+    { id: 'model',   label: '악궁확장기 모델 선택' },
+    { id: 'record',  label: '일일 확장 기록 입력' },
+    { id: 'report',  label: '이미지 첨부 증상 보고' },
+    { id: 'history', label: '기록 이력' },
+  ];
+  return (
+    <header style={{ background: '#fff', borderBottom: '1px solid #E0F0EE', position: 'sticky', top: 0, zIndex: 100 }}>
+      <div style={{ maxWidth: 900, margin: '0 auto', padding: '0 20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 60 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 10, background: 'linear-gradient(135deg, #2BA89E, #5CC8C0)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <i className="ph ph-tooth" style={{ color: '#fff', fontSize: 18 }}></i>
+            </div>
+            <span style={{ fontSize: 17, fontWeight: 700, color: '#1A3533', letterSpacing: -0.3 }}>ArchTracker</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#F0FAF9', padding: '6px 14px', borderRadius: 24, border: '1px solid #D0EDEA' }}>
+            <i className="ph ph-user-circle" style={{ color: '#2BA89E', fontSize: 18 }}></i>
+            <span style={{ fontSize: 13, color: '#4D7572', fontWeight: 600 }}>{patientCode}</span>
+          </div>
+        </div>
+        <nav style={{ display: 'flex', gap: 4, overflowX: 'auto', paddingBottom: 1 }}>
+          {tabs.map(t => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              style={{
+                padding: '10px 16px', border: 'none', cursor: 'pointer', background: 'transparent',
+                fontSize: 13, fontWeight: activeTab === t.id ? 700 : 400,
+                color: activeTab === t.id ? '#2BA89E' : '#4D7572',
+                borderBottom: activeTab === t.id ? '2.5px solid #2BA89E' : '2.5px solid transparent',
+                whiteSpace: 'nowrap', transition: 'all 0.2s', fontFamily: 'inherit',
+              }}
+            >{t.label}</button>
+          ))}
+        </nav>
+      </div>
+    </header>
+  );
+}
+
+// ─────────────────────────────────────────────
+// MAIN TAB — 오늘 기록 대시보드
+// ─────────────────────────────────────────────
+function MainTab({ model, history, setActiveTab }) {
+  const chartRef = useRef(null);
+  const chartInst = useRef(null);
+  const today = new Date().toISOString().slice(0,10);
+  const todayRec = history.find(r => r.date === today);
+  const totalCum = history.length ? history[history.length-1].cumExpand : 0;
+  const progress = model ? Math.min((totalCum / model.maxExpand) * 100, 100) : 0;
+
+  const last7 = history.slice(-7);
+
+  useEffect(() => {
+    if (!chartRef.current || !last7.length) return;
+    if (chartInst.current) chartInst.current.destroy();
+    chartInst.current = new Chart(chartRef.current, {
+      type: 'bar',
+      data: {
+        labels: last7.map(r => r.date.slice(5)),
+        datasets: [{
+          label: '일별 확장량(mm)',
+          data: last7.map(r => r.expand),
+          backgroundColor: 'rgba(43,168,158,0.75)',
+          borderRadius: 6,
+          borderSkipped: false,
+        }, {
+          label: '통증 등급',
+          data: last7.map(r => r.pain),
+          type: 'line',
+          borderColor: '#FF8C5A',
+          backgroundColor: 'rgba(255,140,90,0.12)',
+          pointBackgroundColor: '#FF8C5A',
+          pointRadius: 5,
+          tension: 0.35,
+          yAxisID: 'y2',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'bottom', labels: { font: { family: 'Pretendard Variable' }, color: '#4D7572', boxWidth: 12 } } },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: '#4D7572', font: { family: 'Pretendard Variable', size: 11 } } },
+          y: { beginAtZero: true, grid: { color: '#F0FAF9' }, ticks: { color: '#4D7572', font: { family: 'Pretendard Variable', size: 11 } } },
+          y2: { position: 'right', min: 0, max: 5, grid: { display: false }, ticks: { stepSize: 1, color: '#FF8C5A', font: { size: 11 } } },
+        },
+        animation: { duration: 800, easing: 'easeOutQuart' },
+      },
+    });
+    return () => { if (chartInst.current) chartInst.current.destroy(); };
+  }, [history]);
+
+  const painColor = (p) => ['','#4CAF50','#8BC34A','#FFC107','#FF9800','#F44336'][p] || '#ccc';
+
+  return (
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 20px' }} className="fade-in">
+      {/* Hero stats row */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
+        {[
+          { icon: 'ph-activity', label: '누적 확장량', value: `${totalCum.toFixed(2)} mm`, sub: model ? `목표 ${model.maxExpand} mm` : '모델 미선택', color: '#2BA89E' },
+          { icon: 'ph-chart-pie', label: '치료 진행률', value: `${progress.toFixed(1)}%`, sub: `${model?.name || '—'} 모델 기준`, color: '#5CC8C0' },
+          { icon: 'ph-calendar-check', label: '연속 기록일', value: `${history.length}일`, sub: '치료 시작 이후', color: '#FF8C5A' },
+        ].map((s, i) => (
+          <div key={i} className="card-appear" style={{ animationDelay: `${i * 0.08}s`, background: '#fff', borderRadius: 16, padding: 20, boxShadow: '0 4px 20px rgba(43,168,158,0.10)', border: '1px solid #E8F5F4' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <i className={`ph ${s.icon}`} style={{ color: s.color, fontSize: 20 }}></i>
+              <span style={{ fontSize: 12, color: '#4D7572', fontWeight: 500 }}>{s.label}</span>
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: '#1A3533', letterSpacing: -1 }}>{s.value}</div>
+            <div style={{ fontSize: 12, color: '#4D7572', marginTop: 4 }}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Progress bar */}
+      {model && (
+        <div style={{ background: '#fff', borderRadius: 16, padding: '20px 24px', marginBottom: 24, boxShadow: '0 4px 20px rgba(43,168,158,0.08)', border: '1px solid #E8F5F4' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: '#1A3533' }}>치료 목표 달성률</span>
+            <span style={{ fontSize: 13, color: '#2BA89E', fontWeight: 700 }}>{totalCum.toFixed(2)} / {model.maxExpand} mm</span>
+          </div>
+          <div style={{ height: 14, background: '#E8F5F4', borderRadius: 40, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${progress}%`, background: 'linear-gradient(90deg, #2BA89E, #5CC8C0)', borderRadius: 40, transition: 'width 1s cubic-bezier(0.34,1.56,0.64,1)' }}></div>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
+            <span style={{ fontSize: 11, color: '#4D7572' }}>치료 시작</span>
+            <span style={{ fontSize: 11, color: '#4D7572' }}>목표 달성</span>
+          </div>
+        </div>
+      )}
+
+      {/* Today's record */}
+      <div style={{ background: todayRec ? '#fff' : 'linear-gradient(135deg, #F5FAFA, #E8F5F4)', borderRadius: 16, padding: 20, marginBottom: 24, boxShadow: '0 4px 20px rgba(43,168,158,0.08)', border: `1px solid ${todayRec ? '#D0EDEA' : '#B8E0DC'}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <i className="ph ph-sun" style={{ color: '#FF8C5A', fontSize: 20 }}></i>
+            <span style={{ fontSize: 14, fontWeight: 700, color: '#1A3533' }}>오늘의 기록</span>
+          </div>
+          {todayRec ? (
+            <span style={{ background: '#2BA89E', color: '#fff', fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 40 }}>완료</span>
+          ) : (
+            <button onClick={() => setActiveTab('record')} style={{ background: '#2BA89E', color: '#fff', border: 'none', borderRadius: 40, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+              기록하기
+            </button>
+          )}
+        </div>
+        {todayRec ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            {[
+              { label: '회전수', value: `${todayRec.turns}회전` },
+              { label: '당일 확장량', value: `${todayRec.expand.toFixed(2)} mm` },
+              { label: '통증 등급', value: `${todayRec.pain}단계` },
+            ].map((item, i) => (
+              <div key={i} style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 11, color: '#4D7572', marginBottom: 4 }}>{item.label}</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: '#1A3533' }}>{item.value}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p style={{ fontSize: 13, color: '#4D7572', textAlign: 'center', padding: '12px 0' }}>
+            아직 오늘 기록을 입력하지 않았습니다.<br />기록을 입력하여 치료를 이어가세요.
+          </p>
+        )}
+      </div>
+
+      {/* Chart */}
+      <div style={{ background: '#fff', borderRadius: 16, padding: 20, boxShadow: '0 4px 20px rgba(43,168,158,0.08)', border: '1px solid #E8F5F4' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+          <i className="ph ph-chart-bar" style={{ color: '#2BA89E', fontSize: 20 }}></i>
+          <span style={{ fontSize: 14, fontWeight: 700, color: '#1A3533' }}>최근 7일 기록 추이</span>
+        </div>
+        <div style={{ position: 'relative', height: 220 }}>
+          <canvas ref={chartRef}></canvas>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// MODEL TAB — 악궁확장기 모델 선택
+// ─────────────────────────────────────────────
+function ModelTab({ model, setModel, showToast }) {
+  const [selected, setSelected] = useState(model?.id || null);
+
+  const confirm = () => {
+    const m = MODELS.find(m => m.id === selected);
+    if (m) { setModel(m); showToast(`${m.name} 모델이 선택되었습니다.`); }
+  };
+
+  return (
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 20px' }} className="fade-in">
+      <div style={{ marginBottom: 20 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 800, color: '#1A3533', marginBottom: 6 }}>악궁확장기 모델 선택</h2>
+        <p style={{ fontSize: 13, color: '#4D7572' }}>병원에서 처방받은 모델을 선택하세요. 모델별 확장량이 자동으로 적용됩니다.</p>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 14, marginBottom: 24 }}>
+        {MODELS.map((m, i) => {
+          const sel = selected === m.id;
+          return (
+            <div
+              key={m.id}
+              className="card-appear"
+              style={{
+                animationDelay: `${i * 0.06}s`,
+                borderRadius: 16, padding: 20, cursor: 'pointer',
+                border: sel ? '2px solid #2BA89E' : '1.5px solid #E0F0EE',
+                background: sel ? 'linear-gradient(135deg, #F0FAF9, #E0F7F5)' : '#fff',
+                boxShadow: sel ? '0 6px 24px rgba(43,168,158,0.18)' : '0 2px 8px rgba(0,0,0,0.04)',
+                transition: 'all 0.22s',
+                transform: sel ? 'scale(1.02)' : 'scale(1)',
+              }}
+              onClick={() => setSelected(m.id)}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <span style={{ fontSize: 17, fontWeight: 800, color: sel ? '#2BA89E' : '#1A3533' }}>{m.name}</span>
+                <div style={{ width: 22, height: 22, borderRadius: '50%', border: sel ? '6px solid #2BA89E' : '2px solid #C5DDD8', background: sel ? '#2BA89E' : '#fff', transition: 'all 0.2s' }}></div>
+              </div>
+              <div style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, color: '#4D7572' }}>1회전 확장량</div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: '#2BA89E' }}>{m.expandPerTurn} mm</div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, color: '#4D7572' }}>목표 확장량</div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: '#1A3533' }}>{m.maxExpand} mm</div>
+                </div>
+              </div>
+              <p style={{ fontSize: 12, color: '#4D7572', lineHeight: 1.6 }}>{m.desc}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      <button
+        onClick={confirm}
+        disabled={!selected}
+        style={{
+          width: '100%', padding: '14px 0', background: selected ? '#2BA89E' : '#C5DDD8',
+          color: '#fff', border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 700,
+          cursor: selected ? 'pointer' : 'not-allowed', fontFamily: 'inherit',
+          transition: 'all 0.2s',
+          boxShadow: selected ? '0 6px 20px rgba(43,168,158,0.35)' : 'none',
+        }}
+      >
+        <i className="ph ph-check-circle" style={{ marginRight: 8 }}></i>
+        {model ? '모델 변경 확정' : '모델 선택 완료'}
+      </button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// RECORD TAB — 일일 확장 기록 입력
+// ─────────────────────────────────────────────
+function RecordTab({ model, history, setHistory, showToast }) {
+  const today = new Date().toISOString().slice(0,10);
+  const [date, setDate] = useState(today);
+  const [turns, setTurns] = useState('');
+  const [pain, setPain] = useState(0);
+  const [memo, setMemo] = useState('');
+
+  const expand = model && turns ? (parseFloat(turns) * model.expandPerTurn).toFixed(2) : null;
+  const existRecord = history.find(r => r.date === date);
+
+  const painLabels = ['', '매우 약함', '약함', '보통', '강함', '매우 강함'];
+  const painColors = ['', '#4CAF50', '#8BC34A', '#FFC107', '#FF9800', '#F44336'];
+
+  const submit = () => {
+    if (!model) { showToast('모델을 먼저 선택해주세요.'); return; }
+    if (!turns || parseFloat(turns) <= 0) { showToast('회전수를 입력해주세요.'); return; }
+    if (pain === 0) { showToast('통증 등급을 선택해주세요.'); return; }
+    if (existRecord) { showToast('해당 날짜의 기록이 이미 있습니다.'); return; }
+    const newRec = {
+      id: Date.now(), date,
+      turns: parseFloat(turns),
+      expand: parseFloat(expand),
+      pain, memo,
+      cumExpand: 0,
+    };
+    const sorted = [...history, newRec].sort((a,b) => a.date.localeCompare(b.date));
+    let acc = 0;
+    const recalc = sorted.map(r => { acc += r.expand; return { ...r, cumExpand: parseFloat(acc.toFixed(2)) }; });
+    setHistory(recalc);
+    setTurns(''); setPain(0); setMemo(''); setDate(today);
+    showToast('기록이 저장되었습니다.');
+  };
+
+  return (
+    <div style={{ maxWidth: 600, margin: '0 auto', padding: '24px 20px' }} className="fade-in">
+      <div style={{ marginBottom: 20 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 800, color: '#1A3533', marginBottom: 6 }}>일일 확장 기록 입력</h2>
+        <p style={{ fontSize: 13, color: '#4D7572' }}>오늘의 확장 정보를 입력하세요. 당일 확장량이 자동 계산됩니다.</p>
+      </div>
+
+      {model && (
+        <div style={{ background: 'linear-gradient(135deg, #2BA89E, #5CC8C0)', borderRadius: 14, padding: '14px 18px', marginBottom: 20, color: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 2 }}>선택 모델</div>
+            <div style={{ fontWeight: 800, fontSize: 16 }}>{model.name}</div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 2 }}>1회전 확장량</div>
+            <div style={{ fontWeight: 800, fontSize: 16 }}>{model.expandPerTurn} mm/회전</div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ background: '#fff', borderRadius: 16, padding: 24, boxShadow: '0 4px 20px rgba(43,168,158,0.08)', border: '1px solid #E8F5F4' }}>
+        {/* Date */}
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ fontSize: 13, fontWeight: 700, color: '#1A3533', display: 'block', marginBottom: 8 }}>
+            <i className="ph ph-calendar" style={{ color: '#2BA89E', marginRight: 6 }}></i>날짜
+          </label>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} max={today}
+            style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: `1.5px solid ${existRecord ? '#FF8C5A' : '#E0F0EE'}`, fontSize: 14, fontFamily: 'inherit', color: '#1A3533', outline: 'none' }}
+          />
+          {existRecord && <p style={{ fontSize: 12, color: '#FF8C5A', marginTop: 6 }}>이 날짜에 이미 기록이 있습니다.</p>}
+        </div>
+
+        {/* Turns */}
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ fontSize: 13, fontWeight: 700, color: '#1A3533', display: 'block', marginBottom: 8 }}>
+            <i className="ph ph-arrows-clockwise" style={{ color: '#2BA89E', marginRight: 6 }}></i>오늘 회전수
+          </label>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <input type="number" value={turns} onChange={e => setTurns(e.target.value)} min="0.5" max="20" step="0.5" placeholder="예: 2"
+              style={{ flex: 1, padding: '10px 14px', borderRadius: 10, border: '1.5px solid #E0F0EE', fontSize: 14, fontFamily: 'inherit', color: '#1A3533', outline: 'none' }}
+            />
+            <span style={{ fontSize: 13, color: '#4D7572', whiteSpace: 'nowrap' }}>회전</span>
+          </div>
+          {expand && (
+            <div style={{ marginTop: 10, background: '#F0FAF9', borderRadius: 10, padding: '10px 14px', display: 'flex', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 13, color: '#4D7572' }}>당일 확장량</span>
+              <span style={{ fontSize: 15, fontWeight: 800, color: '#2BA89E' }}>{expand} mm</span>
+            </div>
+          )}
+        </div>
+
+        {/* Pain */}
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ fontSize: 13, fontWeight: 700, color: '#1A3533', display: 'block', marginBottom: 10 }}>
+            <i className="ph ph-smiley" style={{ color: '#2BA89E', marginRight: 6 }}></i>통증 등급
+          </label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {[1,2,3,4,5].map(p => (
+              <button key={p} onClick={() => setPain(p)}
+                style={{
+                  flex: 1, padding: '10px 4px', borderRadius: 10, border: `2px solid ${pain === p ? painColors[p] : '#E0F0EE'}`,
+                  background: pain === p ? painColors[p] : '#fff', color: pain === p ? '#fff' : '#4D7572',
+                  cursor: 'pointer', fontWeight: 700, fontSize: 14, fontFamily: 'inherit', transition: 'all 0.18s',
+                }}
+              >{p}</button>
+            ))}
+          </div>
+          {pain > 0 && (
+            <p style={{ fontSize: 12, color: painColors[pain], fontWeight: 600, marginTop: 6 }}>{painLabels[pain]}</p>
+          )}
+        </div>
+
+        {/* Memo */}
+        <div style={{ marginBottom: 24 }}>
+          <label style={{ fontSize: 13, fontWeight: 700, color: '#1A3533', display: 'block', marginBottom: 8 }}>
+            <i className="ph ph-note-pencil" style={{ color: '#2BA89E', marginRight: 6 }}></i>메모 (선택)
+          </label>
+          <textarea value={memo} onChange={e => setMemo(e.target.value.slice(0,200))} placeholder="오늘 치료 중 느낀 점을 자유롭게 작성하세요." rows={3}
+            style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1.5px solid #E0F0EE', fontSize: 13, fontFamily: 'inherit', color: '#1A3533', resize: 'none', outline: 'none', lineHeight: 1.6 }}
+          />
+          <p style={{ fontSize: 11, color: '#4D7572', textAlign: 'right', marginTop: 4 }}>{memo.length}/200</p>
+        </div>
+
+        <button onClick={submit}
+          style={{ width: '100%', padding: '14px', background: '#2BA89E', color: '#fff', border: 'none', borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 6px 20px rgba(43,168,158,0.3)', transition: 'all 0.2s' }}
+        >
+          <i className="ph ph-floppy-disk" style={{ marginRight: 8 }}></i>기록 저장
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// REPORT TAB — 이미지 첨부 증상 보고
+// ─────────────────────────────────────────────
+function ReportTab({ showToast }) {
+  const [reports, setReports] = useState(MOCK_REPORTS);
+  const [showForm, setShowForm] = useState(false);
+  const [type, setType] = useState('');
+  const [message, setMessage] = useState('');
+  const [fileName, setFileName] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const fileRef = useRef(null);
+
+  const handleFile = (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    setFileName(f.name);
+    setUploading(true);
+    setUploadProgress(0);
+    let p = 0;
+    const iv = setInterval(() => {
+      p += 15;
+      setUploadProgress(Math.min(p, 100));
+      if (p >= 100) { clearInterval(iv); setUploading(false); }
+    }, 120);
+  };
+
+  const submit = () => {
+    if (!type) { showToast('증상 유형을 선택해주세요.'); return; }
+    if (!message.trim()) { showToast('증상 메시지를 입력해주세요.'); return; }
+    const today = new Date().toISOString().slice(0,10);
+    setReports(prev => [{ id: Date.now(), date: today, type, message, imageUrl: fileName, status: '대기 중' }, ...prev]);
+    setShowForm(false); setType(''); setMessage(''); setFileName(null);
+    showToast('증상 보고가 병원으로 전송되었습니다.');
+  };
+
+  return (
+    <div style={{ maxWidth: 700, margin: '0 auto', padding: '24px 20px' }} className="fade-in">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div>
+          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#1A3533', marginBottom: 4 }}>이미지 첨부 증상 보고</h2>
+          <p style={{ fontSize: 13, color: '#4D7572' }}>이상 증상을 사진과 함께 병원으로 전송합니다.</p>
+        </div>
+        <button onClick={() => setShowForm(true)}
+          style={{ background: '#2BA89E', color: '#fff', border: 'none', borderRadius: 12, padding: '10px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 4px 16px rgba(43,168,158,0.3)' }}
+        >
+          <i className="ph ph-plus" style={{ fontSize: 16 }}></i>새 보고
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {reports.map(r => (
+          <div key={r.id} style={{ background: '#fff', borderRadius: 14, padding: 18, border: '1px solid #E8F5F4', boxShadow: '0 2px 10px rgba(43,168,158,0.06)', animation: 'fadeIn 0.3s ease' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ background: '#F0FAF9', borderRadius: 8, padding: '4px 10px', fontSize: 12, fontWeight: 700, color: '#2BA89E' }}>{r.type}</span>
+                <span style={{ fontSize: 12, color: '#4D7572' }}>{r.date}</span>
+              </div>
+              <span style={{ fontSize: 11, fontWeight: 700, color: r.status === '확인 완료' ? '#2BA89E' : '#FF8C5A', background: r.status === '확인 완료' ? '#E0F7F5' : '#FFF3EE', padding: '3px 10px', borderRadius: 20 }}>{r.status}</span>
+            </div>
+            <p style={{ fontSize: 13, color: '#1A3533', lineHeight: 1.6, marginBottom: r.imageUrl ? 8 : 0 }}>{r.message}</p>
+            {r.imageUrl && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, padding: '6px 10px', background: '#F5FAFA', borderRadius: 8, border: '1px solid #E0F0EE' }}>
+                <i className="ph ph-image" style={{ color: '#2BA89E', fontSize: 16 }}></i>
+                <span style={{ fontSize: 12, color: '#4D7572' }}>{r.imageUrl}</span>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Modal */}
+      {showForm && (
+        <div className="overlay" onClick={e => e.target === e.currentTarget && setShowForm(false)}>
+          <div className="card-appear" style={{ background: '#fff', borderRadius: 20, padding: 28, width: '90%', maxWidth: 480, boxShadow: '0 20px 60px rgba(26,53,51,0.15)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+              <h3 style={{ fontSize: 17, fontWeight: 800, color: '#1A3533' }}>이상 증상 보고</h3>
+              <button onClick={() => setShowForm(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4D7572', fontSize: 22 }}>
+                <i className="ph ph-x"></i>
+              </button>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: '#4D7572', display: 'block', marginBottom: 6 }}>증상 유형</label>
+              <select value={type} onChange={e => setType(e.target.value)}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #E0F0EE', fontSize: 14, fontFamily: 'inherit', color: '#1A3533', outline: 'none' }}
+              >
+                <option value="">선택해주세요</option>
+                <option>통증 이상</option>
+                <option>장치 이상</option>
+                <option>치아/잇몸 이상</option>
+                <option>기타</option>
+              </select>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: '#4D7572', display: 'block', marginBottom: 6 }}>증상 설명</label>
+              <textarea value={message} onChange={e => setMessage(e.target.value)} placeholder="증상을 자세히 설명해주세요." rows={4}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #E0F0EE', fontSize: 13, fontFamily: 'inherit', resize: 'none', outline: 'none', lineHeight: 1.6 }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: '#4D7572', display: 'block', marginBottom: 6 }}>사진 첨부 (선택)</label>
+              <div style={{ border: `2px dashed ${fileName ? '#2BA89E' : '#D0EDEA'}`, borderRadius: 12, padding: 16, textAlign: 'center', cursor: 'pointer', background: fileName ? '#F0FAF9' : '#fff', transition: 'all 0.2s' }}
+                onClick={() => fileRef.current?.click()}
+              >
+                <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: 'none' }} />
+                {uploading ? (
+                  <div>
+                    <p style={{ fontSize: 12, color: '#2BA89E', marginBottom: 8 }}>업로드 중... {uploadProgress}%</p>
+                    <div style={{ height: 6, background: '#E0F0EE', borderRadius: 40 }}>
+                      <div style={{ height: '100%', width: `${uploadProgress}%`, background: '#2BA89E', borderRadius: 40, transition: 'width 0.1s' }}></div>
+                    </div>
+                  </div>
+                ) : fileName ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    <i className="ph ph-check-circle" style={{ color: '#2BA89E', fontSize: 20 }}></i>
+                    <span style={{ fontSize: 13, color: '#2BA89E', fontWeight: 600 }}>{fileName}</span>
+                  </div>
+                ) : (
+                  <div>
+                    <i className="ph ph-camera" style={{ color: '#4D7572', fontSize: 28, display: 'block', marginBottom: 6 }}></i>
+                    <p style={{ fontSize: 12, color: '#4D7572' }}>카메라 촬영 또는 갤러리에서 선택</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <button onClick={submit}
+              style={{ width: '100%', padding: '13px', background: '#2BA89E', color: '#fff', border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 4px 16px rgba(43,168,158,0.3)' }}
+            >
+              <i className="ph ph-paper-plane-tilt" style={{ marginRight: 8 }}></i>병원으로 전송
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// HISTORY TAB — 기록 이력
+// ─────────────────────────────────────────────
+function HistoryTab({ history, model }) {
+  const [detail, setDetail] = useState(null);
+  const [sortDesc, setSortDesc] = useState(true);
+
+  const sorted = [...history].sort((a,b) => sortDesc ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date));
+  const painLabels = ['','매우 약함','약함','보통','강함','매우 강함'];
+  const painColors = ['','#4CAF50','#8BC34A','#FFC107','#FF9800','#F44336'];
+
+  return (
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 20px' }} className="fade-in">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div>
+          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#1A3533', marginBottom: 4 }}>기록 이력</h2>
+          <p style={{ fontSize: 13, color: '#4D7572' }}>총 {history.length}건의 기록이 있습니다.</p>
+        </div>
+        <button onClick={() => setSortDesc(!sortDesc)}
+          style={{ background: '#F0FAF9', border: '1px solid #D0EDEA', borderRadius: 10, padding: '8px 14px', fontSize: 12, fontWeight: 600, color: '#2BA89E', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <i className={`ph ph-sort-${sortDesc ? 'descending' : 'ascending'}`}></i>
+          {sortDesc ? '최신순' : '날짜순'}
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {sorted.map((r, i) => (
+          <div key={r.id} className="fade-in" style={{ animationDelay: `${Math.min(i,8)*0.04}s`, background: '#fff', borderRadius: 12, padding: '14px 18px', border: '1px solid #E8F5F4', cursor: 'pointer', transition: 'all 0.18s', boxShadow: '0 2px 8px rgba(43,168,158,0.05)' }}
+            onClick={() => setDetail(r)}
+            onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 6px 20px rgba(43,168,158,0.14)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+            onMouseLeave={e => { e.currentTarget.style.boxShadow = '0 2px 8px rgba(43,168,158,0.05)'; e.currentTarget.style.transform = 'translateY(0)'; }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <div style={{ width: 44, height: 44, borderRadius: 12, background: 'linear-gradient(135deg, #F0FAF9, #E0F7F5)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ fontSize: 10, color: '#4D7572' }}>{r.date.slice(5,7)}월</span>
+                <span style={{ fontSize: 16, fontWeight: 800, color: '#2BA89E' }}>{r.date.slice(8)}</span>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', gap: 16 }}>
+                  <span style={{ fontSize: 13, color: '#1A3533' }}><b>{r.turns}회전</b> · {r.expand.toFixed(2)}mm</span>
+                  <span style={{ fontSize: 13, color: '#4D7572' }}>누적 {r.cumExpand.toFixed(2)}mm</span>
+                </div>
+                {r.memo && <p style={{ fontSize: 12, color: '#4D7572', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 300 }}>{r.memo}</p>}
+              </div>
+              <div style={{ width: 32, height: 32, borderRadius: '50%', background: painColors[r.pain], display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: '#fff' }}>{r.pain}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Detail Modal */}
+      {detail && (
+        <div className="overlay" onClick={e => e.target === e.currentTarget && setDetail(null)}>
+          <div className="card-appear" style={{ background: '#fff', borderRadius: 20, padding: 28, width: '90%', maxWidth: 420, boxShadow: '0 20px 60px rgba(26,53,51,0.15)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 800, color: '#1A3533' }}>{detail.date} 기록 상세</h3>
+              <button onClick={() => setDetail(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4D7572', fontSize: 22 }}>
+                <i className="ph ph-x"></i>
+              </button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+              {[
+                { l: '회전수', v: `${detail.turns}회전` },
+                { l: '당일 확장량', v: `${detail.expand.toFixed(2)} mm` },
+                { l: '누적 확장량', v: `${detail.cumExpand.toFixed(2)} mm` },
+                { l: '통증 등급', v: `${detail.pain}단계 (${painLabels[detail.pain]})` },
+              ].map((item, i) => (
+                <div key={i} style={{ background: '#F5FAFA', borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 11, color: '#4D7572', marginBottom: 4 }}>{item.l}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: '#1A3533' }}>{item.v}</div>
+                </div>
+              ))}
+            </div>
+            {detail.memo && (
+              <div style={{ background: '#F5FAFA', borderRadius: 10, padding: '12px 14px' }}>
+                <div style={{ fontSize: 11, color: '#4D7572', marginBottom: 4 }}>메모</div>
+                <p style={{ fontSize: 13, color: '#1A3533', lineHeight: 1.6 }}>{detail.memo}</p>
+              </div>
+            )}
+            <button onClick={() => setDetail(null)}
+              style={{ width: '100%', marginTop: 16, padding: '12px', background: '#F0FAF9', color: '#2BA89E', border: '1.5px solid #D0EDEA', borderRadius: 12, fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+            >닫기</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// APP
+// ─────────────────────────────────────────────
+function App() {
+  const [activeTab, setActiveTab] = useState('main');
+  const [model, setModel] = useState(MODELS[0]);
+  const [history, setHistory] = useState(() => genHistory(MODELS[0]));
+  const [toast, setToast] = useState(null);
+
+  const showToast = useCallback((msg) => {
+    setToast(null);
+    setTimeout(() => setToast(msg), 10);
+  }, []);
+
+  const patientCode = 'PT-2026-0047';
+
+  return (
+    <div style={{ width: '100%', minHeight: '100vh', background: '#F5FAFA' }}>
+      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+      <Header activeTab={activeTab} setActiveTab={setActiveTab} patientCode={patientCode} />
+      <main>
+        {activeTab === 'main'    && <MainTab model={model} history={history} setActiveTab={setActiveTab} />}
+        {activeTab === 'model'   && <ModelTab model={model} setModel={setModel} showToast={showToast} />}
+        {activeTab === 'record'  && <RecordTab model={model} history={history} setHistory={setHistory} showToast={showToast} />}
+        {activeTab === 'report'  && <ReportTab showToast={showToast} />}
+        {activeTab === 'history' && <HistoryTab history={history} model={model} />}
+      </main>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
