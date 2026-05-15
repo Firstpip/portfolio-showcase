@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ERP·Zendesk 통합 운영 플랫폼</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+<script src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
+<script src="https://unpkg.com/recharts/umd/Recharts.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { width: 100%; height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; }
+  body { background: #F0F9F9; color: #0F2C2C; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes heroSlideDown {
+    from { transform: translateY(-16px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes drawerSlide {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
+  @keyframes fadeInUp {
+    from { transform: translateY(10px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes toastPop {
+    from { transform: translateX(120%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  @keyframes modalFadeScale {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .page-fade { animation: fadeIn 0.22s ease; }
+  .hero-anim { animation: heroSlideDown 0.3s ease; }
+  .card-up { animation: fadeInUp 0.25s ease both; }
+
+  .ti { line-height: 1; }
+
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(13,110,110,0.2); border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } = Recharts;
+
+const C = {
+  primary: '#0D6E6E',
+  primaryDark: '#0A5858',
+  primaryLight: '#0E9F9F',
+  accent: '#10B981',
+  accentLight: '#34D399',
+  bg: '#F0F9F9',
+  surface: '#FFFFFF',
+  text: '#0F2C2C',
+  textMuted: '#4B7070',
+  border: '#CCE8E8',
+  success: '#059669',
+  warning: '#B45309',
+  danger: '#DC2626',
+  info: '#0891B2',
+};
+
+// 더미 데이터
+const erpEventData = [
+  { id: 'ERP-8821', time: '2026-05-15 14:35:02', type: 'ORDER_STATUS', payload: '주문 #ORD-44821 → SHIPPED', status: 'processed', latency: 142 },
+  { id: 'ERP-8820', time: '2026-05-15 14:31:18', type: 'CUSTOMER_UPDATE', payload: 'Customer #C-2941 이메일 변경', status: 'processed', latency: 88 },
+  { id: 'ERP-8819', time: '2026-05-15 14:28:44', type: 'LICENSE_ISSUE', payload: 'Enterprise 플랜 라이선스 발급 요청', status: 'failed', latency: 0 },
+  { id: 'ERP-8818', time: '2026-05-15 14:22:09', type: 'TICKET_SYNC', payload: 'Ticket #ZD-18912 상태 업데이트', status: 'processed', latency: 211 },
+  { id: 'ERP-8817', time: '2026-05-15 14:18:33', type: 'ORDER_STATUS', payload: '주문 #ORD-44815 → PROCESSING', status: 'processed', latency: 129 },
+  { id: 'ERP-8816', time: '2026-05-15 14:14:52', type: 'USER_DEACTIVATE', payload: 'User #USR-2218 비활성화', status: 'dlq', latency: 0 },
+  { id: 'ERP-8815', time: '2026-05-15 14:09:07', type: 'CUSTOMER_CREATE', payload: 'Customer #C-2945 신규 등록', status: 'processed', latency: 167 },
+  { id: 'ERP-8814', time: '2026-05-15 14:03:21', type: 'LICENSE_EXPIRE', payload: 'License #LIC-0831 만료 7일 전 알림', status: 'processed', latency: 95 },
+];
+
+const batchJobData = [
+  { id: 'BATCH-ORG', name: '조직 생성 배치', cron: '0 2 * * *', lastRun: '2026-05-15 02:00:11', duration: '4분 22초', status: 'success', processed: 8, active: true },
+  { id: 'BATCH-TICKET', name: '만료 티켓 자동삭제', cron: '0 3 * * *', lastRun: '2026-05-15 03:00:08', duration: '12분 44초', status: 'success', processed: 234, active: true },
+  { id: 'BATCH-SYNC', name: '고객DB 동기화', cron: '*/30 * * * *', lastRun: '2026-05-15 14:30:04', duration: '1분 18초', status: 'success', processed: 1240, active: true },
+  { id: 'BATCH-LIC', name: '라이선스 만료 스캔', cron: '0 9 * * *', lastRun: '2026-05-15 09:00:06', duration: '28초', status: 'success', processed: 12, active: true },
+  { id: 'BATCH-LOG', name: '감사로그 아카이빙', cron: '0 4 * * 0', lastRun: '2026-05-11 04:00:31', duration: '8분 55초', status: 'success', processed: 18440, active: false },
+  { id: 'BATCH-USER', name: '휴면 사용자 정리', cron: '0 5 1 * *', lastRun: '2026-05-01 05:00:14', duration: '2분 07초', status: 'failed', processed: 0, active: true },
+];
+
+const licenseData = [
+  { id: 'LIC-0841', product: 'Enterprise Suite', customer: '삼광솔루션즈', issued: '2026-05-15', expires: '2027-05-14', seats: 50, status: 'active', key: 'ENT-****-****-A4F2' },
+  { id: 'LIC-0840', product: 'Professional', customer: '한울테크', issued: '2026-05-10', expires: '2027-05-09', seats: 20, status: 'active', key: 'PRO-****-****-B8C1' },
+  { id: 'LIC-0839', product: 'Enterprise Suite', customer: '다온시스템', issued: '2026-02-01', expires: '2026-05-22', seats: 30, status: 'expiring', key: 'ENT-****-****-C3D7' },
+  { id: 'LIC-0838', product: 'Standard', customer: '미래정보통신', issued: '2026-04-01', expires: '2027-03-31', seats: 10, status: 'active', key: 'STD-****-****-E5F9' },
+  { id: 'LIC-0837', product: 'Professional', customer: '세진이엔씨', issued: '2025-11-01', expires: '2026-05-19', seats: 15, status: 'expiring', key: 'PRO-****-****-G7H2' },
+  { id: 'LIC-0836', product: 'Standard', customer: '대한정밀', issued: '2025-05-01', expires: '2026-04-30', seats: 5, status: 'expired', key: 'STD-****-****-I1J4' },
+];
+
+const erpChartData = [
+  { hour: '09:00', processed: 42, failed: 1 }, { hour: '10:00', processed: 68, failed: 2 },
+  { hour: '11:00', processed: 55, failed: 0 }, { hour: '12:00', processed: 31, failed: 3 },
+  { hour: '13:00', processed: 74, failed: 1 }, { hour: '14:00', processed: 58, failed: 2 },
+];
+
+const batchChartData = [
+  { name: 'BATCH-ORG', success: 30, failed: 0 }, { name: 'BATCH-TICKET', success: 30, failed: 0 },
+  { name: 'BATCH-SYNC', success: 28, failed: 2 }, { name: 'BATCH-LIC', success: 30, failed: 0 },
+  { name: 'BATCH-USER', success: 26, failed: 4 },
+];
+
+// 공통 컴포넌트
+function Badge({ status }) {
+  const map = {
+    processed: { bg: '#D1FAE5', color: '#065F46', text: '처리완료' },
+    failed: { bg: '#FEE2E2', color: '#991B1B', text: '실패' },
+    dlq: { bg: '#FEF3C7', color: '#92400E', text: 'DLQ 격리' },
+    success: { bg: '#D1FAE5', color: '#065F46', text: '성공' },
+    active: { bg: '#CFFAFE', color: '#155E75', text: '활성' },
+    expiring: { bg: '#FEF3C7', color: '#92400E', text: '만료임박' },
+    expired: { bg: '#FEE2E2', color: '#991B1B', text: '만료' },
+    running: { bg: '#DBEAFE', color: '#1E40AF', text: '실행중' },
+    stopped: { bg: '#F3F4F6', color: '#6B7280', text: '중단' },
+  };
+  const s = map[status] || { bg: '#F3F4F6', color: '#6B7280', text: status };
+  return <span style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, background: s.bg, color: s.color }}>{s.text}</span>;
+}
+
+function Toast({ message, type, onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, []);
+  const icons = { success: 'ti-circle-check', error: 'ti-alert-circle', info: 'ti-info-circle' };
+  const colors = { success: C.success, error: C.danger, info: C.info };
+  return (
+    <div style={{ position: 'fixed', top: 72, right: 20, zIndex: 1000, display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: '0 8px 24px rgba(13,110,110,0.15)', animation: 'toastPop 0.3s ease', minWidth: 280 }}>
+      <i className={`ti ${icons[type] || 'ti-info-circle'}`} style={{ fontSize: 18, color: colors[type] || C.info }} />
+      <span style={{ fontSize: 13, color: C.text }}>{message}</span>
+      <button onClick={onClose} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', padding: 2 }}>
+        <i className="ti ti-x" style={{ fontSize: 15, color: C.textMuted }} />
+      </button>
+    </div>
+  );
+}
+
+function Drawer({ title, onClose, children }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 500 }}>
+      <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.3)' }} onClick={onClose} />
+      <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 480, background: C.surface, boxShadow: '-8px 0 32px rgba(0,0,0,0.12)', display: 'flex', flexDirection: 'column', animation: 'drawerSlide 0.25s ease' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 20px', borderBottom: `1px solid ${C.border}` }}>
+          <span style={{ fontSize: 15, fontWeight: 600, color: C.text }}>{title}</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 6, borderRadius: 6 }}>
+            <i className="ti ti-x" style={{ fontSize: 18, color: C.textMuted }} />
+          </button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, width = 520 }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 500, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ background: C.surface, borderRadius: 10, width, maxWidth: '90vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column', animation: 'modalFadeScale 0.2s ease', boxShadow: '0 24px 64px rgba(13,110,110,0.2)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px', borderBottom: `1px solid ${C.border}` }}>
+          <span style={{ fontSize: 15, fontWeight: 600, color: C.text }}>{title}</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 6, borderRadius: 6 }}>
+            <i className="ti ti-x" style={{ fontSize: 18, color: C.textMuted }} />
+          </button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 22 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// 운영 대시보드
+function DashboardPage({ showToast }) {
+  const [recentAlert, setRecentAlert] = useState(null);
+
+  return (
+    <div className="page-fade">
+      {/* 히어로 섹션 */}
+      <div className="hero-anim" style={{ background: `linear-gradient(135deg, ${C.primary} 0%, ${C.primaryLight} 60%, #13C4A3 100%)`, padding: '32px 40px 40px', marginBottom: -20, position: 'relative', overflow: 'hidden' }}>
+        {/* 배경 장식 */}
+        <div style={{ position: 'absolute', top: -30, right: -30, width: 180, height: 180, borderRadius: '50%', background: 'rgba(255,255,255,0.06)' }} />
+        <div style={{ position: 'absolute', bottom: -40, right: 120, width: 120, height: 120, borderRadius: '50%', background: 'rgba(255,255,255,0.04)' }} />
+
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <i className="ti ti-home" style={{ fontSize: 12 }} />
+              운영 대시보드
+            </div>
+            <h1 style={{ fontSize: 26, fontWeight: 700, color: '#fff', marginBottom: 8 }}>통합 운영 현황</h1>
+            <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>2026년 5월 15일 14:36 기준 — ERP·Zendesk 통합 플랫폼 실시간 모니터링</p>
+          </div>
+          <div style={{ display: 'flex', gap: 12 }}>
+            {[
+              { label: '오늘 ERP 이벤트', value: '1,482건', sub: '실패 12건' },
+              { label: '배치 성공률', value: '96.2%', sub: '이번 달' },
+              { label: '활성 라이선스', value: '4건', sub: '만료임박 2건' },
+            ].map((s, i) => (
+              <div key={i} style={{ background: 'rgba(255,255,255,0.12)', borderRadius: 8, padding: '12px 16px', backdropFilter: 'blur(8px)', minWidth: 120 }}>
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.65)', marginBottom: 4 }}>{s.label}</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: '#fff' }}>{s.value}</div>
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)' }}>{s.sub}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ padding: '36px 40px 32px' }}>
+        {/* 시스템 헬스 그리드 */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 24 }}>
+          {[
+            { name: 'ERP API', status: 'online', latency: '88ms', icon: 'ti-plug-connected' },
+            { name: 'Bull Queue', status: 'online', latency: '정상', icon: 'ti-list-check' },
+            { name: 'Zendesk API', status: 'online', latency: '142ms', icon: 'ti-brand-telegram' },
+            { name: 'DB (Oracle)', status: 'warn', latency: '지연 감지', icon: 'ti-database' },
+            { name: 'AWS S3', status: 'online', latency: '정상', icon: 'ti-cloud' },
+          ].map((s, i) => (
+            <div key={i} className="card-up" style={{ animationDelay: `${i * 0.04}s`, background: C.surface, borderRadius: 8, padding: '12px 14px', border: `1px solid ${s.status === 'warn' ? '#FCD34D' : C.border}`, boxShadow: '0 2px 8px rgba(13,110,110,0.06)', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 8, background: s.status === 'warn' ? '#FEF3C7' : '#D1FAE5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <i className={`ti ${s.icon}`} style={{ fontSize: 18, color: s.status === 'warn' ? C.warning : C.success }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{s.name}</div>
+                <div style={{ fontSize: 11, color: s.status === 'warn' ? C.warning : C.textMuted }}>{s.latency}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
+          {/* ERP 이벤트 처리 차트 */}
+          <div style={{ background: C.surface, borderRadius: 10, padding: 20, border: `1px solid ${C.border}`, boxShadow: '0 2px 12px rgba(13,110,110,0.06)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>ERP 이벤트 처리 현황 (시간대별)</span>
+              <span style={{ fontSize: 11, color: C.textMuted }}>오늘</span>
+            </div>
+            <div style={{ position: 'relative', height: 200 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={erpChartData} margin={{ top: 0, right: 0, bottom: 0, left: -20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#CCE8E8" vertical={false} />
+                  <XAxis dataKey="hour" tick={{ fontSize: 11, fill: C.textMuted }} />
+                  <YAxis tick={{ fontSize: 11, fill: C.textMuted }} />
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 6, border: `1px solid ${C.border}` }} />
+                  <Bar dataKey="processed" fill={C.primary} name="처리완료" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="failed" fill="#FBBF24" name="실패" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* 배치 실행 현황 */}
+          <div style={{ background: C.surface, borderRadius: 10, padding: 20, border: `1px solid ${C.border}`, boxShadow: '0 2px 12px rgba(13,110,110,0.06)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>배치 작업 월별 실행 현황</span>
+              <span style={{ fontSize: 11, color: C.textMuted }}>5월</span>
+            </div>
+            <div style={{ position: 'relative', height: 200 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={batchChartData} margin={{ top: 0, right: 0, bottom: 0, left: -20 }} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" stroke="#CCE8E8" horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 10, fill: C.textMuted }} />
+                  <YAxis dataKey="name" type="category" tick={{ fontSize: 10, fill: C.textMuted }} width={100} />
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 6 }} />
+                  <Bar dataKey="success" fill={C.accent} name="성공" radius={[0, 3, 3, 0]} />
+                  <Bar dataKey="failed" fill={C.danger} name="실패" radius={[0, 3, 3, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+
+        {/* 알림 패널 */}
+        <div style={{ background: C.surface, borderRadius: 10, padding: 20, border: `1px solid ${C.border}`, boxShadow: '0 2px 12px rgba(13,110,110,0.06)' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 14 }}>최근 시스템 알림</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {[
+              { icon: 'ti-alert-triangle', color: C.warning, bg: '#FEF3C7', text: '라이선스 #LIC-0839 만료까지 7일 남았습니다. (다온시스템)', time: '방금 전' },
+              { icon: 'ti-x-circle', color: C.danger, bg: '#FEE2E2', text: 'BATCH-USER (휴면 사용자 정리) 실행 실패 — Dead Letter Queue 격리됨', time: '5시간 전' },
+              { icon: 'ti-plug-x', color: C.warning, bg: '#FEF3C7', text: 'ERP 이벤트 #ERP-8816 재처리 3회 실패 → DLQ 격리', time: '20분 전' },
+              { icon: 'ti-circle-check', color: C.success, bg: '#D1FAE5', text: '고객DB 동기화 배치 완료 — 1,240건 처리 (1분 18초)', time: '6분 전' },
+            ].map((a, i) => (
+              <div key={i} onClick={() => showToast('상세 내용을 확인합니다.', 'info')} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 6, border: `1px solid ${C.border}`, cursor: 'pointer', transition: 'background 0.15s' }}
+                onMouseEnter={e => e.currentTarget.style.background = '#F0F9F9'}
+                onMouseLeave={e => e.currentTarget.style.background = ''}>
+                <div style={{ width: 30, height: 30, borderRadius: '50%', background: a.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <i className={`ti ${a.icon}`} style={{ fontSize: 16, color: a.color }} />
+                </div>
+                <span style={{ fontSize: 13, color: C.text, flex: 1 }}>{a.text}</span>
+                <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{a.time}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ERP 연동 관리
+function ErpPage({ showToast }) {
+  const [selected, setSelected] = useState(null);
+  const [retrying, setRetrying] = useState(false);
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  const filtered = erpEventData.filter(e =>
+    (typeFilter === 'all' || e.type.startsWith(typeFilter)) &&
+    (statusFilter === 'all' || e.status === statusFilter)
+  );
+
+  const handleRetry = () => {
+    setRetrying(true);
+    setTimeout(() => {
+      setRetrying(false);
+      setSelected(null);
+      showToast('DLQ 이벤트 재처리 요청이 큐에 추가됐습니다.', 'success');
+    }, 2000);
+  };
+
+  return (
+    <div style={{ padding: '28px 40px', minHeight: '100%' }} className="page-fade">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text }}>ERP 연동 관리</h2>
+          <p style={{ fontSize: 13, color: C.textMuted, marginTop: 4 }}>비동기 ERP 이벤트 수신 이력과 처리 상태를 추적합니다</p>
+        </div>
+        <button onClick={() => showToast('이벤트 목록을 새로고침했습니다.', 'success')} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
+          <i className="ti ti-refresh" style={{ fontSize: 15 }} />
+          새로고침
+        </button>
+      </div>
+
+      {/* 요약 배지 */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+        {[
+          { label: '처리완료', count: erpEventData.filter(e => e.status === 'processed').length, color: C.success, bg: '#D1FAE5' },
+          { label: '실패', count: erpEventData.filter(e => e.status === 'failed').length, color: C.danger, bg: '#FEE2E2' },
+          { label: 'DLQ 격리', count: erpEventData.filter(e => e.status === 'dlq').length, color: C.warning, bg: '#FEF3C7' },
+        ].map((s, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: s.bg, borderRadius: 8, cursor: 'pointer' }} onClick={() => setStatusFilter(i === 0 ? 'processed' : i === 1 ? 'failed' : 'dlq')}>
+            <span style={{ fontSize: 20, fontWeight: 700, color: s.color }}>{s.count}</span>
+            <span style={{ fontSize: 12, color: s.color, fontWeight: 500 }}>{s.label}</span>
+          </div>
+        ))}
+        <button onClick={() => { setStatusFilter('all'); setTypeFilter('all'); }} style={{ padding: '8px 14px', background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.textMuted, cursor: 'pointer' }}>
+          필터 초기화
+        </button>
+      </div>
+
+      {/* 필터 */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, padding: '14px 16px', background: C.surface, borderRadius: 8, border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(13,110,110,0.06)' }}>
+        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 12, color: C.text, background: C.surface }}>
+          <option value="all">전체 이벤트 유형</option>
+          <option value="ORDER">주문 관련</option>
+          <option value="CUSTOMER">고객 관련</option>
+          <option value="LICENSE">라이선스 관련</option>
+          <option value="TICKET">티켓 관련</option>
+          <option value="USER">사용자 관련</option>
+        </select>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 12, color: C.text, background: C.surface }}>
+          <option value="all">전체 상태</option>
+          <option value="processed">처리완료</option>
+          <option value="failed">실패</option>
+          <option value="dlq">DLQ 격리</option>
+        </select>
+        <span style={{ display: 'flex', alignItems: 'center', marginLeft: 'auto', fontSize: 12, color: C.textMuted }}>{filtered.length}건 표시</span>
+      </div>
+
+      {/* 이벤트 테이블 */}
+      <div style={{ background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, overflow: 'hidden', boxShadow: '0 2px 12px rgba(13,110,110,0.06)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '100px 160px 140px 1fr 80px 80px', padding: '9px 18px', background: '#E8F5F5', borderBottom: `1px solid ${C.border}`, fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          <span>이벤트 ID</span><span>수신 시각</span><span>이벤트 유형</span><span>페이로드 요약</span><span>응답시간</span><span>상태</span>
+        </div>
+        {filtered.map((ev, i) => (
+          <div key={ev.id} onClick={() => setSelected(ev)} style={{ display: 'grid', gridTemplateColumns: '100px 160px 140px 1fr 80px 80px', padding: '12px 18px', borderBottom: i < filtered.length - 1 ? `1px solid ${C.border}` : 'none', fontSize: 12, color: C.text, cursor: 'pointer', alignItems: 'center', transition: 'background 0.12s' }}
+            onMouseEnter={e => e.currentTarget.style.background = '#F0F9F9'}
+            onMouseLeave={e => e.currentTarget.style.background = ''}>
+            <span style={{ fontWeight: 600, color: C.primary, fontSize: 11 }}>{ev.id}</span>
+            <span style={{ color: C.textMuted, fontSize: 11 }}>{ev.time.split(' ')[1]}</span>
+            <span style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 500 }}>{ev.type}</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: 12 }}>{ev.payload}</span>
+            <span style={{ fontSize: 11, color: ev.status === 'processed' ? C.textMuted : C.danger }}>{ev.status === 'processed' ? `${ev.latency}ms` : '—'}</span>
+            <Badge status={ev.status} />
+          </div>
+        ))}
+      </div>
+
+      {/* Drawer */}
+      {selected && (
+        <Drawer title={`ERP 이벤트 상세 — ${selected.id}`} onClose={() => setSelected(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              {[
+                ['이벤트 ID', selected.id],
+                ['수신 시각', selected.time],
+                ['이벤트 유형', selected.type],
+                ['응답시간', selected.status === 'processed' ? `${selected.latency}ms` : '—'],
+                ['처리 상태', <Badge status={selected.status} />],
+              ].map(([k, v], i) => (
+                <div key={i}>
+                  <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4 }}>{k}</div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{v}</div>
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 8 }}>원본 페이로드</div>
+              <div style={{ background: '#0F2C2C', borderRadius: 6, padding: 16, fontFamily: 'monospace', fontSize: 11, color: '#94A3B8', lineHeight: 1.8 }}>
+                <div style={{ color: '#34D399' }}>{'{'}</div>
+                <div>&nbsp;&nbsp;<span style={{ color: '#67E8F9' }}>"eventId"</span>: <span style={{ color: '#FCD34D' }}>"{selected.id}"</span>,</div>
+                <div>&nbsp;&nbsp;<span style={{ color: '#67E8F9' }}>"type"</span>: <span style={{ color: '#FCD34D' }}>"{selected.type}"</span>,</div>
+                <div>&nbsp;&nbsp;<span style={{ color: '#67E8F9' }}>"summary"</span>: <span style={{ color: '#FCD34D' }}>"{selected.payload}"</span>,</div>
+                <div>&nbsp;&nbsp;<span style={{ color: '#67E8F9' }}>"receivedAt"</span>: <span style={{ color: '#FCD34D' }}>"{selected.time}"</span>,</div>
+                <div>&nbsp;&nbsp;<span style={{ color: '#67E8F9' }}>"attempts"</span>: <span style={{ color: '#A78BFA' }}>{selected.status === 'dlq' ? 3 : 1}</span></div>
+                <div style={{ color: '#34D399' }}>{'}'}</div>
+              </div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 8 }}>처리 이력</div>
+              {(selected.status === 'dlq'
+                ? [{ t: '14:14:52', s: 'received', l: '이벤트 수신' }, { t: '14:14:53', s: 'fail', l: '1차 처리 실패 (timeout)' }, { t: '14:15:23', s: 'fail', l: '2차 재시도 실패 (timeout)' }, { t: '14:16:23', s: 'fail', l: '3차 재시도 실패 → DLQ 격리' }]
+                : selected.status === 'failed'
+                ? [{ t: selected.time.split(' ')[1], s: 'received', l: '이벤트 수신' }, { t: selected.time.split(' ')[1], s: 'fail', l: '처리 실패 (연결 오류)' }]
+                : [{ t: selected.time.split(' ')[1], s: 'received', l: '이벤트 수신' }, { t: selected.time.split(' ')[1], s: 'success', l: `처리 완료 (${selected.latency}ms)` }]
+              ).map((h, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                  <i className={`ti ${h.s === 'success' ? 'ti-circle-check' : h.s === 'fail' ? 'ti-circle-x' : 'ti-clock'}`} style={{ fontSize: 15, color: h.s === 'success' ? C.success : h.s === 'fail' ? C.danger : C.textMuted }} />
+                  <span style={{ fontSize: 11, color: C.textMuted, width: 60, flexShrink: 0 }}>{h.t}</span>
+                  <span style={{ fontSize: 12, color: C.text }}>{h.l}</span>
+                </div>
+              ))}
+            </div>
+
+            {(selected.status === 'failed' || selected.status === 'dlq') && (
+              <button onClick={handleRetry} disabled={retrying} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 0', background: retrying ? '#E5E7EB' : C.primary, color: retrying ? C.textMuted : '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: retrying ? 'wait' : 'pointer', marginTop: 4 }}>
+                <i className={`ti ti-refresh`} style={{ fontSize: 15, animation: retrying ? 'pulse 1s infinite' : 'none' }} />
+                {retrying ? '재처리 중...' : 'Dead Letter Queue에서 재처리'}
+              </button>
+            )}
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+// 배치 작업 스케줄러
+function BatchPage({ showToast }) {
+  const [jobs, setJobs] = useState(batchJobData);
+  const [selectedJob, setSelectedJob] = useState(null);
+  const [showManual, setShowManual] = useState(false);
+  const [running, setRunning] = useState(null);
+
+  const toggleActive = (id) => {
+    setJobs(prev => prev.map(j => j.id === id ? { ...j, active: !j.active } : j));
+    const job = jobs.find(j => j.id === id);
+    showToast(`${job.name} 스케줄을 ${job.active ? '중단' : '활성화'}했습니다.`, 'success');
+  };
+
+  const handleManualRun = (job) => {
+    setRunning(job.id);
+    setTimeout(() => {
+      setRunning(null);
+      showToast(`${job.name} 수동 실행이 완료됐습니다.`, 'success');
+      setShowManual(false);
+    }, 2800);
+  };
+
+  return (
+    <div style={{ padding: '28px 40px' }} className="page-fade">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text }}>배치 작업 스케줄러</h2>
+          <p style={{ fontSize: 13, color: C.textMuted, marginTop: 4 }}>정기 배치 스케줄 관리, 수동 실행, 실행 로그 조회</p>
+        </div>
+        <button onClick={() => setShowManual(true)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
+          <i className="ti ti-player-play" style={{ fontSize: 15 }} />
+          수동 실행
+        </button>
+      </div>
+
+      {/* 통계 요약 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 22 }}>
+        {[
+          { label: '활성 배치', value: jobs.filter(j => j.active).length + '개', icon: 'ti-clock-play', color: C.primary },
+          { label: '오늘 총 실행', value: '87회', icon: 'ti-repeat', color: C.accent },
+          { label: '성공률', value: '96.2%', icon: 'ti-chart-bar', color: C.success },
+          { label: '실패 작업', value: jobs.filter(j => j.status === 'failed').length + '개', icon: 'ti-alert-triangle', color: C.warning },
+        ].map((s, i) => (
+          <div key={i} className="card-up" style={{ animationDelay: `${i * 0.04}s`, background: C.surface, borderRadius: 10, padding: '16px 18px', border: `1px solid ${C.border}`, boxShadow: '0 2px 8px rgba(13,110,110,0.06)', display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: `${s.color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <i className={`ti ${s.icon}`} style={{ fontSize: 20, color: s.color }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: C.text }}>{s.value}</div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>{s.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 배치 작업 목록 */}
+      <div style={{ background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, overflow: 'hidden', boxShadow: '0 2px 12px rgba(13,110,110,0.06)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '180px 120px 140px 100px 80px 80px 100px', padding: '9px 18px', background: '#E8F5F5', borderBottom: `1px solid ${C.border}`, fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          <span>작업명</span><span>크론 스케줄</span><span>마지막 실행</span><span>소요 시간</span><span>처리 건수</span><span>결과</span><span>액션</span>
+        </div>
+        {jobs.map((job, i) => (
+          <div key={job.id} style={{ display: 'grid', gridTemplateColumns: '180px 120px 140px 100px 80px 80px 100px', padding: '13px 18px', borderBottom: i < jobs.length - 1 ? `1px solid ${C.border}` : 'none', fontSize: 12, color: C.text, alignItems: 'center', transition: 'background 0.12s' }}
+            onMouseEnter={e => e.currentTarget.style.background = '#F0F9F9'}
+            onMouseLeave={e => e.currentTarget.style.background = ''}>
+            <div>
+              <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 7, height: 7, borderRadius: '50%', background: job.active ? C.success : C.textMuted, animation: job.active && running === job.id ? 'pulse 1s infinite' : 'none' }} />
+                {job.name}
+              </div>
+            </div>
+            <span style={{ fontFamily: 'monospace', fontSize: 11, color: C.textMuted }}>{job.cron}</span>
+            <span style={{ fontSize: 11, color: C.textMuted }}>{job.lastRun.split(' ')[1]}</span>
+            <span style={{ fontSize: 11 }}>{running === job.id ? '실행 중...' : job.duration}</span>
+            <span style={{ textAlign: 'center' }}>{running === job.id ? '—' : job.processed.toLocaleString()}</span>
+            <Badge status={running === job.id ? 'running' : job.status} />
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={() => handleManualRun(job)} disabled={!!running || !job.active} style={{ padding: '4px 10px', background: !!running || !job.active ? '#F3F4F6' : `${C.primary}18`, color: !!running || !job.active ? C.textMuted : C.primary, border: 'none', borderRadius: 4, fontSize: 11, fontWeight: 500, cursor: !!running || !job.active ? 'not-allowed' : 'pointer' }}>
+                실행
+              </button>
+              <button onClick={() => toggleActive(job.id)} style={{ padding: '4px 8px', background: 'none', border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 11, color: C.textMuted, cursor: 'pointer' }}>
+                {job.active ? '중단' : '활성'}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 수동 실행 모달 */}
+      {showManual && (
+        <Modal title="배치 작업 수동 실행" onClose={() => setShowManual(false)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <p style={{ fontSize: 13, color: C.textMuted, marginBottom: 8 }}>실행할 배치 작업을 선택하세요.</p>
+            {jobs.map(job => (
+              <div key={job.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: '#F0F9F9', borderRadius: 8, border: `1px solid ${C.border}` }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{job.name}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{job.cron} · 마지막 실행: {job.lastRun.split(' ')[1]}</div>
+                </div>
+                <button onClick={() => handleManualRun(job)} disabled={!!running} style={{ padding: '7px 16px', background: running === job.id ? '#E5E7EB' : C.primary, color: running === job.id ? C.textMuted : '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 500, cursor: !!running ? 'wait' : 'pointer' }}>
+                  {running === job.id ? '실행 중...' : '실행'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// 라이선스 발급 관리
+function LicensePage({ showToast }) {
+  const [licenses, setLicenses] = useState(licenseData);
+  const [showIssue, setShowIssue] = useState(false);
+  const [selectedLic, setSelectedLic] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [newLic, setNewLic] = useState({ product: 'Professional', customer: '', seats: 10, duration: 12 });
+  const [issuing, setIssuing] = useState(false);
+
+  const filtered = licenses.filter(l => filter === 'all' || l.status === filter);
+
+  const handleIssue = () => {
+    if (!newLic.customer) { showToast('고객사를 입력하세요.', 'error'); return; }
+    setIssuing(true);
+    setTimeout(() => {
+      setIssuing(false);
+      setShowIssue(false);
+      showToast(`${newLic.customer}에게 ${newLic.product} 라이선스를 발급했습니다.`, 'success');
+      setNewLic({ product: 'Professional', customer: '', seats: 10, duration: 12 });
+    }, 1800);
+  };
+
+  return (
+    <div style={{ padding: '28px 40px' }} className="page-fade">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <div>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text }}>라이선스 발급 관리</h2>
+          <p style={{ fontSize: 13, color: C.textMuted, marginTop: 4 }}>제품 유형별 라이선스 발급, 유효기간 추적, 갱신 이력 관리</p>
+        </div>
+        <button onClick={() => setShowIssue(true)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', background: C.primary, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
+          <i className="ti ti-plus" style={{ fontSize: 15 }} />
+          라이선스 발급
+        </button>
+      </div>
+
+      {/* 만료 임박 알림 */}
+      {licenses.filter(l => l.status === 'expiring').length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: '#FEF3C7', borderRadius: 8, border: '1px solid #FCD34D', marginBottom: 20 }}>
+          <i className="ti ti-alert-triangle" style={{ fontSize: 18, color: C.warning }} />
+          <span style={{ fontSize: 13, color: C.warning, fontWeight: 500 }}>
+            만료 임박 라이선스 {licenses.filter(l => l.status === 'expiring').length}건이 있습니다. 고객사에 갱신을 안내해 주세요.
+          </span>
+        </div>
+      )}
+
+      {/* 필터 탭 */}
+      <div style={{ display: 'flex', gap: 0, borderBottom: `2px solid ${C.border}`, marginBottom: 16 }}>
+        {[
+          { id: 'all', label: '전체', count: licenses.length },
+          { id: 'active', label: '활성', count: licenses.filter(l => l.status === 'active').length },
+          { id: 'expiring', label: '만료임박', count: licenses.filter(l => l.status === 'expiring').length },
+          { id: 'expired', label: '만료', count: licenses.filter(l => l.status === 'expired').length },
+        ].map(t => (
+          <button key={t.id} onClick={() => setFilter(t.id)} style={{ padding: '8px 18px', background: 'none', border: 'none', fontSize: 13, fontWeight: filter === t.id ? 600 : 400, color: filter === t.id ? C.primary : C.textMuted, cursor: 'pointer', borderBottom: filter === t.id ? `2px solid ${C.primary}` : '2px solid transparent', marginBottom: -2, transition: 'all 0.15s' }}>
+            {t.label} ({t.count})
+          </button>
+        ))}
+      </div>
+
+      {/* 라이선스 테이블 */}
+      <div style={{ background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, overflow: 'hidden', boxShadow: '0 2px 12px rgba(13,110,110,0.06)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '90px 140px 150px 90px 100px 60px 90px', padding: '9px 18px', background: '#E8F5F5', borderBottom: `1px solid ${C.border}`, fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          <span>ID</span><span>제품</span><span>고객사</span><span>발급일</span><span>만료일</span><span>좌석</span><span>상태</span>
+        </div>
+        {filtered.map((lic, i) => (
+          <div key={lic.id} onClick={() => setSelectedLic(lic)} style={{ display: 'grid', gridTemplateColumns: '90px 140px 150px 90px 100px 60px 90px', padding: '13px 18px', borderBottom: i < filtered.length - 1 ? `1px solid ${C.border}` : 'none', fontSize: 12, color: C.text, cursor: 'pointer', alignItems: 'center', transition: 'background 0.12s' }}
+            onMouseEnter={e => e.currentTarget.style.background = '#F0F9F9'}
+            onMouseLeave={e => e.currentTarget.style.background = ''}>
+            <span style={{ fontWeight: 600, color: C.primary, fontSize: 11 }}>{lic.id}</span>
+            <span style={{ fontWeight: 500 }}>{lic.product}</span>
+            <span>{lic.customer}</span>
+            <span style={{ fontSize: 11, color: C.textMuted }}>{lic.issued}</span>
+            <span style={{ fontSize: 11, color: lic.status === 'expiring' ? C.warning : lic.status === 'expired' ? C.danger : C.textMuted, fontWeight: lic.status !== 'active' ? 600 : 400 }}>{lic.expires}</span>
+            <span style={{ textAlign: 'center' }}>{lic.seats}석</span>
+            <Badge status={lic.status} />
+          </div>
+        ))}
+      </div>
+
+      {/* 라이선스 발급 모달 */}
+      {showIssue && (
+        <Modal title="라이선스 신규 발급" onClose={() => setShowIssue(false)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: C.textMuted, marginBottom: 6 }}>제품 유형</label>
+              <select value={newLic.product} onChange={e => setNewLic(p => ({ ...p, product: e.target.value }))} style={{ width: '100%', padding: '9px 12px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, background: C.surface }}>
+                <option>Enterprise Suite</option>
+                <option>Professional</option>
+                <option>Standard</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: C.textMuted, marginBottom: 6 }}>고객사 *</label>
+              <input placeholder="예: 삼광솔루션즈" value={newLic.customer} onChange={e => setNewLic(p => ({ ...p, customer: e.target.value }))} style={{ width: '100%', padding: '9px 12px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, outline: 'none' }} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: C.textMuted, marginBottom: 6 }}>좌석 수</label>
+                <input type="number" min="1" value={newLic.seats} onChange={e => setNewLic(p => ({ ...p, seats: e.target.value }))} style={{ width: '100%', padding: '9px 12px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, outline: 'none' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: C.textMuted, marginBottom: 6 }}>유효 기간 (개월)</label>
+                <select value={newLic.duration} onChange={e => setNewLic(p => ({ ...p, duration: e.target.value }))} style={{ width: '100%', padding: '9px 12px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13, color: C.text, background: C.surface }}>
+                  <option value="3">3개월</option>
+                  <option value="6">6개월</option>
+                  <option value="12">12개월</option>
+                  <option value="24">24개월</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ padding: '12px 14px', background: '#F0F9F9', borderRadius: 6, border: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 6 }}>발급 정보 미리보기</div>
+              <div style={{ fontSize: 12, color: C.text }}>
+                {newLic.product} · {newLic.customer || '고객사 미입력'} · {newLic.seats}석 · {newLic.duration}개월
+              </div>
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>라이선스 키: {newLic.product.substring(0,3).toUpperCase()}-****-****-XXXX (자동 생성)</div>
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setShowIssue(false)} style={{ flex: 1, padding: '10px 0', background: C.surface, color: C.textMuted, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, cursor: 'pointer' }}>취소</button>
+              <button onClick={handleIssue} disabled={issuing} style={{ flex: 1, padding: '10px 0', background: issuing ? '#E5E7EB' : C.primary, color: issuing ? C.textMuted : '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: issuing ? 'wait' : 'pointer' }}>
+                {issuing ? '발급 중...' : '라이선스 발급'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* 상세 Drawer */}
+      {selectedLic && (
+        <Drawer title={`라이선스 상세 — ${selectedLic.id}`} onClose={() => setSelectedLic(null)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ padding: '14px 16px', background: '#F0F9F9', borderRadius: 8, border: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 4 }}>라이선스 키</div>
+              <div style={{ fontFamily: 'monospace', fontSize: 14, fontWeight: 700, color: C.primary, letterSpacing: 1 }}>{selectedLic.key}</div>
+            </div>
+            {[
+              ['제품', selectedLic.product],
+              ['고객사', selectedLic.customer],
+              ['좌석 수', `${selectedLic.seats}석`],
+              ['발급일', selectedLic.issued],
+              ['만료일', selectedLic.expires],
+              ['상태', <Badge status={selectedLic.status} />],
+            ].map(([k, v], i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 80, fontSize: 11, color: C.textMuted }}>{k}</div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{v}</div>
+              </div>
+            ))}
+            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+              <button onClick={() => { setSelectedLic(null); showToast(`${selectedLic.id} 갱신 처리를 시작합니다.`, 'info'); }} style={{ flex: 1, padding: '10px 0', background: C.surface, color: C.primary, border: `1px solid ${C.primary}`, borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>갱신</button>
+              <button onClick={() => { setSelectedLic(null); showToast(`${selectedLic.id}가 취소됐습니다.`, 'success'); }} style={{ flex: 1, padding: '10px 0', background: C.danger, color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>취소</button>
+            </div>
+          </div>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+// 메인 App
+function App() {
+  const [currentPage, setCurrentPage] = useState('main');
+  const [toast, setToast] = useState(null);
+
+  const showToast = (message, type = 'success') => setToast({ message, type });
+
+  const navTabs = [
+    { id: 'main', label: '운영 대시보드', icon: 'ti-dashboard' },
+    { id: 'erp', label: 'ERP 연동 관리', icon: 'ti-plug-connected' },
+    { id: 'batch', label: '배치 작업 스케줄러', icon: 'ti-clock-play' },
+    { id: 'license', label: '라이선스 발급 관리', icon: 'ti-license' },
+  ];
+
+  const pages = {
+    main: <DashboardPage showToast={showToast} />,
+    erp: <ErpPage showToast={showToast} />,
+    batch: <BatchPage showToast={showToast} />,
+    license: <LicensePage showToast={showToast} />,
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100%', overflow: 'hidden' }}>
+      {/* 탑 네비게이션 */}
+      <div style={{ background: C.surface, borderBottom: `2px solid ${C.primary}22`, boxShadow: '0 2px 12px rgba(13,110,110,0.08)', flexShrink: 0, zIndex: 100 }}>
+        {/* 로고 + 계정 영역 */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 40px', borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 34, height: 34, background: C.primary, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <i className="ti ti-api" style={{ fontSize: 18, color: '#fff' }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>통합 운영 플랫폼</div>
+              <div style={{ fontSize: 10, color: C.textMuted }}>ERP · Zendesk Integration Hub v3.0</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px', background: '#D1FAE5', borderRadius: 20 }}>
+              <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.success }} />
+              <span style={{ fontSize: 11, color: C.success, fontWeight: 600 }}>PROD 정상</span>
+            </div>
+            <button onClick={() => showToast('알림 3건이 있습니다.', 'info')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 6, position: 'relative' }}>
+              <i className="ti ti-bell" style={{ fontSize: 18, color: C.textMuted }} />
+              <span style={{ position: 'absolute', top: 2, right: 2, width: 8, height: 8, borderRadius: '50%', background: C.danger, border: `2px solid ${C.surface}` }} />
+            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <div style={{ width: 30, height: 30, borderRadius: '50%', background: C.primary, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#fff' }}>관</span>
+              </div>
+              <span style={{ fontSize: 12, color: C.text, fontWeight: 500 }}>운영관리자</span>
+            </div>
+          </div>
+        </div>
+
+        {/* 탭 네비게이션 */}
+        <div style={{ display: 'flex', padding: '0 40px', gap: 0 }}>
+          {navTabs.map(tab => {
+            const active = currentPage === tab.id;
+            return (
+              <button key={tab.id} onClick={() => setCurrentPage(tab.id)} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '11px 18px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: active ? 600 : 400, color: active ? C.primary : C.textMuted, borderBottom: active ? `2px solid ${C.primary}` : '2px solid transparent', marginBottom: -2, transition: 'all 0.15s', whiteSpace: 'nowrap' }}
+                onMouseEnter={e => { if (!active) e.currentTarget.style.color = C.text; }}
+                onMouseLeave={e => { if (!active) e.currentTarget.style.color = C.textMuted; }}>
+                <i className={`ti ${tab.icon}`} style={{ fontSize: 15 }} />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 콘텐츠 영역 */}
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {pages[currentPage] || pages.main}
+      </div>
+
+      {/* 토스트 */}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
