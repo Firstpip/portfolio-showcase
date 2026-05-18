@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WaveSync — 음악 제작 협업 플랫폼 확장 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+<script src="https://unpkg.com/react-is@18.2.0/umd/react-is.production.min.js"></script>
+<script src="https://unpkg.com/recharts@2.8.0/umd/Recharts.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; min-height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; background: #F0FDFA; color: #0F2723; }
+#root { width: 100%; }
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes progressFill {
+  from { width: 0%; }
+  to { width: var(--target-width); }
+}
+@keyframes toastPop {
+  0% { opacity: 0; transform: translateY(12px) scale(0.95); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes notifPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.page-fade { animation: fadeSlideUp 0.3s ease; }
+.card-rise { animation: fadeSlideUp 0.35s ease forwards; opacity: 0; }
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: #E6FEFA; }
+::-webkit-scrollbar-thumb { background: #99E6DA; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, LineChart, Line } = Recharts;
+
+const C = {
+  primary: '#0D9488', primaryLight: '#CCFBF1', primaryDark: '#0F766E',
+  secondary: '#14B8A6', accent: '#F59E0B',
+  bg: '#F0FDFA', surface: '#FFFFFF', surface2: '#F0FDFA',
+  border: '#CCFBF1', borderMid: '#99E6DA',
+  text: '#0F2723', textMid: '#4B7A75', textLight: '#7AADA8',
+  success: '#10B981', warning: '#F59E0B', error: '#EF4444',
+};
+
+const Toast = ({ msg, onClose }) => {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  return (
+    <div style={{ position:'fixed', bottom:28, right:28, background:C.surface, border:`1.5px solid ${C.primary}`, borderRadius:14, padding:'12px 20px', display:'flex', alignItems:'center', gap:10, zIndex:9999, animation:'toastPop 0.3s ease', boxShadow:'0 8px 32px rgba(13,148,136,0.18)' }}>
+      <i className="ph ph-check-circle" style={{ fontSize:18, color:C.success }} />
+      <span style={{ fontSize:13, color:C.text, fontWeight:500 }}>{msg}</span>
+      <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', color:C.textLight, marginLeft:8 }}><i className="ph ph-x" style={{ fontSize:14 }} /></button>
+    </div>
+  );
+};
+
+const Modal = ({ title, onClose, children, width=540 }) => (
+  <div style={{ position:'fixed', inset:0, background:'rgba(15,39,35,0.45)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', animation:'fadeIn 0.2s ease' }}>
+    <div style={{ background:C.surface, borderRadius:20, width, maxWidth:'95vw', maxHeight:'87vh', overflow:'hidden', display:'flex', flexDirection:'column', boxShadow:'0 24px 64px rgba(13,148,136,0.15), 0 4px 16px rgba(0,0,0,0.1)', border:`1px solid ${C.border}` }}>
+      <div style={{ padding:'20px 24px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <h3 style={{ fontSize:16, fontWeight:700, color:C.text }}>{title}</h3>
+        <button onClick={onClose} style={{ background:`${C.bg}`, border:`1px solid ${C.border}`, cursor:'pointer', color:C.textMid, padding:6, borderRadius:8 }}><i className="ph ph-x" style={{ fontSize:16 }} /></button>
+      </div>
+      <div style={{ overflowY:'auto', flex:1 }}>{children}</div>
+    </div>
+  </div>
+);
+
+const Badge = ({ text, type='default' }) => {
+  const map = {
+    default: { bg: C.surface2, color: C.textMid, border: C.border },
+    primary: { bg: C.primaryLight, color: C.primaryDark, border: C.primaryLight },
+    success: { bg: '#D1FAE5', color: '#065F46', border: '#D1FAE5' },
+    warning: { bg: '#FEF3C7', color: '#92400E', border: '#FEF3C7' },
+    error: { bg: '#FEE2E2', color: '#991B1B', border: '#FEE2E2' },
+  };
+  const s = map[type] || map.default;
+  return <span style={{ background:s.bg, color:s.color, border:`1px solid ${s.border}`, borderRadius:6, padding:'3px 9px', fontSize:11, fontWeight:600 }}>{text}</span>;
+};
+
+const radarData = [
+  { role:'작곡', 김민수:85, 이지은:60, 박서연:30, 최준혁:50 },
+  { role:'편곡', 김민수:70, 이지은:80, 박서연:40, 최준혁:55 },
+  { role:'보컬', 김민수:20, 이지은:90, 박서연:85, 최준혁:30 },
+  { role:'믹싱', 김민수:60, 이지은:45, 박서연:20, 최준혁:95 },
+  { role:'마스터링', 김민수:40, 이지은:30, 박서연:15, 최준혁:90 },
+  { role:'기획', 김민수:75, 이지은:65, 박서연:70, 최준혁:40 },
+];
+
+const weeklyActivity = [
+  { week:'5/5', uploads:4, feedback:9, comments:14 },
+  { week:'5/6', uploads:7, feedback:14, comments:22 },
+  { week:'5/7', uploads:3, feedback:8, comments:11 },
+  { week:'5/8', uploads:9, feedback:18, comments:31 },
+  { week:'5/9', uploads:5, feedback:11, comments:17 },
+  { week:'5/10', uploads:6, feedback:16, comments:25 },
+  { week:'5/11', uploads:8, feedback:20, comments:29 },
+];
+
+const members = [
+  { id:1, name:'김민수', email:'minsu.kim@wavesync.io', role:'소유자', status:'온라인', tasks:12, contributions:38, joined:'2025.01.15', avatar:'김', color:'#7C3AED' },
+  { id:2, name:'이지은', email:'jieun.lee@wavesync.io', role:'편집자', status:'온라인', tasks:8, contributions:28, joined:'2025.02.01', avatar:'이', color:'#0D9488' },
+  { id:3, name:'박서연', email:'seoyeon.park@wavesync.io', role:'편집자', status:'자리비움', tasks:5, contributions:19, joined:'2025.02.14', avatar:'박', color:'#F59E0B' },
+  { id:4, name:'최준혁', email:'junhyuk.choi@wavesync.io', role:'뷰어', status:'오프라인', tasks:3, contributions:11, joined:'2025.03.01', avatar:'최', color:'#EF4444' },
+  { id:5, name:'한도윤', email:'doyun.han@wavesync.io', role:'편집자', status:'온라인', tasks:7, contributions:22, joined:'2025.03.20', avatar:'한', color:'#8B5CF6' },
+];
+
+const assets = [
+  { id:1, name:'Kick Layer 01', type:'드럼', bpm:128, key:'--', size:'2.4MB', tags:['힙합','이두방'], date:'2025.05.12', uploader:'최준혁' },
+  { id:2, name:'Vocal Chop Pack', type:'보컬', bpm:120, key:'C#m', size:'8.7MB', tags:['팝','R&B','보컬'], date:'2025.05.11', uploader:'이지은' },
+  { id:3, name:'Synth Pad Warm', type:'신스', bpm:95, key:'Dm', size:'4.1MB', tags:['팝','일렉트로닉','신스'], date:'2025.05.10', uploader:'김민수' },
+  { id:4, name:'Bass Wobble 808', type:'베이스', bpm:140, key:'G#', size:'1.9MB', tags:['트랩','베이스'], date:'2025.05.09', uploader:'박서연' },
+  { id:5, name:'Acoustic Guitar Loop', type:'기타', bpm:90, key:'Am', size:'5.2MB', tags:['어쿠스틱','기타'], date:'2025.05.08', uploader:'한도윤' },
+  { id:6, name:'Piano Melody 002', type:'피아노', bpm:76, key:'F', size:'3.5MB', tags:['클래식','어쿠스틱','피아노'], date:'2025.05.07', uploader:'이지은' },
+];
+
+const notifications = [
+  { id:1, type:'upload', icon:'ph-upload', title:'새 트랙 업로드', desc:'최준혁님이 "일렉트로닉 EP"에 트랙을 업로드했습니다', time:'3분 전', read:false, severity:'info' },
+  { id:2, type:'feedback', icon:'ph-chat-circle-dots', title:'피드백 등록', desc:'이지은님이 "여름 앤썸" 트랙 03에 피드백을 남겼습니다', time:'1시간 전', read:false, severity:'info' },
+  { id:3, type:'member', icon:'ph-user-plus', title:'멤버 초대', desc:'박서연님이 "힐링 OST" 프로젝트에 초대됐습니다', time:'3시간 전', read:true, severity:'success' },
+  { id:4, type:'system', icon:'ph-warning', title:'에셋 업로드 실패', desc:'"Drum Loop Pack.zip" 파일이 용량 초과로 업로드에 실패했습니다', time:'5시간 전', read:false, severity:'warning' },
+  { id:5, type:'feedback', icon:'ph-check-circle', title:'피드백 완료', desc:'트랙 05 드롭 섹션 피드백이 완료 처리됐습니다', time:'1일 전', read:true, severity:'success' },
+  { id:6, type:'upload', icon:'ph-upload', title:'마스터 파일 업로드', desc:'한도윤님이 "재즈 컬렉션" 마스터 파일을 업로드했습니다', time:'2일 전', read:true, severity:'info' },
+];
+
+function MainView({ onToast }) {
+  const [selectedMember, setSelectedMember] = useState('김민수');
+  const memberColors = { '김민수':'#7C3AED', '이지은':'#0D9488', '박서연':'#F59E0B', '최준혁':'#EF4444' };
+
+  return (
+    <div style={{ padding:'32px 24px', maxWidth:1200, margin:'0 auto', animation:'fadeSlideUp 0.3s ease' }}>
+      <div style={{ marginBottom:28 }}>
+        <h2 style={{ fontSize:24, fontWeight:800, color:C.text, marginBottom:6 }}>협업 인사이트 대시보드</h2>
+        <p style={{ fontSize:14, color:C.textMid }}>프로젝트별 기여도와 활동 현황을 분석합니다</p>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:16, marginBottom:28 }}>
+        {[
+          { label:'총 트랙', value:'31', icon:'ph-music-notes', color:C.primary, bg:C.primaryLight },
+          { label:'이번 달 피드백', value:'87', icon:'ph-chat-teardrop-dots', color:'#7C3AED', bg:'#F5F3FF' },
+          { label:'에셋 라이브러리', value:'6', icon:'ph-folder-open', color:C.accent, bg:'#FEF9C3' },
+          { label:'활성 멤버', value:'5', icon:'ph-users', color:C.success, bg:'#D1FAE5' },
+        ].map((stat, i) => (
+          <div key={i} style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:16, padding:'20px', display:'flex', alignItems:'center', gap:16, transition:'all 0.2s', cursor:'default', animation:`fadeSlideUp 0.35s ease ${i*0.07}s both`, opacity:0, boxShadow:'0 2px 8px rgba(13,148,136,0.06)' }}
+            onMouseEnter={e => { e.currentTarget.style.transform='translateY(-3px)'; e.currentTarget.style.boxShadow=`0 12px 28px rgba(13,148,136,0.14)`; }}
+            onMouseLeave={e => { e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='0 2px 8px rgba(13,148,136,0.06)'; }}>
+            <div style={{ width:46, height:46, borderRadius:12, background:stat.bg, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+              <i className={`ph ${stat.icon}`} style={{ fontSize:22, color:stat.color }} />
+            </div>
+            <div>
+              <div style={{ fontSize:24, fontWeight:800, color:C.text }}>{stat.value}</div>
+              <div style={{ fontSize:12, color:C.textMid, marginTop:2 }}>{stat.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 380px', gap:20, marginBottom:20 }}>
+        <div style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:16, padding:24, boxShadow:'0 2px 8px rgba(13,148,136,0.06)' }}>
+          <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:16 }}>주간 활동 현황</div>
+          <div style={{ position:'relative', height:200 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={weeklyActivity} barCategoryGap="35%">
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis dataKey="week" tick={{ fill:C.textMid, fontSize:11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill:C.textMid, fontSize:11 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:10, color:C.text, fontSize:12 }} />
+                <Bar dataKey="uploads" name="업로드" fill={C.primary} radius={[4,4,0,0]} />
+                <Bar dataKey="feedback" name="피드백" fill={C.accent} radius={[4,4,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display:'flex', gap:16, marginTop:8 }}>
+            {[{ c:C.primary, l:'업로드' }, { c:C.accent, l:'피드백' }].map(x => (
+              <div key={x.l} style={{ display:'flex', alignItems:'center', gap:6 }}>
+                <div style={{ width:10, height:10, borderRadius:3, background:x.c }} />
+                <span style={{ fontSize:11, color:C.textMid }}>{x.l}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:16, padding:24, boxShadow:'0 2px 8px rgba(13,148,136,0.06)' }}>
+          <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:12 }}>멤버 기여도 (역할별)</div>
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:12 }}>
+            {Object.keys(memberColors).map(m => (
+              <button key={m} onClick={() => setSelectedMember(m)} style={{ background: selectedMember===m ? memberColors[m] : `${memberColors[m]}18`, color: selectedMember===m ? '#fff' : memberColors[m], border:'none', borderRadius:6, padding:'4px 10px', fontSize:11, fontWeight:600, cursor:'pointer', transition:'all 0.15s' }}>{m}</button>
+            ))}
+          </div>
+          <div style={{ height:170 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <RadarChart data={radarData}>
+                <PolarGrid stroke={C.border} />
+                <PolarAngleAxis dataKey="role" tick={{ fill:C.textMid, fontSize:10 }} />
+                <Radar name={selectedMember} dataKey={selectedMember} stroke={memberColors[selectedMember]} fill={memberColors[selectedMember]} fillOpacity={0.2} />
+              </RadarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:16, padding:24, boxShadow:'0 2px 8px rgba(13,148,136,0.06)' }}>
+        <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:16 }}>멤버별 기여 현황</div>
+        <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+          {members.slice(0,4).map((m) => (
+            <div key={m.id} style={{ display:'flex', alignItems:'center', gap:14 }}>
+              <div style={{ width:32, height:32, borderRadius:'50%', background:m.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700, color:'#fff', flexShrink:0 }}>{m.avatar}</div>
+              <div style={{ flex:1 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5 }}>
+                  <span style={{ fontSize:13, fontWeight:600, color:C.text }}>{m.name}</span>
+                  <span style={{ fontSize:12, color:C.textMid }}>{m.contributions}건</span>
+                </div>
+                <div style={{ height:6, background:C.surface2, borderRadius:3, overflow:'hidden', border:`1px solid ${C.border}` }}>
+                  <div style={{ height:'100%', background:m.color, borderRadius:3, width:`${m.contributions}%`, transition:'width 0.6s ease' }} />
+                </div>
+              </div>
+              <Badge text={m.role} type={m.role==='소유자'?'primary':m.role==='편집자'?'success':'default'} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AssetsView({ onToast }) {
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('전체');
+  const [showUpload, setShowUpload] = useState(false);
+  const [selectedAsset, setSelectedAsset] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const [uploadFile, setUploadFile] = useState('');
+
+  const types = ['전체', '드럼', '보컬', '신스', '베이스', '기타', '피아노'];
+  const filtered = assets.filter(a => {
+    const matchType = typeFilter === '전체' || a.type === typeFilter;
+    const matchSearch = !search || a.name.toLowerCase().includes(search.toLowerCase()) || a.tags.some(t => t.includes(search));
+    return matchType && matchSearch;
+  });
+
+  const simulateUpload = () => {
+    setUploading(true);
+    setUploadProgress(0);
+    let p = 0;
+    const interval = setInterval(() => {
+      p += Math.random() * 18 + 5;
+      if (p >= 100) {
+        p = 100;
+        clearInterval(interval);
+        setTimeout(() => { setUploading(false); setShowUpload(false); setUploadProgress(0); setUploadFile(''); onToast('에셋이 성공적으로 업로드됐습니다'); }, 500);
+      }
+      setUploadProgress(Math.min(p, 100));
+    }, 200);
+  };
+
+  return (
+    <div style={{ padding:'32px 24px', maxWidth:1200, margin:'0 auto', animation:'fadeSlideUp 0.3s ease' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24 }}>
+        <div>
+          <h2 style={{ fontSize:24, fontWeight:800, color:C.text, marginBottom:6 }}>음원 에셋 라이브러리</h2>
+          <p style={{ fontSize:14, color:C.textMid }}>팀에서 공유하는 샘플, 루프, 사운드 프리셋을 관리합니다</p>
+        </div>
+        <button onClick={() => setShowUpload(true)} style={{ background:C.primary, color:'#fff', border:'none', borderRadius:12, padding:'10px 20px', fontSize:13, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', gap:8, boxShadow:'0 4px 12px rgba(13,148,136,0.3)' }}>
+          <i className="ph ph-upload-simple" style={{ fontSize:16 }} /> 에셋 업로드
+        </button>
+      </div>
+
+      <div style={{ display:'flex', gap:12, marginBottom:20, flexWrap:'wrap' }}>
+        <div style={{ flex:1, minWidth:240, position:'relative' }}>
+          <i className="ph ph-magnifying-glass" style={{ position:'absolute', left:12, top:'50%', transform:'translateY(-50%)', fontSize:16, color:C.textLight }} />
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="에셋명, 태그로 검색..." style={{ width:'100%', background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:10, padding:'10px 12px 10px 38px', fontSize:13, color:C.text, outline:'none', transition:'border-color 0.2s' }}
+            onFocus={e=>e.target.style.borderColor=C.primary}
+            onBlur={e=>e.target.style.borderColor=C.border} />
+        </div>
+        <div style={{ display:'flex', gap:6 }}>
+          {types.map(t => (
+            <button key={t} onClick={() => setTypeFilter(t)} style={{ background: typeFilter===t ? C.primary : C.surface, color: typeFilter===t ? '#fff' : C.textMid, border:`1.5px solid ${typeFilter===t ? C.primary : C.border}`, borderRadius:8, padding:'8px 14px', fontSize:12, fontWeight:500, cursor:'pointer', transition:'all 0.15s', whiteSpace:'nowrap' }}>{t}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:14 }}>
+        {filtered.map((asset, i) => (
+          <div key={asset.id} onClick={() => setSelectedAsset(asset)} style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:16, padding:20, cursor:'pointer', transition:'all 0.2s', animation:`fadeSlideUp 0.35s ease ${i*0.06}s both`, opacity:0, boxShadow:'0 2px 8px rgba(13,148,136,0.04)' }}
+            onMouseEnter={e=>{ e.currentTarget.style.borderColor=C.primary; e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.boxShadow=`0 10px 24px rgba(13,148,136,0.14)`; }}
+            onMouseLeave={e=>{ e.currentTarget.style.borderColor=C.border; e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.boxShadow='0 2px 8px rgba(13,148,136,0.04)'; }}>
+            <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:12 }}>
+              <div style={{ width:44, height:44, borderRadius:12, background:C.primaryLight, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                <i className="ph ph-waveform" style={{ fontSize:22, color:C.primary }} />
+              </div>
+              <Badge text={asset.type} type='primary' />
+            </div>
+            <div style={{ fontSize:14, fontWeight:700, color:C.text, marginBottom:4 }}>{asset.name}</div>
+            <div style={{ fontSize:12, color:C.textMid, marginBottom:10 }}>{asset.bpm} BPM · {asset.key !== '--' ? `${asset.key} 키` : '무조성'} · {asset.size}</div>
+            <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:10 }}>
+              {asset.tags.map(tag => (
+                <span key={tag} style={{ background:C.surface2, color:C.textMid, border:`1px solid ${C.border}`, borderRadius:4, padding:'2px 7px', fontSize:10 }}>{tag}</span>
+              ))}
+            </div>
+            <div style={{ fontSize:11, color:C.textLight, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <span>{asset.uploader}</span>
+              <span>{asset.date}</span>
+            </div>
+          </div>
+        ))}
+        {filtered.length === 0 && (
+          <div style={{ gridColumn:'1 / -1', textAlign:'center', padding:60, color:C.textMid }}>
+            <i className="ph ph-magnifying-glass" style={{ fontSize:40, color:C.borderMid, display:'block', marginBottom:12 }} />
+            검색 결과가 없습니다
+          </div>
+        )}
+      </div>
+
+      {showUpload && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(15,39,35,0.45)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', animation:'fadeIn 0.2s ease' }}>
+          <div style={{ background:C.surface, borderRadius:20, width:480, overflow:'hidden', boxShadow:'0 24px 64px rgba(13,148,136,0.18)' }}>
+            <div style={{ padding:'20px 24px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <h3 style={{ fontSize:16, fontWeight:700, color:C.text }}>에셋 업로드</h3>
+              <button onClick={() => { setShowUpload(false); setUploadProgress(0); setUploading(false); setUploadFile(''); }} style={{ background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:6, cursor:'pointer', color:C.textMid }}><i className="ph ph-x" style={{ fontSize:16 }} /></button>
+            </div>
+            <div style={{ padding:24 }}>
+              {!uploading ? (
+                <>
+                  <div onClick={() => setUploadFile('Beat Loop Pack.wav')} style={{ border:`2px dashed ${uploadFile ? C.primary : C.borderMid}`, borderRadius:16, padding:32, textAlign:'center', cursor:'pointer', transition:'all 0.2s', background: uploadFile ? C.primaryLight : C.bg, marginBottom:16 }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor=C.primary}
+                    onMouseLeave={e => { if(!uploadFile) e.currentTarget.style.borderColor=C.borderMid; }}>
+                    <i className={`ph ${uploadFile ? 'ph-check-circle' : 'ph-cloud-arrow-up'}`} style={{ fontSize:36, color: uploadFile ? C.primary : C.textLight, display:'block', marginBottom:8 }} />
+                    {uploadFile ? (
+                      <div>
+                        <div style={{ fontSize:14, fontWeight:600, color:C.primary }}>{uploadFile}</div>
+                        <div style={{ fontSize:12, color:C.textMid, marginTop:4 }}>파일 선택됨 · 클릭하여 변경</div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div style={{ fontSize:14, fontWeight:500, color:C.textMid }}>파일을 드래그하거나 클릭하여 선택</div>
+                        <div style={{ fontSize:12, color:C.textLight, marginTop:4 }}>WAV, MP3, AIFF · 최대 100MB</div>
+                      </div>
+                    )}
+                  </div>
+                  {uploadFile && (
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+                      <div>
+                        <label style={{ display:'block', fontSize:12, fontWeight:600, color:C.textMid, marginBottom:4 }}>BPM</label>
+                        <input placeholder="128" style={{ width:'100%', background:C.bg, border:`1.5px solid ${C.border}`, borderRadius:8, padding:'8px 10px', fontSize:13, color:C.text, outline:'none' }} />
+                      </div>
+                      <div>
+                        <label style={{ display:'block', fontSize:12, fontWeight:600, color:C.textMid, marginBottom:4 }}>키</label>
+                        <select style={{ width:'100%', background:C.bg, border:`1.5px solid ${C.border}`, borderRadius:8, padding:'8px 10px', fontSize:13, color:C.text, outline:'none' }}>
+                          {['--','C','C#','D','D#','E','F','F#','G','G#','A','A#','B'].map(k=><option key={k}>{k}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                  <button onClick={simulateUpload} disabled={!uploadFile} style={{ width:'100%', background: uploadFile ? C.primary : C.border, color:'#fff', border:'none', borderRadius:10, padding:'12px 0', fontSize:14, fontWeight:700, cursor: uploadFile ? 'pointer' : 'not-allowed', transition:'background 0.2s' }}>업로드 시작</button>
+                </>
+              ) : (
+                <div style={{ textAlign:'center', padding:'20px 0' }}>
+                  <div style={{ fontSize:14, fontWeight:600, color:C.text, marginBottom:20 }}>S3에 업로드 중...</div>
+                  <div style={{ height:8, background:C.border, borderRadius:4, overflow:'hidden', marginBottom:8 }}>
+                    <div style={{ height:'100%', background:`linear-gradient(90deg,${C.primary},${C.secondary})`, borderRadius:4, width:`${uploadProgress}%`, transition:'width 0.2s ease' }} />
+                  </div>
+                  <div style={{ fontSize:13, color:C.textMid }}>{Math.round(uploadProgress)}%</div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedAsset && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(15,39,35,0.45)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', animation:'fadeIn 0.2s ease' }}>
+          <div style={{ background:C.surface, borderRadius:20, width:480, overflow:'hidden', boxShadow:'0 24px 64px rgba(13,148,136,0.18)' }}>
+            <div style={{ padding:'20px 24px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <h3 style={{ fontSize:16, fontWeight:700, color:C.text }}>{selectedAsset.name}</h3>
+              <button onClick={() => setSelectedAsset(null)} style={{ background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:6, cursor:'pointer', color:C.textMid }}><i className="ph ph-x" style={{ fontSize:16 }} /></button>
+            </div>
+            <div style={{ padding:24 }}>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:20 }}>
+                {[['유형',selectedAsset.type],['BPM',selectedAsset.bpm],['키',selectedAsset.key],['크기',selectedAsset.size],['업로더',selectedAsset.uploader],['날짜',selectedAsset.date]].map(([k,v])=>(
+                  <div key={k} style={{ background:C.bg, borderRadius:8, padding:'10px 14px' }}>
+                    <div style={{ fontSize:11, color:C.textLight, marginBottom:3 }}>{k}</div>
+                    <div style={{ fontSize:13, fontWeight:600, color:C.text }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginBottom:20 }}>
+                <div style={{ fontSize:12, fontWeight:600, color:C.textMid, marginBottom:6 }}>태그</div>
+                <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                  {selectedAsset.tags.map(t => <Badge key={t} text={t} type='primary' />)}
+                </div>
+              </div>
+              <div style={{ display:'flex', gap:10 }}>
+                <button onClick={() => { setSelectedAsset(null); onToast(`"${selectedAsset.name}" 다운로드를 시작합니다`); }} style={{ flex:1, background:C.primary, color:'#fff', border:'none', borderRadius:10, padding:'11px 0', fontSize:14, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+                  <i className="ph ph-download-simple" style={{ fontSize:16 }} /> 다운로드
+                </button>
+                <button onClick={() => setSelectedAsset(null)} style={{ background:'none', border:`1.5px solid ${C.border}`, color:C.textMid, borderRadius:10, padding:'11px 20px', fontSize:14, cursor:'pointer' }}>닫기</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotificationsView({ onToast }) {
+  const [filter, setFilter] = useState('전체');
+  const [items, setItems] = useState(notifications);
+
+  const filters = ['전체','업로드','피드백','시스템'];
+  const typeMap = { 'upload':'업로드', 'feedback':'피드백', 'member':'멤버', 'system':'시스템' };
+  const filtered = filter === '전체' ? items : items.filter(n => typeMap[n.type] === filter);
+
+  const markRead = (id) => setItems(prev => prev.map(n => n.id===id ? {...n, read:true} : n));
+  const markAllRead = () => { setItems(prev => prev.map(n => ({...n, read:true}))); onToast('모든 알림을 읽음으로 표시했습니다'); };
+
+  const severityColor = { info: C.primary, success: C.success, warning: C.accent, error: C.error };
+
+  return (
+    <div style={{ padding:'32px 24px', maxWidth:800, margin:'0 auto', animation:'fadeSlideUp 0.3s ease' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24 }}>
+        <div>
+          <h2 style={{ fontSize:24, fontWeight:800, color:C.text, marginBottom:6 }}>협업 알림</h2>
+          <p style={{ fontSize:14, color:C.textMid }}>협업 이벤트와 시스템 알림을 확인하세요</p>
+        </div>
+        <button onClick={markAllRead} style={{ background:C.surface, border:`1.5px solid ${C.border}`, color:C.textMid, borderRadius:10, padding:'8px 16px', fontSize:12, fontWeight:600, cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}>
+          <i className="ph ph-check-circle" style={{ fontSize:15 }} /> 모두 읽음
+        </button>
+      </div>
+
+      <div style={{ display:'flex', gap:8, marginBottom:20 }}>
+        {filters.map(f => (
+          <button key={f} onClick={() => setFilter(f)} style={{ background: filter===f ? C.primary : C.surface, color: filter===f ? '#fff' : C.textMid, border:`1.5px solid ${filter===f ? C.primary : C.border}`, borderRadius:8, padding:'7px 16px', fontSize:12, fontWeight:600, cursor:'pointer', transition:'all 0.15s' }}>{f}</button>
+        ))}
+        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:6 }}>
+          <div style={{ width:8, height:8, borderRadius:'50%', background:C.accent, animation:'notifPulse 2s infinite' }} />
+          <span style={{ fontSize:12, color:C.textMid }}>미읽음 {items.filter(n=>!n.read).length}건</span>
+        </div>
+      </div>
+
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {filtered.map((notif, i) => (
+          <div key={notif.id} onClick={() => markRead(notif.id)} style={{ background:C.surface, border:`1.5px solid ${notif.read ? C.border : C.primary}`, borderRadius:14, padding:'16px 20px', cursor:'pointer', transition:'all 0.2s', opacity: notif.read ? 0.7 : 1, animation:`fadeSlideUp 0.3s ease ${i*0.07}s both`, display:'flex', gap:14, alignItems:'flex-start', boxShadow: notif.read ? 'none' : `0 2px 12px rgba(13,148,136,0.1)` }}
+            onMouseEnter={e => { e.currentTarget.style.transform='translateX(4px)'; }}
+            onMouseLeave={e => { e.currentTarget.style.transform='translateX(0)'; }}>
+            <div style={{ width:40, height:40, borderRadius:12, background:`${severityColor[notif.severity]}18`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+              <i className={`ph ${notif.icon}`} style={{ fontSize:20, color:severityColor[notif.severity] }} />
+            </div>
+            <div style={{ flex:1 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
+                <span style={{ fontSize:14, fontWeight:700, color:C.text }}>{notif.title}</span>
+                {!notif.read && <div style={{ width:7, height:7, borderRadius:'50%', background:C.primary, flexShrink:0 }} />}
+              </div>
+              <div style={{ fontSize:13, color:C.textMid, marginBottom:4 }}>{notif.desc}</div>
+              <div style={{ fontSize:11, color:C.textLight }}>{notif.time}</div>
+            </div>
+            <Badge text={typeMap[notif.type]} type={notif.severity==='success'?'success':notif.severity==='warning'?'warning':'primary'} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MembersView({ onToast }) {
+  const [selectedMember, setSelectedMember] = useState(null);
+  const [showInvite, setShowInvite] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('편집자');
+  const [memberList, setMemberList] = useState(members);
+
+  const statusColor = { '온라인': C.success, '자리비움': C.accent, '오프라인': C.textLight };
+  const roleType = { '소유자':'primary', '편집자':'success', '뷰어':'default' };
+
+  const sendInvite = () => {
+    if (inviteEmail.trim()) {
+      onToast(`${inviteEmail}에 초대 메일을 발송했습니다 (24시간 유효)`);
+      setShowInvite(false);
+      setInviteEmail('');
+    }
+  };
+
+  const changeRole = (memberId, newRole) => {
+    setMemberList(prev => prev.map(m => m.id===memberId ? {...m, role:newRole} : m));
+    onToast('권한이 변경됐습니다');
+    setSelectedMember(null);
+  };
+
+  return (
+    <div style={{ padding:'32px 24px', maxWidth:1000, margin:'0 auto', animation:'fadeSlideUp 0.3s ease' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24 }}>
+        <div>
+          <h2 style={{ fontSize:24, fontWeight:800, color:C.text, marginBottom:6 }}>팀 멤버 관리</h2>
+          <p style={{ fontSize:14, color:C.textMid }}>프로젝트 멤버 역할과 권한을 설정합니다</p>
+        </div>
+        <button onClick={() => setShowInvite(true)} style={{ background:C.primary, color:'#fff', border:'none', borderRadius:12, padding:'10px 20px', fontSize:13, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', gap:8, boxShadow:'0 4px 12px rgba(13,148,136,0.3)' }}>
+          <i className="ph ph-user-plus" style={{ fontSize:16 }} /> 멤버 초대
+        </button>
+      </div>
+
+      <div style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:16, overflow:'hidden', boxShadow:'0 2px 8px rgba(13,148,136,0.06)' }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 160px 100px 80px 80px 120px', gap:0, padding:'12px 20px', borderBottom:`1px solid ${C.border}`, background:C.bg }}>
+          {['멤버','역할','기여 건수','상태','작업 수','관리'].map(h => (
+            <div key={h} style={{ fontSize:11, fontWeight:700, color:C.textLight, textTransform:'uppercase', letterSpacing:0.5 }}>{h}</div>
+          ))}
+        </div>
+        {memberList.map((m, i) => (
+          <div key={m.id} style={{ display:'grid', gridTemplateColumns:'1fr 160px 100px 80px 80px 120px', gap:0, padding:'14px 20px', borderBottom: i<memberList.length-1 ? `1px solid ${C.border}` : 'none', transition:'background 0.15s', alignItems:'center' }}
+            onMouseEnter={e => e.currentTarget.style.background=C.bg}
+            onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+            <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+              <div style={{ width:36, height:36, borderRadius:'50%', background:m.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:700, color:'#fff', flexShrink:0 }}>{m.avatar}</div>
+              <div>
+                <div style={{ fontSize:14, fontWeight:600, color:C.text }}>{m.name}</div>
+                <div style={{ fontSize:11, color:C.textLight }}>{m.email}</div>
+              </div>
+            </div>
+            <div><Badge text={m.role} type={roleType[m.role]} /></div>
+            <div style={{ fontSize:13, fontWeight:600, color:C.text }}>{m.contributions}건</div>
+            <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+              <div style={{ width:7, height:7, borderRadius:'50%', background:statusColor[m.status] }} />
+              <span style={{ fontSize:12, color:C.textMid }}>{m.status}</span>
+            </div>
+            <div style={{ fontSize:13, color:C.textMid }}>{m.tasks}</div>
+            <div>
+              <button onClick={() => setSelectedMember(m)} style={{ background:C.bg, border:`1.5px solid ${C.border}`, color:C.textMid, borderRadius:8, padding:'5px 12px', fontSize:12, fontWeight:600, cursor:'pointer', transition:'all 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor=C.primary; e.currentTarget.style.color=C.primary; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor=C.border; e.currentTarget.style.color=C.textMid; }}>
+                권한 변경
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {showInvite && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(15,39,35,0.45)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', animation:'fadeIn 0.2s ease' }}>
+          <div style={{ background:C.surface, borderRadius:20, width:440, overflow:'hidden', boxShadow:'0 24px 64px rgba(13,148,136,0.18)' }}>
+            <div style={{ padding:'20px 24px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <h3 style={{ fontSize:16, fontWeight:700, color:C.text }}>멤버 초대</h3>
+              <button onClick={() => setShowInvite(false)} style={{ background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:6, cursor:'pointer', color:C.textMid }}><i className="ph ph-x" style={{ fontSize:16 }} /></button>
+            </div>
+            <div style={{ padding:24 }}>
+              <label style={{ display:'block', fontSize:12, fontWeight:600, color:C.textMid, marginBottom:6 }}>이메일 주소</label>
+              <input value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)} placeholder="name@example.com" style={{ width:'100%', background:C.bg, border:`1.5px solid ${C.border}`, borderRadius:10, padding:'10px 12px', fontSize:14, color:C.text, outline:'none', marginBottom:16 }}
+                onFocus={e=>e.target.style.borderColor=C.primary}
+                onBlur={e=>e.target.style.borderColor=C.border} />
+              <label style={{ display:'block', fontSize:12, fontWeight:600, color:C.textMid, marginBottom:6 }}>역할</label>
+              <div style={{ display:'flex', gap:10, marginBottom:20 }}>
+                {['편집자','뷰어'].map(r => (
+                  <button key={r} onClick={() => setInviteRole(r)} style={{ flex:1, background: inviteRole===r ? C.primary : C.bg, color: inviteRole===r ? '#fff' : C.textMid, border:`1.5px solid ${inviteRole===r ? C.primary : C.border}`, borderRadius:8, padding:'10px 0', fontSize:13, fontWeight:600, cursor:'pointer', transition:'all 0.15s' }}>{r}</button>
+                ))}
+              </div>
+              <div style={{ background:C.bg, borderRadius:10, padding:'10px 14px', marginBottom:16, fontSize:12, color:C.textMid, display:'flex', alignItems:'center', gap:8 }}>
+                <i className="ph ph-clock" style={{ fontSize:15, color:C.accent }} />
+                초대 링크는 24시간 동안 유효합니다
+              </div>
+              <button onClick={sendInvite} disabled={!inviteEmail.trim()} style={{ width:'100%', background: inviteEmail.trim() ? C.primary : C.border, color:'#fff', border:'none', borderRadius:10, padding:'12px 0', fontSize:14, fontWeight:700, cursor: inviteEmail.trim() ? 'pointer' : 'not-allowed', transition:'background 0.2s' }}>초대 메일 발송</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedMember && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(15,39,35,0.45)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', animation:'fadeIn 0.2s ease' }}>
+          <div style={{ background:C.surface, borderRadius:20, width:400, overflow:'hidden', boxShadow:'0 24px 64px rgba(13,148,136,0.18)' }}>
+            <div style={{ padding:'20px 24px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <h3 style={{ fontSize:16, fontWeight:700, color:C.text }}>{selectedMember.name} 권한 변경</h3>
+              <button onClick={() => setSelectedMember(null)} style={{ background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:6, cursor:'pointer', color:C.textMid }}><i className="ph ph-x" style={{ fontSize:16 }} /></button>
+            </div>
+            <div style={{ padding:24 }}>
+              <div style={{ marginBottom:20 }}>
+                {[
+                  { role:'소유자', desc:'모든 권한. 프로젝트 삭제 가능' },
+                  { role:'편집자', desc:'트랙 업로드, 피드백, 에셋 추가 가능' },
+                  { role:'뷰어', desc:'읽기 전용. 다운로드만 가능' }
+                ].map(r => (
+                  <div key={r.role} onClick={() => changeRole(selectedMember.id, r.role)} style={{ border:`1.5px solid ${selectedMember.role===r.role ? C.primary : C.border}`, borderRadius:10, padding:'12px 16px', marginBottom:10, cursor:'pointer', background: selectedMember.role===r.role ? C.primaryLight : 'transparent', transition:'all 0.15s' }}>
+                    <div style={{ fontSize:14, fontWeight:600, color: selectedMember.role===r.role ? C.primaryDark : C.text }}>{r.role}</div>
+                    <div style={{ fontSize:12, color:C.textMid, marginTop:2 }}>{r.desc}</div>
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => { onToast(`${selectedMember.name}님을 프로젝트에서 제외했습니다`); setSelectedMember(null); }} style={{ width:'100%', background:'none', border:`1.5px solid ${C.error}`, color:C.error, borderRadius:10, padding:'10px 0', fontSize:13, fontWeight:600, cursor:'pointer' }}>멤버 제외</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnalyticsView({ onToast }) {
+  const projectProgress = [
+    { name:'여름 앤썸', tracks:8, feedback:12, completion:68, color:C.primary },
+    { name:'힐링 OST Vol.3', tracks:5, feedback:7, completion:45, color:'#7C3AED' },
+    { name:'일렉트로닉 EP', tracks:12, feedback:21, completion:81, color:C.accent },
+    { name:'재즈 컬렉션', tracks:6, feedback:4, completion:100, color:C.success },
+  ];
+
+  return (
+    <div style={{ padding:'32px 24px', maxWidth:1100, margin:'0 auto', animation:'fadeSlideUp 0.3s ease' }}>
+      <div style={{ marginBottom:24 }}>
+        <h2 style={{ fontSize:24, fontWeight:800, color:C.text, marginBottom:6 }}>상세 분석</h2>
+        <p style={{ fontSize:14, color:C.textMid }}>프로젝트별 진행 현황과 팀 성과를 분석합니다</p>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
+        <div style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:16, padding:24 }}>
+          <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:16 }}>프로젝트 완료율</div>
+          {projectProgress.map((p, i) => (
+            <div key={p.name} style={{ marginBottom:16, animation:`fadeSlideUp 0.35s ease ${i*0.07}s both`, opacity:0 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                <span style={{ fontSize:13, fontWeight:600, color:C.text }}>{p.name}</span>
+                <span style={{ fontSize:12, fontWeight:700, color:p.color }}>{p.completion}%</span>
+              </div>
+              <div style={{ height:8, background:C.border, borderRadius:4, overflow:'hidden' }}>
+                <div style={{ height:'100%', background:p.color, borderRadius:4, width:`${p.completion}%`, transition:'width 0.8s ease' }} />
+              </div>
+              <div style={{ display:'flex', gap:12, marginTop:5 }}>
+                <span style={{ fontSize:11, color:C.textLight }}>{p.tracks} 트랙</span>
+                <span style={{ fontSize:11, color:C.textLight }}>{p.feedback} 피드백</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:16, padding:24 }}>
+          <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:16 }}>주간 트렌드</div>
+          <div style={{ height:250 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={weeklyActivity}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                <XAxis dataKey="week" tick={{ fill:C.textMid, fontSize:11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill:C.textMid, fontSize:11 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:10, color:C.text, fontSize:12 }} />
+                <Line type="monotone" dataKey="comments" stroke={C.primary} strokeWidth={2.5} dot={{ fill:C.primary, r:4 }} name="코멘트" />
+                <Line type="monotone" dataKey="feedback" stroke={C.accent} strokeWidth={2} strokeDasharray="4 2" dot={{ fill:C.accent, r:3 }} name="피드백" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:16, padding:24 }}>
+        <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:16 }}>멤버 활동 지표</div>
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse' }}>
+            <thead>
+              <tr style={{ background:C.bg }}>
+                {['멤버','업로드','피드백','코멘트','총 기여'].map(h => (
+                  <th key={h} style={{ padding:'10px 16px', textAlign:'left', fontSize:11, fontWeight:700, color:C.textLight, borderBottom:`1px solid ${C.border}` }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {members.map((m, i) => (
+                <tr key={m.id} style={{ borderBottom: i<members.length-1 ? `1px solid ${C.border}` : 'none', transition:'background 0.1s' }}
+                  onMouseEnter={e => e.currentTarget.style.background=C.bg}
+                  onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                  <td style={{ padding:'12px 16px', display:'flex', alignItems:'center', gap:10 }}>
+                    <div style={{ width:28, height:28, borderRadius:'50%', background:m.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:700, color:'#fff' }}>{m.avatar}</div>
+                    <span style={{ fontSize:13, fontWeight:600, color:C.text }}>{m.name}</span>
+                  </td>
+                  <td style={{ padding:'12px 16px', fontSize:13, color:C.text }}>{Math.floor(m.contributions * 0.4)}</td>
+                  <td style={{ padding:'12px 16px', fontSize:13, color:C.text }}>{Math.floor(m.contributions * 0.35)}</td>
+                  <td style={{ padding:'12px 16px', fontSize:13, color:C.text }}>{Math.floor(m.contributions * 0.25)}</td>
+                  <td style={{ padding:'12px 16px' }}>
+                    <span style={{ fontSize:13, fontWeight:700, color:C.primary }}>{m.contributions}건</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [activePage, setActivePage] = useState('홈');
+  const [toast, setToast] = useState(null);
+
+  const navItems = ['홈', '에셋', '알림', '멤버', '분석'];
+
+  const showToast = msg => setToast(msg);
+  const hideToast = () => setToast(null);
+
+  const renderPage = () => {
+    switch(activePage) {
+      case '홈': return <MainView onToast={showToast} />;
+      case '에셋': return <AssetsView onToast={showToast} />;
+      case '알림': return <NotificationsView onToast={showToast} />;
+      case '멤버': return <MembersView onToast={showToast} />;
+      case '분석': return <AnalyticsView onToast={showToast} />;
+      default: return null;
+    }
+  };
+
+  return (
+    <div style={{ width:'100%', minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column' }}>
+      <header style={{ background:C.surface, borderBottom:`1.5px solid ${C.border}`, position:'sticky', top:0, zIndex:100, boxShadow:'0 2px 12px rgba(13,148,136,0.08)' }}>
+        <div style={{ maxWidth:1200, margin:'0 auto', padding:'0 24px', display:'flex', alignItems:'center', height:60 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginRight:40 }}>
+            <div style={{ width:32, height:32, borderRadius:10, background:`linear-gradient(135deg,${C.primary},${C.secondary})`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <i className="ph ph-wave-sine" style={{ fontSize:18, color:'#fff' }} />
+            </div>
+            <span style={{ fontSize:16, fontWeight:800, color:C.text, letterSpacing:-0.5 }}>WaveSync</span>
+          </div>
+          <nav style={{ display:'flex', gap:2, flex:1 }}>
+            {navItems.map(item => (
+              <button key={item} onClick={() => setActivePage(item)} style={{ background: activePage===item ? C.primaryLight : 'none', color: activePage===item ? C.primaryDark : C.textMid, border:'none', borderRadius:8, padding:'7px 16px', fontSize:13, fontWeight: activePage===item ? 700 : 500, cursor:'pointer', transition:'all 0.15s' }}>
+                {item}
+              </button>
+            ))}
+          </nav>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <button onClick={() => showToast('새 알림 3건')} style={{ background:'none', border:`1.5px solid ${C.border}`, borderRadius:8, padding:'6px 8px', cursor:'pointer', color:C.textMid, position:'relative' }}>
+              <i className="ph ph-bell" style={{ fontSize:18 }} />
+              <div style={{ width:8, height:8, borderRadius:'50%', background:C.accent, position:'absolute', top:4, right:4, border:`2px solid ${C.surface}` }} />
+            </button>
+            <div style={{ width:34, height:34, borderRadius:'50%', background:`linear-gradient(135deg,${C.primary},${C.secondary})`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:700, color:'#fff', cursor:'pointer' }}>김</div>
+          </div>
+        </div>
+      </header>
+
+      <main style={{ flex:1 }}>
+        {renderPage()}
+      </main>
+
+      <footer style={{ background:C.surface, borderTop:`1.5px solid ${C.border}`, padding:'20px 24px' }}>
+        <div style={{ maxWidth:1200, margin:'0 auto', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <div style={{ width:22, height:22, borderRadius:6, background:`linear-gradient(135deg,${C.primary},${C.secondary})`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <i className="ph ph-wave-sine" style={{ fontSize:12, color:'#fff' }} />
+            </div>
+            <span style={{ fontSize:13, fontWeight:700, color:C.text }}>WaveSync</span>
+            <span style={{ fontSize:12, color:C.textLight }}> — 음악 제작 협업 플랫폼 확장 구현 데모</span>
+          </div>
+          <div style={{ display:'flex', gap:20 }}>
+            {['Next.js','TypeScript','Redis','AWS S3'].map(t => (
+              <span key={t} style={{ fontSize:11, color:C.textLight, fontWeight:500 }}>{t}</span>
+            ))}
+          </div>
+        </div>
+      </footer>
+
+      {toast && <Toast msg={toast} onClose={hideToast} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
