@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>팩트체크 제보 플랫폼 — 알림·통계 확장판</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
+<script src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2/src/regular/style.css"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body,#root{width:100%;min-height:100vh;font-family:'Pretendard',sans-serif;background:#0F1923;color:#E8EDF3;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes glowPulse{0%,100%{box-shadow:0 0 8px rgba(16,183,127,0.3)}50%{box-shadow:0 0 18px rgba(16,183,127,0.6)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes toastIn{from{opacity:0;transform:translateX(100%)}to{opacity:1;transform:translateX(0)}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes progressBar{from{width:0}to{width:var(--target)}}
+@keyframes staggerFade{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
+.fade-in{animation:fadeIn 0.35s ease both}
+.slide-up{animation:slideUp 0.4s ease both}
+.s1{animation-delay:0.06s}.s2{animation-delay:0.12s}.s3{animation-delay:0.18s}.s4{animation-delay:0.24s}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback} = React;
+const {LineChart,Line,BarChart,Bar,XAxis,YAxis,CartesianGrid,Tooltip,
+       ResponsiveContainer,PieChart,Pie,Cell,Legend} = Recharts;
+
+/* ── 팔레트 ── */
+const C={
+  primary:'#10B77F',secondary:'#0D9267',accent:'#F59E42',
+  bg:'#0F1923',surface:'#1A2535',surface2:'#243040',
+  border:'rgba(255,255,255,0.08)',
+  text:'#E8EDF3',textSub:'#8FA3B8',textMuted:'#4E6070',
+  danger:'#EF4444',success:'#10B77F',warn:'#F59E42'
+};
+
+/* ── 더미 데이터 ── */
+const NOTIFS=[
+  {id:1,recipient:'김민수',contact:'010-2345-6789',channel:'카카오',status:'발송완료',sent:'2026-05-15 14:32',retries:0,report:'SNS 허위 정치 광고 처리 결과 안내'},
+  {id:2,recipient:'비회원',contact:'010-5678-9012',channel:'SMS',status:'발송완료',sent:'2026-05-15 13:10',retries:1,report:'유튜브 허위 의학 정보 처리 결과'},
+  {id:3,recipient:'이지은',contact:'010-1234-5678',channel:'카카오',status:'발송 대기',sent:'-',retries:0,report:'지방 선거 투표율 왜곡 보도 검토 중 알림'},
+  {id:4,recipient:'박준호',contact:'010-9876-5432',channel:'SMS',status:'발송 실패',sent:'2026-05-14 09:00',retries:3,report:'포털 사진 오보 처리 결과'},
+  {id:5,recipient:'최서연',contact:'choi@example.com',channel:'카카오',status:'발송완료',sent:'2026-05-13 17:45',retries:0,report:'악성 루머 제보 거절 안내'},
+];
+
+const PERMISSIONS=[
+  {id:1,name:'최서연',email:'choi@example.com',role:'슈퍼어드민',lastAccess:'2026-05-15 18:20',actions:42},
+  {id:2,name:'이준혁',email:'lee@example.com',role:'관리자',lastAccess:'2026-05-15 16:05',actions:18},
+  {id:3,name:'박다솜',email:'park@example.com',role:'뷰어',lastAccess:'2026-05-14 10:30',actions:3},
+  {id:4,name:'김태호',email:'kim2@example.com',role:'관리자',lastAccess:'2026-05-13 14:00',actions:27},
+];
+
+const ACCESS_LOG=[
+  {id:1,user:'이준혁',action:'제보 #3 상태 변경',target:'검토중 → 처리완료',time:'2026-05-15 16:04'},
+  {id:2,user:'최서연',action:'회원 권한 변경',target:'박다솜 → 뷰어',time:'2026-05-15 15:30'},
+  {id:3,user:'이준혁',action:'알림 발송 승인',target:'제보 #2 SMS 발송',time:'2026-05-15 13:12'},
+  {id:4,user:'박다솜',action:'제보 목록 조회',target:'-',time:'2026-05-14 10:30'},
+];
+
+const WEEKLY=[
+  {day:'월',접수:4,처리완료:3},{day:'화',접수:7,처리완료:5},{day:'수',접수:3,처리완료:4},
+  {day:'목',접수:9,처리완료:6},{day:'금',접수:5,처리완료:4},{day:'토',접수:2,처리완료:2},{day:'일',접수:1,처리완료:1},
+];
+
+const PIE_DATA=[
+  {name:'접수',value:2},{name:'검토중',value:2},{name:'처리완료',value:1},{name:'거절',value:1}
+];
+const PIE_COLORS=['#F59E42','#3B82F6',C.primary,'#4E6070'];
+
+const STATUS_COLOR={발송완료:C.primary,'발송 대기':C.warn,'발송 실패':C.danger,'발송중':'#3B82F6'};
+const ROLE_COLOR={슈퍼어드민:'#A78BFA',관리자:C.primary,뷰어:C.textSub};
+
+/* ── 공통 UI ── */
+function GlowCard({children,style={},onClick}){
+  const [hov,setHov]=useState(false);
+  return(
+    <div onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+      style={{background:C.surface,borderRadius:16,border:`1px solid ${hov?C.primary:C.border}`,
+        padding:20,transition:'all 0.2s',cursor:onClick?'pointer':'default',
+        boxShadow:hov?`0 0 20px rgba(16,183,127,0.18)`:'none',...style}}>
+      {children}
+    </div>
+  );
+}
+
+function StatusBadge({status}){
+  const c=STATUS_COLOR[status]||C.textSub;
+  return(
+    <span style={{padding:'3px 10px',borderRadius:20,fontSize:11,fontWeight:600,
+      background:`${c}22`,color:c,border:`1px solid ${c}44`}}>
+      {status}
+    </span>
+  );
+}
+
+function RoleBadge({role}){
+  const c=ROLE_COLOR[role]||C.textSub;
+  return(
+    <span style={{padding:'3px 10px',borderRadius:20,fontSize:11,fontWeight:600,
+      background:`${c}22`,color:c}}>
+      {role}
+    </span>
+  );
+}
+
+function Toast({msg,type='success',onClose}){
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return(
+    <div style={{position:'fixed',top:24,right:24,zIndex:9999,
+      background:C.surface,border:`1px solid ${type==='success'?C.primary:C.danger}`,
+      borderRadius:12,padding:'14px 18px',display:'flex',alignItems:'center',gap:10,
+      animation:'toastIn 0.3s ease both',boxShadow:'0 4px 24px rgba(0,0,0,0.4)'}}>
+      <i className={`ph-bold ${type==='success'?'ph-check-circle':'ph-warning'}`}
+        style={{fontSize:18,color:type==='success'?C.primary:C.danger}}/>
+      <span style={{fontSize:13,color:C.text}}>{msg}</span>
+    </div>
+  );
+}
+
+/* ── 알림 발송 모달 ── */
+function SendNotifModal({report,onClose,onSend}){
+  const [channel,setChannel]=useState('카카오');
+  const [msg,setMsg]=useState(`안녕하세요. 제보하신 "${report?.title||'제보'}" 건이 검토 완료되었습니다. 빠른 시일 내 처리 결과를 안내드리겠습니다.`);
+  const [sending,setSending]=useState(false);
+  function handleSend(){
+    setSending(true);
+    setTimeout(()=>{setSending(false);onSend(channel);},1600);
+  }
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:900,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.6)'}}/>
+      <div onClick={e=>e.stopPropagation()} style={{
+        position:'relative',width:'100%',maxWidth:480,
+        background:C.surface,borderRadius:18,border:`1px solid ${C.border}`,
+        boxShadow:'0 16px 60px rgba(0,0,0,0.5)',animation:'fadeIn 0.25s ease both'}}>
+        <div style={{padding:'18px 22px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <h3 style={{fontSize:16,fontWeight:700,color:C.text}}>알림 발송</h3>
+            <p style={{fontSize:12,color:C.textSub}}>Bull Queue를 통해 비동기 발송됩니다</p>
+          </div>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:C.textSub}}>
+            <i className="ph-bold ph-x" style={{fontSize:18}}/>
+          </button>
+        </div>
+        <div style={{padding:22,display:'flex',flexDirection:'column',gap:14}}>
+          <div>
+            <label style={{fontSize:12,fontWeight:600,color:C.textSub,display:'block',marginBottom:8}}>발송 채널</label>
+            <div style={{display:'flex',gap:8}}>
+              {['카카오','SMS'].map(ch=>(
+                <button key={ch} onClick={()=>setChannel(ch)} style={{
+                  flex:1,padding:'10px',borderRadius:10,border:`2px solid ${channel===ch?C.primary:C.border}`,
+                  cursor:'pointer',background:channel===ch?`${C.primary}22`:'transparent',
+                  color:channel===ch?C.primary:C.textSub,fontWeight:channel===ch?700:400,
+                  fontSize:13,fontFamily:'inherit',transition:'all 0.15s'}}>
+                  <i className={`ph-bold ${ch==='카카오'?'ph-chat-circle':'ph-device-mobile'}`}
+                    style={{fontSize:16,marginBottom:4,display:'block',margin:'0 auto 4px'}}/>
+                  {ch}
+                </button>
+              ))}
+            </div>
+            {channel==='카카오'&&(
+              <p style={{fontSize:11,color:C.textSub,marginTop:6}}>
+                카카오 알림톡 실패 시 SMS로 자동 폴백 발송됩니다.
+              </p>
+            )}
+          </div>
+          <div>
+            <label style={{fontSize:12,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>메시지</label>
+            <textarea value={msg} onChange={e=>setMsg(e.target.value)} rows={4}
+              style={{width:'100%',padding:'10px 12px',borderRadius:10,
+                border:`1px solid ${C.border}`,background:C.surface2,
+                color:C.text,fontSize:13,resize:'vertical',fontFamily:'inherit'}}/>
+          </div>
+          <div style={{background:C.surface2,borderRadius:10,padding:12,border:`1px solid ${C.border}`}}>
+            <p style={{fontSize:11,color:C.textSub,marginBottom:4}}>재시도 정책</p>
+            <p style={{fontSize:12,color:C.text}}>최대 3회 자동 재시도 · 실패 시 notification_log 기록</p>
+          </div>
+        </div>
+        <div style={{padding:'14px 22px',borderTop:`1px solid ${C.border}`,display:'flex',gap:8}}>
+          <button onClick={handleSend} disabled={sending} style={{
+            flex:1,padding:'11px',borderRadius:10,border:'none',cursor:sending?'not-allowed':'pointer',
+            background:sending?C.textMuted:C.primary,color:'#fff',fontWeight:700,fontSize:14,fontFamily:'inherit',
+            transition:'background 0.15s',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+            {sending?(
+              <>
+                <span style={{width:14,height:14,border:'2px solid #fff',borderTopColor:'transparent',
+                  borderRadius:'50%',display:'inline-block',animation:'spin 0.7s linear infinite'}}/>
+                발송 중...
+              </>
+            ):`${channel} 발송`}
+          </button>
+          <button onClick={onClose} style={{
+            padding:'11px 16px',borderRadius:10,border:`1px solid ${C.border}`,
+            cursor:'pointer',background:'transparent',color:C.text,fontSize:14,fontFamily:'inherit'}}>
+            취소
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── 권한 편집 모달 ── */
+function PermissionModal({admin,onClose,onSave}){
+  const [role,setRole]=useState(admin.role);
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:900,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.6)'}}/>
+      <div onClick={e=>e.stopPropagation()} style={{
+        position:'relative',width:400,background:C.surface,
+        borderRadius:18,border:`1px solid ${C.border}`,
+        boxShadow:'0 16px 60px rgba(0,0,0,0.5)',animation:'fadeIn 0.25s ease both'}}>
+        <div style={{padding:'18px 22px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <h3 style={{fontSize:16,fontWeight:700,color:C.text}}>역할 변경</h3>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:C.textSub}}>
+            <i className="ph-bold ph-x" style={{fontSize:18}}/>
+          </button>
+        </div>
+        <div style={{padding:22,display:'flex',flexDirection:'column',gap:14}}>
+          <div style={{display:'flex',alignItems:'center',gap:14,background:C.surface2,borderRadius:12,padding:14}}>
+            <div style={{width:40,height:40,borderRadius:'50%',background:`${C.primary}33`,
+              display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <i className="ph-bold ph-user" style={{fontSize:18,color:C.primary}}/>
+            </div>
+            <div>
+              <p style={{fontSize:15,fontWeight:700,color:C.text}}>{admin.name}</p>
+              <p style={{fontSize:12,color:C.textSub}}>{admin.email}</p>
+            </div>
+          </div>
+          <div>
+            <label style={{fontSize:12,fontWeight:600,color:C.textSub,display:'block',marginBottom:8}}>역할 선택</label>
+            {['슈퍼어드민','관리자','뷰어'].map(r=>(
+              <label key={r} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',borderRadius:10,
+                border:`2px solid ${role===r?ROLE_COLOR[r]:C.border}`,marginBottom:6,cursor:'pointer',
+                background:role===r?`${ROLE_COLOR[r]}11`:'transparent',transition:'all 0.15s'}}>
+                <input type="radio" checked={role===r} onChange={()=>setRole(r)}
+                  style={{accentColor:ROLE_COLOR[r]}}/>
+                <span style={{flex:1,fontSize:13,fontWeight:role===r?700:400,color:ROLE_COLOR[r]}}>{r}</span>
+                <span style={{fontSize:11,color:C.textSub}}>
+                  {r==='슈퍼어드민'?'전체 권한':r==='관리자'?'제보 관리 + 알림 발송':'읽기 전용'}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+        <div style={{padding:'14px 22px',borderTop:`1px solid ${C.border}`,display:'flex',gap:8}}>
+          <button onClick={()=>{onSave(admin.id,role);onClose();}} style={{
+            flex:1,padding:'10px',borderRadius:10,border:'none',cursor:'pointer',
+            background:C.primary,color:'#fff',fontWeight:700,fontSize:14,fontFamily:'inherit'}}>
+            저장
+          </button>
+          <button onClick={onClose} style={{
+            padding:'10px 14px',borderRadius:10,border:`1px solid ${C.border}`,
+            cursor:'pointer',background:'transparent',color:C.text,fontSize:14,fontFamily:'inherit'}}>
+            취소
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── 제보 입력 폼 모달 ── */
+function ReportFormModal({onClose,onSubmit}){
+  const [files,setFiles]=useState([]);
+  const [progress,setProgress]=useState({});
+  const [dragging,setDragging]=useState(false);
+  const [title,setTitle]=useState('');
+  const [content,setContent]=useState('');
+
+  function handleFiles(newFiles){
+    const arr=Array.from(newFiles).slice(0,5);
+    setFiles(arr);
+    arr.forEach((f,i)=>{
+      let p=0;
+      const t=setInterval(()=>{
+        p+=15+Math.random()*10;
+        if(p>=100){p=100;clearInterval(t);}
+        setProgress(prev=>({...prev,[f.name]:Math.floor(p)}));
+      },120);
+    });
+  }
+
+  return(
+    <div style={{position:'fixed',inset:0,zIndex:900,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.65)'}}/>
+      <div onClick={e=>e.stopPropagation()} style={{
+        position:'relative',width:'100%',maxWidth:560,maxHeight:'92vh',overflow:'auto',
+        background:C.surface,borderRadius:20,border:`1px solid ${C.border}`,
+        boxShadow:'0 16px 60px rgba(0,0,0,0.5)',animation:'fadeIn 0.25s ease both'}}>
+        <div style={{padding:'20px 24px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <h3 style={{fontSize:17,fontWeight:700,color:C.text}}>제보하기</h3>
+            <p style={{fontSize:12,color:C.textSub}}>가짜뉴스·허위사실을 빠르게 제보하세요</p>
+          </div>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',color:C.textSub}}>
+            <i className="ph-bold ph-x" style={{fontSize:20}}/>
+          </button>
+        </div>
+        <div style={{padding:24,display:'flex',flexDirection:'column',gap:16}}>
+          <div>
+            <label style={{fontSize:12,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>제목</label>
+            <input value={title} onChange={e=>setTitle(e.target.value)}
+              placeholder="허위사실 또는 가짜뉴스 제목을 입력하세요"
+              style={{width:'100%',padding:'11px 14px',borderRadius:10,
+                border:`1px solid ${C.border}`,background:C.surface2,
+                color:C.text,fontSize:14,fontFamily:'inherit'}}/>
+          </div>
+          <div>
+            <label style={{fontSize:12,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>내용</label>
+            <textarea rows={4} value={content} onChange={e=>setContent(e.target.value)}
+              placeholder="허위사실의 구체적인 내용을 기술해 주세요."
+              style={{width:'100%',padding:'11px 14px',borderRadius:10,
+                border:`1px solid ${C.border}`,background:C.surface2,
+                color:C.text,fontSize:14,resize:'vertical',fontFamily:'inherit'}}/>
+          </div>
+          {/* 드래그앤드롭 업로드 영역 */}
+          <div>
+            <label style={{fontSize:12,fontWeight:600,color:C.textSub,display:'block',marginBottom:6}}>
+              이미지 첨부 (드래그앤드롭 또는 클릭)
+            </label>
+            <label
+              onDragOver={e=>{e.preventDefault();setDragging(true);}}
+              onDragLeave={()=>setDragging(false)}
+              onDrop={e=>{e.preventDefault();setDragging(false);handleFiles(e.dataTransfer.files);}}
+              style={{display:'flex',flexDirection:'column',alignItems:'center',gap:8,
+                padding:'28px 20px',borderRadius:14,
+                border:`2px dashed ${dragging?C.primary:C.border}`,
+                background:dragging?`${C.primary}11`:C.surface2,
+                cursor:'pointer',transition:'all 0.2s'}}>
+              <i className="ph-bold ph-image" style={{fontSize:32,color:dragging?C.primary:C.textSub}}/>
+              <span style={{fontSize:13,color:C.textSub}}>
+                {files.length>0?`${files.length}개 선택됨`:'이미지를 여기에 끌어다 놓거나 클릭하세요'}
+              </span>
+              <span style={{fontSize:11,color:C.textMuted}}>최대 5장 · 파일당 10MB 이하 · WebP 자동 압축</span>
+              <input type="file" accept="image/*" multiple onChange={e=>handleFiles(e.target.files)} style={{display:'none'}}/>
+            </label>
+            {/* 진행률 바 */}
+            {files.length>0&&(
+              <div style={{marginTop:10,display:'flex',flexDirection:'column',gap:6}}>
+                {files.map(f=>(
+                  <div key={f.name}>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}>
+                      <span style={{fontSize:11,color:C.textSub,maxWidth:300,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f.name}</span>
+                      <span style={{fontSize:11,color:C.primary}}>{progress[f.name]||0}%</span>
+                    </div>
+                    <div style={{height:4,background:C.surface2,borderRadius:2}}>
+                      <div style={{height:'100%',borderRadius:2,background:`linear-gradient(90deg,${C.primary},${C.accent})`,
+                        width:`${progress[f.name]||0}%`,transition:'width 0.12s ease'}}/>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* reCAPTCHA */}
+          <div style={{border:`1px solid ${C.border}`,borderRadius:10,padding:'12px 14px',
+            display:'flex',alignItems:'center',gap:12,background:C.surface2}}>
+            <input type="checkbox" style={{width:18,height:18,accentColor:C.primary}}/>
+            <span style={{fontSize:13,color:C.text}}>로봇이 아닙니다</span>
+            <span style={{marginLeft:'auto',fontSize:10,color:C.textMuted}}>reCAPTCHA v3</span>
+          </div>
+        </div>
+        <div style={{padding:'16px 24px',borderTop:`1px solid ${C.border}`,display:'flex',gap:8}}>
+          <button onClick={()=>{onSubmit();}} style={{
+            flex:1,padding:'12px',borderRadius:10,border:'none',cursor:'pointer',
+            background:`linear-gradient(135deg,${C.primary},${C.secondary})`,
+            color:'#fff',fontWeight:700,fontSize:15,fontFamily:'inherit',
+            boxShadow:`0 4px 14px ${C.primary}55`}}>
+            제보 제출
+          </button>
+          <button onClick={onClose} style={{
+            padding:'12px 16px',borderRadius:10,border:`1px solid ${C.border}`,
+            cursor:'pointer',background:'transparent',color:C.text,fontSize:14,fontFamily:'inherit'}}>
+            취소
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── 메인 앱 ── */
+function App(){
+  const [page,setPage]=useState('대시보드');
+  const [notifs,setNotifs]=useState(NOTIFS);
+  const [perms,setPerms]=useState(PERMISSIONS);
+  const [sendModal,setSendModal]=useState(null);
+  const [permModal,setPermModal]=useState(null);
+  const [reportForm,setReportForm]=useState(false);
+  const [toast,setToast]=useState(null);
+  const [filterChannel,setFilterChannel]=useState('전체');
+  const [period,setPeriod]=useState('이번 주');
+
+  function showToast(msg,type='success'){setToast({msg,type});setTimeout(()=>setToast(null),3000);}
+
+  function handleSend(channel){
+    setNotifs(ns=>[{id:Date.now(),recipient:'신규',contact:'010-0000-0000',
+      channel,status:'발송완료',sent:'방금',retries:0,report:'신규 알림'}, ...ns]);
+    showToast(`${channel} 발송이 큐에 등록되었습니다.`);
+  }
+  function handlePermSave(id,role){
+    setPerms(ps=>ps.map(p=>p.id===id?{...p,role}:p));
+    showToast('역할이 변경되었습니다.');
+  }
+
+  const filteredNotifs=filterChannel==='전체'?notifs:notifs.filter(n=>n.channel===filterChannel);
+
+  const NAV=[
+    {label:'대시보드',icon:'ph-chart-bar'},
+    {label:'알림 발송',icon:'ph-bell-ringing'},
+    {label:'권한 관리',icon:'ph-shield-check'},
+    {label:'제보하기',icon:'ph-paper-plane-tilt'},
+  ];
+
+  return(
+    <div style={{width:'100%',minHeight:'100vh',display:'flex',flexDirection:'column'}}>
+      {/* ── 글로벌 네비 ── */}
+      <header style={{position:'sticky',top:0,zIndex:100,
+        background:'rgba(15,25,35,0.92)',backdropFilter:'blur(12px)',
+        borderBottom:`1px solid ${C.border}`}}>
+        <div style={{maxWidth:1240,margin:'0 auto',padding:'0 24px',height:62,
+          display:'flex',alignItems:'center',gap:32}}>
+          {/* 로고 */}
+          <div style={{display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+            <div style={{width:32,height:32,borderRadius:9,
+              background:`linear-gradient(135deg,${C.primary},${C.secondary})`,
+              display:'flex',alignItems:'center',justifyContent:'center',
+              animation:'glowPulse 3s ease-in-out infinite'}}>
+              <i className="ph-bold ph-shield-check" style={{fontSize:16,color:'#fff'}}/>
+            </div>
+            <span style={{fontSize:16,fontWeight:800,color:C.text,letterSpacing:-0.5}}>팩트체크 확장판</span>
+          </div>
+          {/* 네비 */}
+          <nav style={{display:'flex',gap:2,flex:1}}>
+            {NAV.map(n=>(
+              <button key={n.label} onClick={()=>{setPage(n.label);if(n.label==='제보하기')setReportForm(true);}} style={{
+                display:'flex',alignItems:'center',gap:6,
+                padding:'7px 16px',borderRadius:9,border:'none',cursor:'pointer',
+                background:page===n.label?`${C.primary}22`:'transparent',
+                color:page===n.label?C.primary:C.textSub,
+                fontSize:14,fontWeight:page===n.label?700:400,fontFamily:'inherit',
+                transition:'all 0.15s',
+                borderBottom:page===n.label?`2px solid ${C.primary}`:'2px solid transparent'}}>
+                <i className={`ph-bold ${n.icon}`} style={{fontSize:15}}/>
+                {n.label}
+              </button>
+            ))}
+          </nav>
+          {/* 우측 */}
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <div style={{display:'flex',alignItems:'center',gap:6,padding:'6px 14px',borderRadius:8,
+              background:C.surface,border:`1px solid ${C.border}`,cursor:'pointer'}}>
+              <div style={{width:7,height:7,borderRadius:'50%',background:C.primary,
+                animation:'glowPulse 2s infinite'}}/>
+              <span style={{fontSize:12,color:C.textSub}}>Bull Queue 활성</span>
+            </div>
+            <div style={{width:34,height:34,borderRadius:'50%',
+              background:`${C.primary}33`,border:`2px solid ${C.primary}44`,
+              display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}}>
+              <i className="ph-bold ph-user" style={{fontSize:16,color:C.primary}}/>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* ── 콘텐츠 ── */}
+      <main style={{flex:1,maxWidth:1240,width:'100%',margin:'0 auto',padding:'32px 24px'}}>
+
+        {/* 대시보드 */}
+        {page==='대시보드'&&(
+          <div style={{animation:'fadeIn 0.35s ease'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:24,flexWrap:'wrap',gap:12}}>
+              <div>
+                <h1 style={{fontSize:24,fontWeight:800,color:C.text,marginBottom:4}}>제보 통계 대시보드</h1>
+                <p style={{fontSize:13,color:C.textSub}}>30초마다 자동 갱신 · React Query staleTime=30s</p>
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                {['오늘','이번 주','이번 달'].map(p=>(
+                  <button key={p} onClick={()=>setPeriod(p)} style={{
+                    padding:'7px 16px',borderRadius:8,border:`1px solid ${period===p?C.primary:C.border}`,
+                    cursor:'pointer',background:period===p?`${C.primary}22`:'transparent',
+                    color:period===p?C.primary:C.textSub,fontSize:12,fontFamily:'inherit'}}>
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* KPI 카드 */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}}>
+              {[
+                {label:'총 제보',value:31,icon:'ph-inbox',color:C.primary,sub:'+3 오늘'},
+                {label:'미처리',value:4,icon:'ph-clock',color:C.warn,sub:'접수 대기 2 + 검토중 2'},
+                {label:'처리 완료',value:24,icon:'ph-check-circle',color:C.success,sub:'이번 주 처리율 86%'},
+                {label:'발송 성공',value:18,icon:'ph-bell-ringing',color:'#A78BFA',sub:'알림톡 14 / SMS 4'},
+              ].map((k,i)=>(
+                <GlowCard key={k.label} style={{padding:'18px 20px'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
+                    <div style={{width:38,height:38,borderRadius:10,background:`${k.color}22`,
+                      display:'flex',alignItems:'center',justifyContent:'center'}}>
+                      <i className={`ph-bold ${k.icon}`} style={{fontSize:20,color:k.color}}/>
+                    </div>
+                  </div>
+                  <p className={`count-up s${i+1}`} style={{fontSize:30,fontWeight:800,color:C.text,lineHeight:1,marginBottom:4}}>{k.value}</p>
+                  <p style={{fontSize:12,fontWeight:600,color:C.textSub,marginBottom:2}}>{k.label}</p>
+                  <p style={{fontSize:11,color:k.color}}>{k.sub}</p>
+                </GlowCard>
+              ))}
+            </div>
+
+            {/* 차트 */}
+            <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:16,marginBottom:24}}>
+              <GlowCard>
+                <h4 style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:16}}>일별 제보 접수 / 처리 현황</h4>
+                <div style={{position:'relative',height:220}}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={WEEKLY} barSize={16}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)"/>
+                      <XAxis dataKey="day" tick={{fontSize:11,fill:C.textSub}}/>
+                      <YAxis tick={{fontSize:11,fill:C.textSub}}/>
+                      <Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}}/>
+                      <Bar dataKey="접수" fill={C.accent} radius={[4,4,0,0]}/>
+                      <Bar dataKey="처리완료" fill={C.primary} radius={[4,4,0,0]}/>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </GlowCard>
+              <GlowCard>
+                <h4 style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:16}}>처리 상태 분포</h4>
+                <div style={{position:'relative',height:220}}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={PIE_DATA} cx="50%" cy="50%" innerRadius={55} outerRadius={80} dataKey="value">
+                        {PIE_COLORS.map((c,i)=><Cell key={i} fill={c}/>)}
+                      </Pie>
+                      <Tooltip contentStyle={{background:C.surface2,border:`1px solid ${C.border}`,borderRadius:8,color:C.text}}/>
+                      <Legend wrapperStyle={{fontSize:11,color:C.textSub}}/>
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              </GlowCard>
+            </div>
+
+            {/* 최근 접근 로그 */}
+            <GlowCard>
+              <h4 style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:14}}>
+                <i className="ph-bold ph-list-magnifying-glass" style={{marginRight:6,fontSize:15}}/>
+                관리자 접근 로그 (최근 4건)
+              </h4>
+              {ACCESS_LOG.map((l,i)=>(
+                <div key={l.id} className={`fade-in s${i+1}`} style={{
+                  display:'flex',gap:14,padding:'10px 0',
+                  borderBottom:i<ACCESS_LOG.length-1?`1px solid ${C.border}`:'none',alignItems:'center'}}>
+                  <div style={{width:32,height:32,borderRadius:9,background:`${C.primary}22`,
+                    display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                    <i className="ph-bold ph-user-check" style={{fontSize:15,color:C.primary}}/>
+                  </div>
+                  <div style={{flex:1}}>
+                    <p style={{fontSize:13,color:C.text,fontWeight:600}}>{l.user}</p>
+                    <p style={{fontSize:12,color:C.textSub}}>{l.action} · {l.target}</p>
+                  </div>
+                  <span style={{fontSize:11,color:C.textMuted,flexShrink:0}}>{l.time}</span>
+                </div>
+              ))}
+            </GlowCard>
+          </div>
+        )}
+
+        {/* 알림 발송 탭 */}
+        {page==='알림 발송'&&(
+          <div style={{animation:'fadeIn 0.35s ease'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20,flexWrap:'wrap',gap:12}}>
+              <div>
+                <h2 style={{fontSize:22,fontWeight:800,color:C.text,marginBottom:4}}>알림 발송</h2>
+                <p style={{fontSize:13,color:C.textSub}}>Bull Queue 비동기 처리 · 카카오 알림톡 → SMS 자동 폴백</p>
+              </div>
+              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                <select value={filterChannel} onChange={e=>setFilterChannel(e.target.value)} style={{
+                  padding:'8px 14px',borderRadius:8,border:`1px solid ${C.border}`,
+                  background:C.surface,color:C.text,fontSize:13,fontFamily:'inherit'}}>
+                  {['전체','카카오','SMS'].map(ch=><option key={ch}>{ch}</option>)}
+                </select>
+                <button onClick={()=>setSendModal({title:'직접 발송 테스트'})} style={{
+                  padding:'8px 18px',borderRadius:8,border:'none',cursor:'pointer',
+                  background:C.primary,color:'#fff',fontWeight:700,fontSize:13,fontFamily:'inherit',
+                  display:'flex',alignItems:'center',gap:6}}>
+                  <i className="ph-bold ph-paper-plane-tilt" style={{fontSize:15}}/>
+                  새 알림 발송
+                </button>
+              </div>
+            </div>
+
+            {/* 발송 통계 */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginBottom:20}}>
+              {[
+                {label:'발송 성공',value:NOTIFS.filter(n=>n.status==='발송완료').length,color:C.primary},
+                {label:'발송 대기',value:NOTIFS.filter(n=>n.status==='발송 대기').length,color:C.warn},
+                {label:'발송 실패',value:NOTIFS.filter(n=>n.status==='발송 실패').length,color:C.danger},
+              ].map(s=>(
+                <GlowCard key={s.label} style={{padding:'14px 18px',display:'flex',alignItems:'center',gap:12}}>
+                  <div style={{width:10,height:10,borderRadius:'50%',background:s.color,flexShrink:0}}/>
+                  <div>
+                    <p style={{fontSize:22,fontWeight:800,color:C.text}}>{s.value}</p>
+                    <p style={{fontSize:11,color:C.textSub}}>{s.label}</p>
+                  </div>
+                </GlowCard>
+              ))}
+            </div>
+
+            {/* 발송 목록 */}
+            <GlowCard style={{padding:0,overflow:'hidden'}}>
+              <div style={{display:'grid',gridTemplateColumns:'1.5fr 1fr 1fr 1fr 1fr auto',
+                padding:'11px 20px',borderBottom:`1px solid ${C.border}`,
+                fontSize:12,fontWeight:600,color:C.textSub,background:C.surface2}}>
+                <span>제보 내용</span><span>수신자</span><span>채널</span><span>상태</span><span>발송 시각</span><span>재시도</span>
+              </div>
+              {filteredNotifs.map((n,i)=>(
+                <div key={n.id} onClick={()=>setSendModal(n)}
+                  className={`fade-in s${Math.min(i+1,4)}`}
+                  style={{display:'grid',gridTemplateColumns:'1.5fr 1fr 1fr 1fr 1fr auto',
+                    padding:'14px 20px',borderBottom:`1px solid ${C.border}`,
+                    cursor:'pointer',transition:'background 0.12s'}}
+                  onMouseEnter={e=>e.currentTarget.style.background=C.surface2}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <span style={{fontSize:13,fontWeight:500,color:C.text}}>{n.report}</span>
+                  <span style={{fontSize:13,color:C.textSub,display:'flex',alignItems:'center'}}>{n.recipient}</span>
+                  <span style={{display:'flex',alignItems:'center'}}>
+                    <span style={{padding:'3px 10px',borderRadius:20,fontSize:11,fontWeight:600,
+                      background:n.channel==='카카오'?'#FEF9C3':'#EFF6FF',
+                      color:n.channel==='카카오'?'#92400E':'#1D4ED8'}}>
+                      {n.channel}
+                    </span>
+                  </span>
+                  <span style={{display:'flex',alignItems:'center'}}><StatusBadge status={n.status}/></span>
+                  <span style={{fontSize:12,color:C.textSub,display:'flex',alignItems:'center'}}>{n.sent}</span>
+                  <span style={{fontSize:12,display:'flex',alignItems:'center',
+                    color:n.retries>0?C.warn:C.textMuted}}>
+                    {n.retries}회
+                  </span>
+                </div>
+              ))}
+            </GlowCard>
+          </div>
+        )}
+
+        {/* 권한 관리 탭 */}
+        {page==='권한 관리'&&(
+          <div style={{animation:'fadeIn 0.35s ease'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+              <div>
+                <h2 style={{fontSize:22,fontWeight:800,color:C.text,marginBottom:4}}>멀티 관리자 권한 체계</h2>
+                <p style={{fontSize:13,color:C.textSub}}>슈퍼어드민 · 관리자 · 뷰어 3계층 RBAC</p>
+              </div>
+            </div>
+            {/* 권한 매트릭스 설명 */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginBottom:20}}>
+              {[
+                {role:'슈퍼어드민',icon:'ph-crown',color:'#A78BFA',perms:['제보 관리','알림 발송','권한 변경','접근 로그 조회']},
+                {role:'관리자',icon:'ph-shield-check',color:C.primary,perms:['제보 관리','알림 발송','자기 로그 조회']},
+                {role:'뷰어',icon:'ph-eye',color:C.textSub,perms:['제보 목록 조회 (읽기 전용)']},
+              ].map(r=>(
+                <GlowCard key={r.role}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+                    <i className={`ph-bold ${r.icon}`} style={{fontSize:18,color:r.color}}/>
+                    <span style={{fontSize:14,fontWeight:700,color:r.color}}>{r.role}</span>
+                  </div>
+                  {r.perms.map(p=>(
+                    <div key={p} style={{display:'flex',alignItems:'center',gap:6,marginBottom:6}}>
+                      <i className="ph-bold ph-check" style={{fontSize:12,color:r.color}}/>
+                      <span style={{fontSize:12,color:C.textSub}}>{p}</span>
+                    </div>
+                  ))}
+                </GlowCard>
+              ))}
+            </div>
+            {/* 관리자 목록 */}
+            <GlowCard style={{padding:0,overflow:'hidden'}}>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1.5fr 1fr 1fr 1fr auto',
+                padding:'11px 20px',borderBottom:`1px solid ${C.border}`,
+                fontSize:12,fontWeight:600,color:C.textSub,background:C.surface2}}>
+                <span>이름</span><span>이메일</span><span>역할</span><span>최근 접속</span><span>수행 작업</span><span>관리</span>
+              </div>
+              {perms.map((p,i)=>(
+                <div key={p.id} className={`fade-in s${Math.min(i+1,4)}`} style={{
+                  display:'grid',gridTemplateColumns:'1fr 1.5fr 1fr 1fr 1fr auto',
+                  padding:'14px 20px',borderBottom:`1px solid ${C.border}`,alignItems:'center'}}>
+                  <span style={{fontSize:14,fontWeight:600,color:C.text}}>{p.name}</span>
+                  <span style={{fontSize:12,color:C.textSub}}>{p.email}</span>
+                  <span><RoleBadge role={p.role}/></span>
+                  <span style={{fontSize:12,color:C.textSub}}>{p.lastAccess}</span>
+                  <span style={{fontSize:13,color:C.text,fontWeight:600}}>{p.actions}건</span>
+                  <button onClick={()=>setPermModal(p)} style={{
+                    padding:'5px 12px',borderRadius:7,border:`1px solid ${C.border}`,
+                    cursor:'pointer',background:C.surface2,color:C.text,fontSize:12,fontFamily:'inherit',
+                    transition:'border-color 0.15s'}}
+                    onMouseEnter={e=>e.target.style.borderColor=C.primary}
+                    onMouseLeave={e=>e.target.style.borderColor=C.border}>
+                    수정
+                  </button>
+                </div>
+              ))}
+            </GlowCard>
+          </div>
+        )}
+      </main>
+
+      {/* ── 푸터 ── */}
+      <footer style={{borderTop:`1px solid ${C.border}`,padding:'20px 24px',textAlign:'center'}}>
+        <p style={{fontSize:12,color:C.textMuted}}>팩트체크 제보 플랫폼 — 알림·통계 확장판 · 자체 개발 프로젝트</p>
+      </footer>
+
+      {/* ── 오버레이 ── */}
+      {sendModal&&<SendNotifModal report={sendModal} onClose={()=>setSendModal(null)} onSend={handleSend}/>}
+      {permModal&&<PermissionModal admin={permModal} onClose={()=>setPermModal(null)} onSave={handlePermSave}/>}
+      {reportForm&&<ReportFormModal onClose={()=>setReportForm(false)} onSubmit={()=>{setReportForm(false);showToast('제보가 큐에 등록되었습니다.');}}/>}
+      {toast&&<Toast msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
