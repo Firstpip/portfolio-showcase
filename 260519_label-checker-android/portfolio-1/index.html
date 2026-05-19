@@ -1,0 +1,1241 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>산업용 라벨 검수 워크플로우 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/" crossorigin />
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { width: 100%; min-height: 100vh; }
+  body { font-family: 'Pretendard', -apple-system, sans-serif; background: #F0F4F8; color: #1A2332; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes slideInRight {
+    from { opacity: 0; transform: translateX(24px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes progressFill {
+    from { width: 0%; }
+    to { width: var(--progress-width, 70%); }
+  }
+  @keyframes pulseGreen {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0,201,167,0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(0,201,167,0); }
+  }
+  @keyframes scanLine {
+    0% { top: 12%; }
+    100% { top: 88%; }
+  }
+  @keyframes shimmer {
+    0% { background-position: -200px 0; }
+    100% { background-position: calc(200px + 100%) 0; }
+  }
+  @keyframes toastSlide {
+    from { opacity: 0; transform: translateX(100%); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes stepComplete {
+    0% { transform: scale(0.6); opacity: 0; }
+    60% { transform: scale(1.1); }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  @keyframes drawBbox {
+    from { opacity: 0; transform: scale(0.92); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .page-enter { animation: fadeIn 0.3s ease forwards; }
+  .slide-in { animation: slideInRight 0.3s ease forwards; }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #C8D6E5; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const COLORS = {
+  primary: '#1B4F72',
+  primary2: '#154360',
+  secondary: '#2E86AB',
+  accent: '#00C9A7',
+  accentDark: '#00A88E',
+  bg: '#F0F4F8',
+  surface: '#FFFFFF',
+  border: '#D8E6F0',
+  textPrimary: '#1A2332',
+  textSecondary: '#5A7184',
+  success: '#16A34A',
+  danger: '#DC2626',
+  warning: '#D97706',
+  successBg: '#DCFCE7',
+  dangerBg: '#FEE2E2',
+};
+
+/* ───── Icon Helper ───── */
+const Icon = ({ name, size = 16, color = 'currentColor', style }) => {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current && window.lucide) {
+      ref.current.innerHTML = '';
+      const el = document.createElement('span');
+      ref.current.appendChild(el);
+      try {
+        const iconFn = window.lucide[name.replace(/-([a-z])/g, (_, c) => c.toUpperCase())];
+        if (iconFn) {
+          el.innerHTML = iconFn([size, size], { color, 'stroke-width': 1.8 });
+        }
+      } catch {}
+    }
+  }, [name, size, color]);
+  return <span ref={ref} style={{ display:'inline-flex', alignItems:'center', ...style }} />;
+};
+
+/* ───── Toast ───── */
+function Toast({ toasts }) {
+  return (
+    <div style={{ position:'fixed', top:72, right:20, zIndex:9999, display:'flex', flexDirection:'column', gap:8 }}>
+      {toasts.map(t => (
+        <div key={t.id} style={{
+          background: t.type === 'success' ? COLORS.success : t.type === 'error' ? COLORS.danger : COLORS.primary,
+          color:'#fff', padding:'10px 16px', borderRadius:6, fontSize:13, fontWeight:500,
+          animation:'toastSlide 0.3s ease forwards', boxShadow:'0 4px 12px rgba(0,0,0,0.15)',
+          display:'flex', alignItems:'center', gap:8, minWidth:240,
+        }}>
+          <Icon name={t.type === 'success' ? 'check-circle' : t.type === 'error' ? 'x-circle' : 'info'} size={15} color="#fff" />
+          {t.message}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ───── Mock Data ───── */
+const recentInspections = [
+  { id:'INS-0519-001', serial:'HX-2024-A047', date:'2026.05.19 09:41', result:'pass', worker:'김민준', type:'열교환기-A형' },
+  { id:'INS-0519-002', serial:'HX-2024-A048', date:'2026.05.19 09:53', result:'fail', worker:'이서연', type:'열교환기-A형', failRules:['규칙 2 위반: IN/OUT 방향 불일치'] },
+  { id:'INS-0519-003', serial:'HX-2024-B012', date:'2026.05.19 10:07', result:'pass', worker:'박도현', type:'열교환기-B형' },
+  { id:'INS-0519-004', serial:'HX-2024-B013', date:'2026.05.19 10:28', result:'pass', worker:'최유진', type:'열교환기-B형' },
+  { id:'INS-0519-005', serial:'HX-2024-C003', date:'2026.05.19 10:45', result:'fail', worker:'김민준', type:'열교환기-C형', failRules:['규칙 1 위반: 유체명 불일치', '규칙 3 위반: 좌/우 방향 오류'] },
+];
+
+const stepperSteps = [
+  { id:1, label:'명판 촬영', sub:'Serial No. 및 Fluid Group 추출', icon:'camera' },
+  { id:2, label:'전체샷 촬영', sub:'케이스(A/B/C) 수동 선택', icon:'image' },
+  { id:3, label:'Connection Label', sub:'4개 라벨 순차 촬영', icon:'layers' },
+  { id:4, label:'Board Label', sub:'케이스별 위치 확인', icon:'clipboard-check' },
+  { id:5, label:'검증 및 저장', sub:'합격/불합격 판정 후 저장', icon:'save' },
+];
+
+/* ───── Main (검수 시작) ───── */
+function MainView({ showToast }) {
+  const [currentStep, setCurrentStep] = useState(1);
+  const [completedSteps, setCompletedSteps] = useState(new Set());
+  const [selectedInsp, setSelectedInsp] = useState(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+
+  const handleStepClick = (stepId) => {
+    if (stepId <= currentStep + 1) {
+      setCurrentStep(stepId);
+    }
+  };
+
+  const handleStepDone = () => {
+    if (currentStep < 5) {
+      setCompletedSteps(prev => new Set([...prev, currentStep]));
+      setCurrentStep(prev => prev + 1);
+      showToast(`${stepperSteps[currentStep-1].label} 완료`, 'success');
+    } else {
+      setCompletedSteps(prev => new Set([...prev, 5]));
+      showToast('검수 완료 — 결과가 저장됩니다', 'success');
+    }
+  };
+
+  const handleReset = () => {
+    setCurrentStep(1);
+    setCompletedSteps(new Set());
+    showToast('새 검수를 시작합니다', 'info');
+  };
+
+  const openDetail = (insp) => {
+    setSelectedInsp(insp);
+    setDetailOpen(true);
+  };
+
+  return (
+    <div style={{ padding:'28px 32px', maxWidth:1100, margin:'0 auto' }} className="page-enter">
+      {/* Header stats */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:16, marginBottom:28 }}>
+        {[
+          { label:'오늘 검수', value:'47', sub:'건', icon:'clipboard-list', color:COLORS.primary },
+          { label:'합격률', value:'89.4', sub:'%', icon:'check-circle', color:COLORS.success },
+          { label:'불합격', value:'5', sub:'건', icon:'x-circle', color:COLORS.danger },
+          { label:'처리 대기', value:'3', sub:'건', icon:'clock', color:COLORS.warning },
+        ].map(stat => (
+          <div key={stat.label} style={{
+            background:COLORS.surface, borderRadius:6, padding:'18px 20px',
+            border:`1px solid ${COLORS.border}`, display:'flex', alignItems:'center', gap:14,
+          }}>
+            <div style={{ width:40, height:40, borderRadius:6, background:`${stat.color}15`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <Icon name={stat.icon} size={20} color={stat.color} />
+            </div>
+            <div>
+              <div style={{ fontSize:22, fontWeight:700, color:stat.color }}>{stat.value}<span style={{ fontSize:13, marginLeft:2, color:COLORS.textSecondary }}>{stat.sub}</span></div>
+              <div style={{ fontSize:12, color:COLORS.textSecondary, marginTop:1 }}>{stat.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 380px', gap:24 }}>
+        {/* Stepper */}
+        <div style={{ background:COLORS.surface, borderRadius:6, border:`1px solid ${COLORS.border}`, overflow:'hidden' }}>
+          <div style={{ background:COLORS.primary, padding:'16px 24px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <div>
+              <div style={{ fontSize:15, fontWeight:700, color:'#fff' }}>5단계 검수 워크플로우</div>
+              <div style={{ fontSize:12, color:'rgba(255,255,255,0.7)', marginTop:2 }}>HX-2024-A049 | 열교환기-A형</div>
+            </div>
+            <button onClick={handleReset} style={{
+              background:'rgba(255,255,255,0.15)', border:'1px solid rgba(255,255,255,0.3)',
+              color:'#fff', borderRadius:5, padding:'6px 14px', fontSize:12, cursor:'pointer',
+              display:'flex', alignItems:'center', gap:6,
+            }}>
+              <Icon name="rotate-ccw" size={13} color="#fff" /> 초기화
+            </button>
+          </div>
+
+          {/* Progress bar */}
+          <div style={{ height:4, background:'#E8F0F7' }}>
+            <div style={{
+              height:'100%', background:COLORS.accent, borderRadius:2,
+              width:`${(completedSteps.size / 5) * 100}%`, transition:'width 0.4s ease',
+            }} />
+          </div>
+
+          <div style={{ padding:'20px 24px' }}>
+            {/* Step indicators */}
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:28, position:'relative' }}>
+              <div style={{ position:'absolute', top:'50%', left:'10%', right:'10%', height:2, background:COLORS.border, transform:'translateY(-50%)', zIndex:0 }} />
+              {stepperSteps.map(step => {
+                const done = completedSteps.has(step.id);
+                const active = currentStep === step.id;
+                return (
+                  <button key={step.id} onClick={() => handleStepClick(step.id)} style={{
+                    width:44, height:44, borderRadius:'50%', border:'none', cursor: step.id <= currentStep + 1 ? 'pointer' : 'default',
+                    background: done ? COLORS.accent : active ? COLORS.primary : '#E8F0F7',
+                    color: done || active ? '#fff' : COLORS.textSecondary,
+                    fontWeight:700, fontSize:14, position:'relative', zIndex:1,
+                    transition:'all 0.2s ease',
+                    animation: done ? 'stepComplete 0.3s ease forwards' : 'none',
+                    boxShadow: active ? `0 0 0 4px ${COLORS.primary}25` : 'none',
+                  }}>
+                    {done ? <Icon name="check" size={16} color="#fff" /> : step.id}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Current step detail */}
+            {(() => {
+              const step = stepperSteps[currentStep - 1];
+              return (
+                <div key={currentStep} style={{ animation:'fadeIn 0.25s ease' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16 }}>
+                    <div style={{ width:40, height:40, borderRadius:8, background:`${COLORS.primary}12`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                      <Icon name={step.icon} size={20} color={COLORS.primary} />
+                    </div>
+                    <div>
+                      <div style={{ fontWeight:700, fontSize:16, color:COLORS.textPrimary }}>단계 {step.id}: {step.label}</div>
+                      <div style={{ fontSize:13, color:COLORS.textSecondary }}>{step.sub}</div>
+                    </div>
+                  </div>
+
+                  {/* Step specific content */}
+                  {currentStep === 1 && (
+                    <div style={{ background:'#F7FBFF', borderRadius:6, padding:16, border:`1px solid ${COLORS.border}` }}>
+                      <div style={{ fontSize:13, fontWeight:600, color:COLORS.textPrimary, marginBottom:12 }}>추출될 정보</div>
+                      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                        {[
+                          { label:'Serial No.', value:'HX-2024-A049', icon:'hash' },
+                          { label:'Fluid Group', value:'Group-A (S.W / F.W)', icon:'droplets' },
+                          { label:'제조일', value:'2026.03.14', icon:'calendar' },
+                          { label:'모델명', value:'HX-450A-STD', icon:'tag' },
+                        ].map(f => (
+                          <div key={f.label} style={{ display:'flex', alignItems:'center', gap:8 }}>
+                            <Icon name={f.icon} size={13} color={COLORS.secondary} />
+                            <div>
+                              <div style={{ fontSize:11, color:COLORS.textSecondary }}>{f.label}</div>
+                              <div style={{ fontSize:13, fontWeight:600, color:COLORS.textPrimary }}>{f.value}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {currentStep === 2 && (
+                    <div style={{ background:'#F7FBFF', borderRadius:6, padding:16, border:`1px solid ${COLORS.border}` }}>
+                      <div style={{ fontSize:13, fontWeight:600, color:COLORS.textPrimary, marginBottom:12 }}>케이스 선택</div>
+                      <div style={{ display:'flex', gap:10 }}>
+                        {['케이스 A', '케이스 B', '케이스 C'].map((c, i) => (
+                          <button key={c} style={{
+                            flex:1, padding:'10px 0', borderRadius:6, fontSize:13, fontWeight:600, cursor:'pointer',
+                            border: i === 0 ? `2px solid ${COLORS.primary}` : `1px solid ${COLORS.border}`,
+                            background: i === 0 ? `${COLORS.primary}10` : COLORS.surface,
+                            color: i === 0 ? COLORS.primary : COLORS.textSecondary,
+                          }}>{c}</button>
+                        ))}
+                      </div>
+                      <div style={{ marginTop:12, padding:'10px 12px', background:'rgba(46,134,171,0.08)', borderRadius:6, fontSize:12, color:COLORS.secondary }}>
+                        케이스 A: Connection Label 기본 검증 (규칙 1,2,3 적용)
+                      </div>
+                    </div>
+                  )}
+                  {currentStep === 3 && (
+                    <div style={{ background:'#F7FBFF', borderRadius:6, padding:16, border:`1px solid ${COLORS.border}` }}>
+                      <div style={{ fontSize:13, fontWeight:600, color:COLORS.textPrimary, marginBottom:12 }}>Connection Label 촬영 진행</div>
+                      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
+                        {['CL-01', 'CL-02', 'CL-03', 'CL-04'].map((cl, i) => (
+                          <div key={cl} style={{
+                            padding:'10px 8px', borderRadius:5, textAlign:'center', fontSize:12, fontWeight:600,
+                            border: `1px solid ${i < 2 ? COLORS.accent : COLORS.border}`,
+                            background: i < 2 ? `${COLORS.accent}12` : COLORS.surface,
+                            color: i < 2 ? COLORS.accentDark : COLORS.textSecondary,
+                          }}>
+                            {i < 2 ? <Icon name="check" size={12} color={COLORS.accentDark} /> : <Icon name="camera" size={12} color={COLORS.textSecondary} />}
+                            <div style={{ marginTop:4 }}>{cl}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {currentStep === 4 && (
+                    <div style={{ background:'#F7FBFF', borderRadius:6, padding:16, border:`1px solid ${COLORS.border}` }}>
+                      <div style={{ fontSize:13, fontWeight:600, color:COLORS.textPrimary, marginBottom:12 }}>Board Label 위치 확인</div>
+                      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                        {[{ label:'PI 위치', value:'상단 좌측', ok:true }, { label:'TI 위치', value:'상단 우측', ok:true }, { label:'FL 위치', value:'하단 좌측', ok:false }, { label:'PT 위치', value:'미확인', ok:null }].map(b => (
+                          <div key={b.label} style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 10px', background:COLORS.surface, borderRadius:5, border:`1px solid ${COLORS.border}` }}>
+                            <Icon name={b.ok === true ? 'check-circle' : b.ok === false ? 'x-circle' : 'circle'} size={14} color={b.ok === true ? COLORS.success : b.ok === false ? COLORS.danger : COLORS.textSecondary} />
+                            <div>
+                              <div style={{ fontSize:11, color:COLORS.textSecondary }}>{b.label}</div>
+                              <div style={{ fontSize:12, fontWeight:600, color:COLORS.textPrimary }}>{b.value}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {currentStep === 5 && (
+                    <div style={{ background:'#F7FBFF', borderRadius:6, padding:16, border:`1px solid ${COLORS.border}` }}>
+                      <div style={{ fontSize:13, fontWeight:600, color:COLORS.textPrimary, marginBottom:12 }}>검증 요약</div>
+                      {[
+                        { rule:'규칙 1', desc:'상/하 유체명 동일 여부', ok:true },
+                        { rule:'규칙 2', desc:'위/아래 IN/OUT 반대 여부', ok:true },
+                        { rule:'규칙 3', desc:'좌/우 IN/OUT 반대 여부', ok:true },
+                      ].map(r => (
+                        <div key={r.rule} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'7px 0', borderBottom:`1px solid ${COLORS.border}` }}>
+                          <div style={{ fontSize:13, color:COLORS.textPrimary }}><strong>{r.rule}</strong> {r.desc}</div>
+                          <span style={{ fontSize:12, fontWeight:600, padding:'2px 8px', borderRadius:4, background:r.ok ? COLORS.successBg : COLORS.dangerBg, color:r.ok ? COLORS.success : COLORS.danger }}>
+                            {r.ok ? '합격' : '불합격'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div style={{ marginTop:16, display:'flex', gap:10 }}>
+                    {currentStep > 1 && (
+                      <button onClick={() => setCurrentStep(p => p-1)} style={{
+                        padding:'10px 18px', borderRadius:5, border:`1px solid ${COLORS.border}`,
+                        background:COLORS.surface, color:COLORS.textSecondary, fontSize:13, cursor:'pointer',
+                        display:'flex', alignItems:'center', gap:6,
+                      }}>
+                        <Icon name="chevron-left" size={14} /> 이전
+                      </button>
+                    )}
+                    <button onClick={handleStepDone} style={{
+                      flex:1, padding:'10px 0', borderRadius:5, border:'none',
+                      background: currentStep === 5 ? COLORS.success : COLORS.primary,
+                      color:'#fff', fontSize:14, fontWeight:700, cursor:'pointer',
+                      display:'flex', alignItems:'center', justifyContent:'center', gap:6,
+                      transition:'background 0.2s',
+                    }}>
+                      {currentStep === 5 ? (
+                        <><Icon name="save" size={15} color="#fff" /> 저장 완료</>
+                      ) : (
+                        <><Icon name="chevron-right" size={15} color="#fff" /> 다음 단계</>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+
+        {/* Recent inspections */}
+        <div style={{ background:COLORS.surface, borderRadius:6, border:`1px solid ${COLORS.border}`, overflow:'hidden' }}>
+          <div style={{ padding:'16px 20px', borderBottom:`1px solid ${COLORS.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <div style={{ fontWeight:700, fontSize:14, color:COLORS.textPrimary, display:'flex', alignItems:'center', gap:8 }}>
+              <Icon name="clock" size={15} color={COLORS.primary} />
+              최근 검수 이력
+            </div>
+            <span style={{ fontSize:12, color:COLORS.textSecondary }}>오늘 47건</span>
+          </div>
+          <div>
+            {recentInspections.map(insp => (
+              <div key={insp.id} onClick={() => openDetail(insp)} style={{
+                padding:'12px 20px', borderBottom:`1px solid ${COLORS.border}`, cursor:'pointer',
+                transition:'background 0.15s',
+              }}
+              onMouseEnter={e => e.currentTarget.style.background='#F7FBFF'}
+              onMouseLeave={e => e.currentTarget.style.background='transparent'}
+              >
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:COLORS.textPrimary }}>{insp.serial}</div>
+                  <span style={{
+                    fontSize:11, fontWeight:700, padding:'2px 7px', borderRadius:4,
+                    background: insp.result === 'pass' ? COLORS.successBg : COLORS.dangerBg,
+                    color: insp.result === 'pass' ? COLORS.success : COLORS.danger,
+                  }}>
+                    {insp.result === 'pass' ? '합격' : '불합격'}
+                  </span>
+                </div>
+                <div style={{ fontSize:11, color:COLORS.textSecondary }}>{insp.worker} · {insp.date}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ padding:'12px 20px' }}>
+            <button style={{
+              width:'100%', padding:'9px 0', borderRadius:5, border:`1px solid ${COLORS.border}`,
+              background:COLORS.surface, color:COLORS.textSecondary, fontSize:13, cursor:'pointer',
+              display:'flex', alignItems:'center', justifyContent:'center', gap:6,
+            }}>
+              <Icon name="list" size={13} /> 전체 이력 조회
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Detail drawer */}
+      {detailOpen && selectedInsp && (
+        <div onClick={() => setDetailOpen(false)} style={{
+          position:'fixed', inset:0, background:'rgba(0,0,0,0.3)', zIndex:200, display:'flex', justifyContent:'flex-end',
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            width:380, background:COLORS.surface, height:'100%', overflowY:'auto',
+            padding:'24px', boxShadow:'-4px 0 20px rgba(0,0,0,0.1)',
+            animation:'slideInRight 0.25s ease',
+          }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
+              <div style={{ fontWeight:700, fontSize:16, color:COLORS.textPrimary }}>검수 상세</div>
+              <button onClick={() => setDetailOpen(false)} style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}>
+                <Icon name="x" size={18} color={COLORS.textSecondary} />
+              </button>
+            </div>
+            <div style={{
+              display:'inline-flex', alignItems:'center', gap:6, padding:'6px 12px', borderRadius:6, marginBottom:16,
+              background: selectedInsp.result === 'pass' ? COLORS.successBg : COLORS.dangerBg,
+              color: selectedInsp.result === 'pass' ? COLORS.success : COLORS.danger,
+              fontWeight:700, fontSize:14,
+            }}>
+              <Icon name={selectedInsp.result === 'pass' ? 'check-circle' : 'x-circle'} size={16} color={selectedInsp.result === 'pass' ? COLORS.success : COLORS.danger} />
+              {selectedInsp.result === 'pass' ? '합격' : '불합격'}
+            </div>
+            {[
+              { label:'검수 ID', value:selectedInsp.id },
+              { label:'Serial No.', value:selectedInsp.serial },
+              { label:'제품 유형', value:selectedInsp.type },
+              { label:'작업자', value:selectedInsp.worker },
+              { label:'검수 일시', value:selectedInsp.date },
+            ].map(f => (
+              <div key={f.label} style={{ marginBottom:14, paddingBottom:14, borderBottom:`1px solid ${COLORS.border}` }}>
+                <div style={{ fontSize:11, color:COLORS.textSecondary, marginBottom:4 }}>{f.label}</div>
+                <div style={{ fontSize:14, fontWeight:600, color:COLORS.textPrimary }}>{f.value}</div>
+              </div>
+            ))}
+            {selectedInsp.failRules && (
+              <div>
+                <div style={{ fontSize:12, fontWeight:700, color:COLORS.danger, marginBottom:8 }}>불합격 사유</div>
+                {selectedInsp.failRules.map((r, i) => (
+                  <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:8, marginBottom:8, padding:'8px 10px', background:COLORS.dangerBg, borderRadius:5 }}>
+                    <Icon name="alert-circle" size={14} color={COLORS.danger} style={{ marginTop:1 }} />
+                    <span style={{ fontSize:13, color:COLORS.danger }}>{r}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ marginTop:20, display:'flex', gap:8 }}>
+              <button style={{ flex:1, padding:'10px 0', borderRadius:5, border:`1px solid ${COLORS.border}`, background:COLORS.surface, color:COLORS.textSecondary, fontSize:13, cursor:'pointer' }}>
+                재검수 요청
+              </button>
+              <button style={{ flex:1, padding:'10px 0', borderRadius:5, border:'none', background:COLORS.primary, color:'#fff', fontSize:13, fontWeight:600, cursor:'pointer' }}>
+                결과 내보내기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ───── Camera View (촬영 단계) ───── */
+function CameraView({ showToast }) {
+  const [brightness, setBrightness] = useState(50);
+  const [contrast, setContrast] = useState(60);
+  const [isCaptured, setIsCaptured] = useState(false);
+  const [currentLabel, setCurrentLabel] = useState('명판');
+  const [bboxActive, setBboxActive] = useState(true);
+  const [thumbnails, setThumbnails] = useState([]);
+
+  const labelTypes = ['명판', '전체샷', 'CL-01', 'CL-02'];
+
+  const handleCapture = () => {
+    if (isCaptured) {
+      setIsCaptured(false);
+      return;
+    }
+    setIsCaptured(true);
+    const newThumb = { id: Date.now(), label: currentLabel, time: new Date().toLocaleTimeString('ko-KR') };
+    setThumbnails(prev => [...prev.slice(-3), newThumb]);
+    showToast(`${currentLabel} 촬영 완료`, 'success');
+  };
+
+  const brightness100 = brightness * 2;
+  const contrast100 = contrast * 2;
+
+  return (
+    <div style={{ padding:'28px 32px', maxWidth:1100, margin:'0 auto' }} className="page-enter">
+      <div style={{ marginBottom:20 }}>
+        <div style={{ fontSize:18, fontWeight:700, color:COLORS.textPrimary }}>카메라 촬영 가이드 인터페이스</div>
+        <div style={{ fontSize:13, color:COLORS.textSecondary, marginTop:4 }}>MediaDevices API + Canvas Bounding Box 오버레이로 라벨 정렬 가이드를 시각화합니다</div>
+      </div>
+
+      {/* Label type selector */}
+      <div style={{ display:'flex', gap:8, marginBottom:20 }}>
+        {labelTypes.map(lt => (
+          <button key={lt} onClick={() => { setCurrentLabel(lt); setIsCaptured(false); }} style={{
+            padding:'8px 16px', borderRadius:5, fontSize:13, fontWeight:600, cursor:'pointer',
+            border: currentLabel === lt ? `2px solid ${COLORS.primary}` : `1px solid ${COLORS.border}`,
+            background: currentLabel === lt ? `${COLORS.primary}10` : COLORS.surface,
+            color: currentLabel === lt ? COLORS.primary : COLORS.textSecondary,
+            transition:'all 0.15s',
+          }}>{lt}</button>
+        ))}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:24 }}>
+        {/* Camera preview */}
+        <div style={{ background:COLORS.surface, borderRadius:6, border:`1px solid ${COLORS.border}`, overflow:'hidden' }}>
+          <div style={{ padding:'12px 20px', borderBottom:`1px solid ${COLORS.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <div style={{ fontSize:13, fontWeight:700, color:COLORS.textPrimary, display:'flex', alignItems:'center', gap:8 }}>
+              <div style={{ width:8, height:8, borderRadius:'50%', background:isCaptured ? COLORS.success : COLORS.danger, animation: isCaptured ? 'none' : 'pulseGreen 1.5s infinite' }} />
+              {isCaptured ? '촬영 완료' : '라이브 프리뷰'}
+            </div>
+            <button onClick={() => setBboxActive(p => !p)} style={{
+              padding:'4px 10px', borderRadius:4, border:`1px solid ${COLORS.border}`,
+              background: bboxActive ? `${COLORS.accent}15` : COLORS.surface,
+              color: bboxActive ? COLORS.accentDark : COLORS.textSecondary,
+              fontSize:12, cursor:'pointer', display:'flex', alignItems:'center', gap:5,
+            }}>
+              <Icon name="crop" size={12} color={bboxActive ? COLORS.accentDark : COLORS.textSecondary} />
+              가이드라인
+            </button>
+          </div>
+
+          {/* Camera simulation */}
+          <div style={{ position:'relative', height:380, background:'#1a1a2e', overflow:'hidden', cursor:'pointer' }} onClick={handleCapture}>
+            {/* Simulated camera feed */}
+            <div style={{
+              position:'absolute', inset:0,
+              background: isCaptured
+                ? `linear-gradient(135deg, #2a3a2a 0%, #1a2a1a 100%)`
+                : `linear-gradient(135deg, #1e2a3a 0%, #0d1525 100%)`,
+              filter: `brightness(${(brightness100/100)*0.8+0.4}) contrast(${(contrast100/100)*0.6+0.7})`,
+              transition:'filter 0.3s',
+            }}>
+              {/* Metal surface simulation */}
+              <div style={{ position:'absolute', inset:'15%', background:'linear-gradient(145deg, #3a3a3a 0%, #2a2a2a 50%, #3a3a3a 100%)', borderRadius:4 }}>
+                <div style={{ position:'absolute', inset:8, border:'1px solid rgba(255,255,255,0.1)', borderRadius:2 }}>
+                  <div style={{ position:'absolute', top:'20%', left:'10%', fontSize:11, color:'rgba(255,255,255,0.8)', fontFamily:'monospace', letterSpacing:1 }}>
+                    {currentLabel === '명판' && (
+                      <div>
+                        <div>SERIAL: HX-2024-A049</div>
+                        <div style={{marginTop:4}}>MODEL: HX-450A-STD</div>
+                        <div style={{marginTop:4}}>FLUID: S.W / F.W</div>
+                        <div style={{marginTop:4}}>DATE: 2026.03.14</div>
+                      </div>
+                    )}
+                    {currentLabel !== '명판' && (
+                      <div>
+                        <div>IN ←→ OUT</div>
+                        <div style={{marginTop:4}}>{currentLabel === '전체샷' ? 'CASE: A' : `${currentLabel}`}</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Scan line animation */}
+              {!isCaptured && (
+                <div style={{
+                  position:'absolute', left:'15%', right:'15%', height:2,
+                  background:'linear-gradient(90deg, transparent, rgba(0,201,167,0.8), transparent)',
+                  animation:'scanLine 2s linear infinite',
+                }} />
+              )}
+            </div>
+
+            {/* Bounding box overlay */}
+            {bboxActive && (
+              <div style={{
+                position:'absolute', top:'12%', left:'10%', right:'10%', bottom:'12%',
+                border:`2px solid ${COLORS.accent}`, borderRadius:4,
+                animation:'drawBbox 0.4s ease',
+                boxShadow:`0 0 0 1px ${COLORS.accent}30, inset 0 0 0 1px ${COLORS.accent}30`,
+              }}>
+                {/* Corner markers */}
+                {[['-top','-left'], ['-top','-right'], ['-bottom','-left'], ['-bottom','-right']].map(([v,h], i) => (
+                  <div key={i} style={{
+                    position:'absolute',
+                    [v.slice(1)]: -3, [h.slice(1)]: -3,
+                    width:14, height:14,
+                    borderTop: v === '-top' ? `3px solid ${COLORS.accent}` : 'none',
+                    borderBottom: v === '-bottom' ? `3px solid ${COLORS.accent}` : 'none',
+                    borderLeft: h === '-left' ? `3px solid ${COLORS.accent}` : 'none',
+                    borderRight: h === '-right' ? `3px solid ${COLORS.accent}` : 'none',
+                  }} />
+                ))}
+                <div style={{
+                  position:'absolute', top:-24, left:'50%', transform:'translateX(-50%)',
+                  background:COLORS.accent, color:'#fff', fontSize:10, fontWeight:700,
+                  padding:'2px 8px', borderRadius:3,
+                }}>
+                  {currentLabel} 정렬 가이드
+                </div>
+              </div>
+            )}
+
+            {/* Capture button overlay */}
+            <div style={{ position:'absolute', bottom:16, left:'50%', transform:'translateX(-50%)' }}>
+              <div style={{
+                background: isCaptured ? COLORS.success : 'rgba(255,255,255,0.9)',
+                width:56, height:56, borderRadius:'50%',
+                border:`3px solid ${isCaptured ? COLORS.success : 'rgba(255,255,255,0.5)'}`,
+                display:'flex', alignItems:'center', justifyContent:'center',
+                cursor:'pointer', transition:'all 0.2s', boxShadow:'0 4px 16px rgba(0,0,0,0.4)',
+              }}>
+                {isCaptured
+                  ? <Icon name="check" size={22} color="#fff" />
+                  : <Icon name="camera" size={22} color={COLORS.primary} />
+                }
+              </div>
+            </div>
+          </div>
+
+          <div style={{ padding:'10px 20px', background:'#F7FBFF', fontSize:12, color:COLORS.textSecondary, textAlign:'center' }}>
+            클릭하여 {isCaptured ? '재촬영' : '촬영'}하기
+          </div>
+        </div>
+
+        {/* Controls */}
+        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+          <div style={{ background:COLORS.surface, borderRadius:6, border:`1px solid ${COLORS.border}`, padding:'16px 20px' }}>
+            <div style={{ fontSize:13, fontWeight:700, color:COLORS.textPrimary, marginBottom:14 }}>이미지 전처리 파라미터</div>
+            {[
+              { label:'밝기', value:brightness, set:setBrightness, icon:'sun' },
+              { label:'대비', value:contrast, set:setContrast, icon:'contrast' },
+            ].map(ctrl => (
+              <div key={ctrl.label} style={{ marginBottom:16 }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:13, color:COLORS.textPrimary, fontWeight:500 }}>
+                    <Icon name={ctrl.icon} size={13} color={COLORS.secondary} /> {ctrl.label}
+                  </div>
+                  <span style={{ fontSize:12, fontWeight:700, color:COLORS.primary }}>{ctrl.value}</span>
+                </div>
+                <input type="range" min={0} max={100} value={ctrl.value}
+                  onChange={e => ctrl.set(Number(e.target.value))}
+                  style={{ width:'100%', accentColor:COLORS.primary, cursor:'pointer' }}
+                />
+              </div>
+            ))}
+            <button onClick={() => { setBrightness(50); setContrast(60); showToast('기본값으로 초기화', 'info'); }} style={{
+              width:'100%', padding:'7px 0', borderRadius:5, border:`1px solid ${COLORS.border}`,
+              background:COLORS.surface, color:COLORS.textSecondary, fontSize:12, cursor:'pointer',
+              display:'flex', alignItems:'center', justifyContent:'center', gap:6,
+            }}>
+              <Icon name="rotate-ccw" size={12} color={COLORS.textSecondary} /> 기본값 복원
+            </button>
+          </div>
+
+          {/* Thumbnails */}
+          <div style={{ background:COLORS.surface, borderRadius:6, border:`1px solid ${COLORS.border}`, padding:'16px 20px' }}>
+            <div style={{ fontSize:13, fontWeight:700, color:COLORS.textPrimary, marginBottom:14, display:'flex', alignItems:'center', gap:8 }}>
+              <Icon name="images" size={14} color={COLORS.primary} /> 촬영 목록 ({thumbnails.length}/4)
+            </div>
+            {thumbnails.length === 0 ? (
+              <div style={{ textAlign:'center', padding:'20px 0', color:COLORS.textSecondary, fontSize:13 }}>
+                촬영한 이미지가 없습니다
+              </div>
+            ) : (
+              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                {thumbnails.map(t => (
+                  <div key={t.id} style={{
+                    display:'flex', alignItems:'center', gap:10, padding:'8px 10px',
+                    background:'#F7FBFF', borderRadius:5, border:`1px solid ${COLORS.border}`,
+                    animation:'fadeIn 0.2s ease',
+                  }}>
+                    <div style={{ width:36, height:36, borderRadius:4, background:'#1e2a3a', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                      <Icon name="image" size={16} color={COLORS.accent} />
+                    </div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:12, fontWeight:600, color:COLORS.textPrimary }}>{t.label}</div>
+                      <div style={{ fontSize:11, color:COLORS.textSecondary }}>{t.time}</div>
+                    </div>
+                    <button onClick={() => setThumbnails(prev => prev.filter(p => p.id !== t.id))} style={{ background:'none', border:'none', cursor:'pointer', padding:4 }}>
+                      <Icon name="trash-2" size={13} color={COLORS.danger} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ───── OCR View (OCR 인식) ───── */
+function OcrView({ showToast }) {
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [result, setResult] = useState(null);
+  const [editedFields, setEditedFields] = useState({});
+
+  const ocrFields = [
+    { key:'serial', label:'Serial No.', value:'HX-2024-A049', icon:'hash', confidence:97 },
+    { key:'model', label:'모델명', value:'HX-450A-STD', icon:'tag', confidence:94 },
+    { key:'date', label:'제조일', value:'2026.03.14', icon:'calendar', confidence:98 },
+    { key:'fluid1', label:'유체 1 (S.W)', value:'S.W', icon:'droplets', confidence:91 },
+    { key:'fluid2', label:'유체 2 (F.W)', value:'F.W', icon:'droplets', confidence:89 },
+    { key:'conn1_in', label:'Connection IN', value:'IN', icon:'arrow-right', confidence:96 },
+    { key:'conn1_out', label:'Connection OUT', value:'OUT', icon:'arrow-left', confidence:96 },
+  ];
+
+  const startOcr = () => {
+    setIsProcessing(true);
+    setProgress(0);
+    setResult(null);
+    let p = 0;
+    const interval = setInterval(() => {
+      p += Math.random() * 15;
+      if (p >= 100) {
+        p = 100;
+        clearInterval(interval);
+        setTimeout(() => {
+          setIsProcessing(false);
+          setResult(ocrFields);
+          showToast('OCR 인식 완료 — 7개 필드 추출', 'success');
+        }, 200);
+      }
+      setProgress(Math.min(p, 100));
+    }, 150);
+  };
+
+  const handleFieldEdit = (key, value) => {
+    setEditedFields(prev => ({ ...prev, [key]: value }));
+  };
+
+  return (
+    <div style={{ padding:'28px 32px', maxWidth:1100, margin:'0 auto' }} className="page-enter">
+      <div style={{ marginBottom:20 }}>
+        <div style={{ fontSize:18, fontWeight:700, color:COLORS.textPrimary }}>텍스트 인식 워크플로우 시뮬레이터</div>
+        <div style={{ fontSize:13, color:COLORS.textSecondary, marginTop:4 }}>Tesseract.js Web Worker 기반 온디바이스 OCR — 네트워크 무의존</div>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:24 }}>
+        {/* OCR Processing panel */}
+        <div style={{ background:COLORS.surface, borderRadius:6, border:`1px solid ${COLORS.border}`, overflow:'hidden' }}>
+          <div style={{ padding:'16px 20px', borderBottom:`1px solid ${COLORS.border}` }}>
+            <div style={{ fontSize:13, fontWeight:700, color:COLORS.textPrimary }}>이미지 분석</div>
+          </div>
+          <div style={{ padding:'20px' }}>
+            {/* Image preview simulation */}
+            <div style={{
+              height:200, borderRadius:6, background:'linear-gradient(135deg, #1e2a3a 0%, #0d1525 100%)',
+              marginBottom:16, overflow:'hidden', position:'relative', border:`1px solid ${COLORS.border}`,
+            }}>
+              <div style={{ position:'absolute', inset:'10%', background:'linear-gradient(145deg, #3a3a3a 0%, #2a2a2a 100%)', borderRadius:4 }}>
+                <div style={{ padding:12, fontFamily:'monospace', fontSize:10, color:'rgba(255,255,255,0.8)', lineHeight:1.8 }}>
+                  <div>SERIAL: HX-2024-A049</div>
+                  <div>MODEL: HX-450A-STD</div>
+                  <div>DATE: 2026.03.14</div>
+                  <div>FLUID1: S.W</div>
+                  <div>FLUID2: F.W</div>
+                  <div>IN ←→ OUT</div>
+                </div>
+              </div>
+              {isProcessing && (
+                <div style={{
+                  position:'absolute', left:'10%', right:'10%', height:2,
+                  background:'linear-gradient(90deg, transparent, rgba(0,201,167,0.9), transparent)',
+                  animation:'scanLine 1s linear infinite',
+                }} />
+              )}
+              {result && (
+                <div style={{ position:'absolute', inset:'10%', border:`2px solid ${COLORS.accent}30`, borderRadius:4 }}>
+                  {/* Highlight boxes simulation */}
+                  {ocrFields.slice(0,3).map((f, i) => (
+                    <div key={f.key} style={{
+                      position:'absolute', left:`${10 + i*5}%`, top:`${15 + i*18}%`,
+                      width:'60%', height:16, background:`${COLORS.accent}25`,
+                      border:`1px solid ${COLORS.accent}60`, borderRadius:2,
+                    }} />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Progress */}
+            {isProcessing && (
+              <div style={{ marginBottom:16, animation:'fadeIn 0.2s ease' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6, fontSize:12 }}>
+                  <span style={{ color:COLORS.textPrimary, fontWeight:500 }}>인식 진행 중...</span>
+                  <span style={{ color:COLORS.primary, fontWeight:700 }}>{Math.round(progress)}%</span>
+                </div>
+                <div style={{ height:8, background:'#E8F0F7', borderRadius:4, overflow:'hidden' }}>
+                  <div style={{
+                    height:'100%', background:`linear-gradient(90deg, ${COLORS.primary}, ${COLORS.accent})`,
+                    borderRadius:4, width:`${progress}%`, transition:'width 0.15s linear',
+                  }} />
+                </div>
+                <div style={{ marginTop:8, fontSize:11, color:COLORS.textSecondary }}>
+                  Tesseract.js Web Worker 처리 중 — 메인 스레드 블로킹 없음
+                </div>
+              </div>
+            )}
+
+            <button onClick={startOcr} disabled={isProcessing} style={{
+              width:'100%', padding:'11px 0', borderRadius:5, border:'none',
+              background: isProcessing ? '#9FB3C5' : COLORS.primary, color:'#fff',
+              fontSize:14, fontWeight:700, cursor: isProcessing ? 'not-allowed' : 'pointer',
+              display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+            }}>
+              <Icon name={isProcessing ? 'loader' : 'scan'} size={15} color="#fff" />
+              {isProcessing ? 'OCR 처리 중...' : 'OCR 인식 시작'}
+            </button>
+
+            {/* Confidence info */}
+            <div style={{ marginTop:14, padding:'10px 12px', background:'#F7FBFF', borderRadius:5, border:`1px solid ${COLORS.border}` }}>
+              <div style={{ fontSize:12, fontWeight:600, color:COLORS.textPrimary, marginBottom:8 }}>인식 신뢰도 지표</div>
+              <div style={{ display:'flex', gap:12 }}>
+                {[['>95%', '고신뢰', COLORS.success], ['80-95%', '중신뢰', COLORS.warning], ['<80%', '수동확인', COLORS.danger]].map(([range, label, color]) => (
+                  <div key={range} style={{ display:'flex', alignItems:'center', gap:5, fontSize:11 }}>
+                    <div style={{ width:8, height:8, borderRadius:2, background:color }} />
+                    <span style={{ color:COLORS.textSecondary }}>{range} {label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* OCR Results */}
+        <div style={{ background:COLORS.surface, borderRadius:6, border:`1px solid ${COLORS.border}`, overflow:'hidden' }}>
+          <div style={{ padding:'16px 20px', borderBottom:`1px solid ${COLORS.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <div style={{ fontSize:13, fontWeight:700, color:COLORS.textPrimary }}>인식 결과 편집</div>
+            {result && (
+              <span style={{ fontSize:11, padding:'2px 8px', borderRadius:4, background:`${COLORS.success}15`, color:COLORS.success, fontWeight:600 }}>
+                {result.length}개 필드 추출
+              </span>
+            )}
+          </div>
+          <div style={{ padding:'16px 20px' }}>
+            {!result ? (
+              <div style={{ textAlign:'center', padding:'48px 0', color:COLORS.textSecondary }}>
+                <Icon name="scan-line" size={40} color="#C8D6E5" style={{ display:'block', margin:'0 auto 12px' }} />
+                <div style={{ fontSize:14 }}>OCR 인식 결과가 여기에 표시됩니다</div>
+                <div style={{ fontSize:12, marginTop:4 }}>좌측 패널에서 인식을 시작하세요</div>
+              </div>
+            ) : (
+              <div style={{ animation:'fadeIn 0.3s ease' }}>
+                {result.map(f => {
+                  const edited = editedFields[f.key] !== undefined;
+                  const currentVal = edited ? editedFields[f.key] : f.value;
+                  const confColor = f.confidence >= 95 ? COLORS.success : f.confidence >= 80 ? COLORS.warning : COLORS.danger;
+                  return (
+                    <div key={f.key} style={{
+                      marginBottom:10, padding:'10px 12px', borderRadius:5,
+                      border:`1px solid ${edited ? COLORS.secondary : COLORS.border}`,
+                      background: edited ? `${COLORS.secondary}08` : '#FAFCFE',
+                      transition:'all 0.2s',
+                    }}>
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:COLORS.textSecondary }}>
+                          <Icon name={f.icon} size={12} color={COLORS.secondary} /> {f.label}
+                        </div>
+                        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                          {edited && <span style={{ fontSize:10, color:COLORS.secondary, fontWeight:600 }}>수동 편집</span>}
+                          <span style={{ fontSize:11, fontWeight:700, color:confColor }}>{f.confidence}%</span>
+                        </div>
+                      </div>
+                      <input
+                        value={currentVal}
+                        onChange={e => handleFieldEdit(f.key, e.target.value)}
+                        style={{
+                          width:'100%', border:`1px solid ${COLORS.border}`, borderRadius:4,
+                          padding:'6px 10px', fontSize:13, fontWeight:600, color:COLORS.textPrimary,
+                          background:COLORS.surface, outline:'none', fontFamily:'monospace',
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+                <button onClick={() => { showToast('필드 수정이 반영됩니다', 'success'); }} style={{
+                  width:'100%', marginTop:8, padding:'10px 0', borderRadius:5, border:'none',
+                  background:COLORS.primary, color:'#fff', fontSize:13, fontWeight:700, cursor:'pointer',
+                  display:'flex', alignItems:'center', justifyContent:'center', gap:6,
+                }}>
+                  <Icon name="check" size={14} color="#fff" /> 결과 확정 — 다음 단계
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ───── Result View (검증 결과) ───── */
+function ResultView({ showToast }) {
+  const [activeCase, setActiveCase] = useState('A');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [duplicateWarning, setDuplicateWarning] = useState(false);
+
+  const caseRules = {
+    A: [
+      { rule:'규칙 1', desc:'상/하 유체명 동일', detail:'상: S.W ↔ 하: S.W', result:'pass' },
+      { rule:'규칙 2', desc:'위/아래 IN/OUT 반대', detail:'위: IN ↔ 아래: OUT', result:'pass' },
+      { rule:'규칙 3', desc:'좌/우 IN/OUT 반대', detail:'좌: IN ↔ 우: OUT', result:'pass' },
+    ],
+    B: [
+      { rule:'규칙 1', desc:'상/하 유체명 동일', detail:'상: S.W ↔ 하: F.W', result:'fail', failDetail:'유체명 불일치 — S.W ≠ F.W' },
+      { rule:'규칙 2', desc:'위/아래 IN/OUT 반대', detail:'위: IN ↔ 아래: OUT', result:'pass' },
+      { rule:'규칙 3', desc:'좌/우 IN/OUT 반대', detail:'좌: IN ↔ 우: IN', result:'fail', failDetail:'동일 방향 오류 — IN = IN' },
+    ],
+    C: [
+      { rule:'규칙 1', desc:'상/하 유체명 동일', detail:'상: F.W ↔ 하: F.W', result:'pass' },
+      { rule:'규칙 2', desc:'위/아래 IN/OUT 반대', detail:'위: OUT ↔ 아래: IN', result:'pass' },
+      { rule:'규칙 3', desc:'좌/우 IN/OUT 반대', detail:'좌: OUT ↔ 우: IN', result:'pass' },
+    ],
+  };
+
+  const rules = caseRules[activeCase];
+  const overallPass = rules.every(r => r.result === 'pass');
+
+  const handleSave = () => {
+    setDuplicateWarning(true);
+  };
+
+  const confirmSave = () => {
+    setDuplicateWarning(false);
+    setSaving(true);
+    setTimeout(() => {
+      setSaving(false);
+      setSaved(true);
+      showToast('검수 결과가 저장되었습니다', 'success');
+    }, 1500);
+  };
+
+  return (
+    <div style={{ padding:'28px 32px', maxWidth:1100, margin:'0 auto' }} className="page-enter">
+      <div style={{ marginBottom:20 }}>
+        <div style={{ fontSize:18, fontWeight:700, color:COLORS.textPrimary }}>라벨 검증 규칙 엔진 및 판정 UI</div>
+        <div style={{ fontSize:13, color:COLORS.textSecondary, marginTop:4 }}>Strategy 패턴 규칙 엔진 — 케이스별 3개 검증 규칙 적용</div>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 340px', gap:24 }}>
+        <div>
+          {/* Case selector */}
+          <div style={{ display:'flex', gap:8, marginBottom:20 }}>
+            {['A', 'B', 'C'].map(c => (
+              <button key={c} onClick={() => { setActiveCase(c); setSaved(false); }} style={{
+                padding:'8px 20px', borderRadius:5, fontSize:14, fontWeight:700, cursor:'pointer',
+                border: activeCase === c ? `2px solid ${COLORS.primary}` : `1px solid ${COLORS.border}`,
+                background: activeCase === c ? COLORS.primary : COLORS.surface,
+                color: activeCase === c ? '#fff' : COLORS.textSecondary,
+                transition:'all 0.15s',
+              }}>케이스 {c}</button>
+            ))}
+          </div>
+
+          {/* Overall verdict */}
+          <div style={{
+            borderRadius:6, padding:'20px 24px', marginBottom:20,
+            background: overallPass ? COLORS.successBg : COLORS.dangerBg,
+            border: `2px solid ${overallPass ? COLORS.success : COLORS.danger}`,
+            display:'flex', alignItems:'center', gap:16,
+            animation:'fadeIn 0.25s ease',
+          }}>
+            <div style={{
+              width:56, height:56, borderRadius:'50%',
+              background: overallPass ? COLORS.success : COLORS.danger,
+              display:'flex', alignItems:'center', justifyContent:'center',
+              animation: overallPass ? 'pulseGreen 2s infinite' : 'none',
+            }}>
+              <Icon name={overallPass ? 'check' : 'x'} size={28} color="#fff" />
+            </div>
+            <div>
+              <div style={{ fontSize:24, fontWeight:900, color: overallPass ? COLORS.success : COLORS.danger }}>
+                {overallPass ? '합격' : '불합격'}
+              </div>
+              <div style={{ fontSize:13, color:COLORS.textSecondary, marginTop:2 }}>
+                케이스 {activeCase} — {overallPass ? '모든 검증 규칙 통과' : `${rules.filter(r => r.result === 'fail').length}개 규칙 위반 감지`}
+              </div>
+            </div>
+          </div>
+
+          {/* Rules */}
+          <div style={{ background:COLORS.surface, borderRadius:6, border:`1px solid ${COLORS.border}`, overflow:'hidden' }}>
+            <div style={{ padding:'14px 20px', borderBottom:`1px solid ${COLORS.border}` }}>
+              <div style={{ fontSize:13, fontWeight:700, color:COLORS.textPrimary }}>규칙별 검증 결과</div>
+            </div>
+            {rules.map(r => (
+              <div key={r.rule} style={{
+                padding:'16px 20px', borderBottom:`1px solid ${COLORS.border}`,
+                background: r.result === 'fail' ? `${COLORS.danger}05` : COLORS.surface,
+                animation:'fadeIn 0.2s ease',
+              }}>
+                <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between' }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
+                      <span style={{ fontSize:13, fontWeight:700, color:COLORS.textPrimary }}>{r.rule}</span>
+                      <span style={{ fontSize:13, color:COLORS.textSecondary }}>{r.desc}</span>
+                    </div>
+                    <div style={{ fontSize:12, color:COLORS.textSecondary, marginBottom: r.failDetail ? 6 : 0 }}>
+                      인식값: {r.detail}
+                    </div>
+                    {r.failDetail && (
+                      <div style={{ display:'flex', alignItems:'center', gap:6, padding:'5px 10px', background:COLORS.dangerBg, borderRadius:4, marginTop:4 }}>
+                        <Icon name="alert-triangle" size={13} color={COLORS.danger} />
+                        <span style={{ fontSize:12, color:COLORS.danger, fontWeight:600 }}>{r.failDetail}</span>
+                      </div>
+                    )}
+                  </div>
+                  <span style={{
+                    fontSize:12, fontWeight:700, padding:'4px 10px', borderRadius:4, whiteSpace:'nowrap', marginLeft:16,
+                    background: r.result === 'pass' ? COLORS.successBg : COLORS.dangerBg,
+                    color: r.result === 'pass' ? COLORS.success : COLORS.danger,
+                  }}>
+                    {r.result === 'pass' ? '합격' : '불합격'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Save panel */}
+        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+          <div style={{ background:COLORS.surface, borderRadius:6, border:`1px solid ${COLORS.border}`, padding:'16px 20px' }}>
+            <div style={{ fontSize:13, fontWeight:700, color:COLORS.textPrimary, marginBottom:14, display:'flex', alignItems:'center', gap:8 }}>
+              <Icon name="file-text" size={14} color={COLORS.primary} /> 검수 정보
+            </div>
+            {[
+              { label:'Serial No.', value:'HX-2024-A049' },
+              { label:'모델', value:'HX-450A-STD' },
+              { label:'케이스', value:`케이스 ${activeCase}` },
+              { label:'검수 일시', value:'2026.05.19 14:23' },
+              { label:'작업자', value:'김민준' },
+              { label:'저장 경로', value:'Pictures/LabelChecker/HX-2024-A049/20260519/', small:true },
+            ].map(f => (
+              <div key={f.label} style={{ marginBottom:10, paddingBottom:10, borderBottom:`1px solid ${COLORS.border}` }}>
+                <div style={{ fontSize:11, color:COLORS.textSecondary }}>{f.label}</div>
+                <div style={{ fontSize: f.small ? 11 : 13, fontWeight:600, color:COLORS.textPrimary, wordBreak:'break-all' }}>{f.value}</div>
+              </div>
+            ))}
+          </div>
+
+          <button onClick={handleSave} disabled={saving || saved} style={{
+            padding:'13px 0', borderRadius:6, border:'none',
+            background: saved ? COLORS.success : saving ? '#9FB3C5' : overallPass ? COLORS.primary : COLORS.danger,
+            color:'#fff', fontSize:15, fontWeight:700, cursor: saved || saving ? 'not-allowed' : 'pointer',
+            display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+            transition:'background 0.2s',
+          }}>
+            {saved ? (
+              <><Icon name="check-circle" size={16} color="#fff" /> 저장 완료</>
+            ) : saving ? (
+              <><Icon name="loader" size={16} color="#fff" /> 저장 중...</>
+            ) : (
+              <><Icon name="save" size={16} color="#fff" /> {overallPass ? '합격 결과 저장' : '불합격 결과 저장'}</>
+            )}
+          </button>
+
+          <button onClick={() => showToast('JSON 파일을 내보냅니다', 'info')} style={{
+            padding:'10px 0', borderRadius:6, border:`1px solid ${COLORS.border}`,
+            background:COLORS.surface, color:COLORS.textSecondary, fontSize:13, cursor:'pointer',
+            display:'flex', alignItems:'center', justifyContent:'center', gap:6,
+          }}>
+            <Icon name="download" size={14} color={COLORS.textSecondary} /> JSON 내보내기
+          </button>
+        </div>
+      </div>
+
+      {/* Duplicate warning modal */}
+      {duplicateWarning && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:300, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <div style={{ background:COLORS.surface, borderRadius:8, padding:28, width:380, boxShadow:'0 20px 40px rgba(0,0,0,0.15)', animation:'fadeIn 0.2s ease' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
+              <Icon name="alert-triangle" size={22} color={COLORS.warning} />
+              <div style={{ fontSize:16, fontWeight:700, color:COLORS.textPrimary }}>중복 검수 경고</div>
+            </div>
+            <p style={{ fontSize:13, color:COLORS.textSecondary, lineHeight:1.7, marginBottom:20 }}>
+              <strong>HX-2024-A049</strong>은 이미 오늘(2026.05.19) 검수 이력이 존재합니다.<br/>
+              동일 Serial No.로 재저장하시겠습니까?
+            </p>
+            <div style={{ display:'flex', gap:10 }}>
+              <button onClick={() => setDuplicateWarning(false)} style={{
+                flex:1, padding:'10px 0', borderRadius:5, border:`1px solid ${COLORS.border}`,
+                background:COLORS.surface, color:COLORS.textSecondary, fontSize:13, cursor:'pointer',
+              }}>취소</button>
+              <button onClick={confirmSave} style={{
+                flex:1, padding:'10px 0', borderRadius:5, border:'none',
+                background:COLORS.primary, color:'#fff', fontSize:13, fontWeight:700, cursor:'pointer',
+              }}>재저장 진행</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ───── App ───── */
+function App() {
+  const tabs = [
+    { key:'main', label:'검수 시작', icon:'play-circle' },
+    { key:'camera', label:'촬영 단계', icon:'camera' },
+    { key:'ocr', label:'OCR 인식', icon:'scan-line' },
+    { key:'result', label:'검증 결과', icon:'clipboard-check' },
+  ];
+
+  const [activeTab, setActiveTab] = useState('main');
+  const [toasts, setToasts] = useState([]);
+
+  const showToast = (message, type='info') => {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
+  };
+
+  const viewMap = { main: MainView, camera: CameraView, ocr: OcrView, result: ResultView };
+  const CurrentView = viewMap[activeTab];
+
+  return (
+    <div style={{ width:'100%', minHeight:'100vh', background:COLORS.bg }}>
+      {/* Top navigation */}
+      <header style={{
+        position:'sticky', top:0, zIndex:100,
+        background:COLORS.surface, borderBottom:`1px solid ${COLORS.border}`,
+        boxShadow:'0 1px 4px rgba(27,79,114,0.08)',
+      }}>
+        <div style={{ maxWidth:1100, margin:'0 auto', padding:'0 32px', display:'flex', alignItems:'center', height:60 }}>
+          {/* Logo */}
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginRight:40 }}>
+            <div style={{ width:34, height:34, borderRadius:7, background:COLORS.primary, display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <Icon name="scan-barcode" size={18} color="#fff" />
+            </div>
+            <div>
+              <div style={{ fontSize:14, fontWeight:800, color:COLORS.textPrimary, letterSpacing:'-0.3px' }}>LabelChecker</div>
+              <div style={{ fontSize:10, color:COLORS.textSecondary }}>산업용 라벨 검수 시스템</div>
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <nav style={{ display:'flex', gap:2, flex:1 }}>
+            {tabs.map(tab => (
+              <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
+                padding:'8px 16px', borderRadius:5, border:'none', cursor:'pointer',
+                background: activeTab === tab.key ? `${COLORS.primary}10` : 'transparent',
+                color: activeTab === tab.key ? COLORS.primary : COLORS.textSecondary,
+                fontSize:13, fontWeight: activeTab === tab.key ? 700 : 400,
+                display:'flex', alignItems:'center', gap:7,
+                transition:'all 0.15s',
+                borderBottom: activeTab === tab.key ? `2px solid ${COLORS.primary}` : '2px solid transparent',
+              }}>
+                <Icon name={tab.icon} size={14} color={activeTab === tab.key ? COLORS.primary : COLORS.textSecondary} />
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+
+          {/* Right actions */}
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ fontSize:12, color:COLORS.textSecondary }}>
+              <span style={{ fontWeight:700, color:COLORS.textPrimary }}>김민준</span> · 제조 1팀
+            </div>
+            <div style={{ width:32, height:32, borderRadius:'50%', background:COLORS.primary, display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <Icon name="user" size={15} color="#fff" />
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Hero banner */}
+      {activeTab === 'main' && (
+        <div style={{
+          background:`linear-gradient(135deg, ${COLORS.primary} 0%, ${COLORS.secondary} 100%)`,
+          padding:'28px 32px',
+        }}>
+          <div style={{ maxWidth:1100, margin:'0 auto', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <div>
+              <div style={{ fontSize:22, fontWeight:800, color:'#fff', marginBottom:6 }}>산업용 라벨 검수 워크플로우</div>
+              <div style={{ fontSize:14, color:'rgba(255,255,255,0.8)' }}>5단계 스텝퍼 · OCR 자동 인식 · 규칙 엔진 판정</div>
+            </div>
+            <div style={{ display:'flex', gap:12 }}>
+              {[
+                { label:'오늘 합격', value:'42건', color:COLORS.accent },
+                { label:'불합격률', value:'10.6%', color:'rgba(255,255,255,0.9)' },
+              ].map(s => (
+                <div key={s.label} style={{ textAlign:'center', padding:'10px 20px', background:'rgba(255,255,255,0.12)', borderRadius:8, backdropFilter:'blur(4px)' }}>
+                  <div style={{ fontSize:20, fontWeight:800, color:s.color }}>{s.value}</div>
+                  <div style={{ fontSize:11, color:'rgba(255,255,255,0.7)', marginTop:2 }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Content */}
+      <main>
+        <CurrentView key={activeTab} showToast={showToast} />
+      </main>
+
+      <Toast toasts={toasts} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
