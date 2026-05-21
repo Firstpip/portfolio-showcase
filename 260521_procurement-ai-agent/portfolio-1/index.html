@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>구매 마감 자동화 AI 에이전트 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{width:100%;min-height:100vh;font-family:'Pretendard',sans-serif;background:#F5F7FA;color:#1A2436}
+:root{
+  --primary:#1D5CB8;--primary-light:#3B7DD8;--primary-subtle:#EBF2FC;
+  --accent:#2CAE8A;--accent-subtle:#E6F7F3;
+  --surface:#FFFFFF;--bg:#F5F7FA;--border:#E2E8F2;
+  --text:#1A2436;--text-secondary:#5A6B7E;--text-muted:#8A9BAE;
+  --shadow-sm:0 1px 3px rgba(29,92,184,0.08);
+  --shadow-md:0 4px 12px rgba(29,92,184,0.12);
+  --radius:8px;
+}
+button{cursor:pointer;border:none;outline:none;font-family:'Pretendard',sans-serif}
+input,textarea,select{font-family:'Pretendard',sans-serif;outline:none;border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:14px;color:var(--text);background:#fff}
+input:focus,textarea:focus,select:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(29,92,184,0.12)}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+@keyframes scaleUp{from{opacity:0;transform:scale(0.96)}to{opacity:1;transform:scale(1)}}
+@keyframes progressBar{from{width:0}to{width:var(--target-width)}}
+@keyframes countUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes typingDot{0%,80%,100%{transform:scale(0.6)}40%{transform:scale(1)}}
+@keyframes shimmer{0%{background-position:-200px 0}100%{background-position:200px 0}}
+.fade-in{animation:fadeIn 0.3s ease forwards}
+.slide-in{animation:slideIn 0.3s ease forwards}
+.scale-up{animation:scaleUp 0.25s ease forwards}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } = Recharts;
+
+/* ────────── MOCK DATA ────────── */
+const SUPPLIERS = [
+  {id:1,name:"한국산업자재(주)",contact:"김도현",email:"kim@kia.co.kr",status:"회신완료",items:24,amount:"48,320,000",vat:"4,832,000",diff:false,lastMail:"2026-05-20 09:15"},
+  {id:2,name:"(주)대성부품",contact:"이수빈",email:"lee@daesung.com",status:"미회신",items:18,amount:"31,450,000",vat:"3,145,000",diff:false,lastMail:"2026-05-20 09:17"},
+  {id:3,name:"신진물산",contact:"박준혁",email:"park@shinjin.co.kr",status:"불일치",items:12,amount:"22,180,000",vat:"2,218,000",diff:true,lastMail:"2026-05-20 09:20"},
+  {id:4,name:"에이치엔텍(주)",contact:"최유진",email:"choi@hntech.kr",status:"회신완료",items:31,amount:"67,900,000",vat:"6,790,000",diff:false,lastMail:"2026-05-20 09:22"},
+  {id:5,name:"명진소재",contact:"정민석",email:"jung@myoungjin.com",status:"미회신",items:9,amount:"14,670,000",vat:"1,467,000",diff:false,lastMail:"2026-05-20 09:25"},
+  {id:6,name:"(주)한양부자재",contact:"윤서연",email:"yoon@hanyang.co.kr",status:"처리중",items:22,amount:"41,200,000",vat:"4,120,000",diff:false,lastMail:"2026-05-20 09:28"},
+  {id:7,name:"금성소재(주)",contact:"강현우",email:"kang@gs-material.kr",status:"회신완료",items:16,amount:"29,830,000",vat:"2,983,000",diff:false,lastMail:"2026-05-20 09:30"},
+  {id:8,name:"우성기계부품",contact:"임지수",email:"lim@woosung.co.kr",status:"불일치",items:7,amount:"11,540,000",vat:"1,154,000",diff:true,lastMail:"2026-05-20 09:33"},
+];
+
+const CHAT_MESSAGES = [
+  {id:1,role:"user",text:"5월 마감 집계를 시작해줘"},
+  {id:2,role:"agent",text:"5월 구매 마감 집계를 시작합니다. UNIERP에서 데이터를 수집하겠습니다.",tools:[
+    {name:"collect_erp_data",status:"완료",desc:"MSSQL에서 입고/매입 데이터 수집 — 총 139건"},
+    {name:"aggregate_by_supplier",status:"완료",desc:"공급처별 집계 완료 — 8개 공급처"},
+    {name:"generate_excel",status:"완료",desc:"마감 확인용 엑셀 생성 — 5월_마감집계.xlsx"},
+  ]},
+  {id:3,role:"user",text:"이메일 발송도 해줘"},
+  {id:4,role:"agent",text:"8개 공급처에 마감 내역 이메일을 발송합니다.",tools:[
+    {name:"send_bulk_email",status:"완료",desc:"8개 업체 이메일 발송 완료 — 첨부파일 포함"},
+    {name:"track_replies",status:"진행중",desc:"회신 추적 시작 — 미회신 모니터링 중"},
+  ]},
+];
+
+const VERIFY_DATA = [
+  {id:1,item:"산업용 볼트 M10",erpQty:200,replyQty:200,erpPrice:1200,replyPrice:1200,erpVat:24000,replyVat:24000,diff:false},
+  {id:2,item:"육각너트 M10",erpQty:500,replyQty:500,erpPrice:380,replyPrice:380,erpVat:19000,replyVat:19000,diff:false},
+  {id:3,item:"스텐 와셔 Φ20",erpQty:300,replyQty:320,erpPrice:150,replyPrice:150,erpVat:4500,replyVat:4800,diff:true,diffField:"수량"},
+  {id:4,item:"배관 커플링 2인치",erpQty:50,replyQty:50,erpPrice:8500,replyPrice:9000,erpVat:42500,replyVat:45000,diff:true,diffField:"단가"},
+  {id:5,item:"씰링 가스켓",erpQty:100,replyQty:100,erpPrice:2800,replyPrice:2800,erpVat:28000,replyVat:28000,diff:false},
+  {id:6,item:"압력계 게이지",erpQty:10,replyQty:10,erpPrice:45000,replyPrice:45000,erpVat:45000,replyVat:45000,diff:false},
+];
+
+const CHART_DATA = [
+  {name:"한국산업자재",amount:483,status:"완료"},
+  {name:"대성부품",amount:315,status:"미회신"},
+  {name:"신진물산",amount:222,status:"불일치"},
+  {name:"에이치엔텍",amount:679,status:"완료"},
+  {name:"명진소재",amount:147,status:"미회신"},
+  {name:"한양부자재",amount:412,status:"처리중"},
+  {name:"금성소재",amount:298,status:"완료"},
+  {name:"우성기계부품",amount:115,status:"불일치"},
+];
+
+const STATUS_COLOR = {
+  "회신완료":"#2CAE8A","미회신":"#F59E0B","불일치":"#EF4444","처리중":"#1D5CB8"
+};
+
+/* ────────── ICON HELPER ────────── */
+function Icon({name,size=16,color="currentColor",style={}}) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if(ref.current && window.lucide) {
+      ref.current.innerHTML = '';
+      const el = document.createElement('i');
+      el.setAttribute('data-lucide', name);
+      ref.current.appendChild(el);
+      window.lucide.createIcons({icons:window.lucide.icons,nameAttr:'data-lucide',attrs:{width:String(size),height:String(size),stroke:color}});
+    }
+  },[name,size,color]);
+  return <span ref={ref} style={{display:'inline-flex',alignItems:'center',...style}}/>;
+}
+
+/* ────────── BADGE ────────── */
+function Badge({status}) {
+  const colors = {
+    "회신완료":{bg:"#E6F7F3",text:"#2CAE8A"},
+    "미회신":{bg:"#FEF3C7",text:"#D97706"},
+    "불일치":{bg:"#FEF2F2",text:"#DC2626"},
+    "처리중":{bg:"#EBF2FC",text:"#1D5CB8"},
+    "완료":{bg:"#E6F7F3",text:"#2CAE8A"},
+    "진행중":{bg:"#EBF2FC",text:"#1D5CB8"},
+  };
+  const c = colors[status] || {bg:"#F1F5F9",text:"#64748B"};
+  return <span style={{display:'inline-block',padding:'2px 8px',borderRadius:12,fontSize:11,fontWeight:600,background:c.bg,color:c.text}}>{status}</span>;
+}
+
+/* ────────── TOAST ────────── */
+function Toast({msg,onClose}) {
+  useEffect(()=>{const t=setTimeout(onClose,3000);return()=>clearTimeout(t);},[]);
+  return (
+    <div className="scale-up" style={{position:'fixed',bottom:24,right:24,background:'#1A2436',color:'#fff',padding:'12px 20px',borderRadius:'8px',fontSize:13,zIndex:1000,display:'flex',alignItems:'center',gap:8,boxShadow:'0 8px 24px rgba(0,0,0,0.2)'}}>
+      <Icon name="check-circle" size={16} color="#2CAE8A"/>
+      {msg}
+    </div>
+  );
+}
+
+/* ────────── DRAWER ────────── */
+function Drawer({item,onClose}) {
+  if(!item) return null;
+  return (
+    <div style={{position:'fixed',inset:0,zIndex:400}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(26,36,54,0.3)',backdropFilter:'blur(2px)'}}/>
+      <div className="slide-in" style={{position:'absolute',right:0,top:0,bottom:0,width:420,background:'#fff',boxShadow:'-8px 0 40px rgba(29,92,184,0.15)',display:'flex',flexDirection:'column'}}>
+        <div style={{padding:'20px 24px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontSize:16,fontWeight:700,color:'var(--text)'}}>{item.name}</div>
+            <div style={{fontSize:12,color:'var(--text-secondary)',marginTop:2}}>담당자: {item.contact} | {item.email}</div>
+          </div>
+          <button onClick={onClose} style={{background:'none',padding:6,borderRadius:6,color:'var(--text-secondary)'}}><Icon name="x" size={18}/></button>
+        </div>
+        <div style={{flex:1,overflow:'auto',padding:24}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:20}}>
+            {[
+              {label:"마감 상태",value:<Badge status={item.status}/>},
+              {label:"품목 수",value:`${item.items}개`},
+              {label:"공급가액",value:item.amount+"원"},
+              {label:"부가세",value:item.vat+"원"},
+            ].map(({label,value},i)=>(
+              <div key={i} style={{background:'var(--bg)',borderRadius:'var(--radius)',padding:'12px 16px'}}>
+                <div style={{fontSize:11,color:'var(--text-secondary)',marginBottom:4}}>{label}</div>
+                <div style={{fontSize:14,fontWeight:600,color:'var(--text)'}}>{value}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:12,fontWeight:600,color:'var(--text-secondary)',marginBottom:8,textTransform:'uppercase',letterSpacing:'0.5px'}}>이메일 발송 이력</div>
+            {[
+              {date:"2026-05-20 09:17",event:"마감 내역 이메일 발송",status:"발송완료"},
+              {date:"2026-05-20 10:30",event:"미회신 리마인더 발송",status:"발송완료"},
+              {date:"2026-05-20 14:00",event:"회신 파일 수신",status:item.status==="회신완료"?"완료":"대기중"},
+            ].map((ev,i)=>(
+              <div key={i} style={{display:'flex',gap:12,alignItems:'flex-start',paddingBottom:12,borderBottom:i<2?'1px solid var(--border)':'none',marginBottom:i<2?12:0}}>
+                <div style={{width:8,height:8,borderRadius:'50%',background:ev.status==="완료"?"var(--accent)":"var(--primary)",marginTop:4,flexShrink:0}}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,color:'var(--text)',fontWeight:500}}>{ev.event}</div>
+                  <div style={{fontSize:11,color:'var(--text-secondary)',marginTop:2}}>{ev.date}</div>
+                </div>
+                <Badge status={ev.status}/>
+              </div>
+            ))}
+          </div>
+          {item.diff && (
+            <div style={{background:"#FEF2F2",border:'1px solid #FECACA',borderRadius:'var(--radius)',padding:'12px 16px',marginBottom:16}}>
+              <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}>
+                <Icon name="alert-triangle" size={14} color="#DC2626"/>
+                <span style={{fontSize:12,fontWeight:600,color:'#DC2626'}}>데이터 불일치 감지</span>
+              </div>
+              <div style={{fontSize:12,color:'#7F1D1D'}}>수량 또는 단가 불일치 항목이 발견되었습니다. 엑셀 검증 탭에서 상세 확인이 필요합니다.</div>
+            </div>
+          )}
+        </div>
+        <div style={{padding:'16px 24px',borderTop:'1px solid var(--border)',display:'flex',gap:8}}>
+          <button style={{flex:1,padding:'10px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:'var(--radius)',fontSize:13,color:'var(--text)',fontWeight:500}}>리마인더 발송</button>
+          <button style={{flex:1,padding:'10px',background:'var(--primary)',borderRadius:'var(--radius)',fontSize:13,color:'#fff',fontWeight:600}}>검증 결과 보기</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ────────── MODAL ────────── */
+function Modal({title,children,onClose}) {
+  return (
+    <div style={{position:'fixed',inset:0,zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(26,36,54,0.4)'}}/>
+      <div className="scale-up" style={{position:'relative',background:'#fff',borderRadius:12,width:540,maxHeight:'80vh',overflow:'auto',boxShadow:'0 20px 60px rgba(29,92,184,0.2)'}}>
+        <div style={{padding:'20px 24px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center',position:'sticky',top:0,background:'#fff',zIndex:1}}>
+          <div style={{fontSize:16,fontWeight:700,color:'var(--text)'}}>{title}</div>
+          <button onClick={onClose} style={{background:'none',padding:6,borderRadius:6,color:'var(--text-secondary)'}}><Icon name="x" size={18}/></button>
+        </div>
+        <div style={{padding:24}}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ────────── TOPNAV ────────── */
+function TopNav({activeTab,onTabChange}) {
+  const tabs = [
+    {id:'main',label:'AI 에이전트',icon:'bot'},
+    {id:'dashboard',label:'마감 대시보드',icon:'layout-dashboard'},
+    {id:'email',label:'이메일 관리',icon:'mail'},
+    {id:'verification',label:'엑셀 검증',icon:'file-check'},
+  ];
+  return (
+    <header style={{background:'var(--surface)',borderBottom:'1px solid var(--border)',position:'sticky',top:0,zIndex:100,boxShadow:'var(--shadow-sm)'}}>
+      <div style={{maxWidth:1280,margin:'0 auto',padding:'0 24px',display:'flex',alignItems:'center',height:56,gap:24}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginRight:8}}>
+          <div style={{width:32,height:32,background:'var(--primary)',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <Icon name="cpu" size={18} color="#fff"/>
+          </div>
+          <div>
+            <div style={{fontSize:13,fontWeight:700,color:'var(--text)',lineHeight:1.2}}>ProcureAI</div>
+            <div style={{fontSize:10,color:'var(--text-secondary)',lineHeight:1}}>구매 마감 자동화</div>
+          </div>
+        </div>
+        <nav style={{display:'flex',gap:2,flex:1}}>
+          {tabs.map(tab=>(
+            <button key={tab.id} onClick={()=>onTabChange(tab.id)}
+              style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:6,fontSize:13,fontWeight:activeTab===tab.id?600:400,
+                color:activeTab===tab.id?'var(--primary)':'var(--text-secondary)',
+                background:activeTab===tab.id?'var(--primary-subtle)':'transparent',
+                transition:'all 0.15s'}}>
+              <Icon name={tab.icon} size={14} color={activeTab===tab.id?"var(--primary)":"var(--text-secondary)"}/>
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <div style={{background:'var(--accent-subtle)',borderRadius:6,padding:'4px 10px',fontSize:12,color:'var(--accent)',fontWeight:600,display:'flex',gap:4,alignItems:'center'}}>
+            <span style={{width:6,height:6,borderRadius:'50%',background:'var(--accent)',display:'inline-block'}}/>
+            ERP 연결됨
+          </div>
+          <div style={{width:32,height:32,borderRadius:'50%',background:'var(--primary)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,fontWeight:700}}>김</div>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+/* ────────── HERO BANNER ────────── */
+function HeroBanner({onStart}) {
+  return (
+    <div style={{background:'linear-gradient(135deg,#1D5CB8 0%,#2563EB 50%,#0EA472 100%)',padding:'32px 40px',borderRadius:12,marginBottom:24,color:'#fff',position:'relative',overflow:'hidden'}}>
+      <div style={{position:'absolute',right:-20,top:-20,width:200,height:200,borderRadius:'50%',background:'rgba(255,255,255,0.05)'}}/>
+      <div style={{position:'absolute',right:60,bottom:-40,width:120,height:120,borderRadius:'50%',background:'rgba(255,255,255,0.08)'}}/>
+      <div style={{position:'relative'}}>
+        <div style={{fontSize:11,letterSpacing:'1.5px',textTransform:'uppercase',opacity:0.8,marginBottom:8,fontWeight:600}}>Langgraph · FastAPI · UNIERP MSSQL</div>
+        <div style={{fontSize:22,fontWeight:800,marginBottom:8,lineHeight:1.3}}>구매 마감 업무를 AI Agent가<br/>자동으로 처리합니다</div>
+        <div style={{fontSize:13,opacity:0.85,marginBottom:20,lineHeight:1.6}}>데이터 수집 → 집계 → 이메일 발송 → 회신 검증까지,<br/>자연어 지시 한 번으로 전 과정을 자동화합니다.</div>
+        <button onClick={onStart}
+          style={{background:'#fff',color:'var(--primary)',padding:'10px 20px',borderRadius:8,fontSize:13,fontWeight:700,display:'inline-flex',alignItems:'center',gap:6,boxShadow:'0 4px 12px rgba(0,0,0,0.15)',transition:'transform 0.15s'}}
+          onMouseEnter={e=>e.currentTarget.style.transform='translateY(-1px)'}
+          onMouseLeave={e=>e.currentTarget.style.transform='none'}>
+          <Icon name="play" size={14} color="var(--primary)"/>
+          마감 집계 시작
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ────────── CHAT SCREEN ────────── */
+function ChatScreen() {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const [showHero, setShowHero] = useState(true);
+  const [toast, setToast] = useState('');
+  const endRef = useRef(null);
+
+  const scrollBottom = () => endRef.current?.scrollIntoView({behavior:'smooth'});
+
+  const startTask = useCallback(() => {
+    setShowHero(false);
+    setMessages([{id:Date.now(),role:'user',text:'5월 마감 집계를 시작해줘'}]);
+    setIsTyping(true);
+    setTimeout(()=>{
+      setIsTyping(false);
+      setMessages(prev=>[...prev,{
+        id:Date.now()+1,role:'agent',
+        text:'5월 구매 마감 집계를 시작합니다. UNIERP에서 입고/매입 데이터를 수집하겠습니다.',
+        tools:[
+          {name:"collect_erp_data",status:"완료",desc:"MSSQL 139건 수집 완료"},
+          {name:"aggregate_by_supplier",status:"완료",desc:"8개 공급처 집계 완료"},
+          {name:"generate_excel",status:"완료",desc:"5월_마감집계.xlsx 생성"},
+        ]
+      }]);
+    },1800);
+  },[]);
+
+  const sendMessage = () => {
+    if(!input.trim()) return;
+    const msg = input.trim();
+    setInput('');
+    setMessages(prev=>[...prev,{id:Date.now(),role:'user',text:msg}]);
+    setIsTyping(true);
+    setTimeout(()=>{
+      setIsTyping(false);
+      let reply = {id:Date.now()+1,role:'agent',text:'',tools:[]};
+      if(msg.includes('이메일')||msg.includes('발송')) {
+        reply.text='8개 공급처에 마감 내역 이메일을 발송합니다.';
+        reply.tools=[
+          {name:"send_bulk_email",status:"완료",desc:"8개 업체 이메일 발송 완료"},
+          {name:"track_replies",status:"진행중",desc:"회신 추적 모니터링 시작"},
+        ];
+      } else if(msg.includes('검증')||msg.includes('대사')) {
+        reply.text='신진물산, 우성기계부품 2개 업체에서 불일치가 감지되었습니다.';
+        reply.tools=[
+          {name:"verify_replies",status:"완료",desc:"6개 회신 파일 검증 완료"},
+          {name:"flag_discrepancies",status:"완료",desc:"불일치 2건 플래그 처리"},
+        ];
+      } else {
+        reply.text='네, 처리하겠습니다. 추가 명령이 있으시면 말씀해 주세요.';
+      }
+      setMessages(prev=>[...prev,reply]);
+      setToast('Agent가 작업을 완료했습니다');
+    },1600);
+  };
+
+  useEffect(()=>scrollBottom(),[messages,isTyping]);
+
+  const QUICK_CMDS = ['이메일 발송해줘','회신 검증 실행해줘','마감 현황 보여줘'];
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',height:'calc(100vh - 112px)'}}>
+      {showHero && <HeroBanner onStart={startTask}/>}
+      <div style={{flex:1,overflow:'auto',display:'flex',flexDirection:'column',gap:16,paddingBottom:8}}>
+        {messages.length===0 && !showHero && (
+          <div style={{textAlign:'center',padding:'40px 0',color:'var(--text-secondary)',fontSize:14}}>
+            <Icon name="bot" size={40} color="var(--border)" style={{marginBottom:12,display:'block',margin:'0 auto 12px'}}/>
+            빠른 명령어를 선택하거나 직접 입력하세요
+          </div>
+        )}
+        {messages.map((msg,i)=>(
+          <div key={msg.id} className="fade-in" style={{display:'flex',gap:12,justifyContent:msg.role==='user'?'flex-end':'flex-start'}}>
+            {msg.role==='agent' && (
+              <div style={{width:32,height:32,borderRadius:8,background:'var(--primary)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:2}}>
+                <Icon name="bot" size={16} color="#fff"/>
+              </div>
+            )}
+            <div style={{maxWidth:'72%'}}>
+              <div style={{
+                background:msg.role==='user'?'var(--primary)':'var(--surface)',
+                color:msg.role==='user'?'#fff':'var(--text)',
+                padding:'10px 14px',borderRadius:msg.role==='user'?'12px 12px 4px 12px':'12px 12px 12px 4px',
+                fontSize:14,lineHeight:1.6,boxShadow:'var(--shadow-sm)',
+                border:msg.role==='agent'?'1px solid var(--border)':'none',
+              }}>{msg.text}</div>
+              {msg.tools && msg.tools.length>0 && (
+                <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:4}}>
+                  {msg.tools.map((tool,j)=>(
+                    <div key={j} style={{background:'var(--bg)',border:'1px solid var(--border)',borderRadius:8,padding:'8px 12px',display:'flex',alignItems:'center',gap:8}}>
+                      <div style={{width:20,height:20,borderRadius:4,background:tool.status==='완료'?'var(--accent-subtle)':tool.status==='진행중'?'var(--primary-subtle)':'#FEF3C7',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                        <Icon name={tool.status==='완료'?'check':'loader'}size={11}color={tool.status==='완료'?'var(--accent)':tool.status==='진행중'?'var(--primary)':'#D97706'}/>
+                      </div>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:11,fontWeight:600,color:'var(--text)',fontFamily:'monospace'}}>{tool.name}</div>
+                        <div style={{fontSize:11,color:'var(--text-secondary)'}}>{tool.desc}</div>
+                      </div>
+                      <Badge status={tool.status}/>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {msg.role==='user' && (
+              <div style={{width:32,height:32,borderRadius:'50%',background:'var(--primary)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:2,color:'#fff',fontSize:12,fontWeight:700}}>김</div>
+            )}
+          </div>
+        ))}
+        {isTyping && (
+          <div style={{display:'flex',gap:12,alignItems:'flex-start'}}>
+            <div style={{width:32,height:32,borderRadius:8,background:'var(--primary)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <Icon name="bot" size={16} color="#fff"/>
+            </div>
+            <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'12px 12px 12px 4px',padding:'12px 16px',display:'flex',gap:4,alignItems:'center'}}>
+              {[0,1,2].map(i=>(
+                <div key={i} style={{width:6,height:6,borderRadius:'50%',background:'var(--primary)',animation:`typingDot 1.2s ease-in-out ${i*0.2}s infinite`}}/>
+              ))}
+            </div>
+          </div>
+        )}
+        <div ref={endRef}/>
+      </div>
+      {!showHero && messages.length===0 && (
+        <div style={{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}}>
+          {QUICK_CMDS.map((cmd,i)=>(
+            <button key={i} onClick={()=>{setInput(cmd);setTimeout(()=>document.getElementById('chatInput')?.focus(),50)}}
+              style={{padding:'6px 12px',border:'1px solid var(--border)',borderRadius:20,fontSize:12,background:'var(--surface)',color:'var(--primary)',fontWeight:500,transition:'all 0.15s'}}
+              onMouseEnter={e=>{e.currentTarget.style.background='var(--primary-subtle)';e.currentTarget.style.borderColor='var(--primary)'}}
+              onMouseLeave={e=>{e.currentTarget.style.background='var(--surface)';e.currentTarget.style.borderColor='var(--border)'}}>
+              {cmd}
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={{display:'flex',gap:8,alignItems:'flex-end',paddingTop:8,borderTop:'1px solid var(--border)'}}>
+        <textarea id="chatInput" value={input} onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}}
+          placeholder="마감 집계, 이메일 발송, 검증 명령을 입력하세요..." rows={2}
+          style={{flex:1,resize:'none',borderRadius:10,padding:'10px 14px',fontSize:14,lineHeight:1.5}}/>
+        <button onClick={sendMessage} style={{width:44,height:44,borderRadius:10,background:'var(--primary)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+          <Icon name="send" size={18} color="#fff"/>
+        </button>
+      </div>
+      {toast && <Toast msg={toast} onClose={()=>setToast('')}/>}
+    </div>
+  );
+}
+
+/* ────────── DASHBOARD SCREEN ────────── */
+function DashboardScreen() {
+  const [selected, setSelected] = useState(null);
+  const [toast, setToast] = useState('');
+  const stats = [
+    {label:"총 공급처",value:8,icon:"building-2",color:"var(--primary)"},
+    {label:"회신 완료",value:3,icon:"check-circle-2",color:"var(--accent)"},
+    {label:"미회신",value:2,icon:"clock",color:"#F59E0B"},
+    {label:"불일치 감지",value:2,icon:"alert-triangle",color:"#EF4444"},
+  ];
+  return (
+    <div className="fade-in">
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div>
+          <h2 style={{fontSize:18,fontWeight:700,color:'var(--text)'}}>마감 대시보드</h2>
+          <p style={{fontSize:13,color:'var(--text-secondary)',marginTop:2}}>2026년 5월 마감 집계 현황</p>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>setToast('엑셀 파일을 다운로드합니다')} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',border:'1px solid var(--border)',borderRadius:8,fontSize:13,background:'var(--surface)',color:'var(--text)',fontWeight:500}}>
+            <Icon name="download" size={14}/>엑셀 내보내기
+          </button>
+          <button onClick={()=>setToast('데이터를 새로고침합니다')} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',border:'none',borderRadius:8,fontSize:13,background:'var(--primary)',color:'#fff',fontWeight:600}}>
+            <Icon name="refresh-cw" size={14} color="#fff"/>새로고침
+          </button>
+        </div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:24}}>
+        {stats.map((s,i)=>(
+          <div key={i} className="fade-in" style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:'16px 20px',boxShadow:'var(--shadow-sm)',animationDelay:`${i*0.06}s`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+              <div>
+                <div style={{fontSize:11,color:'var(--text-secondary)',marginBottom:4,fontWeight:500}}>{s.label}</div>
+                <div style={{fontSize:28,fontWeight:800,color:s.color}}>{s.value}</div>
+              </div>
+              <div style={{width:36,height:36,borderRadius:8,background:`${s.color}18`,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                <Icon name={s.icon} size={18} color={s.color}/>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'3fr 2fr',gap:16,marginBottom:20}}>
+        <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:'20px',boxShadow:'var(--shadow-sm)'}}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:16,color:'var(--text)'}}>공급처별 공급가액 (단위: 백만원)</div>
+          <div style={{height:220,position:'relative'}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={CHART_DATA} margin={{top:4,right:4,left:-20,bottom:4}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9"/>
+                <XAxis dataKey="name" tick={{fontSize:10,fill:'#8A9BAE'}}/>
+                <YAxis tick={{fontSize:10,fill:'#8A9BAE'}}/>
+                <Tooltip formatter={(v)=>`${v}백만원`} contentStyle={{borderRadius:8,fontSize:12}}/>
+                <Bar dataKey="amount" radius={[4,4,0,0]} fill="#1D5CB8"/>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:'20px',boxShadow:'var(--shadow-sm)'}}>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:16,color:'var(--text)'}}>회신 현황 분포</div>
+          <div style={{height:180,position:'relative'}}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={[
+                  {name:"회신완료",value:3},{name:"미회신",value:2},{name:"불일치",value:2},{name:"처리중",value:1}
+                ]} cx="50%" cy="50%" innerRadius={50} outerRadius={75} paddingAngle={3} dataKey="value">
+                  {[{c:"#2CAE8A"},{c:"#F59E0B"},{c:"#EF4444"},{c:"#1D5CB8"}].map((entry,i)=>(
+                    <Cell key={i} fill={entry.c}/>
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={{borderRadius:8,fontSize:12}}/>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginTop:8}}>
+            {[["회신완료","#2CAE8A"],["미회신","#F59E0B"],["불일치","#EF4444"],["처리중","#1D5CB8"]].map(([l,c],i)=>(
+              <div key={i} style={{display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--text-secondary)'}}>
+                <div style={{width:8,height:8,borderRadius:2,background:c}}/>
+                {l}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--radius)',boxShadow:'var(--shadow-sm)'}}>
+        <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{fontSize:13,fontWeight:600,color:'var(--text)'}}>공급처 목록</div>
+          <div style={{display:'flex',gap:8}}>
+            <input placeholder="공급처명 검색" style={{width:180,height:32,fontSize:12,padding:'0 10px'}}/>
+            <select style={{height:32,fontSize:12,padding:'0 8px'}}>
+              <option>전체 상태</option>
+              <option>회신완료</option>
+              <option>미회신</option>
+              <option>불일치</option>
+            </select>
+          </div>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+          <thead>
+            <tr style={{background:'var(--bg)'}}>
+              {["공급처명","담당자","이메일","상태","품목 수","공급가액","부가세","발송일시"].map(h=>(
+                <th key={h} style={{padding:'10px 16px',textAlign:'left',fontSize:11,fontWeight:600,color:'var(--text-secondary)',textTransform:'uppercase',letterSpacing:'0.3px'}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {SUPPLIERS.map((s,i)=>(
+              <tr key={s.id} onClick={()=>setSelected(s)} style={{borderTop:'1px solid var(--border)',cursor:'pointer',transition:'background 0.1s'}}
+                onMouseEnter={e=>e.currentTarget.style.background='var(--bg)'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'12px 16px',fontWeight:600,color:'var(--text)'}}>{s.name}</td>
+                <td style={{padding:'12px 16px',color:'var(--text-secondary)'}}>{s.contact}</td>
+                <td style={{padding:'12px 16px',color:'var(--text-secondary)',fontSize:12}}>{s.email}</td>
+                <td style={{padding:'12px 16px'}}><Badge status={s.status}/></td>
+                <td style={{padding:'12px 16px',color:'var(--text)',textAlign:'right'}}>{s.items}</td>
+                <td style={{padding:'12px 16px',color:'var(--text)',textAlign:'right',fontWeight:500}}>{s.amount}원</td>
+                <td style={{padding:'12px 16px',color:'var(--text-secondary)',textAlign:'right'}}>{s.vat}원</td>
+                <td style={{padding:'12px 16px',color:'var(--text-secondary)',fontSize:11}}>{s.lastMail}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {selected && <Drawer item={selected} onClose={()=>setSelected(null)}/>}
+      {toast && <Toast msg={toast} onClose={()=>setToast('')}/>}
+    </div>
+  );
+}
+
+/* ────────── EMAIL SCREEN ────────── */
+function EmailScreen() {
+  const [showModal, setShowModal] = useState(false);
+  const [toast, setToast] = useState('');
+  const [selected, setSelected] = useState([]);
+  const toggle = (id) => setSelected(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
+  const sendReminder = () => {setShowModal(false);setToast('리마인더 이메일을 발송합니다');};
+  return (
+    <div className="fade-in">
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div>
+          <h2 style={{fontSize:18,fontWeight:700}}>이메일 관리</h2>
+          <p style={{fontSize:13,color:'var(--text-secondary)',marginTop:2}}>공급처별 발송 현황 및 회신 추적</p>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={()=>setShowModal(true)} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',border:'1px solid var(--border)',borderRadius:8,fontSize:13,background:'var(--surface)',color:'var(--text)',fontWeight:500}}>
+            <Icon name="send" size={14}/>리마인더 발송
+          </button>
+          <button onClick={()=>setToast('전체 이메일을 발송합니다')} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',border:'none',borderRadius:8,fontSize:13,background:'var(--primary)',color:'#fff',fontWeight:600}}>
+            <Icon name="mail" size={14} color="#fff"/>일괄 발송
+          </button>
+        </div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:20}}>
+        {[
+          {label:"총 발송",value:8,icon:"send",color:"var(--primary)"},
+          {label:"회신 완료",value:3,icon:"mail-check",color:"var(--accent)"},
+          {label:"미회신 (2일 이상)",value:2,icon:"mail-warning",color:"#F59E0B"},
+        ].map((s,i)=>(
+          <div key={i} style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:'16px 20px',display:'flex',gap:12,alignItems:'center',boxShadow:'var(--shadow-sm)'}}>
+            <div style={{width:40,height:40,borderRadius:8,background:`${s.color}18`,display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <Icon name={s.icon} size={20} color={s.color}/>
+            </div>
+            <div>
+              <div style={{fontSize:11,color:'var(--text-secondary)'}}>{s.label}</div>
+              <div style={{fontSize:24,fontWeight:800,color:s.color}}>{s.value}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--radius)',boxShadow:'var(--shadow-sm)'}}>
+        <div style={{padding:'16px 20px',borderBottom:'1px solid var(--border)',display:'flex',gap:8,alignItems:'center'}}>
+          <input type="checkbox" onChange={(e)=>setSelected(e.target.checked?SUPPLIERS.map(s=>s.id):[])} style={{width:15,height:15}}/>
+          <span style={{fontSize:13,fontWeight:600,color:'var(--text)',flex:1}}>발송 현황 ({SUPPLIERS.length}개 업체)</span>
+          {selected.length>0 && <button onClick={()=>setToast(`${selected.length}개 업체에 리마인더를 발송합니다`)} style={{padding:'6px 12px',background:'var(--primary)',color:'#fff',borderRadius:6,fontSize:12,fontWeight:600}}>{selected.length}개 선택 발송</button>}
+        </div>
+        {SUPPLIERS.map((s,i)=>(
+          <div key={s.id} style={{padding:'14px 20px',borderTop:i>0?'1px solid var(--border)':'none',display:'flex',gap:12,alignItems:'center',transition:'background 0.1s',cursor:'pointer'}}
+            onMouseEnter={e=>e.currentTarget.style.background='var(--bg)'}
+            onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+            <input type="checkbox" checked={selected.includes(s.id)} onChange={()=>toggle(s.id)} onClick={e=>e.stopPropagation()} style={{width:15,height:15}}/>
+            <div style={{flex:1}}>
+              <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:2}}>
+                <span style={{fontWeight:600,fontSize:14,color:'var(--text)'}}>{s.name}</span>
+                <Badge status={s.status}/>
+              </div>
+              <div style={{fontSize:12,color:'var(--text-secondary)'}}>담당자: {s.contact} | {s.email}</div>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontSize:12,color:'var(--text-secondary)',marginBottom:2}}>발송: {s.lastMail}</div>
+              <div style={{fontSize:11,color:s.status==="미회신"?"#D97706":"var(--text-muted)"}}>
+                {s.status==="미회신"?"미회신 2일 경과":s.status==="회신완료"?"회신 완료":s.status==="불일치"?"불일치 검출":"처리 중"}
+              </div>
+            </div>
+            <button onClick={(e)=>{e.stopPropagation();setToast(`${s.name}에 이메일을 발송합니다`);}}
+              style={{padding:'6px 10px',border:'1px solid var(--border)',borderRadius:6,fontSize:12,background:'var(--surface)',color:'var(--text)',flexShrink:0}}>
+              {s.status==="미회신"?"리마인더":"재발송"}
+            </button>
+          </div>
+        ))}
+      </div>
+      {showModal && (
+        <Modal title="미회신 업체 리마인더 발송" onClose={()=>setShowModal(false)}>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:13,fontWeight:600,color:'var(--text)',display:'block',marginBottom:6}}>발송 대상</label>
+            <div style={{background:'var(--bg)',borderRadius:6,padding:12}}>
+              {SUPPLIERS.filter(s=>s.status==="미회신").map((s,i)=>(
+                <div key={i} style={{display:'flex',gap:8,alignItems:'center',padding:'6px 0',borderBottom:i<SUPPLIERS.filter(x=>x.status==="미회신").length-1?'1px solid var(--border)':'none'}}>
+                  <Icon name="building-2" size={14} color="var(--text-secondary)"/>
+                  <span style={{fontSize:13,color:'var(--text)',flex:1}}>{s.name}</span>
+                  <span style={{fontSize:11,color:'var(--text-secondary)'}}>{s.contact}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:13,fontWeight:600,color:'var(--text)',display:'block',marginBottom:6}}>메일 제목</label>
+            <input defaultValue="[긴급] 2026년 5월 구매 마감 내역 회신 요청" style={{width:'100%'}}/>
+          </div>
+          <div style={{marginBottom:20}}>
+            <label style={{fontSize:13,fontWeight:600,color:'var(--text)',display:'block',marginBottom:6}}>메일 본문</label>
+            <textarea rows={4} style={{width:'100%',resize:'none'}} defaultValue="안녕하세요. 2026년 5월 구매 마감 내역에 대한 회신이 아직 접수되지 않았습니다. 빠른 시일 내에 검토 후 회신 부탁드립니다."/>
+          </div>
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+            <button onClick={()=>setShowModal(false)} style={{padding:'10px 16px',border:'1px solid var(--border)',borderRadius:8,fontSize:13,background:'var(--surface)',color:'var(--text)'}}>취소</button>
+            <button onClick={sendReminder} style={{padding:'10px 20px',background:'var(--primary)',borderRadius:8,fontSize:13,color:'#fff',fontWeight:600}}>발송</button>
+          </div>
+        </Modal>
+      )}
+      {toast && <Toast msg={toast} onClose={()=>setToast('')}/>}
+    </div>
+  );
+}
+
+/* ────────── VERIFICATION SCREEN ────────── */
+function VerificationScreen() {
+  const [uploaded, setUploaded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [toast, setToast] = useState('');
+  const [selectedRow, setSelectedRow] = useState(null);
+
+  const handleUpload = () => {
+    setLoading(true);
+    setProgress(0);
+    const interval = setInterval(()=>{
+      setProgress(p=>{
+        if(p>=100){clearInterval(interval);setLoading(false);setUploaded(true);return 100;}
+        return p+12;
+      });
+    },180);
+  };
+
+  return (
+    <div className="fade-in">
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+        <div>
+          <h2 style={{fontSize:18,fontWeight:700}}>엑셀 검증</h2>
+          <p style={{fontSize:13,color:'var(--text-secondary)',marginTop:2}}>업체 회신 엑셀 vs ERP 원천 데이터 자동 대사</p>
+        </div>
+        {uploaded && (
+          <button onClick={()=>setToast('검증 결과 리포트를 다운로드합니다')} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',background:'var(--primary)',borderRadius:8,fontSize:13,color:'#fff',fontWeight:600}}>
+            <Icon name="download" size={14} color="#fff"/>리포트 다운로드
+          </button>
+        )}
+      </div>
+      {!uploaded ? (
+        <div>
+          <div style={{border:'2px dashed var(--border)',borderRadius:12,padding:'48px 24px',textAlign:'center',marginBottom:16,background:'var(--surface)',transition:'all 0.2s',cursor:'pointer'}}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor='var(--primary)';e.currentTarget.style.background='var(--primary-subtle)'}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor='var(--border)';e.currentTarget.style.background='var(--surface)'}}>
+            <Icon name="upload-cloud" size={40} color="var(--border)" style={{marginBottom:12,display:'block',margin:'0 auto 12px'}}/>
+            <div style={{fontSize:15,fontWeight:600,color:'var(--text)',marginBottom:4}}>업체 회신 엑셀 파일을 업로드하세요</div>
+            <div style={{fontSize:13,color:'var(--text-secondary)',marginBottom:16}}>ERP 원천 데이터와 자동으로 비교합니다</div>
+            <button onClick={handleUpload} style={{padding:'10px 24px',background:'var(--primary)',borderRadius:8,fontSize:13,color:'#fff',fontWeight:600}}>파일 선택</button>
+          </div>
+          {loading && (
+            <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:'20px 24px',boxShadow:'var(--shadow-sm)'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <Icon name="loader" size={16} color="var(--primary)" style={{animation:'pulse 1s ease infinite'}}/>
+                  <span style={{fontSize:13,fontWeight:500,color:'var(--text)'}}>신진물산_5월회신.xlsx 분석 중...</span>
+                </div>
+                <span style={{fontSize:12,color:'var(--primary)',fontWeight:600}}>{progress}%</span>
+              </div>
+              <div style={{height:6,background:'var(--bg)',borderRadius:3,overflow:'hidden'}}>
+                <div style={{height:'100%',background:'var(--primary)',borderRadius:3,width:`${progress}%`,transition:'width 0.18s'}}/>
+              </div>
+              <div style={{marginTop:8,fontSize:11,color:'var(--text-secondary)'}}>
+                {progress<40?'컬럼 매핑 분석 중...':progress<70?'ERP 원천 데이터와 비교 중...':'불일치 항목 분류 중...'}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12,marginBottom:16}}>
+            {[
+              {label:"총 검증 품목",value:"6개",icon:"list",color:"var(--primary)"},
+              {label:"일치",value:"4개",icon:"check-circle-2",color:"var(--accent)"},
+              {label:"불일치 발견",value:"2개",icon:"alert-triangle",color:"#EF4444"},
+            ].map((s,i)=>(
+              <div key={i} style={{background:'var(--surface)',border:`1px solid ${i===2?'#FECACA':'var(--border)'}`,borderRadius:'var(--radius)',padding:'14px 18px',display:'flex',gap:10,alignItems:'center',boxShadow:'var(--shadow-sm)'}}>
+                <div style={{width:36,height:36,borderRadius:8,background:`${s.color}18`,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  <Icon name={s.icon} size={18} color={s.color}/>
+                </div>
+                <div>
+                  <div style={{fontSize:11,color:'var(--text-secondary)'}}>{s.label}</div>
+                  <div style={{fontSize:20,fontWeight:800,color:s.color}}>{s.value}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'var(--radius)',boxShadow:'var(--shadow-sm)'}}>
+            <div style={{padding:'14px 20px',borderBottom:'1px solid var(--border)',display:'flex',gap:8,alignItems:'center'}}>
+              <Icon name="file-spreadsheet" size={16} color="var(--primary)"/>
+              <span style={{fontSize:13,fontWeight:600,color:'var(--text)',flex:1}}>신진물산 — 회신 데이터 검증 결과</span>
+              <div style={{display:'flex',gap:6}}>
+                <div style={{display:'flex',gap:4,alignItems:'center',fontSize:11,color:'var(--accent)'}}>
+                  <div style={{width:8,height:8,borderRadius:2,background:'var(--accent)'}}/>일치
+                </div>
+                <div style={{display:'flex',gap:4,alignItems:'center',fontSize:11,color:'#EF4444'}}>
+                  <div style={{width:8,height:8,borderRadius:2,background:'#EF4444'}}/>불일치
+                </div>
+              </div>
+            </div>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+              <thead>
+                <tr style={{background:'var(--bg)'}}>
+                  {["품목명","ERP 수량","회신 수량","ERP 단가","회신 단가","ERP 부가세","회신 부가세","검증"].map(h=>(
+                    <th key={h} style={{padding:'8px 14px',textAlign:'right',fontSize:10,fontWeight:600,color:'var(--text-secondary)',':first-child':{textAlign:'left'}}}
+                      style={{padding:'8px 14px',textAlign:h==="품목명"?'left':'right',fontSize:10,fontWeight:600,color:'var(--text-secondary)'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {VERIFY_DATA.map((r,i)=>(
+                  <tr key={i} onClick={()=>setSelectedRow(r)}
+                    style={{borderTop:'1px solid var(--border)',cursor:'pointer',background:r.diff?'#FFF5F5':'transparent',transition:'filter 0.1s'}}
+                    onMouseEnter={e=>e.currentTarget.style.filter='brightness(0.97)'}
+                    onMouseLeave={e=>e.currentTarget.style.filter='none'}>
+                    <td style={{padding:'10px 14px',fontWeight:r.diff?600:400,color:'var(--text)'}}>{r.item}</td>
+                    <td style={{padding:'10px 14px',textAlign:'right',color:'var(--text)'}}>{r.erpQty}</td>
+                    <td style={{padding:'10px 14px',textAlign:'right',fontWeight:r.diffField==="수량"?700:400,color:r.diffField==="수량"?"#DC2626":'var(--text)'}}>{r.replyQty}</td>
+                    <td style={{padding:'10px 14px',textAlign:'right',color:'var(--text)'}}>{r.erpPrice.toLocaleString()}</td>
+                    <td style={{padding:'10px 14px',textAlign:'right',fontWeight:r.diffField==="단가"?700:400,color:r.diffField==="단가"?"#DC2626":'var(--text)'}}>{r.replyPrice.toLocaleString()}</td>
+                    <td style={{padding:'10px 14px',textAlign:'right',color:'var(--text)'}}>{r.erpVat.toLocaleString()}</td>
+                    <td style={{padding:'10px 14px',textAlign:'right',fontWeight:r.diff?700:400,color:r.diff?"#DC2626":'var(--text)'}}>{r.replyVat.toLocaleString()}</td>
+                    <td style={{padding:'10px 14px',textAlign:'center'}}>
+                      {r.diff ? (
+                        <span style={{display:'inline-flex',gap:4,alignItems:'center',fontSize:11,fontWeight:600,color:'#DC2626',background:'#FEF2F2',padding:'2px 8px',borderRadius:4}}>
+                          <Icon name="alert-circle" size={11} color="#DC2626"/>{r.diffField} 불일치
+                        </span>
+                      ) : (
+                        <span style={{display:'inline-flex',gap:4,alignItems:'center',fontSize:11,fontWeight:600,color:'var(--accent)',background:'var(--accent-subtle)',padding:'2px 8px',borderRadius:4}}>
+                          <Icon name="check" size={11} color="var(--accent)"/>일치
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {selectedRow && (
+            <Modal title={`검증 상세 — ${selectedRow.item}`} onClose={()=>setSelectedRow(null)}>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+                {[
+                  {label:"ERP 수량",val:selectedRow.erpQty,diff:selectedRow.diffField==="수량"},
+                  {label:"회신 수량",val:selectedRow.replyQty,diff:selectedRow.diffField==="수량"},
+                  {label:"ERP 단가",val:selectedRow.erpPrice.toLocaleString()+"원",diff:selectedRow.diffField==="단가"},
+                  {label:"회신 단가",val:selectedRow.replyPrice.toLocaleString()+"원",diff:selectedRow.diffField==="단가"},
+                ].map(({label,val,diff},i)=>(
+                  <div key={i} style={{background:diff?'#FEF2F2':'var(--bg)',border:`1px solid ${diff?'#FECACA':'var(--border)'}`,borderRadius:6,padding:'12px 14px'}}>
+                    <div style={{fontSize:11,color:diff?'#DC2626':'var(--text-secondary)',fontWeight:diff?600:400,marginBottom:3}}>{label}</div>
+                    <div style={{fontSize:16,fontWeight:700,color:diff?'#DC2626':'var(--text)'}}>{val}</div>
+                  </div>
+                ))}
+              </div>
+              {selectedRow.diff && (
+                <div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:6,padding:'10px 14px',marginBottom:16,fontSize:12,color:'#7F1D1D'}}>
+                  {selectedRow.diffField} 항목에서 불일치가 감지되었습니다. 공급처와 확인이 필요합니다.
+                </div>
+              )}
+              <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+                <button onClick={()=>setSelectedRow(null)} style={{padding:'8px 16px',border:'1px solid var(--border)',borderRadius:6,fontSize:13,background:'var(--surface)',color:'var(--text)'}}>닫기</button>
+                <button onClick={()=>{setSelectedRow(null);setToast('담당자에게 확인 요청을 발송합니다');}} style={{padding:'8px 16px',background:'var(--primary)',borderRadius:6,fontSize:13,color:'#fff',fontWeight:600}}>확인 요청</button>
+              </div>
+            </Modal>
+          )}
+        </div>
+      )}
+      {toast && <Toast msg={toast} onClose={()=>setToast('')}/>}
+    </div>
+  );
+}
+
+/* ────────── APP ────────── */
+function App() {
+  const [tab, setTab] = useState('main');
+  const screens = {main:<ChatScreen/>,dashboard:<DashboardScreen/>,email:<EmailScreen/>,verification:<VerificationScreen/>};
+  return (
+    <div style={{width:'100%',minHeight:'100vh',background:'var(--bg)'}}>
+      <TopNav activeTab={tab} onTabChange={setTab}/>
+      <main style={{maxWidth:1280,margin:'0 auto',padding:'24px 24px 40px'}}>
+        {screens[tab]}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
