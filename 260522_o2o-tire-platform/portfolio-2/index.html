@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>O2O 타이어 플랫폼 파트너 어드민 — 구현 데모</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
+<script src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2/src/regular/style.css"/>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{width:100%;min-height:100vh}
+body{font-family:'Pretendard',sans-serif;background:#0F172A;color:#F1F5F9}
+@keyframes fadeSlide{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes slideRight{from{opacity:0;transform:translateX(-16px)}to{opacity:1;transform:translateX(0)}}
+@keyframes countUp{from{opacity:0;transform:scale(0.85)}to{opacity:1;transform:scale(1)}}
+@keyframes notifPulse{0%,100%{box-shadow:0 0 0 0 rgba(30,110,204,0.5)}50%{box-shadow:0 0 0 6px rgba(30,110,204,0)}}
+.fade-slide{animation:fadeSlide 0.3s ease forwards}
+.fade-in{animation:fadeIn 0.25s ease forwards}
+.count-up{animation:countUp 0.4s cubic-bezier(.175,.885,.32,1.275) forwards}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#1E293B}
+::-webkit-scrollbar-thumb{background:#334155;border-radius:4px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+const { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  CartesianGrid, AreaChart, Area, PieChart, Pie, Cell } = Recharts;
+
+const C = {
+  bg: '#0F172A',
+  surface: '#1E293B',
+  surface2: '#263347',
+  border: '#334155',
+  primary: '#1E6ECC',
+  primaryLight: '#3B82F6',
+  teal: '#0D9488',
+  accent: '#38BDF8',
+  text: '#F1F5F9',
+  textSub: '#94A3B8',
+  textMuted: '#64748B',
+  success: '#10B981',
+  warning: '#F59E0B',
+  danger: '#EF4444',
+  purp: '#8B5CF6',
+};
+
+// Phosphor 아이콘
+function Ph({ name, size=16, color='currentColor', weight='regular', style={} }) {
+  const cls = `ph-${name}`;
+  return <i className={cls} style={{fontSize:size,color:color,display:'inline-flex',alignItems:'center',...style}}/>;
+}
+
+// 배지
+function Badge({ children, color='default', small=false }) {
+  const m = {
+    default:{bg:'rgba(100,116,139,0.2)',text:'#94A3B8'},
+    success:{bg:'rgba(16,185,129,0.15)',text:'#34D399'},
+    warning:{bg:'rgba(245,158,11,0.15)',text:'#FBBF24'},
+    danger:{bg:'rgba(239,68,68,0.15)',text:'#F87171'},
+    info:{bg:'rgba(56,189,248,0.15)',text:'#38BDF8'},
+    primary:{bg:'rgba(30,110,204,0.2)',text:'#60A5FA'},
+    teal:{bg:'rgba(13,148,136,0.2)',text:'#2DD4BF'},
+  };
+  const s = m[color]||m.default;
+  return (
+    <span style={{display:'inline-block',padding:small?'2px 7px':'3px 10px',borderRadius:6,fontSize:small?10:12,fontWeight:600,background:s.bg,color:s.text,border:`1px solid ${s.text}30`}}>
+      {children}
+    </span>
+  );
+}
+
+function Toast({ msg, type='success', onClose }) {
+  useEffect(() => { const t = setTimeout(onClose, 2800); return () => clearTimeout(t); }, []);
+  const ic = type==='success'?'check-circle':type==='info'?'info':'warning-circle';
+  const cl = type==='success'?C.success:type==='info'?C.accent:C.warning;
+  return (
+    <div style={{position:'fixed',bottom:32,right:32,zIndex:9999,
+      background:C.surface,border:`1px solid ${C.border}`,
+      padding:'14px 20px',borderRadius:12,fontWeight:600,
+      fontSize:14,animation:'fadeSlide 0.25s ease',boxShadow:'0 8px 32px rgba(0,0,0,0.5)',
+      display:'flex',alignItems:'center',gap:10,color:C.text,
+      borderLeft:`3px solid ${cl}`}}>
+      <Ph name={ic} size={18} color={cl}/> {msg}
+    </div>
+  );
+}
+
+// 더미 데이터
+const CALENDAR_DATA = {
+  '2025-05': {
+    '05':['김민준 / 195/65R15 / 09:00','이서연 / 225/45R17 / 11:00'],
+    '06':['박도현 / 205/55R16 / 10:00','최유리 / 215/60R16 / 14:00','정태현 / 195/65R15 / 16:00'],
+    '07':['윤지호 / 235/45R18 / 09:00'],
+    '08':['강민서 / 205/55R16 / 10:00','장예진 / 225/50R17 / 13:00'],
+    '12':['김태양 / 195/65R15 / 09:00','이채원 / 215/65R16 / 11:00','박지우 / 235/50R18 / 15:00'],
+    '13':['최서준 / 225/45R17 / 10:00'],
+    '14':['정유나 / 205/55R16 / 14:00','한승현 / 195/65R15 / 16:00'],
+    '15':['오지현 / 215/55R17 / 09:00','송민기 / 225/40R18 / 11:00'],
+    '19':['임하은 / 205/60R16 / 10:00'],
+    '20':['윤준혁 / 215/65R16 / 13:00','배소연 / 195/65R15 / 15:00'],
+    '21':['강도윤 / 225/50R17 / 09:00','신예원 / 235/45R18 / 11:00'],
+    '22':['오재원 / 205/55R16 / 10:00','류민아 / 215/60R16 / 14:00'],
+    '26':['황지훈 / 195/65R15 / 09:00'],
+    '27':['이준호 / 235/50R18 / 11:00','김소율 / 225/45R17 / 14:00'],
+    '28':['박현우 / 205/55R16 / 10:00'],
+    '29':['최지원 / 215/65R16 / 15:00','장우빈 / 195/65R15 / 17:00'],
+  }
+};
+
+const SETTLEMENT_DATA = {
+  monthly: [
+    {month:'1월',amount:2340000,jobs:156,avg:15000},
+    {month:'2월',amount:2180000,jobs:145,avg:15034},
+    {month:'3월',amount:2640000,jobs:176,avg:15000},
+    {month:'4월',amount:2480000,jobs:165,avg:15030},
+    {month:'5월',amount:1820000,jobs:121,avg:15041},
+  ],
+  items: [
+    {id:'ST-240521',date:'2025-05-21',car:'123가4567',tire:'195/65R15',type:'탈거+장착+밸런스',amount:46000,status:'정산완료'},
+    {id:'ST-240520',date:'2025-05-20',car:'456나7890',tire:'225/45R17',type:'탈거+장착+밸런스',amount:60000,status:'정산완료'},
+    {id:'ST-240519',date:'2025-05-19',car:'789다1234',tire:'235/50R18',type:'탈거+장착',amount:50000,status:'정산예정'},
+    {id:'ST-240518',date:'2025-05-18',car:'321라5678',tire:'205/55R16',type:'밸런스',amount:40000,status:'정산완료'},
+    {id:'ST-240517',date:'2025-05-17',car:'654마9012',tire:'215/60R16',type:'탈거+장착+밸런스',amount:48000,status:'정산완료'},
+    {id:'ST-240516',date:'2025-05-16',car:'987바3456',tire:'245/40R19',type:'탈거+장착+밸런스',amount:78000,status:'정산예정'},
+    {id:'ST-240515',date:'2025-05-15',car:'246사7890',tire:'195/65R15',type:'밸런스',amount:36000,status:'정산완료'},
+  ]
+};
+
+const BILLING_DATA = [
+  {id:'SEL-001',seller:'(주)타이어몰',plan:'프리미엄',amount:99000,status:'활성',nextDate:'2025-06-10',
+   history:[
+    {date:'2025-05-10',amount:99000,status:'성공'},{date:'2025-04-10',amount:99000,status:'성공'},
+    {date:'2025-03-10',amount:99000,status:'성공'},{date:'2025-02-10',amount:99000,status:'실패'},
+    {date:'2025-02-11',amount:99000,status:'성공'}
+  ]},
+  {id:'SEL-002',seller:'타이어프리미엄',plan:'기본',amount:49000,status:'활성',nextDate:'2025-06-22',
+   history:[
+    {date:'2025-05-22',amount:49000,status:'성공'},{date:'2025-04-22',amount:49000,status:'성공'},
+    {date:'2025-03-22',amount:49000,status:'성공'}
+  ]},
+  {id:'SEL-003',seller:'국내타이어센터',plan:'프리미엄',amount:99000,status:'정지',nextDate:'-',
+   history:[
+    {date:'2025-04-15',amount:99000,status:'성공'},{date:'2025-03-15',amount:99000,status:'실패'},
+    {date:'2025-02-15',amount:99000,status:'성공'}
+  ]},
+];
+
+const ADMIN_STORES = [
+  {id:'SH-401',name:'인천 타이어플러스',addr:'인천 서구 청라동 142',owner:'박정훈',phone:'032-555-1234',lifts:4,requested:'2025-05-20',status:'승인대기'},
+  {id:'SH-402',name:'수원 드라이브존',addr:'경기 수원시 영통구 법조로 55',owner:'김선희',phone:'031-888-5678',lifts:3,requested:'2025-05-19',status:'승인대기'},
+  {id:'SH-403',name:'부산 타이어킹',addr:'부산 해운대구 센텀시티로 80',owner:'이영민',phone:'051-234-9012',lifts:6,requested:'2025-05-18',status:'검토중'},
+];
+
+const ADMIN_SELLERS = [
+  {id:'SEL-201',seller:'원일타이어몰',email:'sales@wontire.kr',store:'https://smartstore.naver.com/wontire',plan:'프리미엄',requested:'2025-05-21',status:'승인대기'},
+  {id:'SEL-202',seller:'타이어마켓24',email:'info@tiremarket24.kr',store:'https://smartstore.naver.com/tm24',plan:'기본',requested:'2025-05-20',status:'서류검토'},
+];
+
+// 캘린더 컴포넌트
+function CalendarScreen({ setToast }) {
+  const [selectedDay, setSelectedDay] = useState('22');
+  const [detailOpen, setDetailOpen] = useState(null);
+  const [view, setView] = useState('month');
+  const [notif, setNotif] = useState(3);
+
+  const daysInMay = 31;
+  const startDay = 3; // 목요일부터 시작
+  const monthData = CALENDAR_DATA['2025-05'];
+
+  const statusColors = { '대기':C.warning, '확인':C.primary, '완료':C.success, '취소':C.danger };
+
+  const todayItems = monthData[selectedDay] || [];
+
+  function handleStatusChange(item, status) {
+    setDetailOpen(null);
+    setToast(`예약 상태가 "${status}"으로 변경되었습니다.`);
+  }
+
+  function handleNotif() {
+    setNotif(0);
+    setToast('알림을 모두 확인했습니다.');
+  }
+
+  return (
+    <div className="fade-slide" style={{display:'flex',height:'calc(100vh - 64px)',overflow:'hidden'}}>
+      {/* 캘린더 영역 */}
+      <div style={{flex:1,padding:24,overflowY:'auto'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+          <div>
+            <h2 style={{fontWeight:700,fontSize:22,marginBottom:4}}>예약 캘린더</h2>
+            <p style={{fontSize:13,color:C.textSub}}>강남 타이어킹 · 2025년 5월</p>
+          </div>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            {['month','week'].map(v => (
+              <button key={v} onClick={() => setView(v)}
+                style={{padding:'6px 14px',borderRadius:8,fontWeight:600,fontSize:13,cursor:'pointer',
+                  background:view===v?C.primary:'transparent',color:view===v?'#fff':C.textSub,
+                  border:`1px solid ${view===v?C.primary:C.border}`}}>
+                {v==='month'?'월간':'주간'}
+              </button>
+            ))}
+            <button onClick={handleNotif} style={{position:'relative',padding:'7px 14px',borderRadius:8,
+              background:'transparent',border:`1px solid ${C.border}`,cursor:'pointer',
+              display:'flex',alignItems:'center',gap:6,color:C.textSub,fontSize:13}}>
+              <Ph name="bell" size={15} color={notif>0?C.accent:C.textSub}/>
+              {notif > 0 && (
+                <span style={{position:'absolute',top:-4,right:-4,width:16,height:16,borderRadius:'50%',
+                  background:C.danger,color:'#fff',fontSize:9,fontWeight:700,
+                  display:'flex',alignItems:'center',justifyContent:'center',
+                  animation:'notifPulse 1.5s infinite'}}>{notif}</span>
+              )}
+              알림
+            </button>
+          </div>
+        </div>
+
+        <div style={{background:C.surface,borderRadius:16,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+          {/* 요일 헤더 */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',borderBottom:`1px solid ${C.border}`}}>
+            {['일','월','화','수','목','금','토'].map((d,i) => (
+              <div key={d} style={{padding:'12px 0',textAlign:'center',fontSize:13,fontWeight:600,
+                color:i===0?'#F87171':i===6?C.accent:C.textSub}}>
+                {d}
+              </div>
+            ))}
+          </div>
+          {/* 날짜 그리드 */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)'}}>
+            {Array.from({length:startDay}).map((_,i) => (
+              <div key={`empty-${i}`} style={{minHeight:88,borderRight:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,background:C.bg,opacity:0.3}}/>
+            ))}
+            {Array.from({length:daysInMay}).map((_,i) => {
+              const day = String(i+1).padStart(2,'0');
+              const items = monthData[day] || [];
+              const isSelected = selectedDay === day;
+              const isToday = day === '22';
+              const dayOfWeek = (startDay + i) % 7;
+              return (
+                <div key={day} onClick={() => setSelectedDay(day)}
+                  style={{minHeight:88,borderRight:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,
+                    padding:'8px 10px',cursor:'pointer',transition:'background 0.15s',
+                    background:isSelected?'rgba(30,110,204,0.12)':isToday?'rgba(30,110,204,0.06)':'transparent'}}>
+                  <div style={{width:26,height:26,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:4,
+                    background:isToday?C.primary:'transparent',
+                    color:isToday?'#fff':dayOfWeek===0?'#F87171':dayOfWeek===6?C.accent:C.text,
+                    fontWeight:isToday||isSelected?700:400,fontSize:13}}>
+                    {i+1}
+                  </div>
+                  {items.slice(0,2).map((item,idx) => (
+                    <div key={idx} onClick={e=>{e.stopPropagation();setDetailOpen({day,item,idx});}}
+                      style={{padding:'3px 6px',borderRadius:4,marginBottom:2,fontSize:10,fontWeight:500,
+                        background:'rgba(30,110,204,0.2)',color:C.accent,
+                        cursor:'pointer',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                      {item.split('/')[2]?.trim() || item.split('/')[0]}
+                    </div>
+                  ))}
+                  {items.length > 2 && (
+                    <div style={{fontSize:10,color:C.textMuted,fontWeight:600}}>+{items.length-2}건</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* 오른쪽 패널 — 선택 날짜 예약 목록 */}
+      <div style={{width:300,borderLeft:`1px solid ${C.border}`,background:C.surface,overflowY:'auto'}}>
+        <div style={{padding:'20px 20px 14px',borderBottom:`1px solid ${C.border}`}}>
+          <div style={{fontSize:14,fontWeight:700,color:C.text}}>5월 {parseInt(selectedDay)}일 예약</div>
+          <div style={{fontSize:12,color:C.textSub,marginTop:2}}>{todayItems.length}건 예약</div>
+        </div>
+        <div style={{padding:'12px 16px',display:'flex',flexDirection:'column',gap:10}}>
+          {todayItems.length === 0 ? (
+            <div style={{textAlign:'center',padding:'32px 0',color:C.textMuted}}>
+              <Ph name="calendar-x" size={28} color={C.textMuted} style={{marginBottom:8}}/>
+              <div style={{fontSize:13}}>예약 없음</div>
+            </div>
+          ) : todayItems.map((item, i) => {
+            const parts = item.split('/');
+            const time = parts[2]?.trim() || '';
+            const tire = parts[1]?.trim() || '';
+            const name = parts[0]?.trim() || '';
+            const statuses = ['대기','확인','완료'];
+            const st = statuses[i % 3];
+            return (
+              <div key={i} onClick={() => setDetailOpen({day:selectedDay, item, idx:i})}
+                className="slide-right"
+                style={{background:C.surface2,borderRadius:10,padding:'12px 14px',cursor:'pointer',
+                  border:`1px solid ${C.border}`,transition:'border-color 0.15s',
+                  animationDelay:`${i*0.06}s`}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                  <span style={{fontWeight:700,fontSize:14,color:C.text}}>{name}</span>
+                  <Badge color={st==='완료'?'success':st==='확인'?'primary':'warning'} small>{st}</Badge>
+                </div>
+                <div style={{fontSize:12,color:C.textSub,display:'flex',gap:10}}>
+                  <span><Ph name="tire" size={11} color={C.textSub}/> {tire}</span>
+                  <span><Ph name="clock" size={11} color={C.textSub}/> {time}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 예약 상세 모달 */}
+      {detailOpen && (
+        <div style={{position:'fixed',inset:0,zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,0.7)'}}>
+          <div className="fade-in" style={{background:C.surface,borderRadius:16,padding:'28px',width:420,
+            border:`1px solid ${C.border}`,boxShadow:'0 20px 60px rgba(0,0,0,0.6)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+              <h3 style={{fontWeight:700,fontSize:18}}>예약 상세</h3>
+              <button onClick={() => setDetailOpen(null)} style={{background:'none',border:'none',cursor:'pointer',color:C.textSub}}>
+                <Ph name="x" size={20} color={C.textSub}/>
+              </button>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:12,marginBottom:20}}>
+              {[
+                {label:'고객명',value:detailOpen.item.split('/')[0]?.trim()},
+                {label:'타이어',value:detailOpen.item.split('/')[1]?.trim()},
+                {label:'예약 시간',value:detailOpen.item.split('/')[2]?.trim()},
+                {label:'날짜',value:`2025-05-${detailOpen.day}`},
+              ].map(r => (
+                <div key={r.label} style={{display:'flex',justifyContent:'space-between',padding:'10px 14px',
+                  background:C.bg,borderRadius:8,fontSize:14}}>
+                  <span style={{color:C.textSub}}>{r.label}</span>
+                  <span style={{fontWeight:600,color:C.text}}>{r.value}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{marginBottom:20}}>
+              <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:10}}>작업 상태 변경</div>
+              <div style={{display:'flex',gap:8}}>
+                {['대기','확인','완료','취소'].map(s => (
+                  <button key={s} onClick={() => handleStatusChange(detailOpen.item, s)}
+                    style={{flex:1,padding:'9px 4px',borderRadius:8,cursor:'pointer',fontWeight:600,fontSize:12,
+                      border:`1px solid ${s==='완료'?C.success:s==='취소'?C.danger:s==='확인'?C.primary:C.border}`,
+                      background:s==='완료'?'rgba(16,185,129,0.15)':s==='취소'?'rgba(239,68,68,0.12)':s==='확인'?'rgba(30,110,204,0.15)':'transparent',
+                      color:s==='완료'?'#34D399':s==='취소'?'#F87171':s==='확인'?C.accent:C.textSub}}>
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button onClick={() => setDetailOpen(null)}
+              style={{width:'100%',padding:'12px',borderRadius:10,border:`1px solid ${C.border}`,
+                background:C.surface2,cursor:'pointer',color:C.textSub,fontWeight:600,fontSize:14}}>
+              닫기
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 정산 내역 화면
+function SettlementScreen({ setToast }) {
+  const [period, setPeriod] = useState('month');
+  const [filter, setFilter] = useState('all');
+  const [detailOpen, setDetailOpen] = useState(null);
+
+  const items = filter === 'all' ? SETTLEMENT_DATA.items :
+    SETTLEMENT_DATA.items.filter(i => filter === 'done' ? i.status === '정산완료' : i.status === '정산예정');
+
+  const totalAmount = items.reduce((a,b) => a + b.amount, 0);
+  const doneAmount = items.filter(i => i.status==='정산완료').reduce((a,b) => a + b.amount, 0);
+
+  function handleDownload() {
+    setToast('CSV 파일이 다운로드되었습니다.');
+  }
+
+  function handlePdf() {
+    setToast('이번 달 정산 리포트 PDF를 생성 중입니다...');
+    setTimeout(() => setToast('리포트가 AWS S3에 저장되었습니다.'), 1800);
+  }
+
+  return (
+    <div className="fade-slide" style={{padding:24,maxWidth:1100,margin:'0 auto'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:24}}>
+        <div>
+          <h2 style={{fontWeight:700,fontSize:22,marginBottom:4}}>공임 정산 내역</h2>
+          <p style={{fontSize:13,color:C.textSub}}>강남 타이어킹 · 기간별 작업 및 정산 현황</p>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button onClick={handlePdf}
+            style={{display:'flex',alignItems:'center',gap:6,padding:'9px 16px',borderRadius:8,
+              background:C.surface,border:`1px solid ${C.border}`,cursor:'pointer',color:C.textSub,fontSize:13,fontWeight:600}}>
+            <Ph name="file-pdf" size={15} color={C.textSub}/> PDF 저장
+          </button>
+          <button onClick={handleDownload}
+            style={{display:'flex',alignItems:'center',gap:6,padding:'9px 16px',borderRadius:8,
+              background:C.primary,border:'none',cursor:'pointer',color:'#fff',fontSize:13,fontWeight:600}}>
+            <Ph name="download-simple" size={15} color="#fff"/> CSV 다운로드
+          </button>
+        </div>
+      </div>
+
+      {/* 통계 카드 */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}}>
+        {[
+          {label:'이번 달 총 공임',value:totalAmount,icon:'currency-krw',color:C.primary,format:'money'},
+          {label:'정산 완료',value:doneAmount,icon:'check-circle',color:C.success,format:'money'},
+          {label:'정산 예정',value:totalAmount-doneAmount,icon:'clock',color:C.warning,format:'money'},
+          {label:'총 작업 건수',value:SETTLEMENT_DATA.items.length,icon:'wrench',color:C.teal,format:'count'},
+        ].map(card => (
+          <div key={card.label} className="count-up" style={{background:C.surface,borderRadius:14,padding:'18px 20px',border:`1px solid ${C.border}`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+              <div>
+                <div style={{fontSize:12,color:C.textSub,marginBottom:8}}>{card.label}</div>
+                <div style={{fontSize:22,fontWeight:800,color:C.text}}>
+                  {card.format==='money'?`${card.value.toLocaleString()}원`:`${card.value}건`}
+                </div>
+              </div>
+              <div style={{width:38,height:38,borderRadius:10,background:`${card.color}20`,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                <Ph name={card.icon} size={18} color={card.color}/>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* 월별 차트 */}
+      <div style={{background:C.surface,borderRadius:14,border:`1px solid ${C.border}`,padding:'20px',marginBottom:20}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+          <div style={{fontSize:14,fontWeight:600}}>월별 정산 추이 (2025년)</div>
+          <div style={{display:'flex',gap:6}}>
+            {['month','3m','year'].map(p => (
+              <button key={p} onClick={() => setPeriod(p)}
+                style={{padding:'4px 12px',borderRadius:6,fontSize:12,cursor:'pointer',fontWeight:500,
+                  background:period===p?C.primary:'transparent',color:period===p?'#fff':C.textSub,
+                  border:`1px solid ${period===p?C.primary:C.border}`}}>
+                {p==='month'?'이번달':p==='3m'?'3개월':'연간'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{position:'relative',height:200}}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={SETTLEMENT_DATA.monthly}>
+              <defs>
+                <linearGradient id="amtGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={C.primary} stopOpacity={0.3}/>
+                  <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+              <XAxis dataKey="month" tick={{fontSize:12,fill:C.textSub}}/>
+              <YAxis tick={{fontSize:11,fill:C.textSub}} tickFormatter={v=>`${v/10000}만`}/>
+              <Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12}}
+                formatter={(v)=>[`${v.toLocaleString()}원`,'공임 합계']}/>
+              <Area type="monotone" dataKey="amount" stroke={C.primary} strokeWidth={2} fill="url(#amtGrad)"/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 필터 + 테이블 */}
+      <div style={{background:C.surface,borderRadius:14,border:`1px solid ${C.border}`}}>
+        <div style={{padding:'14px 18px',borderBottom:`1px solid ${C.border}`,display:'flex',gap:6}}>
+          {[{k:'all',label:'전체'},{k:'done',label:'정산완료'},{k:'pending',label:'정산예정'}].map(f => (
+            <button key={f.k} onClick={() => setFilter(f.k)}
+              style={{padding:'5px 14px',borderRadius:6,fontSize:12,fontWeight:600,cursor:'pointer',
+                background:filter===f.k?C.primary:'transparent',color:filter===f.k?'#fff':C.textSub,
+                border:`1px solid ${filter===f.k?C.primary:C.border}`}}>
+              {f.label}
+            </button>
+          ))}
+          <span style={{marginLeft:'auto',fontSize:12,color:C.textMuted,alignSelf:'center'}}>{items.length}건</span>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{borderBottom:`1px solid ${C.border}`}}>
+              {['정산ID','날짜','차량번호','타이어 규격','작업 유형','공임','상태'].map(h => (
+                <th key={h} style={{padding:'12px 16px',textAlign:'left',fontSize:12,color:C.textSub,fontWeight:600}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item,i) => (
+              <tr key={item.id} onClick={() => setDetailOpen(item)}
+                style={{borderBottom:`1px solid ${C.border}`,cursor:'pointer',transition:'background 0.15s'}}
+                onMouseEnter={e=>e.currentTarget.style.background='rgba(30,110,204,0.05)'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.textSub,fontFamily:'monospace'}}>{item.id}</td>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.text}}>{item.date}</td>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.text,fontWeight:600}}>{item.car}</td>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.textSub}}>{item.tire}</td>
+                <td style={{padding:'12px 16px',fontSize:13,color:C.text}}>{item.type}</td>
+                <td style={{padding:'12px 16px',fontSize:14,fontWeight:700,color:C.accent}}>{item.amount.toLocaleString()}원</td>
+                <td style={{padding:'12px 16px'}}><Badge color={item.status==='정산완료'?'success':'warning'} small>{item.status}</Badge></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 상세 모달 */}
+      {detailOpen && (
+        <div style={{position:'fixed',inset:0,zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,0.7)'}}>
+          <div className="fade-in" style={{background:C.surface,borderRadius:16,padding:'28px',width:400,border:`1px solid ${C.border}`,boxShadow:'0 20px 60px rgba(0,0,0,0.6)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:20}}>
+              <h3 style={{fontWeight:700,fontSize:17}}>정산 상세</h3>
+              <button onClick={() => setDetailOpen(null)} style={{background:'none',border:'none',cursor:'pointer'}}><Ph name="x" size={18} color={C.textSub}/></button>
+            </div>
+            {Object.entries({정산ID:detailOpen.id,날짜:detailOpen.date,차량번호:detailOpen.car,타이어:detailOpen.tire,작업유형:detailOpen.type,공임:detailOpen.amount.toLocaleString()+'원',상태:detailOpen.status}).map(([k,v]) => (
+              <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'10px 14px',background:C.bg,borderRadius:8,marginBottom:6,fontSize:13}}>
+                <span style={{color:C.textSub}}>{k}</span>
+                <span style={{fontWeight:600,color:detailOpen.status==='정산완료'&&k==='상태'?'#34D399':k==='공임'?C.accent:C.text}}>{v}</span>
+              </div>
+            ))}
+            <button onClick={() => setDetailOpen(null)} style={{width:'100%',marginTop:16,padding:'11px',borderRadius:10,background:C.surface2,border:`1px solid ${C.border}`,color:C.textSub,cursor:'pointer',fontWeight:600}}>닫기</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 빌링 구독 관리
+function BillingScreen({ setToast }) {
+  const [expanded, setExpanded] = useState('SEL-001');
+  const [confirmOpen, setConfirmOpen] = useState(null);
+
+  function handleToggle(id, action) {
+    setConfirmOpen(null);
+    setToast(`구독이 ${action}되었습니다.`);
+  }
+
+  return (
+    <div className="fade-slide" style={{padding:24,maxWidth:900,margin:'0 auto'}}>
+      <div style={{marginBottom:24}}>
+        <h2 style={{fontWeight:700,fontSize:22,marginBottom:4}}>구독 관리</h2>
+        <p style={{fontSize:13,color:C.textSub}}>B2B 셀러 빌링키 기반 월정액 구독 현황을 관리합니다.</p>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginBottom:24}}>
+        {[
+          {label:'활성 구독',value:BILLING_DATA.filter(b=>b.status==='활성').length,icon:'check-circle',color:C.success},
+          {label:'정지 구독',value:BILLING_DATA.filter(b=>b.status==='정지').length,icon:'pause-circle',color:C.warning},
+          {label:'이번 달 결제 예정',value:148000,icon:'currency-krw',color:C.primary,format:'money'},
+        ].map(c => (
+          <div key={c.label} style={{background:C.surface,borderRadius:12,padding:'16px 18px',border:`1px solid ${C.border}`,display:'flex',gap:12,alignItems:'center'}}>
+            <div style={{width:40,height:40,borderRadius:10,background:`${c.color}20`,display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <Ph name={c.icon} size={18} color={c.color}/>
+            </div>
+            <div>
+              <div style={{fontSize:12,color:C.textSub}}>{c.label}</div>
+              <div style={{fontSize:20,fontWeight:700,color:C.text}}>{c.format==='money'?`${c.value.toLocaleString()}원`:c.value+'개'}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        {BILLING_DATA.map(b => (
+          <div key={b.id} style={{background:C.surface,borderRadius:14,border:`1px solid ${C.border}`,overflow:'hidden'}}>
+            <div onClick={() => setExpanded(expanded===b.id?null:b.id)}
+              style={{padding:'16px 20px',display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',
+                transition:'background 0.15s'}}
+              onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.02)'}
+              onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+              <div style={{display:'flex',alignItems:'center',gap:14}}>
+                <div style={{width:42,height:42,borderRadius:10,background:'rgba(30,110,204,0.15)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  <Ph name="storefront" size={20} color={C.primary}/>
+                </div>
+                <div>
+                  <div style={{fontWeight:700,fontSize:15,marginBottom:3}}>{b.seller}</div>
+                  <div style={{fontSize:12,color:C.textSub,display:'flex',gap:10}}>
+                    <span>{b.plan} 플랜</span>
+                    <span>월 {b.amount.toLocaleString()}원</span>
+                    {b.nextDate !== '-' && <span>다음 결제일: {b.nextDate}</span>}
+                  </div>
+                </div>
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:10}}>
+                <Badge color={b.status==='활성'?'success':'danger'}>{b.status}</Badge>
+                <Ph name={expanded===b.id?'caret-up':'caret-down'} size={16} color={C.textSub}/>
+              </div>
+            </div>
+
+            {expanded === b.id && (
+              <div className="fade-in" style={{borderTop:`1px solid ${C.border}`,padding:'16px 20px'}}>
+                <div style={{display:'flex',gap:20}}>
+                  {/* 결제 이력 */}
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:10}}>결제 이력</div>
+                    <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                      {b.history.map((h,i) => (
+                        <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+                          padding:'8px 12px',background:C.bg,borderRadius:8}}>
+                          <div style={{display:'flex',alignItems:'center',gap:8}}>
+                            <div style={{width:8,height:8,borderRadius:'50%',background:h.status==='성공'?C.success:C.danger}}/>
+                            <span style={{fontSize:12,color:C.textSub}}>{h.date}</span>
+                          </div>
+                          <div style={{display:'flex',gap:10,alignItems:'center'}}>
+                            <span style={{fontSize:13,fontWeight:600,color:C.text}}>{h.amount.toLocaleString()}원</span>
+                            <Badge color={h.status==='성공'?'success':'danger'} small>{h.status}</Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  {/* 액션 */}
+                  <div style={{width:180}}>
+                    <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:10}}>구독 제어</div>
+                    {b.status === '활성' ? (
+                      <button onClick={() => setConfirmOpen({id:b.id,action:'정지',seller:b.seller})}
+                        style={{width:'100%',padding:'10px',borderRadius:8,border:`1px solid ${C.warning}`,
+                          background:'rgba(245,158,11,0.1)',color:'#FBBF24',cursor:'pointer',fontWeight:600,fontSize:13,marginBottom:8}}>
+                        구독 정지
+                      </button>
+                    ) : (
+                      <button onClick={() => setConfirmOpen({id:b.id,action:'재개',seller:b.seller})}
+                        style={{width:'100%',padding:'10px',borderRadius:8,border:`1px solid ${C.success}`,
+                          background:'rgba(16,185,129,0.1)',color:'#34D399',cursor:'pointer',fontWeight:600,fontSize:13,marginBottom:8}}>
+                        구독 재개
+                      </button>
+                    )}
+                    <button style={{width:'100%',padding:'10px',borderRadius:8,border:`1px solid ${C.border}`,
+                      background:'transparent',color:C.textSub,cursor:'pointer',fontWeight:600,fontSize:13}}>
+                      플랜 변경
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* 확인 모달 */}
+      {confirmOpen && (
+        <div style={{position:'fixed',inset:0,zIndex:200,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,0.7)'}}>
+          <div className="fade-in" style={{background:C.surface,borderRadius:16,padding:'28px',width:380,border:`1px solid ${C.border}`,boxShadow:'0 20px 60px rgba(0,0,0,0.6)'}}>
+            <div style={{textAlign:'center',marginBottom:20}}>
+              <div style={{width:52,height:52,borderRadius:'50%',background:'rgba(245,158,11,0.15)',
+                display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}>
+                <Ph name="warning" size={26} color={C.warning}/>
+              </div>
+              <h3 style={{fontWeight:700,fontSize:17,marginBottom:6}}>구독 {confirmOpen.action} 확인</h3>
+              <p style={{fontSize:13,color:C.textSub}}>{confirmOpen.seller}의 구독을 {confirmOpen.action}하시겠습니까?</p>
+            </div>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={() => setConfirmOpen(null)}
+                style={{flex:1,padding:'11px',borderRadius:10,border:`1px solid ${C.border}`,background:'transparent',cursor:'pointer',color:C.textSub,fontWeight:600}}>
+                취소
+              </button>
+              <button onClick={() => handleToggle(confirmOpen.id, confirmOpen.action)}
+                style={{flex:1,padding:'11px',borderRadius:10,border:'none',
+                  background:confirmOpen.action==='정지'?C.warning:C.success,
+                  color:'#fff',cursor:'pointer',fontWeight:700}}>
+                {confirmOpen.action}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 슈퍼 어드민 화면
+function AdminScreen({ setToast }) {
+  const [stores, setStores] = useState(ADMIN_STORES);
+  const [sellers, setSellers] = useState(ADMIN_SELLERS);
+  const [activeSection, setActiveSection] = useState('overview');
+
+  function handleApproveStore(id) {
+    setStores(prev => prev.map(s => s.id===id ? {...s,status:'승인완료'} : s));
+    setToast('장착점 승인이 완료되었습니다. 해당 장착점에 알림을 발송했습니다.');
+  }
+
+  function handleRejectStore(id) {
+    setStores(prev => prev.map(s => s.id===id ? {...s,status:'승인거부'} : s));
+    setToast('장착점 승인이 거부되었습니다.');
+  }
+
+  function handleApproveSeller(id) {
+    setSellers(prev => prev.map(s => s.id===id ? {...s,status:'승인완료'} : s));
+    setToast('셀러 가입이 승인되었습니다. 빌링키 등록 안내를 발송했습니다.');
+  }
+
+  const stats = [
+    {label:'전국 장착점',value:'2,140',icon:'buildings',color:C.teal,delta:'+12 이번달'},
+    {label:'등록 셀러',value:'384',icon:'storefront',color:C.primary,delta:'+8 이번달'},
+    {label:'이번 달 예약',value:'18,430',icon:'calendar-check',color:C.purp,delta:'+2,140 전월비'},
+    {label:'월 거래 금액',value:'124.8M',icon:'chart-bar',color:C.warning,delta:'+14.2%'},
+  ];
+
+  return (
+    <div className="fade-slide" style={{padding:24,maxWidth:1100,margin:'0 auto'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:24}}>
+        <div>
+          <h2 style={{fontWeight:700,fontSize:22,marginBottom:4}}>어드민 제어</h2>
+          <p style={{fontSize:13,color:C.textSub}}>플랫폼 생태계 통합 제어 · 슈퍼 어드민 전용</p>
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          {['overview','stores','sellers'].map(s => (
+            <button key={s} onClick={() => setActiveSection(s)}
+              style={{padding:'7px 16px',borderRadius:8,fontSize:13,cursor:'pointer',fontWeight:600,
+                background:activeSection===s?C.primary:'transparent',color:activeSection===s?'#fff':C.textSub,
+                border:`1px solid ${activeSection===s?C.primary:C.border}`}}>
+              {s==='overview'?'개요':s==='stores'?'장착점 관리':'셀러 관리'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 통계 카드 */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16,marginBottom:24}}>
+        {stats.map(s => (
+          <div key={s.label} className="count-up" style={{background:C.surface,borderRadius:14,padding:'18px 20px',border:`1px solid ${C.border}`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+              <div>
+                <div style={{fontSize:12,color:C.textSub,marginBottom:8}}>{s.label}</div>
+                <div style={{fontSize:26,fontWeight:800,color:C.text}}>{s.value}</div>
+                <div style={{fontSize:11,color:C.success,marginTop:4}}>{s.delta}</div>
+              </div>
+              <div style={{width:40,height:40,borderRadius:10,background:`${s.color}20`,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                <Ph name={s.icon} size={20} color={s.color}/>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {(activeSection === 'overview' || activeSection === 'stores') && (
+        <div style={{background:C.surface,borderRadius:14,border:`1px solid ${C.border}`,marginBottom:20}}>
+          <div style={{padding:'14px 18px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div style={{fontWeight:700,fontSize:15}}>장착점 승인 대기</div>
+            <Badge color='warning'>{stores.filter(s=>s.status==='승인대기'||s.status==='검토중').length}건</Badge>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                {['장착점명','주소','대표자','연락처','리프트','신청일','상태','처리'].map(h => (
+                  <th key={h} style={{padding:'10px 16px',textAlign:'left',fontSize:12,color:C.textSub,fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {stores.map(s => (
+                <tr key={s.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                  <td style={{padding:'12px 16px',fontSize:13,fontWeight:600,color:C.text}}>{s.name}</td>
+                  <td style={{padding:'12px 16px',fontSize:12,color:C.textSub}}>{s.addr}</td>
+                  <td style={{padding:'12px 16px',fontSize:13,color:C.text}}>{s.owner}</td>
+                  <td style={{padding:'12px 16px',fontSize:12,color:C.textSub,fontFamily:'monospace'}}>{s.phone}</td>
+                  <td style={{padding:'12px 16px',fontSize:13,color:C.text}}>{s.lifts}대</td>
+                  <td style={{padding:'12px 16px',fontSize:12,color:C.textSub}}>{s.requested}</td>
+                  <td style={{padding:'12px 16px'}}>
+                    <Badge color={s.status==='승인완료'?'success':s.status==='승인거부'?'danger':s.status==='검토중'?'info':'warning'} small>{s.status}</Badge>
+                  </td>
+                  <td style={{padding:'12px 16px'}}>
+                    {(s.status==='승인대기'||s.status==='검토중') && (
+                      <div style={{display:'flex',gap:6}}>
+                        <button onClick={() => handleApproveStore(s.id)}
+                          style={{padding:'4px 10px',borderRadius:6,border:`1px solid ${C.success}`,
+                            background:'rgba(16,185,129,0.1)',color:'#34D399',cursor:'pointer',fontSize:11,fontWeight:600}}>
+                          승인
+                        </button>
+                        <button onClick={() => handleRejectStore(s.id)}
+                          style={{padding:'4px 10px',borderRadius:6,border:`1px solid ${C.danger}`,
+                            background:'rgba(239,68,68,0.1)',color:'#F87171',cursor:'pointer',fontSize:11,fontWeight:600}}>
+                          거부
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {(activeSection === 'overview' || activeSection === 'sellers') && (
+        <div style={{background:C.surface,borderRadius:14,border:`1px solid ${C.border}`}}>
+          <div style={{padding:'14px 18px',borderBottom:`1px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div style={{fontWeight:700,fontSize:15}}>셀러 가입 신청</div>
+            <Badge color='primary'>{sellers.filter(s=>s.status==='승인대기'||s.status==='서류검토').length}건</Badge>
+          </div>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                {['업체명','이메일','스마트스토어','플랜','신청일','상태','처리'].map(h => (
+                  <th key={h} style={{padding:'10px 16px',textAlign:'left',fontSize:12,color:C.textSub,fontWeight:600}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sellers.map(s => (
+                <tr key={s.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                  <td style={{padding:'12px 16px',fontSize:13,fontWeight:600,color:C.text}}>{s.seller}</td>
+                  <td style={{padding:'12px 16px',fontSize:12,color:C.textSub}}>{s.email}</td>
+                  <td style={{padding:'12px 16px',fontSize:12,color:C.accent,fontFamily:'monospace'}}>{s.store.replace('https://smartstore.naver.com/','../')}</td>
+                  <td style={{padding:'12px 16px'}}><Badge color='primary' small>{s.plan}</Badge></td>
+                  <td style={{padding:'12px 16px',fontSize:12,color:C.textSub}}>{s.requested}</td>
+                  <td style={{padding:'12px 16px'}}><Badge color={s.status==='승인완료'?'success':s.status==='서류검토'?'info':'warning'} small>{s.status}</Badge></td>
+                  <td style={{padding:'12px 16px'}}>
+                    {(s.status==='승인대기'||s.status==='서류검토') && (
+                      <div style={{display:'flex',gap:6}}>
+                        <button onClick={() => handleApproveSeller(s.id)}
+                          style={{padding:'4px 12px',borderRadius:6,border:`1px solid ${C.primary}`,
+                            background:'rgba(30,110,204,0.15)',color:C.accent,cursor:'pointer',fontSize:11,fontWeight:600}}>
+                          승인
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 글로벌 네비게이션 (spa-modern)
+function GlobalNav({ page, setPage }) {
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const el = document.getElementById('main-content');
+    if (!el) return;
+    const onScroll = () => setScrolled(el.scrollTop > 20);
+    el.addEventListener('scroll', onScroll);
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const navItems = [
+    {key:'예약 캘린더',icon:'calendar'},
+    {key:'정산 내역',icon:'receipt'},
+    {key:'구독 관리',icon:'credit-card'},
+    {key:'어드민 제어',icon:'shield-check'},
+  ];
+
+  return (
+    <header style={{
+      position:'sticky',top:0,zIndex:50,
+      background:scrolled?'rgba(15,23,42,0.95)':'rgba(15,23,42,0.8)',
+      backdropFilter:'blur(12px)',
+      borderBottom:`1px solid ${scrolled?C.border:'transparent'}`,
+      transition:'all 0.2s',
+      width:'100%'}}>
+      <div style={{maxWidth:1200,margin:'0 auto',padding:'0 24px',display:'flex',alignItems:'center',height:64}}>
+        {/* 로고 */}
+        <div style={{display:'flex',alignItems:'center',gap:10,marginRight:48}}>
+          <div style={{width:34,height:34,borderRadius:9,background:`linear-gradient(135deg,${C.primary},${C.teal})`,
+            display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <Ph name="gear-six" size={18} color="#fff" weight="bold"/>
+          </div>
+          <div>
+            <span style={{fontWeight:800,fontSize:15,color:C.text}}>타이어바로</span>
+            <span style={{fontWeight:600,fontSize:12,color:C.textSub,marginLeft:4}}>파트너 어드민</span>
+          </div>
+        </div>
+
+        {/* 네비 */}
+        <nav style={{display:'flex',gap:2,flex:1}}>
+          {navItems.map(item => (
+            <button key={item.key} onClick={() => setPage(item.key)}
+              style={{display:'flex',alignItems:'center',gap:7,padding:'8px 16px',borderRadius:8,
+                fontWeight:600,fontSize:13,cursor:'pointer',transition:'all 0.2s',
+                background:page===item.key?'rgba(30,110,204,0.18)':'transparent',
+                color:page===item.key?C.accent:C.textSub,
+                border:page===item.key?`1px solid rgba(30,110,204,0.3)`:'1px solid transparent'}}>
+              <Ph name={item.icon} size={14} color={page===item.key?C.accent:C.textSub}/>
+              {item.key}
+            </button>
+          ))}
+        </nav>
+
+        {/* 우측 */}
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:36,height:36,borderRadius:10,background:'rgba(30,110,204,0.15)',
+            display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <Ph name="user" size={16} color={C.primary}/>
+          </div>
+          <div style={{display:'none'}}>
+            <div style={{fontSize:13,fontWeight:600,color:C.text}}>박민준</div>
+            <div style={{fontSize:11,color:C.textSub}}>강남 타이어킹</div>
+          </div>
+        </div>
+      </div>
+
+      {/* 페이지 서브 탭 */}
+      <div style={{borderTop:`1px solid ${C.border}`,background:'rgba(30,41,59,0.5)'}}>
+        <div style={{maxWidth:1200,margin:'0 auto',padding:'0 24px',display:'flex',alignItems:'center',height:36,gap:4}}>
+          <Ph name="house" size={13} color={C.textMuted}/>
+          <span style={{fontSize:12,color:C.textMuted}}>홈</span>
+          <Ph name="caret-right" size={11} color={C.textMuted}/>
+          <span style={{fontSize:12,color:C.textSub}}>{page}</span>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+// 메인 앱
+function App() {
+  const [page, setPage] = useState('예약 캘린더');
+  const [toast, setToast] = useState(null);
+
+  const renderPage = () => {
+    switch(page) {
+      case '예약 캘린더': return <CalendarScreen setToast={setToast}/>;
+      case '정산 내역': return <SettlementScreen setToast={setToast}/>;
+      case '구독 관리': return <BillingScreen setToast={setToast}/>;
+      case '어드민 제어': return <AdminScreen setToast={setToast}/>;
+      default: return <CalendarScreen setToast={setToast}/>;
+    }
+  };
+
+  return (
+    <div style={{width:'100%',minHeight:'100vh',display:'flex',flexDirection:'column',background:C.bg}}>
+      <GlobalNav page={page} setPage={setPage}/>
+      <main id="main-content" style={{flex:1,width:'100%',overflowY:'auto'}}>
+        {renderPage()}
+      </main>
+
+      {/* 하단 푸터 */}
+      <footer style={{borderTop:`1px solid ${C.border}`,padding:'14px 24px',background:C.surface}}>
+        <div style={{maxWidth:1200,margin:'0 auto',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{display:'flex',gap:24}}>
+            {['이용약관','개인정보처리방침','파트너 지원'].map(l => (
+              <span key={l} style={{fontSize:12,color:C.textMuted,cursor:'pointer'}}>{l}</span>
+            ))}
+          </div>
+          <span style={{fontSize:12,color:C.textMuted}}>타이어바로 파트너 어드민 © 2025</span>
+        </div>
+      </footer>
+
+      {toast && <Toast msg={toast} onClose={() => setToast(null)}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
