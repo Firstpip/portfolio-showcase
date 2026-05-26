@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>헬스케어 챗봇 플랫폼 — 구현 데모</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+  <script src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
+  <script src="https://unpkg.com/recharts/umd/Recharts.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; min-height: 100vh; font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif; }
+    #root { width: 100%; min-height: 100vh; }
+    input, textarea, select, button { font-family: inherit; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes slideRight { from { transform: translateX(-20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes scaleIn { from { transform: scale(0.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    @keyframes slideUp { from { transform: translateY(14px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+    @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+    @keyframes progressBar { from { width: 0; } to { width: 100%; } }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } = Recharts;
+
+// Lucide icons helper
+function Icon({ name, size = 16, color = 'currentColor', style: s = {} }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current && window.lucide) {
+      ref.current.innerHTML = '';
+      try {
+        const iconName = name.split('-').map((w, i) => i === 0 ? w : w[0].toUpperCase() + w.slice(1)).join('');
+        const icons = window.lucide;
+        const key = Object.keys(icons).find(k => k.toLowerCase() === iconName.toLowerCase());
+        if (key) {
+          const el = document.createElement('div');
+          el.style.display = 'inline-flex';
+          el.style.alignItems = 'center';
+          el.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icons[key][2].map(([tag, attrs]) => { const a = Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join(' '); return `<${tag} ${a}/>`; }).join('')}</svg>`;
+          ref.current.appendChild(el);
+        }
+      } catch(e) {}
+    }
+  }, [name, size, color]);
+  return <span ref={ref} style={{ display: 'inline-flex', alignItems: 'center', ...s }}/>;
+}
+
+const C = {
+  primary: '#7C3AED', secondary: '#6366F1', accent: '#EDE9FE',
+  bg: '#FAFAFA', surface: '#F5F3FF', textPrimary: '#1E1B4B',
+  textSec: '#64748B', border: '#DDD6FE', hover: '#6D28D9',
+  cardBg: '#ffffff', danger: '#EF4444', success: '#10B981',
+};
+
+const dailyTrend = [
+  { d: '5/20', 대화: 1124, 알림: 2841, 사용자: 312 },
+  { d: '5/21', 대화: 987, 알림: 2310, 사용자: 298 },
+  { d: '5/22', 대화: 1356, 알림: 3120, 사용자: 341 },
+  { d: '5/23', 대화: 1198, 알림: 2980, 사용자: 327 },
+  { d: '5/24', 대화: 1487, 알림: 3650, 사용자: 378 },
+  { d: '5/25', 대화: 1312, 알림: 3210, 사용자: 365 },
+  { d: '5/26', 대화: 1247, 알림: 3891, 사용자: 389 },
+];
+
+const typeBreak = [
+  { name: '건강상담', value: 42, fill: C.primary },
+  { name: '복약안내', value: 23, fill: '#0891B2' },
+  { name: '운동상담', value: 18, fill: '#16A34A' },
+  { name: '검사결과', value: 17, fill: '#F59E0B' },
+];
+
+const scheduleItems = [
+  { id: 1, name: '아침 건강 리마인더', cron: '0 9 * * *', target: '전체 사용자', count: 1247, status: '활성', lastRun: '09:00', nextRun: '내일 09:00' },
+  { id: 2, name: '혈압 측정 알림', cron: '0 8,20 * * *', target: '고혈압 관리 그룹', count: 287, status: '활성', lastRun: '20:00', nextRun: '내일 08:00' },
+  { id: 3, name: '복약 시간 알림', cron: '0 7,12,18 * * *', target: '복약 관리 사용자', count: 156, status: '활성', lastRun: '18:00', nextRun: '내일 07:00' },
+  { id: 4, name: '주간 건강 리포트', cron: '0 10 * * 1', target: '전체 사용자', count: 1247, status: '비활성', lastRun: '월 10:00', nextRun: '다음주 월요일' },
+];
+
+const historyItems = [
+  { id: 1, user: '김민수', date: '2024.05.26', time: '14:32', type: '건강상담', preview: '혈압이 높을 때 먹으면 좋은 음식을 알려주세요', tokens: 342, rating: 5 },
+  { id: 2, user: '이지은', date: '2024.05.26', time: '14:28', type: '검사결과', preview: '오늘 혈당 수치 확인해주세요', tokens: 218, rating: 4 },
+  { id: 3, user: '박성훈', date: '2024.05.26', time: '14:15', type: '복약안내', preview: '고혈압 약 복용 시간을 알려주세요', tokens: 405, rating: 5 },
+  { id: 4, user: '최유진', date: '2024.05.26', time: '13:58', type: '운동상담', preview: '운동 루틴 추천해주세요', tokens: 287, rating: 4 },
+  { id: 5, user: '정다은', date: '2024.05.26', time: '13:42', type: '영양상담', preview: '영양제 조합 질문이 있어요', tokens: 193, rating: 5 },
+  { id: 6, user: '한지훈', date: '2024.05.26', time: '13:21', type: '건강상담', preview: '당뇨 식단 관리 방법을 알려주세요', tokens: 512, rating: 4 },
+];
+
+const profiles = [
+  { id: 1, name: '김민수', age: 48, gender: '남', conditions: ['고혈압', '당뇨 전단계'], meds: ['암로디핀 5mg'], allergies: ['페니실린'], bmi: 26.2, lastUpdate: '2024.05.24' },
+  { id: 2, name: '이지은', age: 35, gender: '여', conditions: ['빈혈'], meds: ['철분제'], allergies: [], bmi: 22.1, lastUpdate: '2024.05.25' },
+  { id: 3, name: '박성훈', age: 62, gender: '남', conditions: ['고혈압', '고지혈증'], meds: ['아토르바스타틴', '로사르탄'], allergies: ['아스피린'], bmi: 28.4, lastUpdate: '2024.05.23' },
+];
+
+function StatCard({ label, value, sub, icon, col, delta }) {
+  return (
+    <div style={{
+      background: C.cardBg, borderRadius: 8, padding: '18px 20px',
+      border: `1px solid ${C.border}`, flex: 1, minWidth: 150,
+      animation: 'fadeIn 0.35s ease both',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: C.textSec, fontWeight: 600 }}>{label}</span>
+        <div style={{ width: 28, height: 28, borderRadius: 6, background: (col || C.primary) + '18', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Icon name={icon} size={14} color={col || C.primary} />
+        </div>
+      </div>
+      <div style={{ fontSize: 26, fontWeight: 800, color: C.textPrimary, letterSpacing: -0.5 }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: delta > 0 ? C.success : delta < 0 ? C.danger : '#94A3B8', marginTop: 4, fontWeight: 600 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Badge({ s }) {
+  const m = { '활성': ['#D1FAE5', '#065F46'], '비활성': ['#FEE2E2', '#991B1B'], '완료': ['#EDE9FE', '#5B21B6'] };
+  const [bg, color] = m[s] || ['#F1F5F9', '#475569'];
+  return <span style={{ background: bg, color, fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 20 }}>{s}</span>;
+}
+
+function Toast({ msg }) {
+  return msg ? (
+    <div style={{
+      position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+      background: '#1E293B', color: '#fff', padding: '11px 22px', borderRadius: 9,
+      fontSize: 13, fontWeight: 600, zIndex: 400, animation: 'slideUp 0.2s ease',
+      boxShadow: '0 8px 24px rgba(0,0,0,0.18)'
+    }}>{msg}</div>
+  ) : null;
+}
+
+/* ---- Main Analytics Dashboard ---- */
+function MainScreen() {
+  return (
+    <div style={{ padding: '32px 40px', display: 'flex', flexDirection: 'column', gap: 22, animation: 'fadeIn 0.3s ease' }}>
+      {/* Page Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: C.textPrimary }}>통합 분석 대시보드</div>
+          <div style={{ fontSize: 13, color: C.textSec, marginTop: 4 }}>헬스케어 챗봇 플랫폼 운영 지표 · 2024년 5월 26일 기준</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <select style={{ padding: '7px 12px', border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, color: C.textSec, background: '#fff', cursor: 'pointer' }}>
+            <option>최근 7일</option><option>최근 30일</option><option>최근 90일</option>
+          </select>
+          <button style={{
+            background: C.primary, color: '#fff', border: 'none', borderRadius: 7,
+            padding: '7px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 5
+          }}>
+            <Icon name="download" size={13} color="#fff" /> CSV 내보내기
+          </button>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div style={{ display: 'flex', gap: 12 }}>
+        <StatCard label="누적 대화 수" value="38,421" sub="+12.3% 전주 대비" icon="message-circle" col={C.primary} delta={1} />
+        <StatCard label="활성 사용자" value="1,247명" sub="+8.7% 전주 대비" icon="users" col="#0891B2" delta={1} />
+        <StatCard label="알림 발송 총계" value="91,203건" sub="+5.2% 전주 대비" icon="bell" col="#16A34A" delta={1} />
+        <StatCard label="평균 세션 시간" value="4.2분" sub="-0.3분 전주 대비" icon="clock" col="#F59E0B" delta={-1} />
+      </div>
+
+      {/* Charts Row */}
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+        <div style={{ background: C.cardBg, borderRadius: 8, padding: 22, border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.textPrimary, marginBottom: 4 }}>일별 서비스 트렌드</div>
+          <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 16 }}>대화수 · 알림 · 사용자 일별 추이</div>
+          <div style={{ height: 200, position: 'relative' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={dailyTrend}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F3F0FF" />
+                <XAxis dataKey="d" tick={{ fontSize: 11, fill: '#94A3B8' }} />
+                <YAxis tick={{ fontSize: 11, fill: '#94A3B8' }} />
+                <Tooltip contentStyle={{ borderRadius: 8, border: 'none', boxShadow: '0 4px 16px rgba(0,0,0,0.1)' }} />
+                <Legend />
+                <Line type="monotone" dataKey="대화" stroke={C.primary} strokeWidth={2} dot={{ r: 3 }} />
+                <Line type="monotone" dataKey="알림" stroke="#0891B2" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="5 3" />
+                <Line type="monotone" dataKey="사용자" stroke="#16A34A" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="2 2" />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div style={{ background: C.cardBg, borderRadius: 8, padding: 22, border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.textPrimary, marginBottom: 4 }}>대화 유형 분포</div>
+          <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 16 }}>상담 카테고리별 비중</div>
+          <div style={{ height: 160, position: 'relative' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={typeBreak} cx="50%" cy="50%" innerRadius={45} outerRadius={70} dataKey="value" paddingAngle={3}>
+                  {typeBreak.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
+                </Pie>
+                <Tooltip formatter={(v) => `${v}%`} contentStyle={{ borderRadius: 8 }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+            {typeBreak.map(t => (
+              <div key={t.name} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: C.textSec }}>
+                <div style={{ width: 8, height: 8, borderRadius: 2, background: t.fill }}/>
+                {t.name} {t.value}%
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* KPI Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        {[
+          { label: 'GPT 응답 성공률', value: '99.2%', icon: 'cpu', col: C.primary },
+          { label: '알림톡 전송 성공률', value: '98.7%', icon: 'send', col: '#16A34A' },
+          { label: '공공API 평균 응답', value: '0.9초', icon: 'zap', col: '#F59E0B' },
+          { label: '일평균 세션/사용자', value: '3.2건', icon: 'activity', col: '#0891B2' },
+        ].map(k => (
+          <div key={k.label} style={{ background: C.surface, borderRadius: 8, padding: '16px 18px', border: `1px solid ${C.border}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <Icon name={k.icon} size={14} color={k.col} />
+              <span style={{ fontSize: 12, color: C.textSec, fontWeight: 600 }}>{k.label}</span>
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: k.col }}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---- Scheduler Screen ---- */
+function SchedulerScreen() {
+  const [items, setItems] = useState(scheduleItems);
+  const [addOpen, setAddOpen] = useState(false);
+  const [selItem, setSelItem] = useState(null);
+  const [toast, setToast] = useState('');
+  const showToast = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); };
+
+  const toggleStatus = (id, e) => {
+    e.stopPropagation();
+    setItems(prev => prev.map(it => it.id === id ? { ...it, status: it.status === '활성' ? '비활성' : '활성' } : it));
+  };
+
+  return (
+    <div style={{ padding: '32px 40px', animation: 'fadeIn 0.3s ease' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: C.textPrimary }}>알림 스케줄러</div>
+          <div style={{ fontSize: 13, color: C.textSec, marginTop: 4 }}>Node-cron + Redis 큐 기반 자동 알림 발송 관리</div>
+        </div>
+        <button onClick={() => setAddOpen(true)} style={{
+          background: C.primary, color: '#fff', border: 'none', borderRadius: 7,
+          padding: '9px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: 6
+        }}>
+          <Icon name="plus-circle" size={14} color="#fff" /> 스케줄 추가
+        </button>
+      </div>
+
+      {/* Stats Row */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
+        <StatCard label="활성 스케줄" value="3개" sub="전체 4개 중" icon="calendar" col={C.primary} />
+        <StatCard label="오늘 발송 완료" value="3,891건" sub="성공률 98.7%" icon="send" col="#16A34A" />
+        <StatCard label="큐 대기 중" value="247건" sub="Redis 큐 현황" icon="layers" col="#F59E0B" />
+        <StatCard label="발송 실패" value="51건" sub="재시도 예정" icon="alert-circle" col={C.danger} />
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {items.map(item => (
+          <div key={item.id} onClick={() => setSelItem(item)} style={{
+            background: C.cardBg, borderRadius: 8, padding: '18px 22px',
+            border: `1px solid ${item.status === '활성' ? C.border : '#FCA5A5'}`,
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 18,
+            transition: 'box-shadow 0.15s, transform 0.15s'
+          }}
+          onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 4px 16px rgba(124,58,237,0.1)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+          onMouseLeave={e => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'translateY(0)'; }}>
+            <div style={{
+              width: 40, height: 40, borderRadius: 8, background: item.status === '활성' ? C.surface : '#FEF2F2',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+            }}>
+              <Icon name="clock" size={18} color={item.status === '활성' ? C.primary : C.danger} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.textPrimary, marginBottom: 4 }}>{item.name}</div>
+              <div style={{ display: 'flex', gap: 16, fontSize: 12, color: '#94A3B8' }}>
+                <span style={{ fontFamily: 'monospace', background: '#F8FAFC', padding: '2px 6px', borderRadius: 4 }}>{item.cron}</span>
+                <span>{item.target}</span>
+                <span>대상 {item.count.toLocaleString()}명</span>
+              </div>
+            </div>
+            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+              <Badge s={item.status} />
+              <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 4 }}>다음 발송: {item.nextRun}</div>
+            </div>
+            <button onClick={e => toggleStatus(item.id, e)} style={{
+              background: item.status === '활성' ? '#FEF2F2' : '#D1FAE5',
+              color: item.status === '활성' ? C.danger : C.success,
+              border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 11, fontWeight: 700, cursor: 'pointer'
+            }}>
+              {item.status === '활성' ? '비활성화' : '활성화'}
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {selItem && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setSelItem(null)}>
+          <div style={{ background: '#fff', borderRadius: 14, width: 500, padding: 28, boxShadow: '0 24px 64px rgba(0,0,0,0.15)', animation: 'scaleIn 0.18s ease' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.textPrimary, marginBottom: 20, display: 'flex', justifyContent: 'space-between' }}>
+              {selItem.name}
+              <button onClick={() => setSelItem(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: '#CBD5E1' }}>×</button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+              {[['Cron 표현식', selItem.cron], ['발송 대상', selItem.target], ['대상 인원', `${selItem.count.toLocaleString()}명`], ['상태', selItem.status], ['마지막 발송', selItem.lastRun], ['다음 발송', selItem.nextRun], ['발송 채널', '카카오 알림톡 API'], ['큐 방식', 'Redis LPUSH/BRPOP']].map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #F8FAFC' }}>
+                  <span style={{ fontSize: 13, color: C.textSec }}>{k}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary }}>{v}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={{ flex: 1, padding: 10, background: C.primary, color: '#fff', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+                onClick={() => { setSelItem(null); showToast('스케줄이 즉시 실행되었습니다.'); }}>즉시 실행</button>
+              <button style={{ flex: 1, padding: 10, background: '#F1F5F9', color: '#475569', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+                onClick={() => setSelItem(null)}>닫기</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {addOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setAddOpen(false)}>
+          <div style={{ background: '#fff', borderRadius: 14, width: 460, padding: 28, boxShadow: '0 24px 64px rgba(0,0,0,0.15)', animation: 'scaleIn 0.18s ease' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.textPrimary, marginBottom: 20 }}>알림 스케줄 추가</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {[['스케줄 이름', 'text', '예: 야간 수면 알림'], ['Cron 표현식', 'text', '예: 0 22 * * *'], ['발송 메시지', 'text', '예: 오늘 하루도 수고하셨습니다.']].map(([label, type, ph]) => (
+                <div key={label}>
+                  <label style={{ fontSize: 13, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>{label}</label>
+                  <input type={type} placeholder={ph} style={{ width: '100%', padding: '9px 12px', border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13 }}/>
+                </div>
+              ))}
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>발송 대상</label>
+                <select style={{ width: '100%', padding: '9px 12px', border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, background: '#fff' }}>
+                  <option>전체 사용자</option><option>고혈압 관리 그룹</option><option>복약 관리 사용자</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
+              <button style={{ flex: 1, padding: 10, background: C.primary, color: '#fff', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+                onClick={() => { setAddOpen(false); showToast('새 스케줄이 등록되었습니다.'); }}>등록</button>
+              <button style={{ flex: 1, padding: 10, background: '#F1F5F9', color: '#475569', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+                onClick={() => setAddOpen(false)}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
+      <Toast msg={toast} />
+    </div>
+  );
+}
+
+/* ---- History Screen ---- */
+function HistoryScreen() {
+  const [sel, setSel] = useState(null);
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('전체');
+  const types = ['전체', '건강상담', '복약안내', '운동상담', '검사결과', '영양상담'];
+  const filtered = historyItems.filter(h => {
+    const matchType = typeFilter === '전체' || h.type === typeFilter;
+    const matchSearch = h.user.includes(search) || h.preview.includes(search);
+    return matchType && matchSearch;
+  });
+
+  return (
+    <div style={{ padding: '32px 40px', animation: 'fadeIn 0.3s ease' }}>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 22, fontWeight: 800, color: C.textPrimary }}>대화 이력 관리</div>
+        <div style={{ fontSize: 13, color: C.textSec, marginTop: 4 }}>PostgreSQL 트리그램 인덱스 기반 전문 검색 · 사용자별 대화 이력 조회</div>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 20, alignItems: 'center' }}>
+        <div style={{ position: 'relative', flex: 1, maxWidth: 320 }}>
+          <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }}>
+            <Icon name="search" size={14} />
+          </span>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="사용자명 또는 키워드 검색..." style={{
+            width: '100%', padding: '8px 12px 8px 32px', border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, outline: 'none'
+          }}/>
+        </div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {types.map(t => (
+            <button key={t} onClick={() => setTypeFilter(t)} style={{
+              padding: '6px 12px', borderRadius: 6, border: `1px solid ${t === typeFilter ? C.primary : C.border}`,
+              background: t === typeFilter ? C.surface : 'transparent', color: t === typeFilter ? C.primary : C.textSec,
+              fontSize: 11, fontWeight: t === typeFilter ? 700 : 500, cursor: 'pointer', transition: 'all 0.12s'
+            }}>{t}</button>
+          ))}
+        </div>
+        <span style={{ fontSize: 12, color: '#94A3B8', marginLeft: 4 }}>{filtered.length}건</span>
+      </div>
+
+      <div style={{ background: C.cardBg, borderRadius: 8, border: `1px solid ${C.border}`, overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: C.surface }}>
+              {['사용자', '일시', '유형', '대화 미리보기', '토큰', '만족도', ''].map(h => (
+                <th key={h} style={{ padding: '10px 18px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#64748B', borderBottom: `1px solid ${C.border}` }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(h => (
+              <tr key={h.id} onClick={() => setSel(h)} style={{ cursor: 'pointer', transition: 'background 0.1s', borderBottom: `1px solid #F8FAFC` }}
+              onMouseEnter={e => e.currentTarget.style.background = '#FAFAFF'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <td style={{ padding: '12px 18px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ width: 26, height: 26, borderRadius: 13, background: C.primary + '20', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, color: C.primary }}>{h.user[0]}</div>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: C.textPrimary }}>{h.user}</span>
+                  </div>
+                </td>
+                <td style={{ padding: '12px 18px', fontSize: 12, color: C.textSec }}>{h.date} {h.time}</td>
+                <td style={{ padding: '12px 18px' }}><span style={{ fontSize: 11, background: C.surface, color: C.primary, fontWeight: 700, padding: '2px 8px', borderRadius: 6 }}>{h.type}</span></td>
+                <td style={{ padding: '12px 18px', fontSize: 12, color: C.textSec, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.preview}</td>
+                <td style={{ padding: '12px 18px', fontSize: 12, color: C.textSec }}>{h.tokens}</td>
+                <td style={{ padding: '12px 18px' }}>
+                  <div style={{ display: 'flex', gap: 2 }}>
+                    {[1,2,3,4,5].map(s => <span key={s} style={{ fontSize: 12, color: s <= h.rating ? '#F59E0B' : '#E2E8F0' }}>★</span>)}
+                  </div>
+                </td>
+                <td style={{ padding: '12px 18px' }}>
+                  <button style={{ background: C.surface, color: C.primary, border: 'none', borderRadius: 5, padding: '3px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>보기</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {sel && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setSel(null)}>
+          <div style={{ background: '#fff', borderRadius: 14, width: 520, boxShadow: '0 24px 64px rgba(0,0,0,0.15)', overflow: 'hidden', animation: 'scaleIn 0.18s ease' }} onClick={e => e.stopPropagation()}>
+            <div style={{ padding: '18px 24px', borderBottom: `1px solid #F1F5F9`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: C.textPrimary }}>{sel.user} 대화 상세</div>
+                <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>{sel.date} {sel.time} · {sel.type} · {sel.tokens} 토큰</div>
+              </div>
+              <button onClick={() => setSel(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: '#CBD5E1' }}>×</button>
+            </div>
+            <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 300, overflowY: 'auto' }}>
+              {[{ role: 'user', text: sel.preview }, { role: 'bot', text: '공공기관 건강 데이터를 기반으로 분석하였습니다. PostgreSQL에 저장된 사용자 건강 프로필을 GPT 컨텍스트에 주입하여 개인화 답변을 제공합니다.' }, { role: 'user', text: '감사합니다. 더 자세히 알고 싶어요.' }, { role: 'bot', text: '식품안전나라 및 건강보험심사평가원 공공 데이터를 추가로 참조하여 상세 안내를 드리겠습니다.' }].map((m, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                  <div style={{ background: m.role === 'user' ? C.primary : C.surface, color: m.role === 'user' ? '#fff' : C.textPrimary, padding: '10px 14px', borderRadius: 9, maxWidth: '80%', fontSize: 13, lineHeight: 1.6 }}>{m.text}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: '12px 24px', borderTop: `1px solid #F1F5F9`, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 2 }}>
+                {[1,2,3,4,5].map(s => <span key={s} style={{ fontSize: 14, color: s <= sel.rating ? '#F59E0B' : '#E2E8F0' }}>★</span>)}
+              </div>
+              <span style={{ fontSize: 12, color: '#94A3B8' }}>사용자 평가 · 공공API 2개 참조</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---- Profile Screen ---- */
+function ProfileScreen() {
+  const [sel, setSel] = useState(profiles[0]);
+  const [editOpen, setEditOpen] = useState(false);
+  const [toast, setToast] = useState('');
+  const showToast = msg => { setToast(msg); setTimeout(() => setToast(''), 2500); };
+
+  return (
+    <div style={{ padding: '32px 40px', animation: 'fadeIn 0.3s ease' }}>
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 22, fontWeight: 800, color: C.textPrimary }}>사용자 건강 프로필</div>
+        <div style={{ fontSize: 13, color: C.textSec, marginTop: 4 }}>건강 지표 관리 · GPT 컨텍스트 자동 연동 · 개인화 설정</div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20 }}>
+        {/* User List */}
+        <div style={{ background: C.cardBg, borderRadius: 8, border: `1px solid ${C.border}`, overflow: 'hidden' }}>
+          <div style={{ padding: '14px 18px', borderBottom: `1px solid ${C.border}`, fontSize: 13, fontWeight: 700, color: C.textPrimary }}>사용자 목록</div>
+          {profiles.map(p => (
+            <div key={p.id} onClick={() => setSel(p)} style={{
+              padding: '14px 18px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12,
+              background: sel?.id === p.id ? C.surface : 'transparent',
+              borderLeft: sel?.id === p.id ? `3px solid ${C.primary}` : '3px solid transparent',
+              transition: 'all 0.12s'
+            }}
+            onMouseEnter={e => { if (sel?.id !== p.id) e.currentTarget.style.background = '#FAFAFF'; }}
+            onMouseLeave={e => { if (sel?.id !== p.id) e.currentTarget.style.background = 'transparent'; }}>
+              <div style={{ width: 38, height: 38, borderRadius: 19, background: C.primary + '20', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: C.primary, flexShrink: 0 }}>{p.name[0]}</div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.textPrimary }}>{p.name}</div>
+                <div style={{ fontSize: 11, color: '#94A3B8' }}>{p.age}세 · {p.conditions[0]}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Profile Detail */}
+        {sel && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ background: C.cardBg, borderRadius: 8, border: `1px solid ${C.border}`, padding: 24 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <div style={{ width: 56, height: 56, borderRadius: 28, background: C.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, color: '#fff', fontWeight: 800 }}>{sel.name[0]}</div>
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: C.textPrimary }}>{sel.name}</div>
+                    <div style={{ fontSize: 13, color: C.textSec }}>{sel.age}세 · {sel.gender}성 · BMI {sel.bmi}</div>
+                    <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>마지막 업데이트: {sel.lastUpdate}</div>
+                  </div>
+                </div>
+                <button onClick={() => setEditOpen(true)} style={{
+                  background: C.surface, color: C.primary, border: `1px solid ${C.border}`,
+                  borderRadius: 7, padding: '7px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 5
+                }}>
+                  <Icon name="edit-2" size={12} color={C.primary} /> 편집
+                </button>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.textSec, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>건강 상태</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {sel.conditions.map(c => <span key={c} style={{ background: '#FEF9C3', color: '#854D0E', fontSize: 12, fontWeight: 600, padding: '3px 10px', borderRadius: 6 }}>{c}</span>)}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.textSec, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>복용 약물</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {sel.meds.length > 0 ? sel.meds.map(m => <span key={m} style={{ background: '#DBEAFE', color: '#1E40AF', fontSize: 12, fontWeight: 600, padding: '3px 10px', borderRadius: 6 }}>{m}</span>) : <span style={{ fontSize: 12, color: '#94A3B8' }}>없음</span>}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.textSec, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>알레르기</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {sel.allergies.length > 0 ? sel.allergies.map(a => <span key={a} style={{ background: '#FEE2E2', color: '#991B1B', fontSize: 12, fontWeight: 600, padding: '3px 10px', borderRadius: 6 }}>{a}</span>) : <span style={{ fontSize: 12, color: '#94A3B8' }}>없음</span>}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.textSec, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>GPT 컨텍스트 연동</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div style={{ width: 6, height: 6, borderRadius: 3, background: C.success }}/>
+                    <span style={{ fontSize: 12, color: C.textSec }}>건강 프로필 자동 주입 활성</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ background: C.cardBg, borderRadius: 8, border: `1px solid ${C.border}`, padding: 24 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.textPrimary, marginBottom: 16 }}>알림 설정</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {[
+                  ['아침 건강 리마인더', true, '매일 09:00'],
+                  ['복약 시간 알림', sel.meds.length > 0, '매일 07:00, 12:00, 18:00'],
+                  ['주간 건강 리포트', true, '매주 월요일 10:00'],
+                  ['공공 데이터 업데이트 알림', false, '비활성'],
+                ].map(([label, active, schedule]) => (
+                  <div key={label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #F8FAFC' }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary }}>{label}</div>
+                      <div style={{ fontSize: 11, color: '#94A3B8' }}>{schedule}</div>
+                    </div>
+                    <div style={{
+                      width: 40, height: 22, borderRadius: 11, cursor: 'pointer',
+                      background: active ? C.primary : '#E2E8F0', position: 'relative', transition: 'background 0.2s'
+                    }}>
+                      <div style={{
+                        width: 16, height: 16, borderRadius: 8, background: '#fff',
+                        position: 'absolute', top: 3, left: active ? 21 : 3, transition: 'left 0.2s'
+                      }}/>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {editOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setEditOpen(false)}>
+          <div style={{ background: '#fff', borderRadius: 14, width: 480, padding: 28, boxShadow: '0 24px 64px rgba(0,0,0,0.15)', animation: 'scaleIn 0.18s ease' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.textPrimary, marginBottom: 20 }}>건강 프로필 편집</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 13, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>나이</label>
+                  <input type="number" defaultValue={sel?.age} style={{ width: '100%', padding: '9px 12px', border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13 }}/>
+                </div>
+                <div>
+                  <label style={{ fontSize: 13, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>BMI</label>
+                  <input type="number" step="0.1" defaultValue={sel?.bmi} style={{ width: '100%', padding: '9px 12px', border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13 }}/>
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>건강 상태 (쉼표 구분)</label>
+                <input type="text" defaultValue={sel?.conditions.join(', ')} style={{ width: '100%', padding: '9px 12px', border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13 }}/>
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 5 }}>복용 약물 (쉼표 구분)</label>
+                <input type="text" defaultValue={sel?.meds.join(', ')} style={{ width: '100%', padding: '9px 12px', border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13 }}/>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
+              <button style={{ flex: 1, padding: 10, background: C.primary, color: '#fff', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+                onClick={() => { setEditOpen(false); showToast('건강 프로필이 업데이트되었습니다. GPT 컨텍스트가 재구성됩니다.'); }}>저장</button>
+              <button style={{ flex: 1, padding: 10, background: '#F1F5F9', color: '#475569', border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+                onClick={() => setEditOpen(false)}>취소</button>
+            </div>
+          </div>
+        </div>
+      )}
+      <Toast msg={toast} />
+    </div>
+  );
+}
+
+/* ---- App Root ---- */
+function App() {
+  const [page, setPage] = useState('대시보드');
+  const navItems = [
+    { label: '대시보드', icon: 'layout-dashboard' },
+    { label: '알림 스케줄러', icon: 'calendar-clock' },
+    { label: '대화 이력', icon: 'message-square-text' },
+    { label: '건강 프로필', icon: 'user-check' },
+  ];
+  const screens = { '대시보드': <MainScreen />, '알림 스케줄러': <SchedulerScreen />, '대화 이력': <HistoryScreen />, '건강 프로필': <ProfileScreen /> };
+
+  return (
+    <div style={{ width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column', background: C.bg }}>
+      {/* Top Nav (spa-modern) */}
+      <header style={{
+        width: '100%', height: 56, background: '#fff', borderBottom: `1px solid ${C.border}`,
+        display: 'flex', alignItems: 'center', padding: '0 40px',
+        boxShadow: '0 1px 4px rgba(124,58,237,0.06)', position: 'sticky', top: 0, zIndex: 50
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginRight: 32 }}>
+          <div style={{ width: 30, height: 30, borderRadius: 7, background: C.primary, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name="activity" size={16} color="#fff" />
+          </div>
+          <span style={{ fontSize: 15, fontWeight: 800, color: C.textPrimary }}>헬스챗봇 플랫폼</span>
+        </div>
+        <nav style={{ display: 'flex', gap: 0 }}>
+          {navItems.map(nav => (
+            <button key={nav.label} onClick={() => setPage(nav.label)} style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 14px', border: 'none', cursor: 'pointer',
+              background: 'transparent', fontSize: 13, fontWeight: page === nav.label ? 700 : 500,
+              color: page === nav.label ? C.primary : '#64748B',
+              borderBottom: page === nav.label ? `2px solid ${C.primary}` : '2px solid transparent',
+              transition: 'all 0.13s', marginBottom: -1
+            }}
+            onMouseEnter={e => { if (page !== nav.label) { e.currentTarget.style.color = C.primary; } }}
+            onMouseLeave={e => { if (page !== nav.label) { e.currentTarget.style.color = '#64748B'; } }}>
+              <Icon name={nav.icon} size={14} color={page === nav.label ? C.primary : '#94A3B8'} />
+              {nav.label}
+            </button>
+          ))}
+        </nav>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ width: 7, height: 7, borderRadius: 4, background: C.success }}/>
+            <span style={{ fontSize: 12, color: C.textSec }}>정상 운영</span>
+          </div>
+          <div style={{ width: 30, height: 30, borderRadius: 15, background: C.surface, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: C.primary }}>
+            <Icon name="user-circle" size={16} color={C.primary} />
+          </div>
+        </div>
+      </header>
+
+      <main style={{ flex: 1, width: '100%' }}>
+        {screens[page]}
+      </main>
+
+      {/* Footer (spa-modern 특징) */}
+      <footer style={{
+        width: '100%', background: '#fff', borderTop: `1px solid ${C.border}`,
+        padding: '14px 40px', display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+      }}>
+        <span style={{ fontSize: 12, color: '#94A3B8' }}>헬스케어 챗봇 플랫폼 — 구현 데모 · Node.js + Express + PostgreSQL + Redis</span>
+        <span style={{ fontSize: 12, color: '#94A3B8' }}>OpenAI GPT-4o · 카카오 알림톡 API · Node-cron</span>
+      </footer>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
