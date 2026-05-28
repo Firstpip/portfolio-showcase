@@ -2406,6 +2406,56 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
   );
 }
 
+// ─── MeetingPrepButton ───
+// 데모 준비 파일(발표·대본·사전준비) 생성. Supabase 작업 큐에 job을 넣으면
+// 맥북 데몬(claude -p)이 생성→Storage 업로드→서명 URL을 돌려준다. LLM 비용 0원.
+function MeetingPrepButton({ project }) {
+  const [status, setStatus] = useState('idle'); // idle | working | error
+  const [msg, setMsg] = useState('');
+  const cleanupRef = useRef(null);
+
+  const run = async () => {
+    if (status === 'working') return;
+    setStatus('working'); setMsg('요청 보내는 중…');
+    const { data: job, error } = await supabase
+      .from('meeting_prep_jobs')
+      .insert({ slug: project.slug, model: 'opus', requested_by: 'dashboard' })
+      .select().single();
+    if (error) { setStatus('error'); setMsg('요청 실패: ' + error.message); return; }
+    setMsg('생성 중… (맥 데몬, 수 분)');
+
+    const finish = (url) => { teardown(); setStatus('idle'); setMsg('');
+      const a = document.createElement('a'); a.href = url; a.download = project.slug + '-meeting-prep.zip'; a.click(); };
+    const fail = (m) => { teardown(); setStatus('error'); setMsg(m || '실패'); };
+
+    const channel = supabase.channel('mpj-' + job.id)
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'meeting_prep_jobs', filter: 'id=eq.' + job.id },
+        ({ new: row }) => { if (row.status === 'done') finish(row.download_url); else if (row.status === 'error') fail(row.error); })
+      .subscribe();
+    const poll = setInterval(async () => {
+      const { data } = await supabase.from('meeting_prep_jobs').select('status,download_url,error').eq('id', job.id).single();
+      if (data && data.status === 'done') finish(data.download_url);
+      else if (data && data.status === 'error') fail(data.error);
+    }, 5000);
+    const timeout = setTimeout(() => fail('시간 초과 — 맥 데몬이 켜져 있는지 확인하세요'), 8 * 60 * 1000);
+    const teardown = () => { clearInterval(poll); clearTimeout(timeout); supabase.removeChannel(channel); cleanupRef.current = null; };
+    cleanupRef.current = teardown;
+  };
+
+  useEffect(() => () => { if (cleanupRef.current) cleanupRef.current(); }, []);
+
+  return (
+    <div style={{ marginBottom:'0.75rem' }}>
+      <button onClick={(e) => { e.stopPropagation(); run(); }} disabled={status === 'working'}
+        style={{ display:'flex', alignItems:'center', gap:6, width:'100%', padding:'0.5rem 0.75rem', borderRadius:8, fontSize:'0.8rem', fontWeight:500, cursor: status==='working'?'default':'pointer', background:'var(--surface2)', color:'var(--accent)', border:'1px solid var(--border)', opacity: status==='working'?0.7:1 }}>
+        {status === 'working' ? '⏳' : '📑'} {status === 'working' ? (msg || '생성 중…') : '데모 준비 파일 생성'}
+      </button>
+      {status === 'error' && <div style={{ fontSize:'0.75rem', color:'var(--red, #e57373)', marginTop:4 }}>{msg}</div>}
+    </div>
+  );
+}
+
 // ─── StatusModal ───
 function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, teamMembers, milestones, milestonesSetupNeeded, onMilestoneUpdate, onMilestoneDelete, onMilestoneAdd, onMilestoneReorder, onCreateFromTemplate, onOpenProjectView, onBulkCreateWeekly, onClearWeeklyPlan, onRequestConfirm, onBackfillAssignees }) {
   const isPostWon = HAS_MILESTONES.includes(project?.current_status);
@@ -2525,6 +2575,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
               ))}
             </div>
           )}
+
+          <MeetingPrepButton project={project} />
 
           {/* 착수일/마감일 미설정 안내 (수주 후 단계인데 누락됐을 때) */}
           {HAS_MILESTONES.includes(project.current_status) && (!project.start_date || !project.deadline) && tab !== 'info' && (
