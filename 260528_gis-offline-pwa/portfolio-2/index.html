@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>현장 GIS 데이터 수집 및 오프라인 동기화 플랫폼 — 구현 데모</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
+<script src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
+<script src="https://unpkg.com/@phosphor-icons/web"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { width: 100%; min-height: 100vh; }
+  body { font-family: 'Pretendard', -apple-system, sans-serif; background: #0D1B2A; color: #E8F4F0; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes glowPulse {
+    0%, 100% { box-shadow: 0 0 12px rgba(0,201,167,0.3); }
+    50% { box-shadow: 0 0 24px rgba(0,201,167,0.6); }
+  }
+  @keyframes syncSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  @keyframes progressAnim {
+    from { width: 0; }
+    to { width: var(--w, 70%); }
+  }
+  @keyframes waveFloat {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+
+  .page-enter { animation: fadeIn 0.25s ease forwards; }
+  .slide-up { animation: slideUp 0.22s ease forwards; }
+
+  /* Top nav */
+  .topnav {
+    position: sticky; top: 0; width: 100%; z-index: 100;
+    background: rgba(13,27,42,0.96); backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(0,201,167,0.15);
+  }
+  .topnav-inner {
+    max-width: 1280px; margin: 0 auto; padding: 0 24px;
+    height: 58px; display: flex; align-items: center; justify-content: space-between;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-icon {
+    width: 34px; height: 34px; border-radius: 10px;
+    background: linear-gradient(135deg, #00C9A7, #0D88C8);
+    display: flex; align-items: center; justify-content: center;
+    animation: waveFloat 3s ease-in-out infinite;
+    box-shadow: 0 0 14px rgba(0,201,167,0.35);
+  }
+  .brand-name { font-size: 13.5px; font-weight: 700; color: #E8F4F0; }
+  .brand-sub { font-size: 9.5px; color: #7EAFC0; margin-top: 1px; }
+
+  .nav-tabs { display: flex; gap: 2px; }
+  .nav-tab {
+    padding: 8px 16px; border-radius: 10px; cursor: pointer;
+    font-size: 12.5px; font-weight: 500; color: #7EAFC0;
+    transition: background 0.15s, color 0.15s;
+    display: flex; align-items: center; gap: 7px;
+    border: 1px solid transparent;
+  }
+  .nav-tab:hover { background: rgba(0,201,167,0.08); color: #E8F4F0; }
+  .nav-tab.active {
+    background: rgba(0,201,167,0.12); color: #00C9A7; font-weight: 700;
+    border-color: rgba(0,201,167,0.25);
+  }
+
+  .topnav-actions { display: flex; align-items: center; gap: 8px; }
+  .net-pill {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 700; padding: 4px 10px; border-radius: 20px;
+    background: rgba(0,201,167,0.12); color: #00C9A7;
+    border: 1px solid rgba(0,201,167,0.3);
+  }
+  .net-dot { width: 6px; height: 6px; border-radius: 50%; background: #00C9A7; animation: glowPulse 2s infinite; }
+  .icon-btn-dark {
+    width: 32px; height: 32px; border-radius: 10px;
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: background 0.12s;
+  }
+  .icon-btn-dark:hover { background: rgba(0,201,167,0.15); }
+
+  /* Main layout */
+  .main-layout { width: 100%; display: flex; flex-direction: column; }
+  .hero-section {
+    background: linear-gradient(180deg, rgba(0,201,167,0.06) 0%, transparent 100%);
+    border-bottom: 1px solid rgba(0,201,167,0.1);
+    padding: 28px 28px 20px;
+  }
+  .content-section { padding: 24px 28px; }
+
+  /* Glass cards */
+  .glass-card {
+    background: rgba(22,37,53,0.9); backdrop-filter: blur(8px);
+    border: 1px solid rgba(0,201,167,0.15); border-radius: 12px;
+    overflow: hidden;
+  }
+  .glass-card:hover { border-color: rgba(0,201,167,0.3); }
+
+  /* KPI hero cards */
+  .hero-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+  .hero-card {
+    border-radius: 12px; padding: 18px 20px; position: relative; overflow: hidden;
+    cursor: pointer; transition: transform 0.15s;
+  }
+  .hero-card:hover { transform: translateY(-2px); }
+  .hero-card.teal { background: linear-gradient(135deg, rgba(0,201,167,0.2), rgba(0,201,167,0.08)); border: 1px solid rgba(0,201,167,0.3); }
+  .hero-card.blue { background: linear-gradient(135deg, rgba(13,136,200,0.2), rgba(13,136,200,0.08)); border: 1px solid rgba(13,136,200,0.3); }
+  .hero-card.orange { background: linear-gradient(135deg, rgba(255,107,53,0.2), rgba(255,107,53,0.08)); border: 1px solid rgba(255,107,53,0.3); }
+  .hero-card.purple { background: linear-gradient(135deg, rgba(130,80,230,0.2), rgba(130,80,230,0.08)); border: 1px solid rgba(130,80,230,0.3); }
+  .hero-label { font-size: 10px; font-weight: 600; color: #7EAFC0; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 8px; }
+  .hero-value { font-size: 30px; font-weight: 800; line-height: 1; color: #E8F4F0; }
+  .hero-sub { font-size: 10px; color: #7EAFC0; margin-top: 6px; }
+  .hero-glow {
+    position: absolute; right: -20px; top: -20px; width: 80px; height: 80px;
+    border-radius: 50%; opacity: 0.15;
+  }
+  .hero-card.teal .hero-glow { background: #00C9A7; }
+  .hero-card.blue .hero-glow { background: #0D88C8; }
+  .hero-card.orange .hero-glow { background: #FF6B35; }
+  .hero-card.purple .hero-glow { background: #8250E6; }
+
+  /* Card headers */
+  .card-header {
+    padding: 14px 18px; border-bottom: 1px solid rgba(0,201,167,0.1);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .card-title { font-size: 12.5px; font-weight: 700; color: #E8F4F0; }
+  .card-sub { font-size: 10px; color: #7EAFC0; margin-top: 2px; }
+  .card-body { padding: 16px 18px; }
+
+  /* Buttons */
+  .btn-teal {
+    padding: 7px 14px; border-radius: 10px; font-size: 11.5px; font-weight: 700;
+    background: linear-gradient(135deg, #00C9A7, #0DB88A); color: #0D1B2A;
+    border: none; cursor: pointer; transition: box-shadow 0.15s, transform 0.1s;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-teal:hover { box-shadow: 0 0 16px rgba(0,201,167,0.4); transform: translateY(-1px); }
+  .btn-ghost {
+    padding: 6px 13px; border-radius: 10px; font-size: 11px; font-weight: 600;
+    background: rgba(255,255,255,0.06); color: #E8F4F0;
+    border: 1px solid rgba(255,255,255,0.12); cursor: pointer;
+    transition: background 0.12s;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .btn-ghost:hover { background: rgba(255,255,255,0.1); }
+  .btn-orange {
+    padding: 7px 14px; border-radius: 10px; font-size: 11.5px; font-weight: 700;
+    background: linear-gradient(135deg, #FF6B35, #E55A28); color: #fff;
+    border: none; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: box-shadow 0.15s;
+  }
+  .btn-orange:hover { box-shadow: 0 0 14px rgba(255,107,53,0.4); }
+
+  /* Input */
+  .dark-input {
+    width: 100%; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px; padding: 9px 13px; color: #E8F4F0; font-size: 12px;
+    font-family: inherit; transition: border-color 0.12s;
+  }
+  .dark-input:focus { outline: none; border-color: rgba(0,201,167,0.5); }
+  .dark-input::placeholder { color: #7EAFC0; }
+  select.dark-input { cursor: pointer; }
+  .dark-label { font-size: 10.5px; font-weight: 600; color: #7EAFC0; margin-bottom: 5px; }
+  .form-row { margin-bottom: 14px; }
+
+  /* Status badges */
+  .badge-dk {
+    display: inline-flex; align-items: center; padding: 2px 8px;
+    border-radius: 20px; font-size: 9.5px; font-weight: 700; border: 1px solid;
+  }
+  .bd-success { background: rgba(0,201,167,0.15); color: #00C9A7; border-color: rgba(0,201,167,0.3); }
+  .bd-warn { background: rgba(255,200,0,0.12); color: #FFD700; border-color: rgba(255,200,0,0.3); }
+  .bd-error { background: rgba(255,107,53,0.15); color: #FF6B35; border-color: rgba(255,107,53,0.3); }
+  .bd-info { background: rgba(13,136,200,0.15); color: #5DC8F0; border-color: rgba(13,136,200,0.3); }
+  .bd-neutral { background: rgba(255,255,255,0.06); color: #7EAFC0; border-color: rgba(255,255,255,0.1); }
+  .bd-sync { background: rgba(130,80,230,0.15); color: #B890FF; border-color: rgba(130,80,230,0.3); }
+
+  /* Sync item */
+  .sync-item {
+    padding: 12px 18px; border-bottom: 1px solid rgba(0,201,167,0.08);
+    display: flex; align-items: center; gap: 12px; cursor: pointer;
+    transition: background 0.1s;
+  }
+  .sync-item:hover { background: rgba(0,201,167,0.05); }
+  .sync-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  /* Progress dark */
+  .progress-dark { height: 4px; background: rgba(255,255,255,0.08); border-radius: 4px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 4px; animation: progressAnim 1s ease forwards; }
+  .pf-teal { background: linear-gradient(90deg, #00C9A7, #1BFFE4); }
+  .pf-blue { background: linear-gradient(90deg, #0D88C8, #5DC8F0); }
+  .pf-orange { background: #FF6B35; }
+
+  /* Photo upload */
+  .photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .photo-slot {
+    aspect-ratio: 1; border-radius: 10px; overflow: hidden;
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: border-color 0.12s;
+  }
+  .photo-slot:hover { border-color: rgba(0,201,167,0.4); }
+  .photo-slot.filled { position: relative; }
+  .photo-filled-bg {
+    width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.7);
+  }
+
+  /* GPS pin display */
+  .gps-display {
+    background: rgba(0,201,167,0.08); border: 1px solid rgba(0,201,167,0.2);
+    border-radius: 10px; padding: 10px 14px; margin-top: 8px;
+    display: flex; align-items: center; gap: 10px;
+  }
+
+  /* Timeline dark */
+  .timeline-dk { list-style: none; }
+  .tl-item {
+    display: flex; gap: 12px; padding-bottom: 16px; position: relative; cursor: pointer;
+  }
+  .tl-item:hover .tl-content { background: rgba(255,255,255,0.03); border-radius: 10px; }
+  .tl-connector {
+    position: absolute; left: 14px; top: 28px; bottom: 0;
+    width: 1px; background: rgba(0,201,167,0.15);
+  }
+  .tl-dot {
+    width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; border: 2px solid;
+    margin-top: 2px;
+  }
+  .tl-content { flex: 1; padding: 6px 0; }
+  .tl-title { font-size: 12px; font-weight: 600; color: #E8F4F0; }
+  .tl-meta { font-size: 10.5px; color: #7EAFC0; margin-top: 3px; }
+  .tl-detail { font-size: 11px; color: #B0D0DC; margin-top: 4px; }
+
+  /* Queue monitor cards */
+  .queue-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+  .queue-card {
+    border-radius: 12px; padding: 14px 16px; text-align: center;
+  }
+  .queue-num { font-size: 26px; font-weight: 800; line-height: 1; }
+  .queue-label { font-size: 10px; color: #7EAFC0; margin-top: 4px; }
+
+  /* Audio input */
+  .audio-strip {
+    background: rgba(0,201,167,0.08); border: 1px solid rgba(0,201,167,0.2);
+    border-radius: 10px; padding: 12px 16px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .audio-wave { display: flex; align-items: center; gap: 2px; }
+  .audio-bar {
+    width: 3px; border-radius: 2px; background: #00C9A7;
+    animation: waveFloat 0.6s ease-in-out infinite;
+  }
+
+  /* Modal dark */
+  .modal-overlay-dk {
+    position: fixed; inset: 0; background: rgba(5,10,20,0.7);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 200; animation: fadeIn 0.15s ease;
+  }
+  .modal-dk {
+    background: #162535; border: 1px solid rgba(0,201,167,0.2);
+    border-radius: 16px; width: 520px; max-width: 92vw; max-height: 86vh;
+    overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    animation: slideUp 0.2s ease;
+  }
+  .modal-dk-header {
+    padding: 18px 22px; border-bottom: 1px solid rgba(0,201,167,0.12);
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; background: #162535; z-index: 1;
+  }
+  .modal-dk-title { font-size: 14px; font-weight: 700; color: #E8F4F0; }
+  .modal-dk-close {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+  }
+  .modal-dk-body { padding: 22px; }
+  .modal-dk-footer {
+    padding: 16px 22px; border-top: 1px solid rgba(0,201,167,0.12);
+    display: flex; justify-content: flex-end; gap: 10px;
+  }
+
+  /* Toast dark */
+  .toast-dk {
+    position: fixed; bottom: 22px; right: 22px;
+    background: #162535; border: 1px solid rgba(0,201,167,0.3);
+    border-radius: 12px; padding: 12px 18px;
+    color: #E8F4F0; font-size: 12px; font-weight: 600;
+    z-index: 9999; display: flex; align-items: center; gap: 10px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.4), 0 0 20px rgba(0,201,167,0.1);
+    animation: slideUp 0.2s ease;
+  }
+
+  /* Stat rows */
+  .stat-row-dk {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 11.5px;
+  }
+  .stat-label-dk { color: #7EAFC0; }
+  .stat-value-dk { font-weight: 600; color: #E8F4F0; }
+
+  /* Map mini */
+  .mini-map {
+    height: 140px; border-radius: 10px; overflow: hidden;
+    background: linear-gradient(180deg, #0A1A2C 0%, #0D2438 100%);
+    position: relative; cursor: pointer;
+    border: 1px solid rgba(0,201,167,0.2);
+  }
+  .map-grid-line {
+    position: absolute; background: rgba(0,201,167,0.08);
+  }
+  .map-pin {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -60%);
+    animation: waveFloat 2s ease-in-out infinite;
+  }
+
+  /* Hash verify */
+  .hash-chip {
+    font-family: monospace; font-size: 10px; padding: 3px 8px;
+    border-radius: 6px; background: rgba(255,255,255,0.06);
+    color: #7EAFC0; letter-spacing: 0.06em;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 180px;
+  }
+  .hash-chip.verified { background: rgba(0,201,167,0.12); color: #00C9A7; }
+  .hash-chip.mismatch { background: rgba(255,107,53,0.12); color: #FF6B35; }
+
+  .divider-dk { height: 1px; background: rgba(255,255,255,0.06); margin: 14px 0; }
+
+  .two-col-dk { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  .category-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 10px; border-radius: 20px; font-size: 10.5px; font-weight: 600;
+    cursor: pointer; transition: background 0.12s; border: 1px solid;
+    background: rgba(255,255,255,0.04); color: #7EAFC0; border-color: rgba(255,255,255,0.1);
+  }
+  .category-chip.selected { background: rgba(0,201,167,0.15); color: #00C9A7; border-color: rgba(0,201,167,0.35); }
+
+  /* Sync log row */
+  .log-row {
+    padding: 10px 18px; border-bottom: 1px solid rgba(255,255,255,0.05);
+    display: flex; align-items: center; gap: 10px; cursor: pointer;
+    transition: background 0.1s; font-size: 11.5px;
+  }
+  .log-row:hover { background: rgba(0,201,167,0.04); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } = Recharts;
+
+// SVG icon helper using Phosphor (rendered via CSS class)
+const Ph = ({ icon, size = 16, color = 'currentColor', weight = 'regular' }) => {
+  const classMap = { regular: `ph ph-${icon}`, bold: `ph-bold ph-${icon}`, fill: `ph-fill ph-${icon}` };
+  return <i className={classMap[weight] || `ph ph-${icon}`} style={{fontSize:size+'px',color,lineHeight:1}} />;
+};
+
+// Toast
+let _setToast = null;
+const showT = (msg) => { if (_setToast) _setToast(msg); };
+const Toast = () => {
+  const [msg, setMsg] = useState('');
+  _setToast = setMsg;
+  useEffect(() => { if (msg) { const t = setTimeout(() => setMsg(''), 2800); return () => clearTimeout(t); } }, [msg]);
+  if (!msg) return null;
+  return <div className="toast-dk"><Ph icon="check-circle" size={15} color="#00C9A7" weight="fill" />{msg}</div>;
+};
+
+// Mock data
+const QUEUE_ITEMS = [
+  { id: 'Q-4821', type: '현장수집', facility: 'F-0821 광화문교차로_북단', size: '8.2MB', status: 'completed', hash: 'a3f8bc12d4e9...', verified: true, time: '09:42:18', tries: 1 },
+  { id: 'Q-4822', type: '현장수집', facility: 'F-0822 광화문교차로_남단', size: '14.7MB', status: 'active', hash: '7c1e9a03b5d2...', verified: null, time: '10:01:05', tries: 1 },
+  { id: 'Q-4823', type: '사진데이터', facility: 'F-0823 세종대로_구간', size: '22.1MB', status: 'failed', hash: 'd9f2c78a14bb...', verified: false, time: '09:55:30', tries: 2 },
+  { id: 'Q-4820', type: '현장수집', facility: 'F-0819 청계천 배수로', size: '5.6MB', status: 'completed', hash: 'e4a1f66c8d3e...', verified: true, time: '08:30:44', tries: 1 },
+  { id: 'Q-4819', type: '현장수집', facility: 'F-0818 서울역 육교', size: '11.3MB', status: 'completed', hash: 'b7d3e5a8c21f...', verified: true, time: '08:15:22', tries: 1 },
+];
+const HISTORY_EVENTS = [
+  { id: 'E001', type: '점검', title: '정기 노면 상태 점검', by: '이재원', date: '2026-05-28', detail: '주행 표면 균열 경미. 다음 분기 보수 예정.', color: '#00C9A7', dotBg: 'rgba(0,201,167,0.2)', dotBorder: '#00C9A7' },
+  { id: 'E002', type: '민원', title: '포트홀 민원 접수', by: '시스템(외부)', date: '2026-05-20', detail: '민원번호 M-8842. 긴급 보수 필요 판정.', color: '#FF6B35', dotBg: 'rgba(255,107,53,0.2)', dotBorder: '#FF6B35' },
+  { id: 'E003', type: '보수', title: '포트홀 긴급 보수 완료', by: '박도형(현장)', date: '2026-05-22', detail: '아스팔트 패칭 시공 완료. 사진 3건 첨부.', color: '#5DC8F0', dotBg: 'rgba(93,200,240,0.2)', dotBorder: '#5DC8F0' },
+  { id: 'E004', type: '점검', title: '분기별 균열 현황 측정', by: '김수연', date: '2026-04-15', detail: '균열폭 2.1mm 측정. 보수 기준값 이하.', color: '#00C9A7', dotBg: 'rgba(0,201,167,0.2)', dotBorder: '#00C9A7' },
+  { id: 'E005', type: '속성변경', title: '관리 구역 재분류', by: '박인호(관리자)', date: '2026-03-10', detail: '구역코드 GW-N-03 → GW-N-04로 재분류.', color: '#B890FF', dotBg: 'rgba(184,144,255,0.2)', dotBorder: '#B890FF' },
+];
+const AREA_DATA = [
+  { t: '08:00', q: 0 }, { t: '09:00', q: 2 }, { t: '10:00', q: 5 },
+  { t: '11:00', q: 3 }, { t: '12:00', q: 1 }, { t: '13:00', q: 4 }, { t: '14:00', q: 2 },
+];
+const PHOTO_COLORS = ['#1E4D7A','#2C6B44','#7A3E1A','#4A2080','#1A5C5C','#7A1A4A'];
+
+// Mini map SVG
+const MiniMap = () => (
+  <div className="mini-map">
+    {[20,40,60,80,100].map(y => <div key={y} className="map-grid-line" style={{top:y+'%',left:0,right:0,height:'1px'}} />)}
+    {[20,40,60,80].map(x => <div key={x} className="map-grid-line" style={{left:x+'%',top:0,bottom:0,width:'1px'}} />)}
+    <div style={{position:'absolute',top:'30%',left:'20%',width:40,height:3,background:'rgba(0,201,167,0.6)',borderRadius:2}} />
+    <div style={{position:'absolute',top:'45%',left:'35%',width:70,height:3,background:'rgba(0,201,167,0.4)',borderRadius:2}} />
+    <div style={{position:'absolute',top:'55%',left:'25%',width:50,height:3,background:'rgba(93,200,240,0.5)',borderRadius:2}} />
+    <div className="map-pin">
+      <svg width="24" height="32" viewBox="0 0 24 32" fill="none">
+        <path d="M12 0C5.37 0 0 5.37 0 12c0 9 12 20 12 20s12-11 12-20C24 5.37 18.63 0 12 0z" fill="#00C9A7"/>
+        <circle cx="12" cy="12" r="5" fill="#0D1B2A"/>
+        <circle cx="12" cy="12" r="2.5" fill="#00C9A7"/>
+      </svg>
+    </div>
+    <div style={{position:'absolute',bottom:8,left:12,fontSize:9,color:'#7EAFC0',fontFamily:'monospace'}}>
+      37.5796°N, 126.9770°E · EPSG:5186
+    </div>
+  </div>
+);
+
+// Screens
+const MainDashboard = () => {
+  return (
+    <div className="page-enter">
+      <div className="hero-section">
+        <div style={{marginBottom:6}}>
+          <div style={{fontSize:10,color:'#7EAFC0',letterSpacing:'0.1em',fontWeight:700,textTransform:'uppercase'}}>현장 GIS 데이터 수집 및 오프라인 동기화 플랫폼</div>
+          <div style={{fontSize:18,fontWeight:800,color:'#E8F4F0',marginTop:4}}>현장 데이터 수집 모바일 대시보드</div>
+        </div>
+        <div className="hero-grid">
+          {[
+            { label:'오늘 수집 건수', value:'18', sub:'목표 20건 · 90%', color:'teal', icon:'map-trifold' },
+            { label:'오프라인 큐', value:'3', sub:'대기 2건 · 진행중 1건', color:'orange', icon:'cloud-slash' },
+            { label:'동기화 완료', value:'42', sub:'오늘 최근 동기화 10분 전', color:'blue', icon:'arrows-clockwise' },
+            { label:'무결성 검증', value:'41', sub:'1건 불일치 — 재전송 중', color:'purple', icon:'shield-check' },
+          ].map((k, i) => (
+            <div key={i} className={`hero-card ${k.color}`} style={{animationDelay:i*0.08+'s'}} onClick={()=>showT(k.label+' 상세 조회')}>
+              <div className="hero-glow" />
+              <div className="hero-label">{k.label}</div>
+              <div className="hero-value">{k.value}</div>
+              <div className="hero-sub">{k.sub}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="content-section">
+        <div className="two-col-dk">
+          <div className="glass-card">
+            <div className="card-header">
+              <div><div className="card-title">현재 위치 (GPS)</div><div className="card-sub">V-World WMTS + OpenLayers</div></div>
+              <div className="net-pill"><div className="net-dot"/><span>GPS 활성</span></div>
+            </div>
+            <div style={{padding:'14px 18px'}}>
+              <MiniMap />
+              <div className="gps-display" style={{marginTop:12}}>
+                <Ph icon="map-pin-simple" size={18} color="#00C9A7" weight="fill" />
+                <div>
+                  <div style={{fontSize:11.5,fontWeight:700,color:'#E8F4F0'}}>광화문교차로 북단 구역</div>
+                  <div style={{fontSize:10.5,color:'#7EAFC0',fontFamily:'monospace'}}>37.5796°N · 126.9770°E</div>
+                </div>
+                <div style={{marginLeft:'auto',fontSize:10,color:'#00C9A7',fontWeight:700}}>정확도 ±3m</div>
+              </div>
+            </div>
+          </div>
+          <div className="glass-card">
+            <div className="card-header">
+              <div><div className="card-title">시간대별 수집 현황</div><div className="card-sub">오늘 08:00 ~ 현재</div></div>
+            </div>
+            <div style={{padding:'14px 18px'}}>
+              <div style={{position:'relative',height:150}}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={AREA_DATA}>
+                    <defs>
+                      <linearGradient id="tealGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#00C9A7" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#00C9A7" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="2 4" stroke="rgba(255,255,255,0.05)" />
+                    <XAxis dataKey="t" tick={{fontSize:9.5,fill:'#7EAFC0'}} axisLine={false} tickLine={false} />
+                    <YAxis tick={{fontSize:9.5,fill:'#7EAFC0'}} axisLine={false} tickLine={false} />
+                    <Tooltip contentStyle={{background:'#162535',border:'1px solid rgba(0,201,167,0.3)',borderRadius:8,fontSize:11,color:'#E8F4F0'}} />
+                    <Area type="monotone" dataKey="q" name="수집 건수" stroke="#00C9A7" strokeWidth={2} fill="url(#tealGrad)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+              <div style={{marginTop:12}}>
+                {[
+                  { label:'오프라인 큐 대기', pct:15, cls:'pf-orange', w:'15%' },
+                  { label:'동기화 완료', pct:78, cls:'pf-teal', w:'78%' },
+                  { label:'무결성 검증 완료', pct:76, cls:'pf-blue', w:'76%' },
+                ].map(r => (
+                  <div key={r.label} style={{marginBottom:8}}>
+                    <div style={{display:'flex',justifyContent:'space-between',fontSize:10.5,color:'#7EAFC0',marginBottom:3}}>
+                      <span>{r.label}</span><span style={{color:'#E8F4F0',fontWeight:600}}>{r.pct}%</span>
+                    </div>
+                    <div className="progress-dark">
+                      <div className={`progress-fill ${r.cls}`} style={{'--w':r.w,width:r.w}} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="glass-card" style={{marginTop:16}}>
+          <div className="card-header">
+            <div><div className="card-title">오프라인 큐 현황 (최근)</div></div>
+            <button className="btn-ghost" onClick={()=>showT('동기화 모니터 탭으로 이동합니다')}>
+              <Ph icon="arrows-clockwise" size={12} /> 전체 보기
+            </button>
+          </div>
+          {QUEUE_ITEMS.slice(0,3).map(q => (
+            <div key={q.id} className="log-row" onClick={()=>showT(`${q.id} 동기화 상세 조회`)}>
+              <div className={`sync-status-dot`} style={{background: q.status==='completed'?'#00C9A7': q.status==='active'?'#5DC8F0':'#FF6B35'}} />
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600,fontSize:12}}>{q.facility}</div>
+                <div style={{fontSize:10,color:'#7EAFC0',marginTop:1}}>{q.id} · {q.size} · {q.time}</div>
+              </div>
+              <span className={`badge-dk ${q.status==='completed'?'bd-success':q.status==='active'?'bd-info':'bd-error'}`}>
+                {q.status==='completed'?'완료':q.status==='active'?'전송중':'실패'}
+              </span>
+              {q.verified !== null && (
+                <span className={`badge-dk ${q.verified?'bd-success':'bd-error'}`} style={{marginLeft:4}}>
+                  {q.verified ? '검증됨' : '불일치'}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const DataCollectScreen = ({ onSubmit }) => {
+  const [photos, setPhotos] = useState([]);
+  const [recording, setRecording] = useState(false);
+  const [recText, setRecText] = useState('');
+  const [category, setCategory] = useState('');
+  const [priority, setPriority] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const CATEGORIES = ['도로 파손','하수관로 이상','교량 이상','시설 민원','기타'];
+  const addPhoto = () => {
+    if (photos.length >= 6) { showT('최대 6장까지 첨부 가능합니다'); return; }
+    const names = ['균열_현장사진','포트홀_전경','시설물_상태','보수전_현황','점검_측면','기록용_GPS'];
+    const gpsData = ['37.5796N, 126.9770E','37.5769N, 126.9767E','37.5746N, 126.9759E'];
+    setPhotos(p => [...p, {
+      id: Date.now(),
+      name: names[photos.length % names.length] + '.jpg',
+      gps: gpsData[photos.length % gpsData.length],
+      color: PHOTO_COLORS[photos.length % PHOTO_COLORS.length],
+      size: (Math.random()*3+1).toFixed(1)+'MB'
+    }]);
+    showT('EXIF GPS 좌표가 자동으로 추출되었습니다');
+  };
+  const toggleRecord = () => {
+    if (recording) {
+      setRecording(false);
+      setRecText('교차로 북단 구역 아스팔트 표면에 약 2cm 폭의 균열이 진행 중입니다. 좌측 방향으로 3m 구간 관찰 필요.');
+      showT('음성이 텍스트로 변환되었습니다');
+    } else { setRecording(true); }
+  };
+  const submitForm = () => {
+    if (photos.length === 0) { showT('사진을 1장 이상 첨부해 주세요'); return; }
+    if (!category) { showT('카테고리를 선택해 주세요'); return; }
+    setUploading(true);
+    setTimeout(() => { setUploading(false); showT('데이터가 오프라인 큐에 저장되었습니다'); onSubmit && onSubmit(); }, 1400);
+  };
+  return (
+    <div className="page-enter" style={{padding:'24px 28px'}}>
+      <div className="card-title" style={{marginBottom:4,fontSize:15}}>사진 다중 첨부 및 EXIF GPS 자동 추출 수집 폼</div>
+      <div style={{fontSize:11,color:'#7EAFC0',marginBottom:18}}>현장 사진 첨부 시 EXIF GPS 좌표가 자동 추출됩니다 · 오프라인 상태에서도 IndexedDB에 저장됩니다</div>
+      <div className="two-col-dk">
+        <div>
+          <div className="glass-card" style={{marginBottom:14}}>
+            <div className="card-header"><div className="card-title">현장 사진 ({photos.length}/6)</div><button className="btn-teal" onClick={addPhoto}><Ph icon="camera" size={13} weight="bold" />사진 추가</button></div>
+            <div style={{padding:'14px 18px'}}>
+              <div className="photo-grid">
+                {photos.map(p => (
+                  <div key={p.id} className="photo-slot filled">
+                    <div className="photo-filled-bg" style={{background: `linear-gradient(135deg, ${p.color}cc, ${p.color}44)`}}>
+                      <div style={{textAlign:'center'}}>
+                        <Ph icon="image" size={20} color="rgba(255,255,255,0.7)" />
+                        <div style={{fontSize:8.5,marginTop:3,color:'rgba(255,255,255,0.7)',maxWidth:60,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.name}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {photos.length < 6 && (
+                  <div className="photo-slot" onClick={addPhoto}>
+                    <div style={{textAlign:'center'}}>
+                      <Ph icon="plus" size={20} color="#7EAFC0" />
+                      <div style={{fontSize:9,color:'#7EAFC0',marginTop:3}}>추가</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {photos.length > 0 && (
+                <div style={{marginTop:12}}>
+                  {photos.map(p => (
+                    <div key={p.id} className="gps-display" style={{marginBottom:6}}>
+                      <Ph icon="map-pin" size={14} color="#00C9A7" weight="fill" />
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:10.5,fontWeight:600,color:'#E8F4F0',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.name}</div>
+                        <div style={{fontSize:9.5,color:'#7EAFC0',fontFamily:'monospace'}}>{p.gps} · {p.size}</div>
+                      </div>
+                      <button className="btn-ghost" style={{padding:'2px 7px',fontSize:9.5}} onClick={()=>{setPhotos(ps=>ps.filter(x=>x.id!==p.id));showT('사진이 삭제되었습니다')}}>삭제</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="glass-card">
+            <div className="card-header"><div className="card-title">음성 메모 (STT)</div></div>
+            <div style={{padding:'14px 18px'}}>
+              <div className="audio-strip" style={{marginBottom:12,cursor:'pointer'}} onClick={toggleRecord}>
+                <div style={{width:34,height:34,borderRadius:10,background:recording?'rgba(255,107,53,0.2)':'rgba(0,201,167,0.12)',border:`1px solid ${recording?'rgba(255,107,53,0.4)':'rgba(0,201,167,0.3)'}`,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  <Ph icon={recording?"stop-circle":"microphone"} size={18} color={recording?"#FF6B35":"#00C9A7"} weight="fill" />
+                </div>
+                {recording ? (
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:11,fontWeight:700,color:'#FF6B35'}}>녹음 중... (탭하여 중지)</div>
+                    <div className="audio-wave" style={{marginTop:5}}>
+                      {[12,18,10,22,14,20,8,16].map((h,i) => (
+                        <div key={i} className="audio-bar" style={{height:h+'px',animationDelay:i*0.08+'s'}} />
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{fontSize:11.5,color:'#7EAFC0'}}>{recText || '탭하여 음성 메모 시작'}</div>
+                )}
+              </div>
+              {recText && !recording && (
+                <textarea className="dark-input" rows={3} value={recText} onChange={e=>setRecText(e.target.value)} style={{resize:'vertical',marginTop:0}} placeholder="음성 메모 또는 직접 입력" />
+              )}
+            </div>
+          </div>
+        </div>
+        <div>
+          <div className="glass-card" style={{marginBottom:14}}>
+            <div className="card-header"><div className="card-title">수집 정보 입력</div></div>
+            <div style={{padding:'14px 18px'}}>
+              <div className="form-row">
+                <div className="dark-label">시설물 ID</div>
+                <input className="dark-input" defaultValue="F-0821" placeholder="F-XXXX" />
+              </div>
+              <div className="form-row">
+                <div className="dark-label">카테고리 *</div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:2}}>
+                  {CATEGORIES.map(c => (
+                    <div key={c} className={`category-chip ${category===c?'selected':''}`} onClick={()=>setCategory(c)}>
+                      {c}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="dark-label">긴급도</div>
+                <select className="dark-input" value={priority} onChange={e=>setPriority(e.target.value)}>
+                  <option value="">선택하세요</option>
+                  <option>낮음 — 정기 보수 대상</option>
+                  <option>보통 — 다음 순찰 시 확인</option>
+                  <option>높음 — 48시간 내 조치</option>
+                  <option>긴급 — 즉시 대응 필요</option>
+                </select>
+              </div>
+              <div className="form-row">
+                <div className="dark-label">메모</div>
+                <textarea className="dark-input" rows={3} placeholder="추가 메모 입력" style={{resize:'vertical'}} />
+              </div>
+            </div>
+          </div>
+          <div className="glass-card">
+            <div className="card-header"><div className="card-title">현재 GPS 위치</div></div>
+            <div style={{padding:'14px 18px'}}>
+              <MiniMap />
+              <div style={{marginTop:10,fontSize:10.5,color:'#7EAFC0'}}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                  <span>좌표 (WGS84)</span><span style={{color:'#E8F4F0',fontFamily:'monospace',fontSize:10}}>37.5796°N, 126.9770°E</span>
+                </div>
+                <div style={{display:'flex',justifyContent:'space-between'}}>
+                  <span>변환 (EPSG:5186)</span><span style={{color:'#00C9A7',fontFamily:'monospace',fontSize:10}}>201,432.82, 453,891.45</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <button className="btn-teal" style={{width:'100%',marginTop:14,justifyContent:'center',padding:'11px',fontSize:13}}
+            onClick={submitForm} disabled={uploading}>
+            {uploading ? (
+              <><Ph icon="arrows-clockwise" size={14} /><span style={{animation:'syncSpin 1s linear infinite',display:'inline-block'}}>저장 중...</span></>
+            ) : (
+              <><Ph icon="cloud-arrow-up" size={14} weight="bold" />오프라인 큐에 저장 및 전송</>
+            )}
+          </button>
+          <div style={{fontSize:9.5,color:'#7EAFC0',textAlign:'center',marginTop:8}}>
+            오프라인 상태에서도 IndexedDB에 안전하게 저장됩니다
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const HistoryBookScreen = ({ onGenPDF }) => {
+  const [selectedFacility, setSelectedFacility] = useState('F-0821');
+  const [filterType, setFilterType] = useState('전체');
+  const [dateFrom, setDateFrom] = useState('2026-01-01');
+  const [dateTo, setDateTo] = useState('2026-05-28');
+  const filtered = HISTORY_EVENTS.filter(e => filterType === '전체' || e.type === filterType);
+  return (
+    <div className="page-enter" style={{padding:'24px 28px'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:18}}>
+        <div>
+          <div className="card-title" style={{fontSize:15}}>시설물 디지털 히스토리 북</div>
+          <div style={{fontSize:11,color:'#7EAFC0',marginTop:3}}>점검·민원·보수 기록을 시계열로 조회하고 출장복명서를 자동 생성합니다</div>
+        </div>
+        <button className="btn-teal" onClick={onGenPDF}><Ph icon="file-pdf" size={14} weight="bold" />출장복명서 생성</button>
+      </div>
+      <div className="glass-card" style={{marginBottom:14}}>
+        <div className="card-header"><div className="card-title">시설물 검색</div></div>
+        <div style={{padding:'14px 18px',display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
+          <div style={{flex:'0 0 180px'}}>
+            <div className="dark-label">시설물 ID</div>
+            <input className="dark-input" value={selectedFacility} onChange={e=>setSelectedFacility(e.target.value)} placeholder="F-XXXX" />
+          </div>
+          <div style={{flex:'0 0 160px'}}>
+            <div className="dark-label">이벤트 유형</div>
+            <select className="dark-input" value={filterType} onChange={e=>setFilterType(e.target.value)}>
+              <option>전체</option>
+              {['점검','민원','보수','속성변경'].map(t=><option key={t}>{t}</option>)}
+            </select>
+          </div>
+          <div style={{flex:'0 0 130px'}}>
+            <div className="dark-label">시작일</div>
+            <input type="date" className="dark-input" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} />
+          </div>
+          <div style={{flex:'0 0 130px'}}>
+            <div className="dark-label">종료일</div>
+            <input type="date" className="dark-input" value={dateTo} onChange={e=>setDateTo(e.target.value)} />
+          </div>
+          <button className="btn-teal" onClick={()=>showT('시설물 이력 로드 완료')}><Ph icon="magnifying-glass" size={13} weight="bold" />조회</button>
+        </div>
+      </div>
+      <div className="two-col-dk">
+        <div className="glass-card">
+          <div className="card-header">
+            <div><div className="card-title">{selectedFacility} 이력 타임라인</div><div className="card-sub">{filtered.length}건 · {dateFrom} ~ {dateTo}</div></div>
+          </div>
+          <div style={{padding:'16px 20px'}}>
+            <ul className="timeline-dk">
+              {filtered.map((e, i) => (
+                <li key={e.id} className="tl-item" onClick={()=>showT(`${e.date} '${e.type}' 스냅샷 조회`)}>
+                  {i < filtered.length-1 && <div className="tl-connector"/>}
+                  <div className="tl-dot" style={{background:e.dotBg,borderColor:e.dotBorder}}>
+                    <Ph icon={e.type==='점검'?'magnifying-glass':e.type==='민원'?'chat-circle-warning':e.type==='보수'?'wrench':e.type==='속성변경'?'pencil':'circle'} size={12} color={e.dotBorder} />
+                  </div>
+                  <div className="tl-content">
+                    <div style={{display:'flex',alignItems:'center',gap:8}}>
+                      <span className="tl-title">{e.title}</span>
+                      <span className="badge-dk bd-neutral" style={{fontSize:9}}>{e.type}</span>
+                    </div>
+                    <div className="tl-meta">{e.by} · {e.date}</div>
+                    <div className="tl-detail">{e.detail}</div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <button className="btn-ghost" style={{marginTop:4,fontSize:10.5}} onClick={()=>showT('이전 이력 로드 중...')}>
+              <Ph icon="caret-down" size={12} /> 이전 이력 더 보기
+            </button>
+          </div>
+        </div>
+        <div>
+          <div className="glass-card" style={{marginBottom:14}}>
+            <div className="card-header"><div className="card-title">시설물 현황 요약</div></div>
+            <div style={{padding:'14px 18px'}}>
+              {[
+                ['시설물 ID', selectedFacility],
+                ['유형', '도로시설물'],
+                ['관리 구역', 'GW-N-04'],
+                ['최근 점검', '2026-05-28'],
+                ['이력 건수', filtered.length+'건 (전체 '+HISTORY_EVENTS.length+'건)'],
+                ['현재 상태', '정상'],
+              ].map(([k,v]) => (
+                <div key={k} className="stat-row-dk"><span className="stat-label-dk">{k}</span><span className="stat-value-dk">{v}</span></div>
+              ))}
+            </div>
+          </div>
+          <div className="glass-card">
+            <div className="card-header"><div className="card-title">출장복명서 생성</div></div>
+            <div style={{padding:'14px 18px'}}>
+              <div className="form-row">
+                <div className="dark-label">보고 기간</div>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <input type="date" className="dark-input" defaultValue="2026-05-01" style={{flex:1}} />
+                  <span style={{color:'#7EAFC0',fontSize:11}}>~</span>
+                  <input type="date" className="dark-input" defaultValue="2026-05-28" style={{flex:1}} />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="dark-label">담당자</div>
+                <input className="dark-input" defaultValue="이재원" />
+              </div>
+              <div className="form-row">
+                <div className="dark-label">포함 시설물</div>
+                <input className="dark-input" defaultValue={selectedFacility + ', F-0822, F-0823'} />
+              </div>
+              <button className="btn-teal" style={{width:'100%',justifyContent:'center',padding:'10px'}} onClick={onGenPDF}>
+                <Ph icon="file-pdf" size={14} weight="bold" />출장복명서 PDF 생성
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const SyncMonitorScreen = ({ onItemClick }) => {
+  const total = QUEUE_ITEMS.length;
+  const completed = QUEUE_ITEMS.filter(q=>q.status==='completed').length;
+  const active = QUEUE_ITEMS.filter(q=>q.status==='active').length;
+  const failed = QUEUE_ITEMS.filter(q=>q.status==='failed').length;
+  const waiting = 0;
+  return (
+    <div className="page-enter" style={{padding:'24px 28px'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:18}}>
+        <div>
+          <div className="card-title" style={{fontSize:15}}>오프라인 큐 동기화 및 망연계 현황 모니터</div>
+          <div style={{fontSize:11,color:'#7EAFC0',marginTop:3}}>Redis + Bull Queue 기반 단방향 전송 파이프라인 · SHA-256 무결성 검증</div>
+        </div>
+        <button className="btn-ghost" onClick={()=>showT('큐 현황이 갱신되었습니다')}><Ph icon="arrows-clockwise" size={13} />새로고침</button>
+      </div>
+      <div className="queue-cards">
+        {[
+          { label:'대기', value:waiting, color:'rgba(255,200,0,0.15)', border:'rgba(255,200,0,0.3)', text:'#FFD700' },
+          { label:'전송중', value:active, color:'rgba(93,200,240,0.15)', border:'rgba(93,200,240,0.3)', text:'#5DC8F0' },
+          { label:'완료', value:completed, color:'rgba(0,201,167,0.15)', border:'rgba(0,201,167,0.3)', text:'#00C9A7' },
+          { label:'실패', value:failed, color:'rgba(255,107,53,0.15)', border:'rgba(255,107,53,0.3)', text:'#FF6B35' },
+        ].map(c => (
+          <div key={c.label} className="queue-card" style={{background:c.color,border:`1px solid ${c.border}`,cursor:'pointer'}} onClick={()=>showT(c.label+' 항목 필터링')}>
+            <div className="queue-num" style={{color:c.text}}>{c.value}</div>
+            <div className="queue-label">{c.label}</div>
+          </div>
+        ))}
+      </div>
+      <div className="glass-card" style={{marginBottom:16}}>
+        <div className="card-header">
+          <div><div className="card-title">큐 항목 목록</div><div className="card-sub">총 {total}건 · 30초마다 자동 갱신</div></div>
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn-ghost" onClick={()=>showT('실패 항목 전체 재전송 요청')}>
+              <Ph icon="repeat" size={12} />실패 재전송
+            </button>
+          </div>
+        </div>
+        <div>
+          <div style={{padding:'8px 18px',background:'rgba(255,255,255,0.03)',display:'flex',gap:10,fontSize:10,color:'#7EAFC0',borderBottom:'1px solid rgba(255,255,255,0.06)'}}>
+            <span style={{width:90}}>큐 ID</span>
+            <span style={{flex:1}}>시설물</span>
+            <span style={{width:60}}>크기</span>
+            <span style={{width:90}}>SHA-256</span>
+            <span style={{width:60}}>무결성</span>
+            <span style={{width:60}}>상태</span>
+            <span style={{width:55}}>시도</span>
+          </div>
+          {QUEUE_ITEMS.map(q => (
+            <div key={q.id} className="log-row" onClick={()=>onItemClick(q)}>
+              <span style={{width:90,fontFamily:'monospace',fontSize:10.5,color:'#7EAFC0'}}>{q.id}</span>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600,fontSize:11.5}}>{q.facility}</div>
+                <div style={{fontSize:9.5,color:'#7EAFC0'}}>{q.time}</div>
+              </div>
+              <span style={{width:60,fontSize:10.5,color:'#7EAFC0'}}>{q.size}</span>
+              <span className={`hash-chip ${q.verified===true?'verified':q.verified===false?'mismatch':''}`} style={{width:90}}>{q.hash}</span>
+              <span style={{width:60}}>
+                {q.verified === true ? <span className="badge-dk bd-success">검증됨</span>
+                  : q.verified === false ? <span className="badge-dk bd-error">불일치</span>
+                  : <span className="badge-dk bd-neutral">대기</span>}
+              </span>
+              <span style={{width:60}}>
+                <span className={`badge-dk ${q.status==='completed'?'bd-success':q.status==='active'?'bd-info':'bd-error'}`}>
+                  {q.status==='completed'?'완료':q.status==='active'?'전송중':'실패'}
+                </span>
+              </span>
+              <span style={{width:55,fontSize:10.5,color:'#7EAFC0'}}>{q.tries}회</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="glass-card">
+        <div className="card-header"><div className="card-title">망연계 아키텍처 개요</div></div>
+        <div style={{padding:'16px 20px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:14}}>
+            {[
+              { label: '외부망 (모바일 PWA)', color: '#00C9A7', icon: 'device-mobile', desc: 'IndexedDB 오프라인 큐\nService Worker 동기화' },
+              { label: '→ 망연계 솔루션', color: '#FFD700', icon: 'arrows-left-right', desc: '단방향 전송\nSHA-256 무결성 검증' },
+              { label: '내부망 (GIS 플랫폼)', color: '#5DC8F0', icon: 'database', desc: 'Bull Queue 수신\nPostGIS DB 저장' },
+            ].map((n, i) => (
+              <div key={i} style={{flex:'1 1 180px',background:'rgba(255,255,255,0.04)',border:`1px solid ${n.color}33`,borderRadius:10,padding:'14px 16px',textAlign:'center'}}>
+                <Ph icon={n.icon} size={24} color={n.color} weight="duotone" />
+                <div style={{fontSize:12,fontWeight:700,color:'#E8F4F0',marginTop:8}}>{n.label}</div>
+                <div style={{fontSize:10,color:'#7EAFC0',marginTop:4,whiteSpace:'pre-line'}}>{n.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Modals
+const QueueDetailModal = ({ item, onClose }) => {
+  return (
+    <div className="modal-overlay-dk" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div className="modal-dk">
+        <div className="modal-dk-header">
+          <div className="modal-dk-title">큐 항목 상세 — {item.id}</div>
+          <div className="modal-dk-close" onClick={onClose}><Ph icon="x" size={13} color="#E8F4F0" /></div>
+        </div>
+        <div className="modal-dk-body">
+          <div style={{display:'flex',gap:8,marginBottom:14}}>
+            <span className={`badge-dk ${item.status==='completed'?'bd-success':item.status==='active'?'bd-info':'bd-error'}`}>
+              {item.status==='completed'?'완료':item.status==='active'?'전송중':'실패'}
+            </span>
+            <span className={`badge-dk ${item.verified===true?'bd-success':item.verified===false?'bd-error':'bd-neutral'}`}>
+              {item.verified===true?'무결성 검증됨':item.verified===false?'해시 불일치':'검증 대기'}
+            </span>
+          </div>
+          {[
+            ['큐 ID', item.id], ['시설물', item.facility], ['데이터 크기', item.size],
+            ['전송 시각', item.time], ['시도 횟수', item.tries+'회'],
+          ].map(([k,v]) => (
+            <div key={k} className="stat-row-dk"><span className="stat-label-dk">{k}</span><span className="stat-value-dk">{v}</span></div>
+          ))}
+          <div className="divider-dk"/>
+          <div style={{marginBottom:8,fontSize:10.5,fontWeight:700,color:'#7EAFC0',textTransform:'uppercase',letterSpacing:'0.08em'}}>SHA-256 무결성 검증</div>
+          <div style={{marginBottom:8}}>
+            <div className="dark-label">송신 측 해시 (외부망)</div>
+            <div className="hash-chip verified" style={{maxWidth:'100%',padding:'6px 10px',marginTop:4}}>{item.hash}a7c2e4f9b3d1...</div>
+          </div>
+          <div>
+            <div className="dark-label">수신 측 재계산 해시 (내부망)</div>
+            <div className={`hash-chip ${item.verified===false?'mismatch':'verified'}`} style={{maxWidth:'100%',padding:'6px 10px',marginTop:4}}>
+              {item.verified===false ? 'f3b8c1e5a2d4...7a9f (불일치 — 재전송 필요)' : item.hash+'a7c2e4f9b3d1...'}
+            </div>
+          </div>
+          {item.status==='failed' && (
+            <div style={{marginTop:14,padding:'10px 14px',background:'rgba(255,107,53,0.1)',borderRadius:8,border:'1px solid rgba(255,107,53,0.25)',fontSize:11,color:'#FF6B35'}}>
+              전송 실패 원인: SHA-256 해시 불일치. 네트워크 불안정으로 인한 데이터 손상이 의심됩니다. 재전송 시 원본 데이터를 IndexedDB에서 다시 읽어 전송합니다.
+            </div>
+          )}
+        </div>
+        <div className="modal-dk-footer">
+          <button className="btn-ghost" onClick={onClose}>닫기</button>
+          {item.status==='failed' && (
+            <button className="btn-teal" onClick={()=>{showT('재전송 큐에 등록되었습니다');onClose();}}>
+              <Ph icon="repeat" size={12} weight="bold" />재전송
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const PDFModal = ({ onClose }) => {
+  const [generating, setGenerating] = useState(false);
+  const [done, setDone] = useState(false);
+  const generate = () => {
+    setGenerating(true);
+    setTimeout(() => { setGenerating(false); setDone(true); }, 2200);
+  };
+  return (
+    <div className="modal-overlay-dk" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div className="modal-dk">
+        <div className="modal-dk-header">
+          <div className="modal-dk-title">출장복명서 자동 생성</div>
+          <div className="modal-dk-close" onClick={onClose}><Ph icon="x" size={13} color="#E8F4F0" /></div>
+        </div>
+        <div className="modal-dk-body">
+          {!done ? (
+            <>
+              <div style={{marginBottom:14,fontSize:12,color:'#7EAFC0'}}>선택된 기간 및 시설물의 이력 데이터를 공공 문서 양식에 바인딩하여 PDF를 생성합니다.</div>
+              {[
+                ['보고 기간', '2026-05-01 ~ 2026-05-28'],
+                ['담당자', '이재원 (현장조사팀)'],
+                ['포함 시설물', 'F-0821, F-0822, F-0823'],
+                ['이력 건수', '5건 (점검 2, 민원 1, 보수 1, 속성변경 1)'],
+                ['첨부 사진', '8장'],
+              ].map(([k,v])=>(
+                <div key={k} className="stat-row-dk"><span className="stat-label-dk">{k}</span><span className="stat-value-dk">{v}</span></div>
+              ))}
+              {generating && (
+                <div style={{marginTop:14}}>
+                  <div style={{fontSize:11,color:'#7EAFC0',marginBottom:6}}>PDF 생성 중...</div>
+                  <div className="progress-dark"><div className="progress-fill pf-teal" style={{'--w':'85%',width:'85%',transition:'width 2s ease'}} /></div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{textAlign:'center',padding:'20px 0'}}>
+              <Ph icon="check-circle" size={48} color="#00C9A7" weight="fill" />
+              <div style={{fontSize:14,fontWeight:700,color:'#E8F4F0',marginTop:12}}>출장복명서가 생성되었습니다</div>
+              <div style={{fontSize:11,color:'#7EAFC0',marginTop:4}}>출장복명서_20260528_이재원.pdf (328KB)</div>
+            </div>
+          )}
+        </div>
+        <div className="modal-dk-footer">
+          <button className="btn-ghost" onClick={onClose}>{done ? '닫기' : '취소'}</button>
+          {!done && !generating && <button className="btn-teal" onClick={generate}><Ph icon="file-pdf" size={12} weight="bold" />생성 시작</button>}
+          {done && <button className="btn-teal" onClick={()=>{showT('파일 다운로드가 시작됩니다');onClose();}}><Ph icon="download-simple" size={12} weight="bold" />다운로드</button>}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// App
+const TABS = [
+  { id: 'main', label: '대시보드', icon: 'house-simple' },
+  { id: 'data-collect', label: '데이터 수집', icon: 'camera' },
+  { id: 'history-book', label: '히스토리 북', icon: 'clock-countdown' },
+  { id: 'sync-monitor', label: '동기화 모니터', icon: 'arrows-clockwise' },
+];
+
+function App() {
+  const [tab, setTab] = useState('main');
+  const [modal, setModal] = useState(null);
+  const [queueItem, setQueueItem] = useState(null);
+
+  const openQueue = (item) => { setQueueItem(item); setModal('queue'); };
+  const openPDF = () => setModal('pdf');
+  const closeModal = () => { setModal(null); setQueueItem(null); };
+
+  return (
+    <div style={{width:'100%',minHeight:'100vh',display:'flex',flexDirection:'column'}}>
+      <header className="topnav">
+        <div className="topnav-inner">
+          <div className="brand">
+            <div className="brand-icon">
+              <Ph icon="map-trifold" size={18} color="#0D1B2A" weight="bold" />
+            </div>
+            <div>
+              <div className="brand-name">GIS 현장 수집 플랫폼</div>
+              <div className="brand-sub">오프라인 동기화 · 망연계 · 히스토리 북</div>
+            </div>
+          </div>
+          <nav className="nav-tabs">
+            {TABS.map(t => (
+              <div key={t.id} className={`nav-tab ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>
+                <Ph icon={t.icon} size={14} weight={tab===t.id?'bold':'regular'} />
+                {t.label}
+              </div>
+            ))}
+          </nav>
+          <div className="topnav-actions">
+            <div className="net-pill"><div className="net-dot"/><span>외부망 연결됨</span></div>
+            <div className="icon-btn-dark" onClick={()=>showT('알림함: 미확인 2건')}><Ph icon="bell" size={15} color="#7EAFC0"/></div>
+            <div className="icon-btn-dark" onClick={()=>showT('설정 패널이 열립니다')}><Ph icon="gear" size={15} color="#7EAFC0"/></div>
+          </div>
+        </div>
+      </header>
+      <main style={{flex:1,width:'100%'}}>
+        {tab === 'main' && <MainDashboard />}
+        {tab === 'data-collect' && <DataCollectScreen onSubmit={()=>showT('수집 데이터가 큐에 저장되었습니다')} />}
+        {tab === 'history-book' && <HistoryBookScreen onGenPDF={openPDF} />}
+        {tab === 'sync-monitor' && <SyncMonitorScreen onItemClick={openQueue} />}
+      </main>
+
+      {modal === 'queue' && queueItem && <QueueDetailModal item={queueItem} onClose={closeModal} />}
+      {modal === 'pdf' && <PDFModal onClose={closeModal} />}
+      <Toast />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
