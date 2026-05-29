@@ -4423,6 +4423,16 @@ function App({ session }) {
     return { avg: Math.round(samples.reduce((a,b)=>a+b,0) / samples.length), n: samples.length };
   }, [data]);
 
+  // 선택된 담당 필터가 현재 상태 필터에서 더 이상 유효하지 않으면(해당 단계에 배정 없음) 자동 해제
+  useEffect(() => {
+    if (!memberFilter || !data) return;
+    const scoped = filter === 'all' ? data : data.filter(d => d.current_status === filter);
+    const stillRelevant = scoped.some(d => isPmView(filter)
+      ? d.assigned_manager === memberFilter
+      : (d.assigned_main === memberFilter || d.assigned_sub === memberFilter));
+    if (!stillRelevant) setMemberFilter('');
+  }, [filter, memberFilter, data]);
+
   if (!data) return <Loading />;
 
   // Project view route
@@ -4665,8 +4675,16 @@ function App({ session }) {
         </div>
       </div>
 
-      {/* 담당자 필터 (팀원이 있을 때만 표시) */}
-      {activeMembers.length > 0 && (
+      {/* 담당자 필터 — 현재 상태 필터에 실제 배정이 있는 담당만 노출
+          (PM 뷰는 PM 기준, 미팅 단계는 주/보조 기준 집계. 생성/지원 단계는 미배정이라 자동 숨김) */}
+      {activeMembers.length > 0 && (() => {
+        const scoped = filter === 'all' ? data : data.filter(d => d.current_status === filter);
+        const roleIdsOf = d => isPmView(filter) ? [d.assigned_manager] : [d.assigned_main, d.assigned_sub];
+        const counts = {};
+        scoped.forEach(d => roleIdsOf(d).forEach(id => { if (id) counts[id] = (counts[id]||0) + 1; }));
+        const relevant = activeMembers.filter(m => counts[m.id] > 0);
+        if (relevant.length === 0) return null;
+        return (
         <div style={{ display:'flex', gap:8, marginBottom:'1rem', flexWrap:'wrap', alignItems:'center' }}>
           <span style={{ fontSize:'0.8rem', color:'var(--text2)', flexShrink:0 }}>담당:</span>
           <button onClick={() => setMemberFilter('')} style={{
@@ -4676,12 +4694,9 @@ function App({ session }) {
             color:!memberFilter?'var(--accent)':'var(--text2)',
             fontSize:'0.8rem', fontWeight:!memberFilter?600:400,
           }}>전체</button>
-          {activeMembers.map(m => {
+          {relevant.map(m => {
             const sel = memberFilter===m.id;
-            // 배지: PM 뷰('전체'·수주 후)에선 PM 배정 건수, 미팅 단계 뷰에선 미팅 주/보조 배정 건수
-            const cnt = isPmView(filter)
-              ? data.filter(d => d.assigned_manager===m.id && HAS_MILESTONES.includes(d.current_status)).length
-              : data.filter(d => (d.assigned_main===m.id||d.assigned_sub===m.id) && ['interview','meeting_done'].includes(d.current_status)).length;
+            const cnt = counts[m.id];
             return (
               <button key={m.id} onClick={() => setMemberFilter(sel?'':m.id)} style={{
                 padding:'0.25rem 0.6rem 0.25rem 0.3rem', borderRadius:20, cursor:'pointer',
@@ -4696,7 +4711,8 @@ function App({ session }) {
             );
           })}
         </div>
-      )}
+        );
+      })()}
 
       {/* 테이블 */}
       <div className="fade-in delay-2" style={{ marginBottom:'1.75rem' }}>
