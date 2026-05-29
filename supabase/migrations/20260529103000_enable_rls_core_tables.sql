@@ -21,6 +21,28 @@
 --   4) 문제 발생 시 하단 "롤백" 블록만 실행하면 원복
 -- ============================================================================
 
+-- ── [0] 기존 anon/public 허용 정책 제거 (필수 선행) ──────────────────────────
+-- 초기 개발 때 생성된 read_all/insert_all/update_all/delete_all 같은 "TO public"
+-- 정책이 남아 있으면, RLS 정책은 OR(합집합)이라 아래 authenticated 정책을 추가해도
+-- anon이 계속 통과한다(2026-05-29 실측으로 wishket_projects에서 확인됨).
+-- 따라서 anon/public 대상 정책을 먼저 전부 제거한다. (authenticated/service_role 정책은 보존)
+DO $$
+DECLARE t TEXT; r RECORD;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['wishket_projects','team_members','project_milestones','meeting_prep_jobs'] LOOP
+    IF to_regclass('public.'||t) IS NOT NULL THEN
+      FOR r IN
+        SELECT policyname FROM pg_policies
+        WHERE schemaname='public' AND tablename=t
+          AND ('anon' = ANY(roles) OR 'public' = ANY(roles))
+      LOOP
+        EXECUTE format('DROP POLICY %I ON public.%I', r.policyname, t);
+        RAISE NOTICE 'dropped permissive policy: %.%', t, r.policyname;
+      END LOOP;
+    END IF;
+  END LOOP;
+END $$;
+
 -- ── wishket_projects ────────────────────────────────────────────────────────
 -- authenticated 역할에 테이블 권한 보장(Supabase 기본 부여분 재확인용, 멱등).
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.wishket_projects TO authenticated;
