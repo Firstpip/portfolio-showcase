@@ -351,7 +351,41 @@ function navigate(route) {
 
 // ─── ConfirmModal ───
 // confirmInput: { label, match } 설정 시 텍스트 입력 일치 여부로 확인 버튼 활성화
+// 모달 포커스 트랩: 열려 있는 동안 Tab 순환을 패널 안에 가두고, 닫히면 직전 포커스 복원.
+// active=false면 비활성(항상 마운트되는 ConfirmModal처럼 state로 토글되는 경우 사용).
+function useFocusTrap(active = true) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!active) return;
+    const node = ref.current;
+    if (!node) return;
+    const prev = document.activeElement;
+    const SEL = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+    const focusable = () => Array.from(node.querySelectorAll(SEL)).filter(el => el.offsetParent !== null);
+    // 이미 내부에 포커스가 있으면(autoFocus 등) 존중, 아니면 첫 요소(없으면 패널)에 포커스
+    if (!node.contains(document.activeElement)) {
+      const f = focusable();
+      if (f[0]) f[0].focus(); else { node.setAttribute('tabindex', '-1'); node.focus(); }
+    }
+    const onKey = (e) => {
+      if (e.key !== 'Tab') return;
+      const f = focusable();
+      if (f.length === 0) { e.preventDefault(); return; }
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !node.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || !node.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
+    };
+    node.addEventListener('keydown', onKey);
+    return () => {
+      node.removeEventListener('keydown', onKey);
+      if (prev && typeof prev.focus === 'function') prev.focus();
+    };
+  }, [active]);
+  return ref;
+}
+
 function ConfirmModal({ state, onCancel }) {
+  const trapRef = useFocusTrap(!!state);
   const [inputVal, setInputVal] = useState('');
   useEffect(() => {
     if (state) setInputVal('');
@@ -368,7 +402,7 @@ function ConfirmModal({ state, onCancel }) {
   const inputMatch = !confirmInput || inputVal === confirmInput.match;
   return (
     <div onClick={onCancel} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(3px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:2000, padding:'1rem' }}>
-      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
+      <div ref={trapRef} role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:14, width:'100%', maxWidth:420,
         border:'1px solid var(--border)', animation:'slideUp 0.2s ease-out',
         boxShadow:'0 20px 50px var(--shadow)', overflow:'hidden',
@@ -412,6 +446,7 @@ function ConfirmModal({ state, onCancel }) {
 
 // ─── ShortcutHelp ───
 function ShortcutHelp({ onClose }) {
+  const trapRef = useFocusTrap();
   useEffect(() => {
     const h = e => { if (e.key === 'Escape' || e.key === '?') onClose(); };
     window.addEventListener('keydown', h);
@@ -427,7 +462,7 @@ function ShortcutHelp({ onClose }) {
   const kbdS = { padding:'0.2rem 0.55rem', borderRadius:5, background:'var(--surface2)', border:'1px solid var(--border)', fontSize:'0.8rem', fontWeight:600, fontFamily:'monospace', color:'var(--text)' };
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(3px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:2500 }}>
-      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{ background:'var(--surface)', borderRadius:14, width:'100%', maxWidth:360, border:'1px solid var(--border)', boxShadow:'0 20px 50px var(--shadow)', animation:'slideUp 0.2s ease-out' }}>
+      <div ref={trapRef} role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{ background:'var(--surface)', borderRadius:14, width:'100%', maxWidth:360, border:'1px solid var(--border)', boxShadow:'0 20px 50px var(--shadow)', animation:'slideUp 0.2s ease-out' }}>
         <div style={{ padding:'1rem 1.25rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <span style={{ fontWeight:700, fontSize:'0.95rem' }}>키보드 단축키</span>
           <button onClick={onClose} style={btn.ghost({ padding:0, fontSize:'1rem' })}>✕</button>
@@ -827,6 +862,7 @@ function AssignPicker({ label, members, value, onChange, exclude }) {
 
 // ─── TeamMgrModal ───
 function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivate }) {
+  const trapRef = useFocusTrap();
   const [newName, setNewName] = useState('');
   const [newColor, setNewColor] = useState(MEMBER_COLORS[0]);
   const [editId, setEditId] = useState(null);
@@ -874,7 +910,7 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
-      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
+      <div ref={trapRef} role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:460,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
         boxShadow:'0 20px 60px var(--shadow)', maxHeight:'80vh', display:'flex', flexDirection:'column',
@@ -1696,6 +1732,7 @@ function PhaseDetail({ milestone, teamMembers, saving, onUpdate, onDelete, weekO
 
 // ─── MilestoneEditModal ───
 function MilestoneEditModal({ milestone, teamMembers, saving, onUpdate, onDelete, onClose, weekOptions }) {
+  const trapRef = useFocusTrap();
   useEffect(() => {
     const h = e => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -1709,7 +1746,7 @@ function MilestoneEditModal({ milestone, teamMembers, saving, onUpdate, onDelete
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1500, padding:'2rem 1rem' }}>
-      <div role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()} style={{
+      <div ref={trapRef} role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:640,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
         boxShadow:'0 20px 60px var(--shadow)', maxHeight:'90vh', display:'flex', flexDirection:'column',
@@ -2456,6 +2493,7 @@ function MeetingPrepButton({ project }) {
 
 // ─── StatusModal ───
 function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, teamMembers, milestones, milestonesSetupNeeded, onMilestoneUpdate, onMilestoneDelete, onMilestoneAdd, onMilestoneReorder, onCreateFromTemplate, onOpenProjectView, onBulkCreateWeekly, onClearWeeklyPlan, onRequestConfirm, onBackfillAssignees }) {
+  const trapRef = useFocusTrap();
   const isPostWon = HAS_MILESTONES.includes(project?.current_status);
   const [tab, setTab] = useState(
     project?.current_status === 'meeting_done' ? 'meeting' : isPostWon ? 'tasks' : 'info'
@@ -2535,7 +2573,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
-      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
+      <div ref={trapRef} role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:500,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
         boxShadow:'0 20px 60px var(--shadow)', maxHeight:'88vh', display:'flex', flexDirection:'column',
@@ -3231,6 +3269,7 @@ function RegenerationPanel({ project, structuredChanged, onRegenerate, saving, f
 // demo_status='ready' 또는 '*_failed' 상태에서 노출. RegenerationPanel 을 모달로 감싼 얇은 래퍼.
 // T7.1 이전의 SpecModal/StructuredSpecEditor/ApprovalPanel 흐름은 폐기됨 (1-click 자동화).
 function RegenerationModal({ project, onClose, onRegenerate, saving }) {
+  const trapRef = useFocusTrap();
   useEffect(() => {
     const handler = e => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
@@ -3242,7 +3281,7 @@ function RegenerationModal({ project, onClose, onRegenerate, saving }) {
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
-      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
+      <div ref={trapRef} role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:560,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
         boxShadow:'0 20px 60px var(--shadow)',
@@ -4854,6 +4893,7 @@ function App({ session }) {
 
 // ─── QuickAddModal ───
 function QuickAddModal({ onClose, onAdd, saving }) {
+  const trapRef = useFocusTrap();
   const [url, setUrl]     = useState('');
   const [title, setTitle] = useState('');
   const [budget, setBudget] = useState('');
@@ -4908,7 +4948,7 @@ function QuickAddModal({ onClose, onAdd, saving }) {
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
-      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
+      <div ref={trapRef} role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:440,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
         boxShadow:'0 20px 60px var(--shadow)',
