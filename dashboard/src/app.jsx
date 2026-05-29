@@ -4636,16 +4636,10 @@ function App({ session }) {
             <div style={{ flex:'1 1 0', minWidth:0, padding:'0.5rem 0.8rem', borderRadius:8, background:'var(--surface-warning-soft)', border:'1px solid var(--surface-warning-mid)', fontSize:'0.8rem', color:'var(--yellow)', display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
               <span style={{ fontWeight:600, flexShrink:0 }}>📅 이번 주 미팅 {thisWeekMeetings.length}건</span>
               <span style={{ fontSize:'0.8rem', color:'var(--text2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0, flex:1 }}>{thisWeekMeetings.map(m=>(m.title||m.slug).substring(0,15)).join(', ')}</span>
-              {'Notification' in window && Notification.permission === 'default' && (
-                <button onClick={() => Notification.requestPermission()}
-                  style={{ padding:'0.15rem 0.5rem', borderRadius:4, border:'1px solid var(--surface-warning-strong)', background:'transparent', color:'var(--yellow)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600, flexShrink:0 }}>
-                  🔔 알림 허용
-                </button>
-              )}
             </div>
           )}
           {staleCount>0 && (
-            <div onClick={() => setFilter('applied')} style={{ flexShrink:0, padding:'0.5rem 0.8rem', borderRadius:8, background:'var(--surface-danger-soft)', border:'1px solid var(--surface-danger-mid)', fontSize:'0.8rem', color:'var(--red)', cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}>
+            <div onClick={() => { setFilter('applied'); setSortKey('created_at'); setSortOrder('asc'); setDateRange('all'); }} style={{ flexShrink:0, padding:'0.5rem 0.8rem', borderRadius:8, background:'var(--surface-danger-soft)', border:'1px solid var(--surface-danger-mid)', fontSize:'0.8rem', color:'var(--red)', cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}>
               ⏰ 30일+ 무응답 {staleCount}건
             </div>
           )}
