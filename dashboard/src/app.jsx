@@ -4665,6 +4665,50 @@ function App({ session }) {
           onFocus={e => e.target.style.borderColor='var(--accent)'}
           onBlur={e  => e.target.style.borderColor='var(--border)'} />
         <FilterTabs active={filter} onChange={setFilter} counts={counts} />
+      </div>
+
+      {/* 담당 필터(좌) + 기간 필터(우) — 한 줄. 담당 pills는 현재 상태에 배정 있는 담당만, 없으면 숨김.
+          기간 버튼은 항상 표시(담당이 숨겨져도). */}
+      <div style={{ display:'flex', gap:8, marginBottom:'1rem', flexWrap:'wrap', alignItems:'center' }}>
+        {activeMembers.length > 0 && (() => {
+          const scoped = filter === 'all' ? data : data.filter(d => d.current_status === filter);
+          const counts = {};
+          scoped.forEach(d => assignRolesFor(filter).forEach(role => {
+            if (!roleAppliesToRow(role, d)) return;
+            const id = d[role.field]; if (id) counts[id] = (counts[id]||0) + 1;
+          }));
+          const relevant = activeMembers.filter(m => counts[m.id] > 0);
+          if (relevant.length === 0) return null;
+          return (
+          <>
+            <span style={{ fontSize:'0.8rem', color:'var(--text2)', flexShrink:0 }}>담당:</span>
+            <button onClick={() => setMemberFilter('')} style={{
+              padding:'0.25rem 0.65rem', borderRadius:20, cursor:'pointer',
+              border:!memberFilter?'1px solid var(--accent)':'1px solid transparent',
+              background:!memberFilter?'var(--accent)30':'var(--surface2)',
+              color:!memberFilter?'var(--accent)':'var(--text2)',
+              fontSize:'0.8rem', fontWeight:!memberFilter?600:400,
+            }}>전체</button>
+            {relevant.map(m => {
+              const sel = memberFilter===m.id;
+              const cnt = counts[m.id];
+              return (
+                <button key={m.id} onClick={() => setMemberFilter(sel?'':m.id)} style={{
+                  padding:'0.25rem 0.6rem 0.25rem 0.3rem', borderRadius:20, cursor:'pointer',
+                  border:sel?`1px solid ${m.color}`:'1px solid transparent',
+                  background:sel?m.color+'30':'var(--surface2)',
+                  display:'inline-flex', alignItems:'center', gap:5,
+                }}>
+                  <MemberAvatar member={m} size={16} />
+                  <span style={{ fontSize:'0.8rem', fontWeight:sel?600:400, color:sel?m.color:'var(--text2)' }}>{m.name}</span>
+                  {cnt>0 && <span style={{ fontSize:'0.8rem', color:sel?m.color:'var(--text2)', opacity:0.8 }}>{cnt}</span>}
+                </button>
+              );
+            })}
+          </>
+          );
+        })()}
+        {/* 기간 필터 — 우측 정렬, 항상 표시 */}
         <div style={{ marginLeft:'auto', display:'flex', gap:3 }}>
           {[{key:'all',label:'전체'},{key:'7d',label:'7일'},{key:'30d',label:'30일'},{key:'90d',label:'90일'}].map(d => (
             <button key={d.key} onClick={() => setDateRange(d.key)} style={{
@@ -4676,47 +4720,6 @@ function App({ session }) {
           ))}
         </div>
       </div>
-
-      {/* 담당자 필터 — 현재 상태 필터에 실제 배정이 있는 담당만 노출
-          (PM 뷰는 PM 기준, 미팅 단계는 주/보조 기준 집계. 생성/지원 단계는 미배정이라 자동 숨김) */}
-      {activeMembers.length > 0 && (() => {
-        const scoped = filter === 'all' ? data : data.filter(d => d.current_status === filter);
-        const counts = {};
-        scoped.forEach(d => assignRolesFor(filter).forEach(role => {
-          if (!roleAppliesToRow(role, d)) return;
-          const id = d[role.field]; if (id) counts[id] = (counts[id]||0) + 1;
-        }));
-        const relevant = activeMembers.filter(m => counts[m.id] > 0);
-        if (relevant.length === 0) return null;
-        return (
-        <div style={{ display:'flex', gap:8, marginBottom:'1rem', flexWrap:'wrap', alignItems:'center' }}>
-          <span style={{ fontSize:'0.8rem', color:'var(--text2)', flexShrink:0 }}>담당:</span>
-          <button onClick={() => setMemberFilter('')} style={{
-            padding:'0.25rem 0.65rem', borderRadius:20, cursor:'pointer',
-            border:!memberFilter?'1px solid var(--accent)':'1px solid transparent',
-            background:!memberFilter?'var(--accent)30':'var(--surface2)',
-            color:!memberFilter?'var(--accent)':'var(--text2)',
-            fontSize:'0.8rem', fontWeight:!memberFilter?600:400,
-          }}>전체</button>
-          {relevant.map(m => {
-            const sel = memberFilter===m.id;
-            const cnt = counts[m.id];
-            return (
-              <button key={m.id} onClick={() => setMemberFilter(sel?'':m.id)} style={{
-                padding:'0.25rem 0.6rem 0.25rem 0.3rem', borderRadius:20, cursor:'pointer',
-                border:sel?`1px solid ${m.color}`:'1px solid transparent',
-                background:sel?m.color+'30':'var(--surface2)',
-                display:'inline-flex', alignItems:'center', gap:5,
-              }}>
-                <MemberAvatar member={m} size={16} />
-                <span style={{ fontSize:'0.8rem', fontWeight:sel?600:400, color:sel?m.color:'var(--text2)' }}>{m.name}</span>
-                {cnt>0 && <span style={{ fontSize:'0.8rem', color:sel?m.color:'var(--text2)', opacity:0.8 }}>{cnt}</span>}
-              </button>
-            );
-          })}
-        </div>
-        );
-      })()}
 
       {/* 테이블 */}
       <div className="fade-in delay-2" style={{ marginBottom:'1.75rem' }}>
