@@ -66,26 +66,21 @@ CREATE POLICY "pm_all_authenticated" ON public.project_milestones
   FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 -- ── meeting_prep_jobs ─────────────────────────────────────────────────────────
--- 🟡 의도적으로 "비활성"(주석 처리) 상태로 둠.
---    이유: 이 테이블은 마이그레이션에 정의가 없는 드리프트 테이블이며, 잡 처리
---    주체(데모 준비 파일 생성 — 30~45분, Claude sonnet 사용)가 이 레포 어디에도
---    없음. 즉 외부/별도 인프라가 처리하며, 그 접속 키(role)를 코드로 확인 불가.
---    → 처리기가 anon 키를 쓴다면 RLS 활성화 즉시 데모 생성이 멈춤(운영 장애).
---
---    [활성화 조건] 처리기가 service_role 키를 쓰는 것을 확인하면(백엔드 잡은
---    거의 항상 service_role, 본 레포 worker/도 service_role) 아래 블록의 주석을
---    해제하고 재적용. 대시보드(authenticated)는 어느 경우든 정상 동작.
---
--- DO $$
--- BEGIN
---   IF to_regclass('public.meeting_prep_jobs') IS NOT NULL THEN
---     EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.meeting_prep_jobs TO authenticated';
---     EXECUTE 'ALTER TABLE public.meeting_prep_jobs ENABLE ROW LEVEL SECURITY';
---     EXECUTE 'DROP POLICY IF EXISTS "mpj_all_authenticated" ON public.meeting_prep_jobs';
---     EXECUTE 'CREATE POLICY "mpj_all_authenticated" ON public.meeting_prep_jobs
---              FOR ALL TO authenticated USING (true) WITH CHECK (true)';
---   END IF;
--- END $$;
+-- ✅ 활성화됨. 처리 주체 확인 완료: 로컬 맥 데몬
+--    (~/wishket-portfolio-system/scripts/meeting-prep-daemon.js)이 SERVICE_ROLE 키로
+--    접속 → RLS 우회하므로 영향 없음. 대시보드는 authenticated 라 정책으로 정상 동작.
+--    기존 anon 허용 정책("insert job"/"select job" — 원본 supabase-jobs-schema.sql)이
+--    구멍이었으며, 위 [0] 블록이 anon/public 정책을 선제거함.
+DO $$
+BEGIN
+  IF to_regclass('public.meeting_prep_jobs') IS NOT NULL THEN
+    EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.meeting_prep_jobs TO authenticated';
+    EXECUTE 'ALTER TABLE public.meeting_prep_jobs ENABLE ROW LEVEL SECURITY';
+    EXECUTE 'DROP POLICY IF EXISTS "mpj_all_authenticated" ON public.meeting_prep_jobs';
+    EXECUTE 'CREATE POLICY "mpj_all_authenticated" ON public.meeting_prep_jobs
+             FOR ALL TO authenticated USING (true) WITH CHECK (true)';
+  END IF;
+END $$;
 
 -- ── (선택) 방어 심화: anon 테이블 권한 자체 회수 ──────────────────────────────
 -- RLS만으로도 anon은 차단되지만, 권한 자체를 회수하면 belt-and-suspenders.
