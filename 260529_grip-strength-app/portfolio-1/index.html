@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>스마트 악력 측정 피트니스 트래커 — 맞춤 구현 데모</title>
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+  <script src="https://unpkg.com/react-is@18.2.0/umd/react-is.production.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.5.0/umd/Recharts.js"></script>
+  <script src="https://unpkg.com/lucide@0.263.1/dist/umd/lucide.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { width: 100%; min-height: 100vh; }
+    body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif; background: #FBF8F5; color: #1A1210; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes slideInRight {
+      from { transform: translateX(100%); opacity: 0; }
+      to   { transform: translateX(0);   opacity: 1; }
+    }
+    @keyframes pulseRing {
+      0%   { opacity: 0.3; transform: scale(0.95); }
+      50%  { opacity: 1;   transform: scale(1.05); }
+      100% { opacity: 0.3; transform: scale(0.95); }
+    }
+    @keyframes countUp {
+      from { opacity: 0; transform: scale(0.75); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    @keyframes toastSlide {
+      from { transform: translateY(20px); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+
+    .fade-in    { animation: fadeIn 0.3s ease-out both; }
+    .slide-right{ animation: slideInRight 0.35s cubic-bezier(0.32,0.72,0,1) both; }
+    .count-up   { animation: countUp 0.4s ease-out both; }
+    .toast-anim { animation: toastSlide 0.25s ease-out both; }
+
+    button { font-family: 'Pretendard', sans-serif; }
+    select { font-family: 'Pretendard', sans-serif; }
+
+    .nav-btn { transition: color 0.15s, border-color 0.15s; }
+    .nav-btn:hover { color: #E8350A !important; }
+
+    .card-hover { transition: box-shadow 0.18s, transform 0.18s; }
+    .card-hover:hover { box-shadow: 0 6px 24px rgba(232,53,10,0.12) !important; transform: translateY(-2px); }
+
+    .row-hover { transition: background 0.1s; }
+    .row-hover:hover { background: #FAFAF8 !important; }
+
+    .primary-btn {
+      background: #E8350A; color: #fff; border: none;
+      border-radius: 6px; font-weight: 700; cursor: pointer;
+      transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+    }
+    .primary-btn:hover { background: #C42B08; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(232,53,10,0.3); }
+    .primary-btn:disabled { background: #ccc; transform: none; box-shadow: none; cursor: not-allowed; }
+
+    .ghost-btn {
+      background: none; border: 1px solid #E8E0DB; border-radius: 6px;
+      cursor: pointer; color: #6B5C58; transition: border-color 0.15s, background 0.15s;
+    }
+    .ghost-btn:hover { border-color: #E8350A; color: #E8350A; background: #FFF7F5; }
+
+    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 200; display: flex; align-items: center; justify-content: center; }
+    .drawer-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 200; display: flex; align-items: stretch; justify-content: flex-end; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { LineChart, Line, AreaChart, Area, BarChart, Bar,
+        XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+        ResponsiveContainer, ReferenceLine } = Recharts;
+
+/* ── PALETTE ── */
+const C = {
+  primary: '#E8350A', secondary: '#FF6B35', accent: '#FFB347',
+  bg: '#FBF8F5', surface: '#FFFFFF', border: '#E8E0DB',
+  text: '#1A1210', muted: '#6B5C58',
+  success: '#16A34A', successBg: '#F0FDF4',
+};
+
+/* ── MOCK DATA ── */
+const USERS = [
+  {id:1,rank:1,name:'김민준',value:72.4,country:'한국',gender:'남',weight:'80kg',hand:'오른손',date:'2026-05-28'},
+  {id:2,rank:2,name:'박철수',value:70.1,country:'한국',gender:'남',weight:'75kg',hand:'오른손',date:'2026-05-27'},
+  {id:3,rank:3,name:'이상훈',value:68.8,country:'일본',gender:'남',weight:'80kg',hand:'왼손', date:'2026-05-26'},
+  {id:4,rank:4,name:'최준혁',value:66.2,country:'한국',gender:'남',weight:'75kg',hand:'오른손',date:'2026-05-25'},
+  {id:5,rank:5,name:'정지훈',value:63.7,country:'미국',gender:'남',weight:'85kg',hand:'오른손',date:'2026-05-24'},
+  {id:6,rank:6,name:'김지영',value:42.1,country:'한국',gender:'여',weight:'60kg',hand:'오른손',date:'2026-05-23'},
+  {id:7,rank:7,name:'이수진',value:40.5,country:'한국',gender:'여',weight:'55kg',hand:'왼손', date:'2026-05-22'},
+  {id:8,rank:8,name:'박미래',value:38.9,country:'일본',gender:'여',weight:'55kg',hand:'오른손',date:'2026-05-21'},
+];
+
+const HISTORY = [
+  {d:'5/01',r:58.2,l:54.8},{d:'5/05',r:60.4,l:57.1},
+  {d:'5/09',r:61.8,l:58.6},{d:'5/13',r:63.2,l:59.9},
+  {d:'5/17',r:64.5,l:61.4},{d:'5/21',r:67.1,l:63.3},
+  {d:'5/25',r:69.8,l:65.7},{d:'5/28',r:71.2,l:67.3},
+];
+
+const MY_RECORDS = [
+  {id:1,date:'2026-05-29',right:71.2,left:67.3,peak:71.2,rank:4},
+  {id:2,date:'2026-05-25',right:69.8,left:65.7,peak:69.8,rank:5},
+  {id:3,date:'2026-05-21',right:67.1,left:63.3,peak:67.1,rank:7},
+  {id:4,date:'2026-05-17',right:64.5,left:61.4,peak:64.5,rank:9},
+  {id:5,date:'2026-05-13',right:63.2,left:59.9,peak:63.2,rank:11},
+];
+
+function genCurve(peak=71.2) {
+  const pts = [];
+  for (let i=0; i<=40; i++) {
+    const t = i/40;
+    let v = t<0.3 ? peak*(t/0.3)*0.92
+           : t<0.45 ? peak*(0.92+(t-0.3)/0.15*0.08)
+           : peak*Math.exp(-3.2*(t-0.45));
+    pts.push({t:parseFloat((i*0.25).toFixed(2)), v:parseFloat(v.toFixed(1))});
+  }
+  return pts;
+}
+
+/* ── TOPNAV ── */
+function TopNav({tab, setTab}) {
+  const TABS = ['측정 시작','기록 관리','랭킹','결과 공유'];
+  return (
+    <header style={{width:'100%',background:C.surface,borderBottom:`1px solid ${C.border}`,
+      position:'sticky',top:0,zIndex:100,boxShadow:'0 1px 4px rgba(0,0,0,0.06)'}}>
+      <div style={{maxWidth:1200,margin:'0 auto',padding:'0 24px',display:'flex',alignItems:'center',height:60}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginRight:40,flexShrink:0}}>
+          <div style={{width:32,height:32,borderRadius:'50%',
+            background:`linear-gradient(135deg,${C.primary},${C.secondary})`,
+            display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <i data-lucide="zap" style={{width:15,height:15,color:'#fff'}}></i>
+          </div>
+          <span style={{fontWeight:800,fontSize:15,color:C.text,letterSpacing:'-0.3px'}}>GripForce</span>
+        </div>
+        <nav style={{display:'flex',gap:2,flex:1}}>
+          {TABS.map(t=>(
+            <button key={t} className="nav-btn" onClick={()=>setTab(t)} style={{
+              padding:'8px 18px',border:'none',background:'none',cursor:'pointer',
+              fontSize:14,fontWeight:tab===t?700:400,
+              color:tab===t?C.primary:C.muted,
+              borderBottom:tab===t?`2px solid ${C.primary}`:'2px solid transparent',
+              borderRadius:0,transition:'all 0.15s',
+            }}>{t}</button>
+          ))}
+        </nav>
+        <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
+          <div style={{width:30,height:30,borderRadius:'50%',background:'#F0EBE8',
+            display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <i data-lucide="user" style={{width:15,height:15,color:C.muted}}></i>
+          </div>
+          <span style={{fontSize:13,color:C.muted}}>김민수</span>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+/* ── HERO ── */
+function Hero() {
+  return (
+    <div style={{background:`linear-gradient(135deg,${C.primary} 0%,#C42B08 55%,#9E2007 100%)`,
+      padding:'48px 24px',color:'#fff'}}>
+      <div style={{maxWidth:1200,margin:'0 auto',display:'flex',
+        justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:24}}>
+        <div style={{flex:1,minWidth:280}}>
+          <div style={{fontSize:11,opacity:.75,letterSpacing:'0.12em',textTransform:'uppercase',marginBottom:10}}>
+            BLE 악력 측정 플랫폼 — 맞춤 구현 데모
+          </div>
+          <h1 style={{fontSize:30,fontWeight:800,lineHeight:1.35,marginBottom:14}}>
+            당신의 악력이<br/>전 세계 순위를 만듭니다
+          </h1>
+          <p style={{opacity:.85,fontSize:14,lineHeight:1.7,maxWidth:460,marginBottom:22}}>
+            스마트 악력 디바이스와 BLE로 연결하면 실시간 Force Curve 시각화와 함께
+            글로벌 랭킹에서 본인의 위치를 바로 확인할 수 있습니다.
+          </p>
+          <div style={{display:'flex',gap:12}}>
+            <div style={{display:'flex',alignItems:'center',gap:6,fontSize:13,opacity:.85}}>
+              <i data-lucide="bluetooth" style={{width:15,height:15}}></i>
+              BLE SDK 어댑터 패턴
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:6,fontSize:13,opacity:.85}}>
+              <i data-lucide="trending-up" style={{width:15,height:15}}></i>
+              Force Curve 실시간 렌더링
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:6,fontSize:13,opacity:.85}}>
+              <i data-lucide="trophy" style={{width:15,height:15}}></i>
+              글로벌 4차원 랭킹
+            </div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:16}}>
+          {[{l:'글로벌 사용자',v:'28,341명'},{l:'오늘 측정',v:'1,204회'},{l:'평균 악력',v:'54.2 kgf'}].map(s=>(
+            <div key={s.l} style={{background:'rgba(255,255,255,0.15)',backdropFilter:'blur(4px)',
+              borderRadius:10,padding:'16px 22px',textAlign:'center'}}>
+              <div style={{fontSize:20,fontWeight:800}}>{s.v}</div>
+              <div style={{fontSize:11,opacity:.8,marginTop:4}}>{s.l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── MEASUREMENT VIEW ── */
+function MeasurementView() {
+  const [ble, setBle] = useState('disconnected'); // disconnected|connecting|connected
+  const [phase, setPhase] = useState('idle'); // idle|counting|measuring|done
+  const [cd, setCd] = useState(3);
+  const [curveData, setCurveData] = useState([]);
+  const [valR, setValR] = useState('0.0');
+  const [valL, setValL] = useState('0.0');
+  const [peakR, setPeakR] = useState(71.2);
+  const [peakL, setPeakL] = useState(67.3);
+  const [showDrawer, setShowDrawer] = useState(false);
+  const [toast, setToast] = useState(null);
+  const ivRef = useRef(null);
+
+  function showMsg(m){ setToast(m); setTimeout(()=>setToast(null),2500); }
+
+  function connect() {
+    setBle('connecting');
+    setTimeout(()=>{ setBle('connected'); showMsg('GripForce Pro #A4:B2:C3 연결됨'); },1800);
+  }
+
+  function startMeasure() {
+    setPhase('counting'); setCd(3); setCurveData([]);
+    setValR('0.0'); setValL('0.0');
+  }
+
+  useEffect(()=>{
+    if(phase!=='counting') return;
+    const t=setInterval(()=>setCd(c=>{ if(c<=1){clearInterval(t);setPhase('measuring');return 0;} return c-1; }),1000);
+    return ()=>clearInterval(t);
+  },[phase]);
+
+  useEffect(()=>{
+    if(phase!=='measuring') return;
+    const pts=genCurve(71.2); let idx=0;
+    ivRef.current=setInterval(()=>{
+      if(idx>=pts.length){ clearInterval(ivRef.current); setPhase('done'); return; }
+      const p=pts[idx];
+      setCurveData(prev=>[...prev,p]);
+      setValR(p.v.toFixed(1));
+      setValL((p.v*0.945).toFixed(1));
+      idx++;
+    },110);
+    return()=>clearInterval(ivRef.current);
+  },[phase]);
+
+  const fullCurve = genCurve(71.2);
+
+  return (
+    <div style={{maxWidth:1200,margin:'0 auto',padding:'28px 24px'}}>
+      {ble==='disconnected' && (
+        <div className="fade-in card-hover" style={{background:C.surface,borderRadius:12,padding:52,
+          textAlign:'center',border:`2px dashed ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.04)'}}>
+          <i data-lucide="bluetooth-off" style={{width:48,height:48,color:C.border,display:'block',margin:'0 auto 16px'}}></i>
+          <h2 style={{fontSize:21,fontWeight:700,marginBottom:8}}>BLE 디바이스 연결</h2>
+          <p style={{color:C.muted,lineHeight:1.65,marginBottom:28,fontSize:14}}>
+            GripForce 악력 디바이스의 전원을 켜고 연결 버튼을 눌러<br/>블루투스 페어링을 시작합니다.
+          </p>
+          <button className="primary-btn" onClick={connect} style={{padding:'11px 36px',fontSize:15,borderRadius:6}}>
+            BLE 연결 시작
+          </button>
+        </div>
+      )}
+
+      {ble==='connecting' && (
+        <div className="fade-in" style={{background:C.surface,borderRadius:12,padding:52,
+          textAlign:'center',border:`1px solid ${C.border}`}}>
+          <div style={{animation:'pulseRing 1.2s ease-in-out infinite',display:'inline-block',marginBottom:16}}>
+            <i data-lucide="bluetooth-searching" style={{width:48,height:48,color:C.primary}}></i>
+          </div>
+          <h2 style={{fontSize:20,fontWeight:700,marginBottom:8}}>디바이스 검색 중...</h2>
+          <p style={{color:C.muted,fontSize:14}}>주변의 GripForce 디바이스를 탐색하고 있습니다.</p>
+          <div style={{display:'flex',justifyContent:'center',gap:8,marginTop:20}}>
+            {[0,1,2].map(i=>(
+              <div key={i} style={{width:8,height:8,borderRadius:'50%',background:C.primary,
+                animation:`pulseRing 1.2s ease-in-out ${i*0.2}s infinite`}}></div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {ble==='connected' && (
+        <div className="fade-in">
+          {/* Connected bar */}
+          <div style={{background:C.successBg,border:'1px solid #BBF7D0',borderRadius:8,
+            padding:'10px 18px',display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20}}>
+            <div style={{display:'flex',alignItems:'center',gap:10}}>
+              <i data-lucide="bluetooth-connected" style={{width:18,height:18,color:C.success}}></i>
+              <span style={{fontSize:14,fontWeight:600}}>GripForce Pro #A4:B2:C3</span>
+              <span style={{fontSize:12,color:C.success,fontWeight:700,background:'#DCFCE7',
+                padding:'2px 8px',borderRadius:4}}>연결됨</span>
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:12}}>
+              <span style={{fontSize:12,color:C.muted,display:'flex',alignItems:'center',gap:4}}>
+                <i data-lucide="signal" style={{width:14,height:14,color:C.success}}></i>신호: 우수
+              </span>
+              <button className="ghost-btn" onClick={()=>{setBle('disconnected');setPhase('idle');}}
+                style={{padding:'4px 12px',fontSize:12,borderRadius:4}}>연결 해제</button>
+            </div>
+          </div>
+
+          <div style={{display:'grid',gridTemplateColumns:'260px 1fr',gap:20}}>
+            {/* Live values */}
+            <div style={{display:'flex',flexDirection:'column',gap:14}}>
+              {[{side:'오른손',val:phase==='idle'||phase==='done'?peakR:valR,pk:peakR,color:C.primary,icon:'hand'},
+                {side:'왼손',val:phase==='idle'||phase==='done'?(peakL):valL,pk:peakL,color:C.secondary,icon:'hand'}
+              ].map(h=>(
+                <div key={h.side} className="card-hover" style={{background:C.surface,borderRadius:10,padding:'18px 20px',
+                  border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.05)'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:7,marginBottom:10}}>
+                    <i data-lucide={h.icon} style={{width:16,height:16,color:h.color}}></i>
+                    <span style={{fontSize:12,fontWeight:600,color:C.muted}}>{h.side}</span>
+                  </div>
+                  <div className={phase==='measuring'?'count-up':''} style={{fontSize:38,fontWeight:800,color:h.color,lineHeight:1}}>
+                    {h.val}
+                  </div>
+                  <div style={{fontSize:12,color:C.muted,marginTop:2}}>kgf</div>
+                  <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`,
+                    display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <span style={{fontSize:11,color:C.muted}}>최고 기록</span>
+                    <span style={{fontSize:14,fontWeight:700}}>{h.pk} kgf</span>
+                  </div>
+                </div>
+              ))}
+
+              {/* CTA */}
+              {(phase==='idle'||phase==='done') ? (
+                <button className="primary-btn" onClick={startMeasure}
+                  style={{padding:'13px',fontSize:15,borderRadius:8,width:'100%'}}>
+                  {phase==='done'?'다시 측정하기':'측정 시작'}
+                </button>
+              ):(
+                <div style={{textAlign:'center',padding:'14px 0'}}>
+                  {phase==='counting' ? (
+                    <div className="count-up" style={{fontSize:56,fontWeight:900,color:C.primary,lineHeight:1}}>{cd}</div>
+                  ):(
+                    <div style={{display:'flex',alignItems:'center',gap:8,justifyContent:'center'}}>
+                      <div style={{width:10,height:10,borderRadius:'50%',background:C.primary,
+                        animation:'pulseRing 0.8s ease-in-out infinite'}}></div>
+                      <span style={{fontSize:14,fontWeight:600,color:C.primary}}>측정 중...</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {phase==='done' && (
+                <div className="fade-in" style={{background:'#FFF7F5',border:`1px solid ${C.primary}30`,
+                  borderRadius:8,padding:14}}>
+                  <div style={{display:'flex',gap:8,marginBottom:10}}>
+                    <div style={{flex:1,textAlign:'center'}}>
+                      <div style={{fontSize:18,fontWeight:800,color:C.primary}}>71.2</div>
+                      <div style={{fontSize:10,color:C.muted}}>오른손 kgf</div>
+                    </div>
+                    <div style={{flex:1,textAlign:'center'}}>
+                      <div style={{fontSize:18,fontWeight:800,color:C.secondary}}>67.3</div>
+                      <div style={{fontSize:10,color:C.muted}}>왼손 kgf</div>
+                    </div>
+                    <div style={{flex:1,textAlign:'center'}}>
+                      <div style={{fontSize:18,fontWeight:800,color:C.success}}>4위</div>
+                      <div style={{fontSize:10,color:C.muted}}>글로벌</div>
+                    </div>
+                  </div>
+                  <button className="ghost-btn" onClick={()=>setShowDrawer(true)}
+                    style={{width:'100%',padding:'7px',fontSize:12,borderRadius:6}}>
+                    Force Curve 상세 분석
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Force Curve chart */}
+            <div className="card-hover" style={{background:C.surface,borderRadius:10,padding:'20px 24px',
+              border:`1px solid ${C.border}`,boxShadow:'0 2px 8px rgba(0,0,0,0.05)'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+                <div>
+                  <h3 style={{fontSize:15,fontWeight:700}}>Force Curve 실시간 측정</h3>
+                  <p style={{fontSize:12,color:C.muted,marginTop:2}}>악력 시간-힘 곡선 시각화 (BLE 스트리밍)</p>
+                </div>
+                {phase==='done' && (
+                  <button className="ghost-btn" onClick={()=>setShowDrawer(true)}
+                    style={{padding:'6px 14px',fontSize:12,borderRadius:6,display:'flex',alignItems:'center',gap:5}}>
+                    <i data-lucide="maximize-2" style={{width:13,height:13}}></i>상세
+                  </button>
+                )}
+              </div>
+              <div style={{position:'relative',height:230}}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={curveData.length>0?curveData:fullCurve}
+                    margin={{top:5,right:8,left:-14,bottom:5}}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                    <XAxis dataKey="t" tickFormatter={v=>`${v}s`} tick={{fontSize:11,fill:C.muted}}/>
+                    <YAxis tick={{fontSize:11,fill:C.muted}} domain={[0,80]}/>
+                    <Tooltip formatter={v=>[`${v} kgf`,'Force']} contentStyle={{fontSize:12,borderRadius:6,border:`1px solid ${C.border}`}}/>
+                    <ReferenceLine y={71.2} stroke={C.primary} strokeDasharray="4 2"
+                      label={{value:'Peak 71.2',fill:C.primary,fontSize:10,position:'insideTopRight'}}/>
+                    <Line type="monotone" dataKey="v" stroke={C.primary} strokeWidth={2.5} dot={false} isAnimationActive={false}/>
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              <div style={{display:'flex',gap:0,marginTop:16,paddingTop:16,borderTop:`1px solid ${C.border}`}}>
+                {[{l:'피크값',v:'71.2 kgf'},{l:'도달 시간',v:'1.1초'},{l:'유지 시간',v:'5.2초'},{l:'평균값',v:'48.4 kgf'}].map(s=>(
+                  <div key={s.l} style={{flex:1,textAlign:'center',borderRight:s.l!=='평균값'?`1px solid ${C.border}`:'none'}}>
+                    <div style={{fontSize:15,fontWeight:700,color:C.text}}>{s.v}</div>
+                    <div style={{fontSize:11,color:C.muted,marginTop:2}}>{s.l}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Drawer: Force Curve 상세 */}
+      {showDrawer && (
+        <div className="drawer-overlay" onClick={()=>setShowDrawer(false)}>
+          <div className="slide-right" style={{width:420,background:C.surface,padding:32,overflowY:'auto'}}
+            onClick={e=>e.stopPropagation()}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:22}}>
+              <h2 style={{fontSize:17,fontWeight:700}}>Force Curve 상세 분석</h2>
+              <button onClick={()=>setShowDrawer(false)} style={{background:'none',border:'none',cursor:'pointer'}}>
+                <i data-lucide="x" style={{width:20,height:20,color:C.muted}}></i>
+              </button>
+            </div>
+            <div style={{position:'relative',height:190,marginBottom:20}}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={fullCurve} margin={{top:5,right:8,left:-14,bottom:5}}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                  <XAxis dataKey="t" tickFormatter={v=>`${v}s`} tick={{fontSize:10,fill:C.muted}}/>
+                  <YAxis tick={{fontSize:10,fill:C.muted}} domain={[0,80]}/>
+                  <Tooltip formatter={v=>[`${v} kgf`]} contentStyle={{fontSize:11}}/>
+                  <ReferenceLine y={71.2} stroke={C.primary} strokeDasharray="4 2"/>
+                  <Line type="monotone" dataKey="v" stroke={C.primary} strokeWidth={2} dot={false}/>
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            {[
+              {l:'측정 일시',v:'2026-05-29 14:23:07'},
+              {l:'오른손 피크',v:'71.2 kgf'},
+              {l:'왼손 피크',v:'67.3 kgf'},
+              {l:'피크 도달 시간',v:'1.1초'},
+              {l:'측정 지속 시간',v:'5.2초'},
+              {l:'글로벌 순위',v:'4위 (남/80kg)'},
+              {l:'국내 순위',v:'2위'},
+            ].map(r=>(
+              <div key={r.l} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:13,color:C.muted}}>{r.l}</span>
+                <span style={{fontSize:13,fontWeight:600}}>{r.v}</span>
+              </div>
+            ))}
+            <div style={{display:'flex',gap:10,marginTop:20}}>
+              <button className="primary-btn" style={{flex:1,padding:10,fontSize:14,borderRadius:6}}
+                onClick={()=>{setShowDrawer(false);showMsg('측정 결과가 저장되었습니다.');}}>결과 저장</button>
+              <button className="ghost-btn" style={{flex:1,padding:10,fontSize:14,borderRadius:6}}
+                onClick={()=>{setShowDrawer(false);showMsg('공유 링크가 복사되었습니다.');}}>공유</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className="toast-anim" style={{position:'fixed',bottom:24,right:24,zIndex:300,
+          background:'#1A1210',color:'#fff',padding:'11px 18px',borderRadius:8,
+          fontSize:13,boxShadow:'0 4px 20px rgba(0,0,0,0.25)',display:'flex',alignItems:'center',gap:8}}>
+          <i data-lucide="check-circle" style={{width:15,height:15,color:'#4ADE80'}}></i>
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── RECORDS VIEW ── */
+function RecordsView() {
+  const [period, setPeriod] = useState('1개월');
+  const [sel, setSel] = useState(null);
+
+  return (
+    <div style={{maxWidth:1200,margin:'0 auto',padding:'28px 24px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:22}}>
+        <div>
+          <h2 style={{fontSize:21,fontWeight:700}}>기록 관리</h2>
+          <p style={{fontSize:13,color:C.muted,marginTop:3}}>김민수님의 악력 측정 이력 및 성장 추세</p>
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          {['1주','1개월','3개월','전체'].map(p=>(
+            <button key={p} onClick={()=>setPeriod(p)} style={{
+              padding:'6px 14px',borderRadius:6,border:`1px solid ${period===p?C.primary:C.border}`,
+              background:period===p?C.primary:C.surface,color:period===p?'#fff':C.muted,
+              fontSize:13,cursor:'pointer',fontWeight:period===p?600:400,
+              transition:'all 0.15s',
+            }}>{p}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Chart */}
+      <div className="card-hover" style={{background:C.surface,borderRadius:10,padding:'20px 24px',
+        border:`1px solid ${C.border}`,marginBottom:18,boxShadow:'0 2px 8px rgba(0,0,0,0.05)'}}>
+        <h3 style={{fontSize:14,fontWeight:600,marginBottom:16}}>양손 악력 추세 · {period}</h3>
+        <div style={{position:'relative',height:230}}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={HISTORY} margin={{top:5,right:20,left:-10,bottom:5}}>
+              <defs>
+                <linearGradient id="gR" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={C.primary} stopOpacity={0.2}/>
+                  <stop offset="95%" stopColor={C.primary} stopOpacity={0.02}/>
+                </linearGradient>
+                <linearGradient id="gL" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={C.secondary} stopOpacity={0.2}/>
+                  <stop offset="95%" stopColor={C.secondary} stopOpacity={0.02}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+              <XAxis dataKey="d" tick={{fontSize:11,fill:C.muted}}/>
+              <YAxis tick={{fontSize:11,fill:C.muted}} domain={[50,76]}/>
+              <Tooltip contentStyle={{fontSize:12,borderRadius:6,border:`1px solid ${C.border}`}}
+                formatter={(v,n)=>[`${v} kgf`,n==='r'?'오른손':'왼손']}/>
+              <Legend iconType="circle" wrapperStyle={{fontSize:12}}
+                formatter={v=>v==='r'?'오른손':'왼손'}/>
+              <Area type="monotone" dataKey="r" stroke={C.primary} strokeWidth={2}
+                fill="url(#gR)" dot={{r:4,fill:C.primary,strokeWidth:0}}/>
+              <Area type="monotone" dataKey="l" stroke={C.secondary} strokeWidth={2}
+                fill="url(#gL)" dot={{r:4,fill:C.secondary,strokeWidth:0}}/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={{background:C.surface,borderRadius:10,border:`1px solid ${C.border}`,
+        overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.05)'}}>
+        <div style={{padding:'14px 20px',borderBottom:`1px solid ${C.border}`,
+          display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <h3 style={{fontSize:14,fontWeight:600}}>측정 이력</h3>
+          <span style={{fontSize:12,color:C.muted}}>총 {MY_RECORDS.length}건</span>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:'#FAFAF8'}}>
+              {['측정일','오른손','왼손','최고값','글로벌 순위',''].map(h=>(
+                <th key={h} style={{padding:'10px 16px',textAlign:'left',fontSize:12,
+                  fontWeight:600,color:C.muted,borderBottom:`1px solid ${C.border}`}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {MY_RECORDS.map(r=>(
+              <tr key={r.id} className="row-hover" onClick={()=>setSel(r)} style={{cursor:'pointer'}}>
+                <td style={{padding:'12px 16px',fontSize:13,borderBottom:`1px solid ${C.border}`}}>{r.date}</td>
+                <td style={{padding:'12px 16px',fontSize:13,fontWeight:700,color:C.primary,borderBottom:`1px solid ${C.border}`}}>{r.right} kgf</td>
+                <td style={{padding:'12px 16px',fontSize:13,fontWeight:700,color:C.secondary,borderBottom:`1px solid ${C.border}`}}>{r.left} kgf</td>
+                <td style={{padding:'12px 16px',fontSize:13,borderBottom:`1px solid ${C.border}`}}>{r.peak} kgf</td>
+                <td style={{padding:'12px 16px',borderBottom:`1px solid ${C.border}`}}>
+                  <span style={{fontSize:12,fontWeight:600,
+                    background:r.rank<=5?'#FFF7F5':'#F5F0ED',
+                    color:r.rank<=5?C.primary:C.muted,
+                    padding:'3px 9px',borderRadius:4}}>{r.rank}위</span>
+                </td>
+                <td style={{padding:'12px 16px',borderBottom:`1px solid ${C.border}`}}>
+                  <button className="ghost-btn" style={{padding:'4px 10px',fontSize:12,borderRadius:4}}>상세</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Modal */}
+      {sel && (
+        <div className="overlay" onClick={()=>setSel(null)}>
+          <div className="fade-in" style={{background:C.surface,borderRadius:12,padding:32,
+            width:440,maxWidth:'92vw'}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+              <h2 style={{fontSize:16,fontWeight:700}}>측정 상세 — {sel.date}</h2>
+              <button onClick={()=>setSel(null)} style={{background:'none',border:'none',cursor:'pointer'}}>
+                <i data-lucide="x" style={{width:18,height:18,color:C.muted}}></i>
+              </button>
+            </div>
+            <div style={{position:'relative',height:170,marginBottom:20}}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={genCurve(sel.right)} margin={{top:5,right:8,left:-14,bottom:5}}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                  <XAxis dataKey="t" tickFormatter={v=>`${v}s`} tick={{fontSize:10}}/>
+                  <YAxis tick={{fontSize:10}} domain={[0,80]}/>
+                  <Tooltip formatter={v=>[`${v} kgf`]} contentStyle={{fontSize:11}}/>
+                  <Line type="monotone" dataKey="v" stroke={C.primary} strokeWidth={2} dot={false}/>
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            {[{l:'오른손 최대값',v:`${sel.right} kgf`},{l:'왼손 최대값',v:`${sel.left} kgf`},{l:'글로벌 순위',v:`${sel.rank}위`}].map(r=>(
+              <div key={r.l} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:13,color:C.muted}}>{r.l}</span>
+                <span style={{fontSize:13,fontWeight:600}}>{r.v}</span>
+              </div>
+            ))}
+            <button className="primary-btn" onClick={()=>setSel(null)}
+              style={{width:'100%',marginTop:20,padding:10,fontSize:14,borderRadius:6}}>닫기</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── RANKING VIEW ── */
+function RankingView() {
+  const [fl, setFl] = useState({country:'전체',gender:'전체',weight:'전체',season:'2026 시즌 1'});
+  const [selUser, setSelUser] = useState(null);
+
+  const filtered = USERS.filter(u=>{
+    if(fl.country!=='전체'&&u.country!==fl.country) return false;
+    if(fl.gender!=='전체'&&u.gender!==fl.gender) return false;
+    return true;
+  });
+
+  const MEDAL = ['#D97706','#9CA3AF','#92400E'];
+
+  return (
+    <div style={{maxWidth:1200,margin:'0 auto',padding:'28px 24px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:22}}>
+        <div>
+          <h2 style={{fontSize:21,fontWeight:700}}>글로벌 랭킹</h2>
+          <p style={{fontSize:13,color:C.muted,marginTop:3}}>전 세계 사용자와 악력을 비교합니다</p>
+        </div>
+        <div style={{background:C.primary,color:'#fff',padding:'10px 22px',borderRadius:8,textAlign:'center'}}>
+          <div style={{fontSize:11,opacity:.85}}>내 현재 순위</div>
+          <div style={{fontSize:24,fontWeight:900,lineHeight:1}}>4위</div>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div style={{background:C.surface,borderRadius:10,padding:'14px 18px',
+        border:`1px solid ${C.border}`,marginBottom:18,display:'flex',gap:14,flexWrap:'wrap',alignItems:'center'}}>
+        {[
+          {k:'country',l:'국가',opts:['전체','한국','일본','미국']},
+          {k:'gender',l:'성별',opts:['전체','남','여']},
+          {k:'weight',l:'체급',opts:['전체','60kg 이하','75kg 이하','80kg 이하','85kg 이하']},
+          {k:'season',l:'시즌',opts:['2026 시즌 1','2025 시즌 2','2025 시즌 1']},
+        ].map(f=>(
+          <div key={f.k} style={{display:'flex',alignItems:'center',gap:7}}>
+            <label style={{fontSize:12,fontWeight:600,color:C.muted,whiteSpace:'nowrap'}}>{f.l}</label>
+            <select value={fl[f.k]} onChange={e=>setFl({...fl,[f.k]:e.target.value})} style={{
+              padding:'6px 10px',borderRadius:6,border:`1px solid ${C.border}`,
+              fontSize:13,cursor:'pointer',background:C.surface,color:C.text,}}>
+              {f.opts.map(o=><option key={o}>{o}</option>)}
+            </select>
+          </div>
+        ))}
+        <div style={{marginLeft:'auto',display:'flex',gap:6}}>
+          {Object.entries(fl).filter(([k,v])=>v!=='전체'&&k!=='season').map(([k,v])=>(
+            <span key={k} style={{background:'#FFF7F5',color:C.primary,fontSize:12,
+              padding:'3px 10px',borderRadius:12,border:`1px solid ${C.primary}25`,
+              display:'flex',alignItems:'center',gap:4}}>
+              {v}
+              <button onClick={()=>setFl({...fl,[k]:'전체'})} style={{background:'none',border:'none',
+                cursor:'pointer',color:C.primary,fontSize:11,padding:0,lineHeight:1}}>x</button>
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={{background:C.surface,borderRadius:10,border:`1px solid ${C.border}`,
+        overflow:'hidden',boxShadow:'0 2px 8px rgba(0,0,0,0.05)'}}>
+        {/* My rank sticky */}
+        <div style={{background:'#FFF7F5',padding:'12px 20px',
+          borderBottom:`2px solid ${C.primary}25`,
+          display:'flex',alignItems:'center',gap:14}}>
+          <div style={{width:32,height:32,borderRadius:'50%',background:C.primary,
+            color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:14}}>4</div>
+          <div>
+            <span style={{fontSize:14,fontWeight:700}}>김민수 (나)</span>
+            <span style={{fontSize:12,color:C.muted,marginLeft:10}}>한국 · 남 · 80kg</span>
+          </div>
+          <div style={{marginLeft:'auto',fontSize:18,fontWeight:800,color:C.primary}}>71.2 kgf</div>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead>
+            <tr style={{background:'#FAFAF8'}}>
+              {['순위','사용자','최고값','국가','성별','체급','측정일',''].map(h=>(
+                <th key={h} style={{padding:'9px 16px',textAlign:'left',fontSize:12,
+                  fontWeight:600,color:C.muted,borderBottom:`1px solid ${C.border}`}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(u=>(
+              <tr key={u.id} className="row-hover" onClick={()=>setSelUser(u)} style={{cursor:'pointer'}}>
+                <td style={{padding:'11px 16px',borderBottom:`1px solid ${C.border}`}}>
+                  <div style={{width:28,height:28,borderRadius:'50%',
+                    background:u.rank<=3?MEDAL[u.rank-1]:'#F0EEEC',
+                    color:u.rank<=3?'#fff':C.muted,
+                    display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:13}}>{u.rank}</div>
+                </td>
+                <td style={{padding:'11px 16px',fontSize:13,fontWeight:600,borderBottom:`1px solid ${C.border}`}}>{u.name}</td>
+                <td style={{padding:'11px 16px',fontSize:14,fontWeight:800,color:C.primary,borderBottom:`1px solid ${C.border}`}}>{u.value} kgf</td>
+                <td style={{padding:'11px 16px',fontSize:13,borderBottom:`1px solid ${C.border}`}}>{u.country}</td>
+                <td style={{padding:'11px 16px',fontSize:13,borderBottom:`1px solid ${C.border}`}}>{u.gender}</td>
+                <td style={{padding:'11px 16px',fontSize:13,borderBottom:`1px solid ${C.border}`}}>{u.weight}</td>
+                <td style={{padding:'11px 16px',fontSize:12,color:C.muted,borderBottom:`1px solid ${C.border}`}}>{u.date}</td>
+                <td style={{padding:'11px 16px',borderBottom:`1px solid ${C.border}`}}>
+                  <button className="ghost-btn" style={{padding:'4px 10px',fontSize:12,borderRadius:4}}>프로필</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* User modal */}
+      {selUser && (
+        <div className="overlay" onClick={()=>setSelUser(null)}>
+          <div className="fade-in" style={{background:C.surface,borderRadius:12,padding:32,
+            width:380,maxWidth:'92vw'}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}>
+              <div style={{display:'flex',alignItems:'center',gap:12}}>
+                <div style={{width:44,height:44,borderRadius:'50%',background:'#F0EBE8',
+                  display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  <i data-lucide="user" style={{width:22,height:22,color:C.muted}}></i>
+                </div>
+                <div>
+                  <h2 style={{fontSize:16,fontWeight:700}}>{selUser.name}</h2>
+                  <div style={{fontSize:12,color:C.muted}}>글로벌 {selUser.rank}위</div>
+                </div>
+              </div>
+              <button onClick={()=>setSelUser(null)} style={{background:'none',border:'none',cursor:'pointer'}}>
+                <i data-lucide="x" style={{width:18,height:18,color:C.muted}}></i>
+              </button>
+            </div>
+            {[
+              {l:'최고 악력',v:`${selUser.value} kgf (${selUser.hand})`},
+              {l:'국가',v:selUser.country},{l:'성별',v:selUser.gender},
+              {l:'체급',v:selUser.weight},{l:'최근 측정일',v:selUser.date},
+            ].map(r=>(
+              <div key={r.l} style={{display:'flex',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:13,color:C.muted}}>{r.l}</span>
+                <span style={{fontSize:13,fontWeight:600}}>{r.v}</span>
+              </div>
+            ))}
+            <button className="primary-btn" onClick={()=>setSelUser(null)}
+              style={{width:'100%',marginTop:20,padding:10,fontSize:14,borderRadius:6}}>닫기</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── SHARE VIEW ── */
+function ShareView() {
+  const [sel, setSel] = useState(1);
+  const [opts, setOpts] = useState({watermark:true,curve:true,rank:true,date:false});
+  const [gen, setGen] = useState(false);
+  const [done, setDone] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  function showMsg(m){ setToast(m); setTimeout(()=>setToast(null),2500); }
+
+  function generate(){
+    setGen(true); setDone(false);
+    setTimeout(()=>{ setGen(false); setDone(true); },2200);
+  }
+
+  const rec = MY_RECORDS.find(r=>r.id===sel);
+
+  return (
+    <div style={{maxWidth:1200,margin:'0 auto',padding:'28px 24px'}}>
+      <div style={{marginBottom:22}}>
+        <h2 style={{fontSize:21,fontWeight:700}}>결과 공유</h2>
+        <p style={{fontSize:13,color:C.muted,marginTop:3}}>측정 결과 카드 이미지를 생성하고 SNS에 공유합니다</p>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:22}}>
+        {/* Settings */}
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{background:C.surface,borderRadius:10,padding:22,border:`1px solid ${C.border}`}}>
+            <h3 style={{fontSize:14,fontWeight:700,marginBottom:14}}>측정 기록 선택</h3>
+            {MY_RECORDS.slice(0,3).map(r=>(
+              <div key={r.id} onClick={()=>setSel(r.id)} style={{
+                display:'flex',alignItems:'center',justifyContent:'space-between',
+                padding:'10px 14px',borderRadius:8,marginBottom:8,cursor:'pointer',
+                border:`1px solid ${sel===r.id?C.primary:C.border}`,
+                background:sel===r.id?'#FFF7F5':C.surface,
+                transition:'all 0.15s',
+              }}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:600}}>{r.date}</div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>오른손 {r.right} kgf · 순위 {r.rank}위</div>
+                </div>
+                {sel===r.id && <i data-lucide="check-circle" style={{width:18,height:18,color:C.primary}}></i>}
+              </div>
+            ))}
+          </div>
+          <div style={{background:C.surface,borderRadius:10,padding:22,border:`1px solid ${C.border}`}}>
+            <h3 style={{fontSize:14,fontWeight:700,marginBottom:14}}>이미지 옵션</h3>
+            {[{k:'watermark',l:'브랜드 워터마크'},{k:'curve',l:'Force Curve 그래프'},{k:'rank',l:'글로벌 순위 표시'},{k:'date',l:'측정 날짜 표시'}].map(o=>(
+              <div key={o.k} style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+                padding:'9px 0',borderBottom:`1px solid ${C.border}`}}>
+                <span style={{fontSize:13}}>{o.l}</span>
+                <div onClick={()=>setOpts({...opts,[o.k]:!opts[o.k]})} style={{
+                  width:38,height:22,borderRadius:11,cursor:'pointer',position:'relative',
+                  background:opts[o.k]?C.primary:C.border,transition:'background 0.2s',
+                }}>
+                  <div style={{width:18,height:18,borderRadius:'50%',background:'#fff',position:'absolute',
+                    top:2,left:opts[o.k]?18:2,transition:'left 0.2s',boxShadow:'0 1px 3px rgba(0,0,0,0.2)'}}></div>
+                </div>
+              </div>
+            ))}
+            <button className="primary-btn" onClick={generate} disabled={gen}
+              style={{width:'100%',marginTop:18,padding:'11px 0',fontSize:15,borderRadius:6,
+                display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+              {gen ? (
+                <>
+                  <div style={{width:14,height:14,border:'2px solid rgba(255,255,255,0.35)',
+                    borderTopColor:'#fff',borderRadius:'50%',animation:'pulseRing 0.7s linear infinite'}}></div>
+                  이미지 생성 중...
+                </>
+              ) : '결과 이미지 생성'}
+            </button>
+          </div>
+        </div>
+
+        {/* Preview */}
+        <div style={{background:C.surface,borderRadius:10,padding:22,border:`1px solid ${C.border}`}}>
+          <h3 style={{fontSize:14,fontWeight:700,marginBottom:14}}>미리보기</h3>
+          {!done ? (
+            <div style={{height:300,background:'#FAFAF8',borderRadius:10,
+              border:`1px dashed ${C.border}`,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:10}}>
+              <i data-lucide="image" style={{width:44,height:44,color:C.border}}></i>
+              <span style={{fontSize:13,color:C.muted}}>이미지를 생성하면 미리보기가 표시됩니다</span>
+            </div>
+          ):(
+            <div className="fade-in" style={{borderRadius:12,overflow:'hidden',
+              background:`linear-gradient(135deg,${C.primary} 0%,#9E2007 100%)`,
+              padding:'22px 24px',color:'#fff',position:'relative'}}>
+              {opts.watermark && <div style={{position:'absolute',top:13,right:14,fontSize:11,
+                opacity:.7,fontWeight:800,letterSpacing:'0.05em'}}>GripForce</div>}
+              {opts.date && <div style={{fontSize:11,opacity:.75,marginBottom:4}}>{rec.date}</div>}
+              <div style={{fontSize:11,opacity:.75,marginBottom:6}}>
+                글로벌 {rec.rank}위{opts.rank?' (남/80kg)':''}
+              </div>
+              <div style={{fontSize:40,fontWeight:900,marginBottom:3}}>{rec.right} kgf</div>
+              <div style={{fontSize:13,opacity:.85,marginBottom:16}}>오른손 최대값 · 김민수</div>
+              {opts.curve && (
+                <div style={{height:80,background:'rgba(255,255,255,0.1)',borderRadius:8}}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={genCurve(rec.right)} margin={{top:8,right:8,left:-22,bottom:5}}>
+                      <Line type="monotone" dataKey="v" stroke="rgba(255,255,255,0.8)"
+                        strokeWidth={2} dot={false} isAnimationActive={false}/>
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              <div style={{marginTop:10,display:'flex',justifyContent:'space-between',opacity:.8,fontSize:12}}>
+                <span>왼손 {rec.left} kgf</span>
+                <span>2026 시즌 1</span>
+              </div>
+            </div>
+          )}
+
+          {done && (
+            <div className="fade-in" style={{marginTop:14,display:'flex',flexDirection:'column',gap:10}}>
+              <button className="primary-btn" onClick={()=>showMsg('공유 링크가 클립보드에 복사되었습니다.')}
+                style={{width:'100%',padding:'10px',fontSize:14,borderRadius:6,
+                  display:'flex',alignItems:'center',justifyContent:'center',gap:7}}>
+                <i data-lucide="share-2" style={{width:15,height:15}}></i>SNS 공유
+              </button>
+              <div style={{display:'flex',gap:8}}>
+                {['카카오','인스타','트위터','페이스북'].map(s=>(
+                  <button key={s} className="ghost-btn" onClick={()=>showMsg(`${s}으로 공유합니다.`)}
+                    style={{flex:1,padding:'8px 0',fontSize:12,borderRadius:6}}>{s}</button>
+                ))}
+              </div>
+              <button className="ghost-btn" onClick={()=>showMsg('이미지가 저장되었습니다.')}
+                style={{width:'100%',padding:'9px',fontSize:13,borderRadius:6,
+                  display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
+                <i data-lucide="download" style={{width:14,height:14}}></i>이미지 저장
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {toast && (
+        <div className="toast-anim" style={{position:'fixed',bottom:24,right:24,zIndex:300,
+          background:'#1A1210',color:'#fff',padding:'11px 18px',borderRadius:8,
+          fontSize:13,boxShadow:'0 4px 20px rgba(0,0,0,0.25)',display:'flex',alignItems:'center',gap:8}}>
+          <i data-lucide="check" style={{width:15,height:15,color:'#4ADE80'}}></i>
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── APP ── */
+function App() {
+  const [tab, setTab] = useState('측정 시작');
+
+  useEffect(()=>{
+    if(window.lucide) window.lucide.createIcons();
+  });
+
+  return (
+    <div style={{width:'100%',minHeight:'100vh',display:'flex',flexDirection:'column',background:C.bg}}>
+      <TopNav tab={tab} setTab={setTab}/>
+      {tab==='측정 시작' && <Hero/>}
+      <main style={{flex:1,width:'100%'}}>
+        {tab==='측정 시작' && <MeasurementView/>}
+        {tab==='기록 관리'  && <RecordsView/>}
+        {tab==='랭킹'       && <RankingView/>}
+        {tab==='결과 공유'  && <ShareView/>}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
