@@ -4658,8 +4658,9 @@ function App({ session }) {
         </div>
       )}
 
-      {/* 검색 + 상태 필터 (페이지 스크롤 시 상단 sticky로 항상 접근 가능) */}
-      <div className="fade-in delay-1" style={{ display:'flex', gap:'0.6rem', marginBottom:'0.75rem', flexWrap:'wrap', alignItems:'center', position:'sticky', top:0, background:'var(--bg)', zIndex:5, padding:'0.5rem 0' }}>
+      {/* 필터 바 (검색·상태·담당·기간) — 표 스크롤 시 블록 전체가 상단 sticky로 고정 */}
+      <div className="fade-in delay-1" style={{ position:'sticky', top:0, background:'var(--bg)', zIndex:5, padding:'0.5rem 0', marginBottom:'1rem' }}>
+      <div style={{ display:'flex', gap:'0.6rem', marginBottom:'0.5rem', flexWrap:'wrap', alignItems:'center' }}>
         <input ref={searchRef} type="text" placeholder="제목·슬러그·메모 검색 (/)" value={search} onChange={e => setSearch(e.target.value)}
           style={{ padding:'0.4rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', flex:'1 1 180px', minWidth:180, maxWidth:280, outline:'none' }}
           onFocus={e => e.target.style.borderColor='var(--accent)'}
@@ -4669,7 +4670,7 @@ function App({ session }) {
 
       {/* 담당 필터(좌) + 기간 필터(우) — 한 줄. 담당 pills는 현재 상태에 배정 있는 담당만, 없으면 숨김.
           기간 버튼은 항상 표시(담당이 숨겨져도). */}
-      <div style={{ display:'flex', gap:8, marginBottom:'1rem', flexWrap:'wrap', alignItems:'center' }}>
+      <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
         {activeMembers.length > 0 && (() => {
           const scoped = filter === 'all' ? data : data.filter(d => d.current_status === filter);
           const counts = {};
@@ -4719,6 +4720,7 @@ function App({ session }) {
             }}>{d.label}</button>
           ))}
         </div>
+      </div>
       </div>
 
       {/* 테이블 */}
