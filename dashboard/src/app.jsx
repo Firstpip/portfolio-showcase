@@ -44,8 +44,26 @@ const STATUS_ORDER = ['generated','applied','interview','meeting_done','won','co
 const POST_WON = ['contracted','in_progress','delivered','settled']; // stats: 수주 후 진행 단계
 const HAS_MILESTONES = ['won','contracted','in_progress','delivered','settled']; // 마일스톤 트래커 노출 대상
 const ACTIVE_WORK = ['won','contracted','in_progress']; // 상단 '내 담당 프로젝트' 카드 노출 대상 — 납품·정산 완료 제외
-// 담당 컬럼·담당 필터 기준: '전체'와 수주 후 단계는 PM(assigned_manager), 미팅 단계는 미팅 주/보조 담당
-const isPmView = (f) => f === 'all' || HAS_MILESTONES.includes(f);
+// 담당 컬럼·담당 필터·멤버 바의 단일 소스. 필터별로 노출/매칭할 담당 역할을 정의한다.
+// role.statuses 가 있으면 해당 행 상태에서만 그 역할이 적용됨('전체' 뷰의 행별 구분용).
+// - '전체'        : PM(수주 후 건) + 미팅 주(미팅예정 건만)
+// - 수주 후        : PM(assigned_manager)
+// - 미팅예정/완료  : 미팅 주(main)/보조(sub)
+// - 생성/지원      : 미배정 → 빈 배열(컬럼·필터 숨김)
+const assignRolesFor = (f) => {
+  if (f === 'all') return [
+    { field:'assigned_manager', label:'PM',   statuses: HAS_MILESTONES },
+    { field:'assigned_main',    label:'미팅', statuses: ['interview'] },
+  ];
+  if (HAS_MILESTONES.includes(f)) return [{ field:'assigned_manager', label:'PM' }];
+  if (f === 'interview' || f === 'meeting_done') return [
+    { field:'assigned_main', label:'주' },
+    { field:'assigned_sub',  label:'부' },
+  ];
+  return [];
+};
+const roleAppliesToRow = (role, row) => !role.statuses || role.statuses.includes(row.current_status);
+const assignColLabel = (f) => f === 'all' ? '담당' : (HAS_MILESTONES.includes(f) ? '담당 (PM)' : '담당 (미팅)');
 // 미선정/삭제는 별도의 '미선정·프로젝트 삭제' 버튼으로 처리 — 상태 전환에는 포함하지 않음.
 const TRANSITION_TARGETS = {
   generated:   ['applied'],
@@ -3361,10 +3379,8 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
       }
     }
     if (memberFilter) {
-      // 담당 컬럼이 PM을 보여주는 뷰('전체'·수주 후)에서는 PM 기준, 미팅 단계에서는 주/보조 담당 기준으로 필터
-      list = isPmView(filter)
-        ? list.filter(d => d.assigned_manager===memberFilter)
-        : list.filter(d => d.assigned_main===memberFilter || d.assigned_sub===memberFilter);
+      // 현재 필터의 담당 역할(assignRolesFor) 중 하나라도 해당 행에 적용되고 그 담당이 선택값과 일치하면 통과
+      list = list.filter(d => assignRolesFor(filter).some(role => roleAppliesToRow(role, d) && d[role.field]===memberFilter));
     }
     return list;
   }, [data, filter, search, dateRange, memberFilter]);
@@ -3409,7 +3425,6 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
   const safePage = Math.min(page, totalPages);
   const pageStart = (safePage - 1) * PAGE_SIZE;
   const pagedRows = filtered.slice(pageStart, pageStart + PAGE_SIZE);
-  const isPmFilter = isPmView(filter);
   // 미팅 예정 이전 단계(generated/applied)엔 미팅일·담당이 모두 의미 없음 → 컬럼 자체 숨김
   const preMeeting = filter === 'generated' || filter === 'applied';
   const hideMeeting  = preMeeting;
@@ -3420,7 +3435,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
     { key:'budget',     label:'예산',  sortable:true,  width:'110px' },
     { key:'created_at', label:'생성일', sortable:true,  width:'100px' },
     ...(hideMeeting  ? [] : [{ key:'meeting_at', label:'미팅일', sortable:true,  width:'175px' }]),
-    ...(hideAssigned ? [] : [{ key:'assigned',   label:isPmFilter?'담당 (PM)':'담당 (미팅)', sortable:false, width:'130px' }]),
+    ...(hideAssigned ? [] : [{ key:'assigned',   label:assignColLabel(filter), sortable:false, width:'130px' }]),
     { key:'note',       label:'메모',  sortable:false, width:'160px' },
   ];
 
@@ -3477,9 +3492,6 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
               const urgency = r._urgency||getMeetingUrgency(r.meeting_at);
               const urgBg  = urgency==='today'?'var(--surface-warning-soft)':urgency==='tomorrow'?'var(--surface-info-soft)':r._stale?'var(--surface-danger-soft)':'transparent';
               const urgBdr = urgency==='today'?'var(--surface-warning-strong)':urgency==='tomorrow'?'var(--surface-info-mid)':r._stale?'var(--surface-danger-mid)':'var(--border)';
-              const mgrM  = teamMembers?.find(m => m.id===r.assigned_manager);
-              const mainM = teamMembers?.find(m => m.id===r.assigned_main);
-              const subM  = teamMembers?.find(m => m.id===r.assigned_sub);
               return (
                 <tr key={r.slug} onClick={() => onRowClick(r)}
                   style={{ borderBottom:`1px solid ${urgBdr}`, cursor:'pointer', transition:'background 0.1s', background:urgBg }}
@@ -3564,43 +3576,35 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                     })() : <span style={{ color:'var(--text2)' }}>—</span>}
                   </td>
                   )}
-                  {/* 담당 컬럼: '전체'·수주 후 단계는 PM(assigned_manager), 미팅 단계는 미팅 메인/보조(main/sub).
-                      미팅 예정 이전(generated/applied) 필터일 땐 컬럼 자체를 숨김.
-                      'PM 미배정' 경고는 PM이 실제로 필요한 수주 후 단계에서만 노출 (전체 뷰의 수주 전 건은 — 표시) */}
-                  {!hideAssigned && (
-                  <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap' }}>
-                    {isPmFilter ? (
-                      mgrM ? (
-                        <span style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
-                          <MemberAvatar member={mgrM} size={16} />
-                          <span style={{ fontSize:'0.8rem', color:mgrM.color, fontWeight:600 }}>{mgrM.name}</span>
-                          <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>PM</span>
-                        </span>
-                      ) : HAS_MILESTONES.includes(r.current_status) ? (
+                  {/* 담당 컬럼: 필터별 담당 역할(assignRolesFor)에 따라 표시.
+                      '전체'=PM(수주 후 건)+미팅 주(미팅예정 건), 수주 후=PM, 미팅 단계=주/보조, 생성/지원=컬럼 숨김.
+                      'PM 미배정' 경고는 PM이 필수인 '수주 후 상태 필터'에서만 (전체 뷰는 — 표시) */}
+                  {!hideAssigned && (() => {
+                    const entries = assignRolesFor(filter)
+                      .filter(role => roleAppliesToRow(role, r))
+                      .map(role => ({ label: role.label, m: teamMembers?.find(tm => tm.id === r[role.field]) }))
+                      .filter(e => e.m);
+                    const pmRequired = filter !== 'all' && HAS_MILESTONES.includes(r.current_status);
+                    return (
+                    <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap' }}>
+                      {entries.length > 0 ? (
+                        <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+                          {entries.map((e, i) => (
+                            <span key={i} style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
+                              <MemberAvatar member={e.m} size={16} />
+                              <span style={{ fontSize:'0.8rem', color:e.m.color, fontWeight:600 }}>{e.m.name}</span>
+                              <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>{e.label}</span>
+                            </span>
+                          ))}
+                        </div>
+                      ) : pmRequired ? (
                         <span title="수주 후 PM 미배정 — 배정 필요" style={{ display:'inline-flex', alignItems:'center', gap:4, padding:'0.15rem 0.5rem', borderRadius:6, background:'var(--surface-warning-soft)', color:'var(--yellow)', fontSize:'0.75rem', fontWeight:600, border:'1px solid var(--surface-warning-strong)' }}>
                           ⚠ PM 미배정
                         </span>
-                      ) : <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>—</span>
-                    ) : (mainM||subM) ? (
-                      <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
-                        {mainM && (
-                          <span style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
-                            <MemberAvatar member={mainM} size={16} />
-                            <span style={{ fontSize:'0.8rem', color:mainM.color, fontWeight:600 }}>{mainM.name}</span>
-                            <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>주</span>
-                          </span>
-                        )}
-                        {subM && (
-                          <span style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
-                            <MemberAvatar member={subM} size={14} />
-                            <span style={{ fontSize:'0.8rem', color:subM.color }}>{subM.name}</span>
-                            <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>부</span>
-                          </span>
-                        )}
-                      </div>
-                    ) : <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>—</span>}
-                  </td>
-                  )}
+                      ) : <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>—</span>}
+                    </td>
+                    );
+                  })()}
                   <td style={{ padding:'0.7rem 1rem', fontSize:'0.8rem', color:'var(--text2)', maxWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                     <InlineMemo value={r.memo} onSave={val => onMemoSave(r,val)} />
                   </td>
@@ -4427,9 +4431,7 @@ function App({ session }) {
   useEffect(() => {
     if (!memberFilter || !data) return;
     const scoped = filter === 'all' ? data : data.filter(d => d.current_status === filter);
-    const stillRelevant = scoped.some(d => isPmView(filter)
-      ? d.assigned_manager === memberFilter
-      : (d.assigned_main === memberFilter || d.assigned_sub === memberFilter));
+    const stillRelevant = scoped.some(d => assignRolesFor(filter).some(role => roleAppliesToRow(role, d) && d[role.field] === memberFilter));
     if (!stillRelevant) setMemberFilter('');
   }, [filter, memberFilter, data]);
 
@@ -4679,9 +4681,11 @@ function App({ session }) {
           (PM 뷰는 PM 기준, 미팅 단계는 주/보조 기준 집계. 생성/지원 단계는 미배정이라 자동 숨김) */}
       {activeMembers.length > 0 && (() => {
         const scoped = filter === 'all' ? data : data.filter(d => d.current_status === filter);
-        const roleIdsOf = d => isPmView(filter) ? [d.assigned_manager] : [d.assigned_main, d.assigned_sub];
         const counts = {};
-        scoped.forEach(d => roleIdsOf(d).forEach(id => { if (id) counts[id] = (counts[id]||0) + 1; }));
+        scoped.forEach(d => assignRolesFor(filter).forEach(role => {
+          if (!roleAppliesToRow(role, d)) return;
+          const id = d[role.field]; if (id) counts[id] = (counts[id]||0) + 1;
+        }));
         const relevant = activeMembers.filter(m => counts[m.id] > 0);
         if (relevant.length === 0) return null;
         return (
