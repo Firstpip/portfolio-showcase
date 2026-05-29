@@ -368,7 +368,7 @@ function ConfirmModal({ state, onCancel }) {
   const inputMatch = !confirmInput || inputVal === confirmInput.match;
   return (
     <div onClick={onCancel} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(3px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:2000, padding:'1rem' }}>
-      <div onClick={e => e.stopPropagation()} style={{
+      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:14, width:'100%', maxWidth:420,
         border:'1px solid var(--border)', animation:'slideUp 0.2s ease-out',
         boxShadow:'0 20px 50px var(--shadow)', overflow:'hidden',
@@ -427,7 +427,7 @@ function ShortcutHelp({ onClose }) {
   const kbdS = { padding:'0.2rem 0.55rem', borderRadius:5, background:'var(--surface2)', border:'1px solid var(--border)', fontSize:'0.8rem', fontWeight:600, fontFamily:'monospace', color:'var(--text)' };
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(3px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:2500 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background:'var(--surface)', borderRadius:14, width:'100%', maxWidth:360, border:'1px solid var(--border)', boxShadow:'0 20px 50px var(--shadow)', animation:'slideUp 0.2s ease-out' }}>
+      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{ background:'var(--surface)', borderRadius:14, width:'100%', maxWidth:360, border:'1px solid var(--border)', boxShadow:'0 20px 50px var(--shadow)', animation:'slideUp 0.2s ease-out' }}>
         <div style={{ padding:'1rem 1.25rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <span style={{ fontWeight:700, fontSize:'0.95rem' }}>키보드 단축키</span>
           <button onClick={onClose} style={btn.ghost({ padding:0, fontSize:'1rem' })}>✕</button>
@@ -473,10 +473,26 @@ function useToast() {
 
 // ─── Loading ───
 function Loading() {
+  // 스켈레톤: 스피너 대신 실제 레이아웃(헤더·필터·표) 형태로 체감 지연·레이아웃 시프트 감소
+  const sk = (w, h=16, mb=0) => <div style={{ width:w, height:h, marginBottom:mb, borderRadius:6, background:'var(--surface2)', animation:'pulse 1.4s ease-in-out infinite', flexShrink:0 }} />;
   return (
-    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', minHeight:'60vh', gap:'1rem' }}>
-      <div style={{ width:32, height:32, border:'3px solid var(--border)', borderTopColor:'var(--accent)', borderRadius:'50%', animation:'spin 0.8s linear infinite' }} />
-      <span style={{ color:'var(--text2)' }}>Supabase 연결 중...</span>
+    <div style={{ paddingTop:'1rem' }} aria-busy="true" aria-label="불러오는 중">
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1.5rem' }}>
+        {sk(180, 28)}
+        <div style={{ display:'flex', gap:8 }}>{sk(72, 32)}{sk(40, 32)}{sk(120, 32)}</div>
+      </div>
+      <div style={{ display:'flex', gap:8, marginBottom:'1rem', flexWrap:'wrap' }}>
+        {sk(260, 34)}{sk(64, 30)}{sk(72, 30)}{sk(72, 30)}{sk(72, 30)}
+      </div>
+      <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:12, overflow:'hidden' }}>
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div key={i} style={{ display:'flex', alignItems:'center', gap:16, padding:'0.9rem 1rem', borderBottom: i < 7 ? '1px solid var(--border)' : 'none', opacity: 1 - i * 0.07 }}>
+            {sk(88, 20)}
+            <div style={{ flex:1, minWidth:0 }}>{sk('55%', 14, 6)}{sk('32%', 10)}</div>
+            {sk(64, 14)}{sk(80, 14)}{sk(56, 14)}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -858,7 +874,7 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
-      <div onClick={e => e.stopPropagation()} style={{
+      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:460,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
         boxShadow:'0 20px 60px var(--shadow)', maxHeight:'80vh', display:'flex', flexDirection:'column',
@@ -1693,7 +1709,7 @@ function MilestoneEditModal({ milestone, teamMembers, saving, onUpdate, onDelete
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1500, padding:'2rem 1rem' }}>
-      <div onClick={e=>e.stopPropagation()} style={{
+      <div role="dialog" aria-modal="true" onClick={e=>e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:640,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
         boxShadow:'0 20px 60px var(--shadow)', maxHeight:'90vh', display:'flex', flexDirection:'column',
@@ -2519,7 +2535,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
-      <div onClick={e => e.stopPropagation()} style={{
+      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:500,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
         boxShadow:'0 20px 60px var(--shadow)', maxHeight:'88vh', display:'flex', flexDirection:'column',
@@ -3226,7 +3242,7 @@ function RegenerationModal({ project, onClose, onRegenerate, saving }) {
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
-      <div onClick={e => e.stopPropagation()} style={{
+      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:560,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
         boxShadow:'0 20px 60px var(--shadow)',
@@ -3459,6 +3475,9 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
               </th>
               {cols.map(c => (
                 <th key={c.key} onClick={c.sortable?()=>onSort(c.key):undefined}
+                  role={c.sortable?'button':undefined} tabIndex={c.sortable?0:undefined}
+                  aria-sort={c.sortable ? (sortKey===c.key ? (sortOrder==='desc'?'descending':'ascending') : 'none') : undefined}
+                  onKeyDown={c.sortable ? (e => { if (e.key==='Enter' || e.key===' ') { e.preventDefault(); onSort(c.key); } }) : undefined}
                   style={{ padding:'0.75rem 1rem', textAlign:'left', fontWeight:600, color:'var(--text2)', fontSize:'0.8rem', whiteSpace:'nowrap', width:c.width||'auto', cursor:c.sortable?'pointer':'default', userSelect:c.sortable?'none':'auto', position:'sticky', top:0, background:'var(--surface)', zIndex:1 }}>
                   {c.label}{c.sortable&&sortKey===c.key&&(sortOrder==='desc'?' ▼':' ▲')}
                 </th>
@@ -3494,6 +3513,8 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
               const urgBdr = urgency==='today'?'var(--surface-warning-strong)':urgency==='tomorrow'?'var(--surface-info-mid)':r._stale?'var(--surface-danger-mid)':'var(--border)';
               return (
                 <tr key={r.slug} onClick={() => onRowClick(r)}
+                  tabIndex={0} role="button" aria-label={`${meta.label||''} · ${r.title||r.slug}`}
+                  onKeyDown={e => { if ((e.key==='Enter') && e.target===e.currentTarget) { e.preventDefault(); onRowClick(r); } }}
                   style={{ borderBottom:`1px solid ${urgBdr}`, cursor:'pointer', transition:'background 0.1s', background:urgBg }}
                   onMouseEnter={e => e.currentTarget.style.background=urgency?(urgency==='today'?'var(--surface-warning-soft)':'var(--surface-info-soft)'):'var(--surface2)'}
                   onMouseLeave={e => e.currentTarget.style.background=urgBg}>
@@ -4197,14 +4218,23 @@ function App({ session }) {
   const handleCloseRegenerate = useCallback(()   => setRegenerateProject(null), []);
 
   const handleFieldSave = useCallback(async (project, fields) => {
+    const today = new Date().toISOString().split('T')[0];
+    // 옵티미스틱: 로컬에 즉시 반영 (체감 지연 제거)
+    setData(prev => prev.map(d => d.slug===project.slug ? {...d, ...fields, updated_at:today} : d));
+    setSelectedProject(prev => prev && prev.slug===project.slug ? {...prev, ...fields, updated_at:today} : prev);
     setSaving(true);
     try {
-      const { error } = await supabase.from(TABLE).update({ ...fields, updated_at:new Date().toISOString().split('T')[0] }).eq('slug',project.slug);
+      const { error } = await supabase.from(TABLE).update({ ...fields, updated_at:today }).eq('slug',project.slug);
       if (error) throw error;
-      setData(prev => prev.map(d => d.slug===project.slug?{...d,...fields}:d));
-      setSelectedProject(prev => prev?{...prev,...fields}:prev);
       toast('저장 완료','success');
-    } catch(err) { toast('저장 실패: '+err.message,'error'); } finally { setSaving(false); }
+    } catch(err) {
+      // 실패 → 직전 값으로 롤백 (project는 저장 전 스냅샷)
+      const rollback = { updated_at: project.updated_at };
+      Object.keys(fields).forEach(k => { rollback[k] = project[k]; });
+      setData(prev => prev.map(d => d.slug===project.slug ? {...d, ...rollback} : d));
+      setSelectedProject(prev => prev && prev.slug===project.slug ? {...prev, ...rollback} : prev);
+      toast('저장 실패: '+friendlyError(err),'error');
+    } finally { setSaving(false); }
   }, [toast]);
 
   // T7.2 1-click 트리거: demo_status='autorun_queued' + regenerate_scope=null.
@@ -4276,9 +4306,14 @@ function App({ session }) {
   }, [toast]);
 
   const handleMemoSave = useCallback(async (project, memo) => {
-    const { error } = await supabase.from(TABLE).update({ memo, updated_at:new Date().toISOString().split('T')[0] }).eq('slug',project.slug);
-    if (error) { toast('메모 저장 실패','error'); return; }
-    setData(prev => prev.map(d => d.slug===project.slug?{...d,memo}:d));
+    const today = new Date().toISOString().split('T')[0];
+    // 옵티미스틱: 즉시 반영, 실패 시 롤백
+    setData(prev => prev.map(d => d.slug===project.slug ? {...d, memo, updated_at:today} : d));
+    const { error } = await supabase.from(TABLE).update({ memo, updated_at:today }).eq('slug',project.slug);
+    if (error) {
+      setData(prev => prev.map(d => d.slug===project.slug ? {...d, memo:project.memo, updated_at:project.updated_at} : d));
+      toast('메모 저장 실패','error'); return;
+    }
     toast('메모 저장','success');
   }, [toast]);
 
@@ -4873,7 +4908,7 @@ function QuickAddModal({ onClose, onAdd, saving }) {
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
-      <div onClick={e => e.stopPropagation()} style={{
+      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:440,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
         boxShadow:'0 20px 60px var(--shadow)',
