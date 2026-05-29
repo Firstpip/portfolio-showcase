@@ -143,6 +143,9 @@ const STATUS_META = {
 const STATUS_ORDER = ['generated','applied','interview','meeting_done','won','contracted','in_progress','delivered','settled'];
 const POST_WON = ['contracted','in_progress','delivered','settled']; // stats: 수주 후 진행 단계
 const HAS_MILESTONES = ['won','contracted','in_progress','delivered','settled']; // 마일스톤 트래커 노출 대상
+const ACTIVE_WORK = ['won','contracted','in_progress']; // 상단 '내 담당 프로젝트' 카드 노출 대상 — 납품·정산 완료 제외
+// 담당 컬럼·담당 필터 기준: '전체'와 수주 후 단계는 PM(assigned_manager), 미팅 단계는 미팅 주/보조 담당
+const isPmView = (f) => f === 'all' || HAS_MILESTONES.includes(f);
 // 미선정/삭제는 별도의 '미선정·프로젝트 삭제' 버튼으로 처리 — 상태 전환에는 포함하지 않음.
 const TRANSITION_TARGETS = {
   generated:   ['applied'],
@@ -3457,7 +3460,10 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
       }
     }
     if (memberFilter) {
-      list = list.filter(d => d.assigned_manager===memberFilter || d.assigned_main===memberFilter || d.assigned_sub===memberFilter);
+      // 담당 컬럼이 PM을 보여주는 뷰('전체'·수주 후)에서는 PM 기준, 미팅 단계에서는 주/보조 담당 기준으로 필터
+      list = isPmView(filter)
+        ? list.filter(d => d.assigned_manager===memberFilter)
+        : list.filter(d => d.assigned_main===memberFilter || d.assigned_sub===memberFilter);
     }
     return list;
   }, [data, filter, search, dateRange, memberFilter]);
@@ -3502,7 +3508,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
   const safePage = Math.min(page, totalPages);
   const pageStart = (safePage - 1) * PAGE_SIZE;
   const pagedRows = filtered.slice(pageStart, pageStart + PAGE_SIZE);
-  const isPmFilter = ['won','contracted','in_progress','delivered','settled'].includes(filter);
+  const isPmFilter = isPmView(filter);
   // 미팅 예정 이전 단계(generated/applied)엔 미팅일·담당이 모두 의미 없음 → 컬럼 자체 숨김
   const preMeeting = filter === 'generated' || filter === 'applied';
   const hideMeeting  = preMeeting;
@@ -3657,8 +3663,9 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                     })() : <span style={{ color:'var(--text2)' }}>—</span>}
                   </td>
                   )}
-                  {/* 담당 컬럼: 필터가 won 이후 단계일 때는 PM(assigned_manager), 그 외엔 미팅 메인/보조(main/sub).
-                      미팅 예정 이전(generated/applied) 필터일 땐 컬럼 자체를 숨김 */}
+                  {/* 담당 컬럼: '전체'·수주 후 단계는 PM(assigned_manager), 미팅 단계는 미팅 메인/보조(main/sub).
+                      미팅 예정 이전(generated/applied) 필터일 땐 컬럼 자체를 숨김.
+                      'PM 미배정' 경고는 PM이 실제로 필요한 수주 후 단계에서만 노출 (전체 뷰의 수주 전 건은 — 표시) */}
                   {!hideAssigned && (
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap' }}>
                     {isPmFilter ? (
@@ -3668,11 +3675,11 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                           <span style={{ fontSize:'0.8rem', color:mgrM.color, fontWeight:600 }}>{mgrM.name}</span>
                           <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>PM</span>
                         </span>
-                      ) : (
+                      ) : HAS_MILESTONES.includes(r.current_status) ? (
                         <span title="수주 후 PM 미배정 — 배정 필요" style={{ display:'inline-flex', alignItems:'center', gap:4, padding:'0.15rem 0.5rem', borderRadius:6, background:'var(--surface-warning-soft)', color:'var(--yellow)', fontSize:'0.75rem', fontWeight:600, border:'1px solid var(--surface-warning-strong)' }}>
                           ⚠ PM 미배정
                         </span>
-                      )
+                      ) : <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>—</span>
                     ) : (mainM||subM) ? (
                       <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
                         {mainM && (
@@ -4651,7 +4658,7 @@ function App({ session }) {
       {/* 내 담당 프로젝트 — 수주 후 작업 페이지 바로가기 */}
       {currentMember && (() => {
         const myProjects = data.filter(d =>
-          HAS_MILESTONES.includes(d.current_status) && d.assigned_manager === currentMember.id
+          ACTIVE_WORK.includes(d.current_status) && d.assigned_manager === currentMember.id
         );
         if (myProjects.length === 0) return null;
         return (
@@ -4775,7 +4782,10 @@ function App({ session }) {
           }}>전체</button>
           {activeMembers.map(m => {
             const sel = memberFilter===m.id;
-            const cnt = data.filter(d => (d.assigned_manager===m.id||d.assigned_main===m.id||d.assigned_sub===m.id) && ['interview','meeting_done'].includes(d.current_status)).length;
+            // 배지: PM 뷰('전체'·수주 후)에선 PM 배정 건수, 미팅 단계 뷰에선 미팅 주/보조 배정 건수
+            const cnt = isPmView(filter)
+              ? data.filter(d => d.assigned_manager===m.id && HAS_MILESTONES.includes(d.current_status)).length
+              : data.filter(d => (d.assigned_main===m.id||d.assigned_sub===m.id) && ['interview','meeting_done'].includes(d.current_status)).length;
             return (
               <button key={m.id} onClick={() => setMemberFilter(sel?'':m.id)} style={{
                 padding:'0.25rem 0.6rem 0.25rem 0.3rem', borderRadius:20, cursor:'pointer',
