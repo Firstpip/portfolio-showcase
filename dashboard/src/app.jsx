@@ -445,7 +445,8 @@ function ToastContainer({ toasts }) {
 function useToast() {
   const [toasts, setToasts] = useState([]);
   const add = useCallback((message, type='info') => {
-    const id = Date.now();
+    // 충돌 없는 고유 id (Date.now()는 같은 ms 동시 토스트 시 key 중복 → 둘 다 제거됨)
+    const id = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.random()}`;
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
   }, []);
