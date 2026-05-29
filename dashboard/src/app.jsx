@@ -3792,7 +3792,8 @@ function App({ session }) {
       if (e) { console.warn('마감일 자동 전환 RPC 실패:', e.message); return; }
       if (n > 0) toast(`📦 마감일 경과 자동 전환 ${n}건 → 납품 완료`, 'info');
     });
-    // P2/P3 orphan 정리는 cleanup-p2p3.yml 워크플로우가 매일 자정 + dispatch 시 처리
+    // (구) P2/P3 orphan 정리 cron(cleanup-p2p3.yml)은 제거됨 — 미선정은 이제 즉시 삭제
+    // (handleDelete/handleBatchDelete)로 DB+파일을 함께 정리하므로 별도 정리 작업 불필요.
     setData(finalRows); setConnected(true);
     checkMeetingNotifications(finalRows);
   }, [toast, checkMeetingNotifications]);
