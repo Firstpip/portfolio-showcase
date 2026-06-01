@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>장례 현장 다지점 통합 플랫폼 — 구현 데모</title>
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet"/>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+  <script src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
+  <script src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
+  <script src="https://unpkg.com/lucide@latest" defer></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { width: 100%; min-height: 100vh; }
+    body { font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif; background: #f2f0eb; color: #1e1b1a; -webkit-font-smoothing: antialiased; }
+
+    @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes heroReveal { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes slideUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes toastIn { from { opacity:0; transform:translateX(100%); } to { opacity:1; transform:translateX(0); } }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+    @keyframes floatIn { from { opacity:0; transform:scale(0.97); } to { opacity:1; transform:scale(1); } }
+    @keyframes ripple { from { transform:scale(0); opacity:0.6; } to { transform:scale(2.5); opacity:0; } }
+
+    ::-webkit-scrollbar { width:4px; }
+    ::-webkit-scrollbar-track { background:transparent; }
+    ::-webkit-scrollbar-thumb { background:#c8c4c0; border-radius:2px; }
+
+    [data-lucide] { vertical-align: middle; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } = Recharts;
+
+const C = {
+  bg:'#f2f0eb', surface:'#ffffff', hero:'#421d24',
+  primary:'#7c3a3a', primaryHover:'#6b2f2f', primaryLight:'rgba(124,58,58,0.08)',
+  accent:'#9e4a4a',
+  text:'#1e1b1a', textMuted:'#5c5856', textLight:'#8a8480',
+  border:'#e3e3e2', borderMid:'#dcd7d3',
+  success:'#2a7a4b', successBg:'#e8f5ef', successBorder:'#b2e0c8',
+  warning:'#a05c1a', warningBg:'#fef3e6', warningBorder:'#f5d4a0',
+  error:'#b02a2a', errorBg:'#fdeaea', errorBorder:'#f5b0b0',
+  shadow:'0px 2px 12px rgba(0,0,0,0.08)',
+  shadowElevated:'0px 8px 32px rgba(0,0,0,0.12)',
+  shadowCard:'0px 4px 20px rgba(0,0,0,0.07), 0px 1px 3px rgba(0,0,0,0.05)',
+};
+
+/* ===== MOCK DATA ===== */
+const BRANCHES = [
+  { id:'B001', name:'하나장례식장', location:'서울 강동구', ceremonies:2, visitors:47, capacity:8, status:'active', director:'김도현' },
+  { id:'B002', name:'서울추모공원', location:'서울 노원구', ceremonies:1, visitors:28, capacity:6, status:'active', director:'이수빈' },
+  { id:'B003', name:'강남장례식장', location:'서울 강남구', ceremonies:0, visitors:0, capacity:5, status:'idle', director:'박소연' },
+  { id:'B004', name:'광진장례식장', location:'서울 광진구', ceremonies:1, visitors:11, capacity:4, status:'active', director:'윤세영' },
+  { id:'B005', name:'송파추모관', location:'서울 송파구', ceremonies:0, visitors:0, capacity:3, status:'maintenance', director:'최재원' },
+];
+
+const TREND_DATA = [
+  { date:'5/26', visitors:42 }, { date:'5/27', visitors:58 }, { date:'5/28', visitors:35 },
+  { date:'5/29', visitors:71 }, { date:'5/30', visitors:49 }, { date:'5/31', visitors:63 }, { date:'6/1', visitors:86 },
+];
+
+const BRANCH_CHART = [
+  { name:'하나', visitors:112, ceremonies:3 },
+  { name:'서울추모', visitors:87, ceremonies:2 },
+  { name:'강남', visitors:64, ceremonies:2 },
+  { name:'광진', visitors:45, ceremonies:1 },
+  { name:'송파', visitors:38, ceremonies:1 },
+];
+
+const CHANNEL_DATA = [
+  { name:'카카오톡', value:52 }, { name:'직접 방문', value:28 }, { name:'SMS 링크', value:20 },
+];
+
+const SMS_LOGS = [
+  { id:'S001', to:'박정민 (010-9876-****)', type:'유가족 앱 링크', status:'success', sentAt:'10:15', branch:'하나장례식장' },
+  { id:'S002', to:'김지호 (010-1234-****)', type:'유가족 앱 링크', status:'success', sentAt:'14:02', branch:'서울추모공원' },
+  { id:'S003', to:'이용철 (010-9000-****)', type:'부고 공유 알림', status:'failed', sentAt:'10:16', branch:'하나장례식장' },
+  { id:'S004', to:'최재현 (010-3456-****)', type:'발인 D-1 리마인더', status:'pending', sentAt:'예약', branch:'광진장례식장' },
+  { id:'S005', to:'홍진수 (010-7777-****)', type:'유가족 앱 링크', status:'success', sentAt:'15:44', branch:'광진장례식장' },
+];
+
+const STAFF = [
+  { id:'U001', name:'김도현', role:'지점관리자', branch:'하나장례식장', status:'active' },
+  { id:'U002', name:'이수빈', role:'장례지도사', branch:'서울추모공원', status:'active' },
+  { id:'U003', name:'박소연', role:'장례지도사', branch:'강남장례식장', status:'active' },
+  { id:'U004', name:'윤세영', role:'장례지도사', branch:'광진장례식장', status:'active' },
+  { id:'U005', name:'최재원', role:'지점관리자', branch:'송파추모관', status:'inactive' },
+];
+
+/* ===== LUCIDE ICONS HELPER ===== */
+const useLucide = () => {
+  useEffect(() => {
+    const t = setTimeout(() => { if (window.lucide) window.lucide.createIcons(); }, 50);
+    return () => clearTimeout(t);
+  });
+};
+
+/* ===== UI COMPONENTS ===== */
+const Badge = ({ label, color }) => {
+  const m = {
+    active:{ bg:C.successBg, text:C.success, border:C.successBorder },
+    idle:{ bg:'#f5f5f0', text:C.textLight, border:C.border },
+    maintenance:{ bg:C.warningBg, text:C.warning, border:C.warningBorder },
+    success:{ bg:C.successBg, text:C.success, border:C.successBorder },
+    failed:{ bg:C.errorBg, text:C.error, border:C.errorBorder },
+    pending:{ bg:'#f5f0fb', text:'#6b4fa0', border:'#c9b8e8' },
+    admin:{ bg:'rgba(124,58,58,0.1)', text:C.primary, border:'rgba(124,58,58,0.3)' },
+    director:{ bg:'#f0f4f8', text:'#3d5a7a', border:'#c0d0dc' },
+    inactive:{ bg:'#f5f5f0', text:C.textLight, border:C.border },
+  };
+  const c = m[color] || m.idle;
+  return <span style={{ fontSize:11, fontWeight:600, padding:'2px 9px', borderRadius:9999, background:c.bg, color:c.text, border:`1px solid ${c.border}`, whiteSpace:'nowrap' }}>{label}</span>;
+};
+
+const Toast = ({ message, type, onClose }) => {
+  useEffect(() => { const t = setTimeout(onClose, 3000); return () => clearTimeout(t); }, []);
+  return (
+    <div style={{ position:'fixed', bottom:28, right:28, zIndex:9999, background:C.hero, color:'#f2f0eb', borderRadius:8, padding:'14px 22px', boxShadow:C.shadowElevated, animation:'toastIn 0.3s ease', display:'flex', alignItems:'center', gap:10, fontSize:14, fontWeight:500 }}>
+      <i data-lucide={type==='error'?'x-circle':'check-circle'} style={{ width:16, height:16 }} />
+      {message}
+    </div>
+  );
+};
+
+const Modal = ({ title, children, onClose, width=560 }) => (
+  <div style={{ position:'fixed', inset:0, zIndex:8888, background:'rgba(30,27,26,0.35)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+    <div style={{ background:C.surface, borderRadius:16, width, maxWidth:'calc(100vw - 40px)', maxHeight:'90vh', overflowY:'auto', boxShadow:C.shadowElevated, animation:'floatIn 0.2s ease' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'20px 28px', borderBottom:`1px solid ${C.border}` }}>
+        <span style={{ fontSize:18, fontWeight:600, color:C.text, letterSpacing:'-0.31px' }}>{title}</span>
+        <button onClick={onClose} style={{ background:'none', border:'none', cursor:'pointer', color:C.textMuted, padding:4 }}><i data-lucide="x" style={{ width:18, height:18 }} /></button>
+      </div>
+      <div style={{ padding:28 }}>{children}</div>
+    </div>
+  </div>
+);
+
+const Card = ({ children, style={} }) => (
+  <div style={{ background:C.surface, borderRadius:16, border:`1px solid ${C.border}`, boxShadow:C.shadowCard, ...style }}>
+    {children}
+  </div>
+);
+
+const PrimaryBtn = ({ onClick, children, icon }) => (
+  <button onClick={onClick} style={{ display:'flex', alignItems:'center', gap:7, background:C.primary, color:'#f2f0eb', border:'none', borderRadius:8, padding:'10px 20px', fontSize:14, fontWeight:600, cursor:'pointer', letterSpacing:'-0.008px', transition:'background 0.15s' }}
+    onMouseEnter={e=>e.currentTarget.style.background=C.primaryHover}
+    onMouseLeave={e=>e.currentTarget.style.background=C.primary}>
+    {icon && <i data-lucide={icon} style={{ width:14, height:14 }} />}
+    {children}
+  </button>
+);
+
+const GhostBtn = ({ onClick, children, icon }) => (
+  <button onClick={onClick} style={{ display:'flex', alignItems:'center', gap:6, background:'transparent', color:C.primary, border:`1px solid ${C.primary}`, borderRadius:8, padding:'8px 16px', fontSize:13, fontWeight:500, cursor:'pointer', transition:'all 0.15s' }}
+    onMouseEnter={e=>{e.currentTarget.style.background=C.primaryLight;}}
+    onMouseLeave={e=>{e.currentTarget.style.background='transparent';}}>
+    {icon && <i data-lucide={icon} style={{ width:13, height:13 }} />}
+    {children}
+  </button>
+);
+
+const FormField = ({ label, type='text', value, onChange, placeholder }) => (
+  <div style={{ marginBottom:16 }}>
+    <label style={{ fontSize:12, fontWeight:500, color:C.textMuted, display:'block', marginBottom:5 }}>{label}</label>
+    <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{ width:'100%', padding:'10px 14px', border:`1px solid ${C.borderMid}`, borderRadius:8, fontSize:14, color:C.text, background:C.surface, outline:'none' }} />
+  </div>
+);
+
+/* ===== SPA NAVIGATION ===== */
+const NAV_LINKS = [
+  { id:'analytics', label:'조문 통계 및 분석 대시보드', icon:'bar-chart-2' },
+  { id:'notification', label:'스마트 알림 및 발송 이력 관리', icon:'bell' },
+  { id:'settings', label:'장례식장 및 운영자 관리', icon:'settings' },
+  { id:'branch-detail', label:'다지점 현황 상세 보기', icon:'map-pin' },
+];
+
+const SpaNav = ({ page, setPage }) => {
+  useLucide();
+  return (
+    <nav style={{ background:C.surface, borderBottom:`1px solid ${C.border}`, position:'sticky', top:0, zIndex:100, boxShadow:'0 1px 4px rgba(0,0,0,0.06)' }}>
+      <div style={{ maxWidth:1200, margin:'0 auto', padding:'0 32px', display:'flex', alignItems:'center', justifyContent:'space-between', height:56 }}>
+        <button onClick={()=>setPage('main')} style={{ display:'flex', alignItems:'center', gap:10, background:'none', border:'none', cursor:'pointer', padding:0 }}>
+          <div style={{ width:26, height:26, background:C.hero, borderRadius:6, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <i data-lucide="flower" style={{ width:14, height:14, color:'#f2f0eb' }} />
+          </div>
+          <span style={{ fontSize:15, fontWeight:700, color:C.text, letterSpacing:'-0.022px' }}>HUBOS</span>
+          <span style={{ fontSize:10, background:C.hero, color:'#f2f0eb', padding:'1px 7px', borderRadius:999, fontWeight:600 }}>운영 관리</span>
+        </button>
+        <div style={{ display:'flex', gap:2 }}>
+          {NAV_LINKS.map(l => (
+            <button key={l.id} onClick={()=>setPage(l.id)} style={{ background:page===l.id?C.primaryLight:'none', border:'none', cursor:'pointer', padding:'7px 12px', borderRadius:8, fontSize:13, fontWeight:page===l.id?600:400, color:page===l.id?C.primary:C.textMuted, transition:'all 0.15s', display:'flex', alignItems:'center', gap:5 }}>
+              <i data-lucide={l.icon} style={{ width:13, height:13 }} />
+              {l.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <div style={{ width:7, height:7, borderRadius:'50%', background:C.success, animation:'pulse 2s infinite' }} />
+            <span style={{ fontSize:11, color:C.textMuted }}>10개 지점 연결</span>
+          </div>
+          <div style={{ width:32, height:32, borderRadius:'50%', background:'#421d24', display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}>
+            <i data-lucide="user" style={{ width:15, height:15, color:'#f2f0eb' }} />
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+};
+
+/* ===== ANNOUNCEMENT BANNER ===== */
+const AnnouncementBanner = () => {
+  const [visible, setVisible] = useState(true);
+  if (!visible) return null;
+  return (
+    <div style={{ background:C.hero, color:'#f2f0eb', padding:'11px 32px', display:'flex', alignItems:'center', justifyContent:'center', gap:12, fontSize:13, fontWeight:500, position:'relative' }}>
+      <div style={{ width:6, height:6, borderRadius:'50%', background:'#e8f5ef', animation:'pulse 2s infinite' }} />
+      10개 지점 실시간 연결 · 오늘 86명 방문 완료 · 진행중 장례 4건
+      <button onClick={()=>setVisible(false)} style={{ position:'absolute', right:20, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', color:'rgba(242,240,235,0.5)', fontSize:16, lineHeight:1 }}>×</button>
+    </div>
+  );
+};
+
+/* ===== MAIN SCREEN (다지점 현황 모니터링) ===== */
+const MainScreen = ({ setPage, showToast }) => {
+  const [liveVisitors, setLiveVisitors] = useState(86);
+  useLucide();
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      setLiveVisitors(v => v + (Math.random() > 0.6 ? 1 : 0));
+    }, 4000);
+    return () => clearInterval(t);
+  }, []);
+
+  const statusMap = { active:'운영중', idle:'대기중', maintenance:'점검중' };
+  const statusColor = { active:'active', idle:'idle', maintenance:'maintenance' };
+
+  return (
+    <div>
+      {/* Hero */}
+      <div style={{ background:`linear-gradient(to bottom, ${C.hero}, #5a2028)`, color:'#f2f0eb', padding:'52px 32px 56px' }}>
+        <div style={{ maxWidth:1200, margin:'0 auto' }}>
+          <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:32, flexWrap:'wrap' }}>
+            <div style={{ animation:'heroReveal 0.6s ease' }}>
+              <p style={{ fontSize:12, color:'rgba(242,240,235,0.6)', fontWeight:500, marginBottom:8, letterSpacing:'0.048px', textTransform:'uppercase' }}>다지점 실시간 현황</p>
+              <h1 style={{ fontSize:48, fontWeight:600, lineHeight:1, letterSpacing:'-1.3px', marginBottom:12 }}>장례 현장을<br/>실시간으로 통합 관리</h1>
+              <p style={{ fontSize:16, color:'rgba(242,240,235,0.7)', lineHeight:1.5, maxWidth:480 }}>10개 장례식장 지점의 접수 현황, 조문객 체크인, SMS 발송 상태를 하나의 대시보드에서 실시간으로 파악합니다. Socket.io + Redis Pub/Sub 기반 다지점 이벤트 통합 아키텍처를 구현합니다.</p>
+              <div style={{ display:'flex', gap:12, marginTop:24 }}>
+                <PrimaryBtn onClick={()=>setPage('analytics')} icon="bar-chart-2">통계 분석 보기</PrimaryBtn>
+                <button onClick={()=>setPage('branch-detail')} style={{ display:'flex', alignItems:'center', gap:6, background:'transparent', color:'rgba(242,240,235,0.9)', border:'1px solid rgba(242,240,235,0.35)', borderRadius:8, padding:'10px 20px', fontSize:14, cursor:'pointer' }}>
+                  <i data-lucide="map-pin" style={{ width:14, height:14 }} /> 지점 상세 보기
+                </button>
+              </div>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, animation:'heroReveal 0.7s ease 0.1s both' }}>
+              {[
+                { icon:'activity', label:'진행 중 장례', value:'4건', delta:'+1' },
+                { icon:'users', label:'실시간 조문객', value:`${liveVisitors}명`, delta:'▲' },
+                { icon:'message-square', label:'SMS 발송완료', value:'15건', delta:'100%' },
+                { icon:'building', label:'연결된 지점', value:'10개', delta:'전체' },
+              ].map((s,i) => (
+                <div key={i} style={{ background:'rgba(242,240,235,0.1)', borderRadius:16, padding:'18px 20px', border:'1px solid rgba(242,240,235,0.15)', minWidth:160 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:8 }}>
+                    <i data-lucide={s.icon} style={{ width:14, height:14, color:'rgba(242,240,235,0.6)' }} />
+                    <span style={{ fontSize:11, color:'rgba(242,240,235,0.6)', fontWeight:500 }}>{s.label}</span>
+                  </div>
+                  <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
+                    <span style={{ fontSize:26, fontWeight:600, color:'#f2f0eb', letterSpacing:'-0.62px' }}>{s.value}</span>
+                    <span style={{ fontSize:11, color:'rgba(242,240,235,0.5)' }}>{s.delta}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Branch Grid */}
+      <div style={{ maxWidth:1200, margin:'0 auto', padding:'48px 32px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:24 }}>
+          <h2 style={{ fontSize:22, fontWeight:600, color:C.text, letterSpacing:'-0.31px' }}>지점별 현황</h2>
+          <button onClick={()=>setPage('branch-detail')} style={{ display:'flex', alignItems:'center', gap:5, background:C.primary, color:'#f2f0eb', border:'none', borderRadius:8, padding:'9px 18px', fontSize:13, fontWeight:600, cursor:'pointer' }}>
+            <i data-lucide="layout-grid" style={{ width:13, height:13 }} /> 다지점 현황 상세 보기
+          </button>
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(280px, 1fr))', gap:16 }}>
+          {BRANCHES.map((b,i) => (
+            <Card key={b.id} style={{ padding:24, animation:`slideUp 0.4s ease ${i*0.07}s both` }}>
+              <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:16 }}>
+                <div>
+                  <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:3, letterSpacing:'-0.017px' }}>{b.name}</div>
+                  <div style={{ display:'flex', alignItems:'center', gap:4, fontSize:12, color:C.textMuted }}>
+                    <i data-lucide="map-pin" style={{ width:11, height:11 }} />
+                    {b.location}
+                  </div>
+                </div>
+                <Badge label={statusMap[b.status]} color={statusColor[b.status]} />
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+                <div style={{ background:C.bg, borderRadius:10, padding:'10px 14px' }}>
+                  <div style={{ fontSize:10, color:C.textLight, marginBottom:4, fontWeight:500, textTransform:'uppercase', letterSpacing:'0.048px' }}>장례 진행</div>
+                  <span style={{ fontSize:22, fontWeight:600, color:C.text, letterSpacing:'-0.31px' }}>{b.ceremonies}</span>
+                  <span style={{ fontSize:11, color:C.textMuted, marginLeft:2 }}>건</span>
+                </div>
+                <div style={{ background:C.bg, borderRadius:10, padding:'10px 14px' }}>
+                  <div style={{ fontSize:10, color:C.textLight, marginBottom:4, fontWeight:500, textTransform:'uppercase', letterSpacing:'0.048px' }}>금일 조문객</div>
+                  <span style={{ fontSize:22, fontWeight:600, color:C.text, letterSpacing:'-0.31px' }}>{b.visitors}</span>
+                  <span style={{ fontSize:11, color:C.textMuted, marginLeft:2 }}>명</span>
+                </div>
+              </div>
+              <div style={{ marginBottom:14 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5, fontSize:11, color:C.textLight }}>
+                  <span>빈소 가동률</span>
+                  <span>{Math.round((b.ceremonies/b.capacity)*100)}%</span>
+                </div>
+                <div style={{ height:5, background:C.border, borderRadius:999, overflow:'hidden' }}>
+                  <div style={{ height:'100%', width:`${Math.min((b.ceremonies/b.capacity)*100, 100)}%`, background:b.status==='active'?C.success:C.textLight, borderRadius:999, transition:'width 0.6s ease' }} />
+                </div>
+              </div>
+              <button onClick={()=>{setPage('branch-detail');showToast(`${b.name} 상세 현황으로 이동합니다.`);}} style={{ width:'100%', background:'none', border:`1px solid ${C.border}`, borderRadius:8, padding:'9px 0', fontSize:13, cursor:'pointer', color:C.textMuted, display:'flex', alignItems:'center', justifyContent:'center', gap:5, transition:'all 0.15s' }}
+                onMouseEnter={e=>{e.currentTarget.style.borderColor=C.primary;e.currentTarget.style.color=C.primary;}}
+                onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.color=C.textMuted;}}>
+                <i data-lucide="external-link" style={{ width:12, height:12 }} /> 상세 보기
+              </button>
+            </Card>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ===== ANALYTICS SCREEN ===== */
+const AnalyticsScreen = () => {
+  const [period, setPeriod] = useState('7d');
+  const [branchFilter, setBranchFilter] = useState('all');
+  useLucide();
+
+  const PIE_COLORS = ['#7c3a3a', '#a05c1a', '#2a7a4b'];
+
+  return (
+    <div style={{ background:C.bg, minHeight:'calc(100vh - 56px)' }}>
+      <div style={{ maxWidth:1200, margin:'0 auto', padding:'40px 32px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:28 }}>
+          <div>
+            <h1 style={{ fontSize:28, fontWeight:600, color:C.text, letterSpacing:'-0.62px', marginBottom:6 }}>조문 통계 및 분석 대시보드</h1>
+            <p style={{ fontSize:14, color:C.textMuted }}>지점별 방문자 추이, 부의금 현황, 채널별 유입 분석</p>
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <select value={period} onChange={e=>setPeriod(e.target.value)} style={{ padding:'8px 14px', border:`1px solid ${C.borderMid}`, borderRadius:8, fontSize:13, background:C.surface, color:C.text, outline:'none', cursor:'pointer' }}>
+              <option value="7d">최근 7일</option>
+              <option value="30d">최근 30일</option>
+              <option value="90d">최근 90일</option>
+            </select>
+            <select value={branchFilter} onChange={e=>setBranchFilter(e.target.value)} style={{ padding:'8px 14px', border:`1px solid ${C.borderMid}`, borderRadius:8, fontSize:13, background:C.surface, color:C.text, outline:'none', cursor:'pointer' }}>
+              <option value="all">전체 지점</option>
+              {BRANCHES.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:14, marginBottom:24 }}>
+          {[
+            { icon:'users', label:'총 조문객', value:'346명', delta:'이번 달' },
+            { icon:'calendar', label:'진행 장례', value:'9건', delta:'이번 달' },
+            { icon:'trending-up', label:'일평균 방문', value:'49.4명', delta:'최근 7일' },
+            { icon:'message-circle', label:'SMS 발송률', value:'96.7%', delta:'성공 기준' },
+          ].map((s,i) => (
+            <Card key={i} style={{ padding:'18px 20px' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+                <div style={{ width:30, height:30, borderRadius:8, background:C.primaryLight, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                  <i data-lucide={s.icon} style={{ width:15, height:15, color:C.primary }} />
+                </div>
+                <span style={{ fontSize:12, color:C.textMuted, fontWeight:500 }}>{s.label}</span>
+              </div>
+              <div style={{ fontSize:24, fontWeight:700, color:C.text, letterSpacing:'-0.62px', marginBottom:2 }}>{s.value}</div>
+              <div style={{ fontSize:11, color:C.textLight }}>{s.delta}</div>
+            </Card>
+          ))}
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:16, marginBottom:16 }}>
+          <Card style={{ padding:24 }}>
+            <div style={{ marginBottom:16 }}>
+              <h3 style={{ fontSize:16, fontWeight:600, color:C.text, letterSpacing:'-0.017px', marginBottom:4 }}>일별 조문객 방문 추이</h3>
+              <p style={{ fontSize:12, color:C.textMuted }}>최근 7일 · 전체 지점 합산</p>
+            </div>
+            <div style={{ height:200, position:'relative' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={TREND_DATA}>
+                  <defs>
+                    <linearGradient id="visitGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={C.primary} stopOpacity={0.15}/>
+                      <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
+                  <XAxis dataKey="date" tick={{ fill:C.textMuted, fontSize:11 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill:C.textMuted, fontSize:11 }} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, fontSize:12 }} />
+                  <Area type="monotone" dataKey="visitors" name="조문객 수" stroke={C.primary} strokeWidth={2.5} fill="url(#visitGrad)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+          <Card style={{ padding:24 }}>
+            <h3 style={{ fontSize:16, fontWeight:600, color:C.text, letterSpacing:'-0.017px', marginBottom:4 }}>유입 채널 분석</h3>
+            <p style={{ fontSize:12, color:C.textMuted, marginBottom:16 }}>부고장 공유 채널별 조문객 비율</p>
+            <div style={{ height:170, position:'relative' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={CHANNEL_DATA} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" nameKey="name" paddingAngle={3}>
+                    {CHANNEL_DATA.map((entry, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip contentStyle={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, fontSize:12 }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+              {CHANNEL_DATA.map((d,i) => (
+                <div key={i} style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                    <div style={{ width:8, height:8, borderRadius:2, background:PIE_COLORS[i] }} />
+                    <span style={{ fontSize:12, color:C.textMuted }}>{d.name}</span>
+                  </div>
+                  <span style={{ fontSize:12, fontWeight:600, color:C.text }}>{d.value}%</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+
+        <Card style={{ padding:24 }}>
+          <div style={{ marginBottom:16 }}>
+            <h3 style={{ fontSize:16, fontWeight:600, color:C.text, letterSpacing:'-0.017px', marginBottom:4 }}>지점별 이번 달 조문객 비교</h3>
+            <p style={{ fontSize:12, color:C.textMuted }}>월별 방문자 수 및 장례 건수</p>
+          </div>
+          <div style={{ height:200, position:'relative' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={BRANCH_CHART} barSize={32}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
+                <XAxis dataKey="name" tick={{ fill:C.textMuted, fontSize:11 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill:C.textMuted, fontSize:11 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, fontSize:12 }} />
+                <Bar dataKey="visitors" name="조문객 수" fill={C.primary} radius={[8,8,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+/* ===== NOTIFICATION SCREEN ===== */
+const NotificationScreen = ({ showToast }) => {
+  const [logs, setLogs] = useState(SMS_LOGS);
+  const [selected, setSelected] = useState([]);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [schedForm, setSchedForm] = useState({ branch:'', type:'', datetime:'' });
+  useLucide();
+
+  const toggleSelect = (id) => setSelected(p => p.includes(id) ? p.filter(x=>x!==id) : [...p, id]);
+  const retrySelected = () => {
+    setLogs(p => p.map(l => selected.includes(l.id) && l.status==='failed' ? {...l, status:'pending'} : l));
+    showToast(`${selected.filter(id=>logs.find(l=>l.id===id&&l.status==='failed')).length}건 재발송 요청이 등록되었습니다.`);
+    setSelected([]);
+  };
+
+  const statusLabel = { success:'발송완료', failed:'실패', pending:'대기/예약' };
+  const statusColor = { success:'success', failed:'failed', pending:'pending' };
+
+  return (
+    <div style={{ background:C.bg, minHeight:'calc(100vh - 56px)' }}>
+      <div style={{ maxWidth:1200, margin:'0 auto', padding:'40px 32px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:28 }}>
+          <div>
+            <h1 style={{ fontSize:28, fontWeight:600, color:C.text, letterSpacing:'-0.62px', marginBottom:6 }}>스마트 알림 및 발송 이력 관리</h1>
+            <p style={{ fontSize:14, color:C.textMuted }}>SMS 자동 발송 이력 · Solapi 웹훅 콜백 실시간 상태 업데이트</p>
+          </div>
+          <div style={{ display:'flex', gap:10 }}>
+            {selected.length > 0 && (
+              <PrimaryBtn onClick={retrySelected} icon="refresh-cw">선택 항목 재발송 ({selected.length})</PrimaryBtn>
+            )}
+            <GhostBtn onClick={()=>setShowSchedule(true)} icon="clock">예약 발송 등록</GhostBtn>
+          </div>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:14, marginBottom:24 }}>
+          {[
+            { label:'발송 완료', value:10, total:12, color:C.success, icon:'check-circle' },
+            { label:'실패', value:1, total:12, color:C.error, icon:'x-circle' },
+            { label:'대기/예약', value:1, total:12, color:'#6b4fa0', icon:'clock' },
+          ].map((s,i) => (
+            <Card key={i} style={{ padding:'18px 22px', display:'flex', alignItems:'center', gap:16 }}>
+              <div style={{ width:36, height:36, borderRadius:10, background:`${s.color}15`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                <i data-lucide={s.icon} style={{ width:18, height:18, color:s.color }} />
+              </div>
+              <div>
+                <div style={{ fontSize:12, color:C.textMuted, fontWeight:500, marginBottom:3 }}>{s.label}</div>
+                <div style={{ fontSize:24, fontWeight:700, color:C.text, letterSpacing:'-0.62px' }}>{s.value}<span style={{ fontSize:12, color:C.textLight, fontWeight:400, marginLeft:3 }}>건</span></div>
+              </div>
+              <div style={{ marginLeft:'auto' }}>
+                <div style={{ height:40, width:100, position:'relative' }}>
+                  <div style={{ height:5, background:C.border, borderRadius:999, overflow:'hidden', position:'absolute', bottom:0, left:0, right:0 }}>
+                    <div style={{ height:'100%', width:`${(s.value/s.total)*100}%`, background:s.color, borderRadius:999 }} />
+                  </div>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+
+        <Card>
+          <div style={{ padding:'16px 24px', borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <span style={{ fontSize:15, fontWeight:600, color:C.text }}>발송 이력</span>
+            <span style={{ fontSize:12, color:C.textMuted }}>실패 건 선택 후 일괄 재발송 가능</span>
+          </div>
+          <table style={{ width:'100%', borderCollapse:'collapse' }}>
+            <thead>
+              <tr style={{ background:'#f8f6f3' }}>
+                <th style={{ padding:'10px 20px', width:40 }}></th>
+                {['수신자','발송 유형','지점','상태','시각','액션'].map(h => (
+                  <th key={h} style={{ padding:'10px 16px', fontSize:11, fontWeight:600, color:C.textMuted, textAlign:'left', borderBottom:`1px solid ${C.border}` }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map((l,i) => (
+                <tr key={l.id} style={{ borderBottom:i<logs.length-1?`1px solid ${C.border}`:'none' }}>
+                  <td style={{ padding:'12px 20px', textAlign:'center' }}>
+                    <input type="checkbox" checked={selected.includes(l.id)} onChange={()=>toggleSelect(l.id)} disabled={l.status!=='failed'} style={{ cursor:l.status==='failed'?'pointer':'default', accentColor:C.primary }} />
+                  </td>
+                  <td style={{ padding:'12px 16px', fontSize:13, color:C.text, fontWeight:500 }}>{l.to}</td>
+                  <td style={{ padding:'12px 16px', fontSize:13, color:C.textMuted }}>{l.type}</td>
+                  <td style={{ padding:'12px 16px', fontSize:12, color:C.textMuted }}>{l.branch}</td>
+                  <td style={{ padding:'12px 16px' }}><Badge label={statusLabel[l.status]} color={statusColor[l.status]} /></td>
+                  <td style={{ padding:'12px 16px', fontSize:12, color:C.textMuted }}>{l.sentAt}</td>
+                  <td style={{ padding:'12px 16px' }}>
+                    {l.status === 'failed' && (
+                      <button onClick={()=>{setLogs(p=>p.map(x=>x.id===l.id?{...x,status:'pending'}:x));showToast('재발송 요청이 등록되었습니다.');}} style={{ background:'none', border:`1px solid ${C.border}`, borderRadius:6, padding:'4px 10px', fontSize:11, cursor:'pointer', color:C.textMuted, display:'flex', alignItems:'center', gap:3 }}>
+                        <i data-lucide="refresh-cw" style={{ width:10, height:10 }} /> 재발송
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      </div>
+
+      {showSchedule && (
+        <Modal title="예약 발송 등록" onClose={()=>setShowSchedule(false)}>
+          <FormField label="대상 지점" value={schedForm.branch} onChange={v=>setSchedForm({...schedForm,branch:v})} placeholder="하나장례식장" />
+          <FormField label="발송 유형" value={schedForm.type} onChange={v=>setSchedForm({...schedForm,type:v})} placeholder="발인 D-1 리마인더" />
+          <FormField label="발송 일시" type="datetime-local" value={schedForm.datetime} onChange={v=>setSchedForm({...schedForm,datetime:v})} />
+          <div style={{ background:'#f5f2fb', border:'1px solid #c9b8e8', borderRadius:8, padding:'10px 14px', marginBottom:20, fontSize:12, color:'#6b4fa0' }}>
+            agenda.js 기반 스케줄러에 등록됩니다. 발인 D-1 리마인더는 발인 일시 24시간 전에 자동 발송됩니다.
+          </div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <GhostBtn onClick={()=>setShowSchedule(false)}>취소</GhostBtn>
+            <PrimaryBtn icon="clock" onClick={()=>{setShowSchedule(false);showToast('예약 발송이 등록되었습니다.');}}>예약 등록</PrimaryBtn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+/* ===== SETTINGS SCREEN ===== */
+const SettingsScreen = ({ showToast }) => {
+  const [tab, setTab] = useState('branches');
+  const [showAddBranch, setShowAddBranch] = useState(false);
+  const [showAddStaff, setShowAddStaff] = useState(false);
+  const [branchForm, setBranchForm] = useState({ name:'', location:'', capacity:'' });
+  const [staffForm, setStaffForm] = useState({ name:'', role:'장례지도사', branch:'' });
+  useLucide();
+
+  const roleColor = { '지점관리자':'admin', '장례지도사':'director' };
+  const statusColor = { active:'active', inactive:'inactive' };
+
+  return (
+    <div style={{ background:C.bg, minHeight:'calc(100vh - 56px)' }}>
+      <div style={{ maxWidth:1200, margin:'0 auto', padding:'40px 32px' }}>
+        <div style={{ marginBottom:28 }}>
+          <h1 style={{ fontSize:28, fontWeight:600, color:C.text, letterSpacing:'-0.62px', marginBottom:6 }}>장례식장 및 운영자 관리</h1>
+          <p style={{ fontSize:14, color:C.textMuted }}>지점 등록·수정, 장례지도사 계정 관리, 3단계 권한 설정</p>
+        </div>
+
+        <div style={{ display:'flex', gap:2, background:C.surface, borderRadius:10, padding:4, display:'inline-flex', marginBottom:24, border:`1px solid ${C.border}` }}>
+          {[['branches','지점 관리'],['staff','운영자 관리']].map(([k,l]) => (
+            <button key={k} onClick={()=>setTab(k)} style={{ background:tab===k?C.bg:'none', border:'none', borderRadius:8, padding:'7px 18px', fontSize:13, fontWeight:tab===k?600:400, color:tab===k?C.text:C.textMuted, cursor:'pointer', boxShadow:tab===k?C.shadow:'none', transition:'all 0.15s' }}>{l}</button>
+          ))}
+        </div>
+
+        {tab === 'branches' && (
+          <div>
+            <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:14 }}>
+              <PrimaryBtn icon="plus" onClick={()=>setShowAddBranch(true)}>지점 등록</PrimaryBtn>
+            </div>
+            <Card>
+              <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                <thead>
+                  <tr style={{ background:'#f8f6f3' }}>
+                    {['지점명','위치','최대 빈소','담당자','상태','관리'].map(h => (
+                      <th key={h} style={{ padding:'10px 20px', fontSize:11, fontWeight:600, color:C.textMuted, textAlign:'left', borderBottom:`1px solid ${C.border}` }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {BRANCHES.map((b,i) => (
+                    <tr key={b.id} style={{ borderBottom:i<BRANCHES.length-1?`1px solid ${C.border}`:'none' }}>
+                      <td style={{ padding:'14px 20px', fontSize:14, fontWeight:600, color:C.text }}>{b.name}</td>
+                      <td style={{ padding:'14px 20px', fontSize:13, color:C.textMuted }}>{b.location}</td>
+                      <td style={{ padding:'14px 20px', fontSize:13, color:C.text }}>{b.capacity}개</td>
+                      <td style={{ padding:'14px 20px', fontSize:13, color:C.textMuted }}>{b.director}</td>
+                      <td style={{ padding:'14px 20px' }}><Badge label={b.status==='active'?'운영중':b.status==='maintenance'?'점검중':'대기중'} color={b.status} /></td>
+                      <td style={{ padding:'14px 20px' }}>
+                        <button onClick={()=>showToast(`${b.name} 수정 화면으로 이동합니다.`)} style={{ background:'none', border:`1px solid ${C.border}`, borderRadius:6, padding:'5px 12px', fontSize:12, cursor:'pointer', color:C.textMuted, display:'flex', alignItems:'center', gap:3 }}>
+                          <i data-lucide="edit-2" style={{ width:11, height:11 }} /> 수정
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          </div>
+        )}
+
+        {tab === 'staff' && (
+          <div>
+            <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:14 }}>
+              <PrimaryBtn icon="user-plus" onClick={()=>setShowAddStaff(true)}>운영자 추가</PrimaryBtn>
+            </div>
+            <Card>
+              <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                <thead>
+                  <tr style={{ background:'#f8f6f3' }}>
+                    {['이름','역할','담당 지점','상태','관리'].map(h => (
+                      <th key={h} style={{ padding:'10px 20px', fontSize:11, fontWeight:600, color:C.textMuted, textAlign:'left', borderBottom:`1px solid ${C.border}` }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {STAFF.map((s,i) => (
+                    <tr key={s.id} style={{ borderBottom:i<STAFF.length-1?`1px solid ${C.border}`:'none' }}>
+                      <td style={{ padding:'13px 20px', fontSize:14, fontWeight:600, color:C.text }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                          <div style={{ width:28, height:28, borderRadius:'50%', background:C.primaryLight, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                            <i data-lucide="user" style={{ width:13, height:13, color:C.primary }} />
+                          </div>
+                          {s.name}
+                        </div>
+                      </td>
+                      <td style={{ padding:'13px 20px' }}><Badge label={s.role} color={roleColor[s.role]||'director'} /></td>
+                      <td style={{ padding:'13px 20px', fontSize:13, color:C.textMuted }}>{s.branch}</td>
+                      <td style={{ padding:'13px 20px' }}><Badge label={s.status==='active'?'활성':'비활성'} color={s.status} /></td>
+                      <td style={{ padding:'13px 20px' }}>
+                        <button onClick={()=>showToast(`${s.name} 권한 수정 화면으로 이동합니다.`)} style={{ background:'none', border:`1px solid ${C.border}`, borderRadius:6, padding:'5px 12px', fontSize:12, cursor:'pointer', color:C.textMuted, display:'flex', alignItems:'center', gap:3 }}>
+                          <i data-lucide="shield" style={{ width:11, height:11 }} /> 권한 설정
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          </div>
+        )}
+      </div>
+
+      {showAddBranch && (
+        <Modal title="새 지점 등록" onClose={()=>setShowAddBranch(false)}>
+          <FormField label="지점명" value={branchForm.name} onChange={v=>setBranchForm({...branchForm,name:v})} placeholder="OO장례식장" />
+          <FormField label="주소 (카카오맵 검색)" value={branchForm.location} onChange={v=>setBranchForm({...branchForm,location:v})} placeholder="서울 강동구 천중로 211" />
+          <FormField label="최대 빈소 수" type="number" value={branchForm.capacity} onChange={v=>setBranchForm({...branchForm,capacity:v})} placeholder="5" />
+          <div style={{ background:'#f0f4f8', border:`1px solid #c0d0dc`, borderRadius:8, padding:'10px 14px', marginBottom:20, fontSize:12, color:'#3d5a7a' }}>
+            주소 입력 후 카카오맵 API로 좌표가 자동 변환됩니다. 부고장 위치 안내에 활용됩니다.
+          </div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <GhostBtn onClick={()=>setShowAddBranch(false)}>취소</GhostBtn>
+            <PrimaryBtn icon="plus" onClick={()=>{setShowAddBranch(false);showToast('새 지점이 등록되었습니다.');}}>지점 등록</PrimaryBtn>
+          </div>
+        </Modal>
+      )}
+
+      {showAddStaff && (
+        <Modal title="운영자 추가" onClose={()=>setShowAddStaff(false)}>
+          <FormField label="이름" value={staffForm.name} onChange={v=>setStaffForm({...staffForm,name:v})} placeholder="홍길동" />
+          <div style={{ marginBottom:16 }}>
+            <label style={{ fontSize:12, fontWeight:500, color:C.textMuted, display:'block', marginBottom:5 }}>역할</label>
+            <select value={staffForm.role} onChange={e=>setStaffForm({...staffForm,role:e.target.value})} style={{ width:'100%', padding:'10px 14px', border:`1px solid ${C.borderMid}`, borderRadius:8, fontSize:14, color:C.text, background:C.surface, outline:'none' }}>
+              <option>장례지도사</option>
+              <option>지점관리자</option>
+            </select>
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <label style={{ fontSize:12, fontWeight:500, color:C.textMuted, display:'block', marginBottom:5 }}>담당 지점</label>
+            <select value={staffForm.branch} onChange={e=>setStaffForm({...staffForm,branch:e.target.value})} style={{ width:'100%', padding:'10px 14px', border:`1px solid ${C.borderMid}`, borderRadius:8, fontSize:14, color:C.text, background:C.surface, outline:'none' }}>
+              <option value="">선택</option>
+              {BRANCHES.map(b => <option key={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <GhostBtn onClick={()=>setShowAddStaff(false)}>취소</GhostBtn>
+            <PrimaryBtn icon="user-plus" onClick={()=>{setShowAddStaff(false);showToast('운영자가 추가되었습니다. 초기 비밀번호 SMS가 발송됩니다.');}}>운영자 추가</PrimaryBtn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+/* ===== BRANCH DETAIL SCREEN ===== */
+const BranchDetailScreen = ({ setPage }) => {
+  const [liveCount, setLiveCount] = useState(47);
+  const branch = BRANCHES[0];
+  useLucide();
+
+  useEffect(() => {
+    const t = setInterval(() => { setLiveCount(v => v + (Math.random() > 0.65 ? 1 : 0)); }, 3000);
+    return () => clearInterval(t);
+  }, []);
+
+  const DETAIL_TREND = [
+    { time:'09:00', count:3 }, { time:'10:00', count:8 }, { time:'11:00', count:15 },
+    { time:'12:00', count:22 }, { time:'13:00', count:28 }, { time:'14:00', count:35 },
+    { time:'15:00', count:liveCount },
+  ];
+
+  return (
+    <div style={{ background:C.bg, minHeight:'calc(100vh - 56px)' }}>
+      <div style={{ maxWidth:1200, margin:'0 auto', padding:'40px 32px' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:28 }}>
+          <button onClick={()=>setPage('main')} style={{ background:'none', border:`1px solid ${C.border}`, borderRadius:8, padding:'7px 14px', fontSize:13, cursor:'pointer', color:C.textMuted, display:'flex', alignItems:'center', gap:5 }}>
+            <i data-lucide="arrow-left" style={{ width:13, height:13 }} /> 전체 현황으로
+          </button>
+          <div style={{ width:1, height:16, background:C.border }} />
+          <h1 style={{ fontSize:22, fontWeight:600, color:C.text, letterSpacing:'-0.31px' }}>{branch.name} — 실시간 상세 현황</h1>
+          <div style={{ display:'flex', alignItems:'center', gap:5 }}>
+            <div style={{ width:6, height:6, borderRadius:'50%', background:C.success, animation:'pulse 1.5s infinite' }} />
+            <span style={{ fontSize:11, color:C.success, fontWeight:500 }}>LIVE</span>
+          </div>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:14, marginBottom:24 }}>
+          {[
+            { icon:'activity', label:'진행 중 장례', value:branch.ceremonies+'건' },
+            { icon:'users', label:'금일 조문객', value:`${liveCount}명` },
+            { icon:'layers', label:'가동 빈소', value:`${branch.ceremonies}/${branch.capacity}` },
+            { icon:'message-square', label:'SMS 발송', value:'7건' },
+          ].map((s,i) => (
+            <Card key={i} style={{ padding:'16px 20px' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:7, marginBottom:8 }}>
+                <i data-lucide={s.icon} style={{ width:13, height:13, color:C.primary }} />
+                <span style={{ fontSize:11, color:C.textMuted, fontWeight:500 }}>{s.label}</span>
+              </div>
+              <span style={{ fontSize:24, fontWeight:700, color:C.text, letterSpacing:'-0.62px' }}>{s.value}</span>
+            </Card>
+          ))}
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:16 }}>
+          <Card style={{ padding:24 }}>
+            <div style={{ marginBottom:16 }}>
+              <h3 style={{ fontSize:15, fontWeight:600, color:C.text, letterSpacing:'-0.017px', marginBottom:4 }}>시간대별 조문객 추이 (실시간)</h3>
+              <p style={{ fontSize:12, color:C.textMuted }}>Socket.io Room 기반 실시간 집계 · 하나장례식장</p>
+            </div>
+            <div style={{ height:200, position:'relative' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={DETAIL_TREND}>
+                  <defs>
+                    <linearGradient id="liveGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={C.primary} stopOpacity={0.2}/>
+                      <stop offset="95%" stopColor={C.primary} stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
+                  <XAxis dataKey="time" tick={{ fill:C.textMuted, fontSize:11 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill:C.textMuted, fontSize:11 }} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, fontSize:12 }} />
+                  <Area type="monotone" dataKey="count" name="누적 조문객" stroke={C.primary} strokeWidth={2.5} fill="url(#liveGrad)" dot={{ fill:C.primary, r:3 }} activeDot={{ r:5 }} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+
+          <Card style={{ padding:24 }}>
+            <h3 style={{ fontSize:15, fontWeight:600, color:C.text, letterSpacing:'-0.017px', marginBottom:16 }}>진행 중 접수 현황</h3>
+            {[
+              { name:'故 박성훈', room:'3호실', visitors:34, status:'active' },
+              { name:'故 이정봉', room:'5호실', visitors:13, status:'active' },
+            ].map((c,i) => (
+              <div key={i} style={{ background:C.bg, borderRadius:10, padding:'14px 16px', marginBottom:10 }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
+                  <span style={{ fontSize:14, fontWeight:600, color:C.text }}>{c.name}</span>
+                  <Badge label='진행중' color='active' />
+                </div>
+                <div style={{ display:'flex', gap:12, fontSize:12, color:C.textMuted }}>
+                  <span><i data-lucide="door-open" style={{ width:11, height:11 }} /> {c.room}</span>
+                  <span><i data-lucide="users" style={{ width:11, height:11 }} /> 조문객 {c.visitors}명</span>
+                </div>
+              </div>
+            ))}
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ===== FOOTER ===== */
+const Footer = () => (
+  <footer style={{ background:C.hero, color:'rgba(242,240,235,0.7)', padding:'32px', marginTop:'auto' }}>
+    <div style={{ maxWidth:1200, margin:'0 auto', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+        <div style={{ width:22, height:22, background:'rgba(242,240,235,0.15)', borderRadius:4, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <i data-lucide="flower" style={{ width:12, height:12, color:'rgba(242,240,235,0.8)' }} />
+        </div>
+        <span style={{ fontSize:13, fontWeight:600, color:'rgba(242,240,235,0.85)' }}>HUBOS 장례 현장 다지점 통합 플랫폼</span>
+      </div>
+      <p style={{ fontSize:12 }}>Node.js · Express · PostgreSQL · Prisma · Redis · Socket.io · React · Next.js</p>
+    </div>
+  </footer>
+);
+
+/* ===== APP ROOT ===== */
+const App = () => {
+  const [page, setPage] = useState('main');
+  const [toast, setToast] = useState(null);
+  const showToast = (msg, type='success') => setToast({ msg, type });
+  useLucide();
+
+  return (
+    <div style={{ width:'100%', minHeight:'100vh', display:'flex', flexDirection:'column', background:C.bg }}>
+      <AnnouncementBanner />
+      <SpaNav page={page} setPage={setPage} />
+      <main style={{ flex:1, width:'100%' }}>
+        {page==='main' && <MainScreen setPage={setPage} showToast={showToast} />}
+        {page==='analytics' && <AnalyticsScreen />}
+        {page==='notification' && <NotificationScreen showToast={showToast} />}
+        {page==='settings' && <SettingsScreen showToast={showToast} />}
+        {page==='branch-detail' && <BranchDetailScreen setPage={setPage} />}
+      </main>
+      <Footer />
+      {toast && <Toast message={toast.msg} type={toast.type} onClose={()=>setToast(null)} />}
+    </div>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
