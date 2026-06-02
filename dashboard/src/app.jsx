@@ -2407,6 +2407,28 @@ function MeetingPrepButton({ project }) {
     const a = document.createElement('a'); a.href = url; a.download = project.slug + '-meeting-prep.zip'; a.click();
   };
 
+  // 데몬이 progress.label로 박는 raw 메시지를 사용자 친화적 한 줄로 변환
+  // (daemon은 step 시작 신호에서만 progress를 업데이트 — manifest 자동생성 + 3개 파일 첫 시작)
+  const friendlyLabel = (raw) => {
+    if (!raw) return '';
+    const s = String(raw);
+    if (/manifest|자동 생성/.test(s)) return 'manifest 분석';
+    if (/client-presentation/.test(s)) return '발표 슬라이드 생성';
+    if (/live-script/.test(s)) return '시연 대본 생성';
+    if (/meeting-prep\.html/.test(s)) return '사전 준비 자료 생성';
+    if (/완료/.test(s)) return '마무리 중';
+    if (/시작/.test(s)) return '시작';
+    return s.length > 40 ? s.slice(0, 40) + '…' : s;
+  };
+
+  const renderProgress = (progress) => {
+    if (!progress) return null;
+    const { current, total, label } = progress;
+    const fl = friendlyLabel(label);
+    if (current && total) return `${current}/${total} · ${fl}`;
+    return fl || null;
+  };
+
   // 특정 job을 구독/폴링해 완료 시 다운로드 + 상시 버튼 노출
   const listen = (jobId) => {
     const finish = (url) => { teardown();
@@ -2414,15 +2436,24 @@ function MeetingPrepButton({ project }) {
       else { setStatus('error'); setMsg('완료됐지만 다운로드 URL이 만료됨 — 다시 생성하세요'); }
     };
     const fail = (m) => { teardown(); setStatus('error'); setMsg(m || '실패'); };
+    const showProgress = (progress) => {
+      const p = renderProgress(progress);
+      if (p) setMsg(p);
+    };
     const channel = supabase.channel('mpj-' + jobId)
       .on('postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'meeting_prep_jobs', filter: 'id=eq.' + jobId },
-        ({ new: row }) => { if (row.status === 'done') finish(row.download_url); else if (row.status === 'error') fail(row.error); })
+        ({ new: row }) => {
+          if (row.status === 'done') finish(row.download_url);
+          else if (row.status === 'error') fail(row.error);
+          else showProgress(row.progress);
+        })
       .subscribe();
     const poll = setInterval(async () => {
-      const { data } = await supabase.from('meeting_prep_jobs').select('status,download_url,error').eq('id', jobId).single();
+      const { data } = await supabase.from('meeting_prep_jobs').select('status,download_url,error,progress').eq('id', jobId).single();
       if (data && data.status === 'done') finish(data.download_url);
       else if (data && data.status === 'error') fail(data.error);
+      else if (data) showProgress(data.progress);
     }, 5000);
     const timeout = setTimeout(() => fail('시간 초과 — 맥 데몬이 켜져 있는지 확인하세요'), 45 * 60 * 1000);
     const teardown = () => { clearInterval(poll); clearTimeout(timeout); supabase.removeChannel(channel); cleanupRef.current = null; };
@@ -2439,7 +2470,7 @@ function MeetingPrepButton({ project }) {
       .insert({ slug: project.slug, model: 'sonnet', requested_by: 'dashboard' })
       .select().single();
     if (error) { setStatus('error'); setMsg('요청 실패: ' + error.message); return; }
-    setMsg('생성 중… (맥 데몬, 수 분)');
+    setMsg('생성 중… (30~50분 소요)');
     listen(job.id);
   };
 
@@ -2460,7 +2491,7 @@ function MeetingPrepButton({ project }) {
       if (job.status === 'done' && job.download_url && urlValid(job.download_url)) {
         setReadyUrl(job.download_url); setStatus('ready');
       } else if (job.status === 'pending' || job.status === 'processing') {
-        setStatus('working'); setMsg('생성 중… (맥 데몬, 수 분)');
+        setStatus('working'); setMsg('생성 중… (30~50분 소요)');
         listen(job.id);
       }
     })();
