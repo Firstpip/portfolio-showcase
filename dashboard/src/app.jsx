@@ -47,6 +47,13 @@ const POST_WON = ['in_progress','maintenance_free','maintenance_paid','delivered
 const HAS_MILESTONES = ['won','in_progress','maintenance_free','maintenance_paid','delivered','settled']; // 마일스톤 트래커 노출 대상
 const ACTIVE_WORK = ['won','in_progress']; // 상단 '내 담당 프로젝트' 카드 노출 대상 — 납품·정산 완료 제외
 const POST_DEV = ['maintenance_free','maintenance_paid','delivered','settled']; // 개발 종료 후 상태 — 주차 진행/마감 초과 등 실시간 일정 표시 숨김
+// ─── 위시켓 수수료 차감 + 부가세 — '계약 논의 중'(won) 이후 상태에서 예산 대신 표시하는 계약대금(+부) ───
+// 수수료: 지원가 500만원 이하 25% / 500만원 초과 20% → 차감액 × 1.1 (부가세 10% 포함 지급)
+// ⚠️ DB의 budget은 원본(지원가)을 그대로 보존 — 저장값 변환 금지, 표시 시점에만 계산 (통계 왜곡·상태 되돌림 오염 방지)
+const CONTRACT_NET_STATUSES = ['won', ...POST_WON];
+const wishketFeeRate = (manwon) => manwon <= 500 ? 0.25 : 0.20;
+const contractNet = (manwon) => manwon > 0 ? Math.round(manwon * (1 - wishketFeeRate(manwon)) * 1.1 * 10) / 10 : 0; // 0.1만원 단위
+const fmtManwon = (n) => n.toLocaleString(undefined, { maximumFractionDigits: 1 });
 // 담당 컬럼·담당 필터·멤버 바의 단일 소스. 필터별로 노출/매칭할 담당 역할을 정의한다.
 // role.statuses 가 있으면 해당 행 상태에서만 그 역할이 적용됨('전체' 뷰의 행별 구분용).
 // - '전체'        : PM(수주 후 건) + 미팅 주(미팅예정 건만)
@@ -2693,6 +2700,12 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                         style={{ ...inputS, borderTopRightRadius:0, borderBottomRightRadius:0, borderRight:'none' }} />
                       <span style={{ padding:'0.5rem 0.6rem', borderRadius:'0 8px 8px 0', fontSize:'0.85rem', background:'var(--border)', color:'var(--text2)', border:'1px solid var(--border)', lineHeight:1.5, whiteSpace:'nowrap' }}>만원</span>
                     </div>
+                    {CONTRACT_NET_STATUSES.includes(project.current_status) && parseBudgetNum(editBudget) > 0 && (() => {
+                      const bn = parseBudgetNum(editBudget);
+                      return <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginTop:4 }}>
+                        계약대금(+부) <b style={{ color:'var(--green)' }}>{fmtManwon(contractNet(bn))}만원</b> — 수수료 {wishketFeeRate(bn)*100}% 차감 후 부가세 10% 포함
+                      </div>;
+                    })()}
                   </div>
                   <div>
                     <div style={labelS}>기간</div>
@@ -3527,7 +3540,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
   const cols = [
     { key:'status',     label:'상태',  sortable:false, width:'120px' },
     { key:'title',      label:'프로젝트', sortable:false, width:'' },
-    { key:'budget',     label:'예산',  sortable:true,  width:'110px' },
+    { key:'budget',     label:CONTRACT_NET_STATUSES.includes(filter)?'계약대금(+부)':'예산',  sortable:true,  width:'110px' },
     { key:'created_at', label:'생성일', sortable:true,  width:'100px' },
     // 개발 종료 후 상태 필터에서는 미팅일 대신 개발완료일(마감일)을 표시
     ...(hideMeeting  ? [] : [{ key:'meeting_at', label:POST_DEV.includes(filter)?'개발완료일':'미팅일', sortable:true,  width:'175px' }]),
@@ -3654,7 +3667,15 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                       );
                     })()}
                   </td>
-                  <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:r.budget?'var(--text)':'var(--text2)' }}>{r.budget||'—'}</td>
+                  <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:r.budget?'var(--text)':'var(--text2)' }}>{(() => {
+                    const bn = parseBudgetNum(r.budget);
+                    if (bn > 0 && CONTRACT_NET_STATUSES.includes(r.current_status)) {
+                      return <span title={`지원가 ${r.budget} − 수수료 ${wishketFeeRate(bn)*100}% → ×1.1(부가세) = ${fmtManwon(contractNet(bn))}만원`}>
+                        {fmtManwon(contractNet(bn))}만원<span style={{ color:'var(--text2)', fontSize:'0.7rem' }}> +부</span>
+                      </span>;
+                    }
+                    return r.budget || '—';
+                  })()}</td>
                   <td title={r.created_at ? formatMeetingAt(r.created_at) || r.created_at : ''} style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:'var(--text2)' }}>{r.created_at ? (r.created_at.length >= 10 ? r.created_at.slice(0,10) : r.created_at) : '—'}</td>
                   {!hideMeeting && (
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem' }}>
@@ -4866,7 +4887,7 @@ function App({ session }) {
 
       {/* KPI 바 (상시 노출) */}
       {(() => {
-        const wonBudgetTotal = data.filter(d=>SECURED_STATUSES.includes(d.current_status)).reduce((sum,d)=>sum+parseBudgetNum(d.budget),0);
+        const wonBudgetTotal = data.filter(d=>SECURED_STATUSES.includes(d.current_status)).reduce((sum,d)=>sum+contractNet(parseBudgetNum(d.budget)),0);
         const inProg = SECURED_STATUSES.reduce((s,k)=>s+(counts[k]||0),0);
         const kpiStyle = { flex:'1 1 0', minWidth:'fit-content', display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'0.45rem 0.85rem', borderRadius:8, background:'var(--surface)', border:'1px solid var(--border)', fontSize:'0.8rem', whiteSpace:'nowrap' };
         const numStyle = (color) => ({ fontWeight:700, fontSize:'0.95rem', color });
@@ -4878,9 +4899,9 @@ function App({ session }) {
               <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>({wonCount}/{meetingReachedCount})</span>
             </div>
             {wonBudgetTotal > 0 && (
-              <div style={kpiStyle}>
-                <span style={{ color:'var(--text2)' }}>수주 금액</span>
-                <span style={numStyle('var(--green)')}>{wonBudgetTotal.toLocaleString()}만원</span>
+              <div style={kpiStyle} title="위시켓 수수료(지원가 500만 이하 25% / 초과 20%) 차감 후 부가세 10% 포함 실지급 대금 합산">
+                <span style={{ color:'var(--text2)' }}>수주대금(+부)</span>
+                <span style={numStyle('var(--green)')}>{fmtManwon(wonBudgetTotal)}만원</span>
               </div>
             )}
             {inProg > 0 && (
@@ -4912,13 +4933,13 @@ function App({ session }) {
         {showStats && (
           <div style={{ animation:'fadeIn 0.25s ease-out' }}>
             {(() => {
-              const wonBudgetTotal = data.filter(d=>SECURED_STATUSES.includes(d.current_status)).reduce((sum,d)=>sum+parseBudgetNum(d.budget),0);
-              const wonBudgetStr = wonBudgetTotal>0?wonBudgetTotal.toLocaleString()+'만원':'—';
+              const wonBudgetTotal = data.filter(d=>SECURED_STATUSES.includes(d.current_status)).reduce((sum,d)=>sum+contractNet(parseBudgetNum(d.budget)),0);
+              const wonBudgetStr = wonBudgetTotal>0?fmtManwon(wonBudgetTotal)+'만원':'—';
               return (
                 <div style={{ display:'flex', gap:'0.75rem', flexWrap:'wrap', marginTop:'0.75rem', marginBottom:'1rem' }}>
                   <StatCard title="총 프로젝트" value={data.length} sub={`생성 ${counts.generated||0} / 지원 ${appliedOrBeyond}`} delay={1} />
                   <StatCard title="미팅 → 수주 전환율" value={`${winRate}%`} sub={`${wonCount} / ${meetingReachedCount}`} color="var(--green)" delay={1} />
-                  <StatCard title="수주 금액" value={wonBudgetStr} sub={`${wonCount}건 합산`} color="var(--green)" delay={1} />
+                  <StatCard title="수주대금(+부)" value={wonBudgetStr} sub={`${wonCount}건 합산 · 수수료 차감+부가세 포함`} color="var(--green)" delay={1} />
                   <StatCard title="진행 중" value={SECURED_STATUSES.reduce((s,k)=>s+(counts[k]||0),0)}
                     sub={SECURED_STATUSES.map(k=>counts[k]>0?`${STATUS_META[k].label} ${counts[k]}`:'').filter(Boolean).join(' · ')||'없음'} color="var(--accent2)" delay={1} />
                   {avgInterviewDays && <StatCard title="지원 → 미팅 잡힘" value={`평균 ${avgInterviewDays.avg}일`} sub={`${avgInterviewDays.n}건 (미팅 예정 전환 시점 기준)`} color="var(--blue)" delay={1} />}
