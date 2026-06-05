@@ -38,7 +38,7 @@ const STATUS_META = {
   in_progress:  { label: '개발 중',    emoji: '⚙️',  color: '#a29bfe' },
   maintenance_free: { label: '유지보수(무상)', emoji: '🔧', color: '#f39c12' },
   maintenance_paid: { label: '유지보수(유상)', emoji: '🛠️', color: '#e84393' },
-  delivered:    { label: '납품 완료',  emoji: '📦', color: '#cd853f' },
+  delivered:    { label: '납품 완료',  emoji: '📦', color: '#be2edd' },
   settled:      { label: '정산 완료',  emoji: '✅', color: '#00cec9' },
   lost:         { label: '미선정',     emoji: '❌', color: '#e17055' },
 };
