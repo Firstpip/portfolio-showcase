@@ -29,15 +29,15 @@ const DEMO_GEN_ENABLED = (() => {
 
 // ─── Constants ───
 const STATUS_META = {
-  generated:    { label: '생성완료',     emoji: '📥', color: '#636e72' },
-  applied:      { label: '지원완료',     emoji: '📤', color: '#6c5ce7' },
+  generated:    { label: '생성 완료',    emoji: '📥', color: '#636e72' },
+  applied:      { label: '지원 완료',    emoji: '📤', color: '#6c5ce7' },
   interview:    { label: '미팅 예정',    emoji: '📅', color: '#fdcb6e' },
-  meeting_done: { label: '미팅완료',   emoji: '🤝', color: '#74b9ff' },
-  won:          { label: '계약 논의 중', emoji: '📝', color: '#00b894' }, // (구)수주 성공+계약 완료 통합
+  meeting_done: { label: '미팅 완료',    emoji: '🤝', color: '#74b9ff' },
+  won:          { label: '계약 논의 중', emoji: '💬', color: '#00b894' }, // (구)수주 성공+계약 완료 통합
   contracted:   { label: '계약 완료',  emoji: '📝', color: '#0984e3' }, // legacy: won으로 통합됨 — 과거 history 표시용으로만 유지
   in_progress:  { label: '개발 중',    emoji: '⚙️',  color: '#a29bfe' },
-  maintenance_free: { label: '유지보수(무상)', emoji: '🔧', color: '#f39c12' },
-  maintenance_paid: { label: '유지보수(유상)', emoji: '🛠️', color: '#e84393' },
+  maintenance_free: { label: '유지보수 (무상)', emoji: '🔧', color: '#f39c12' },
+  maintenance_paid: { label: '유지보수 (유상)', emoji: '🛠️', color: '#e84393' },
   delivered:    { label: '납품 완료',  emoji: '📦', color: '#be2edd' },
   settled:      { label: '정산 완료',  emoji: '✅', color: '#00cec9' },
   lost:         { label: '미선정',     emoji: '❌', color: '#e17055' },
@@ -636,8 +636,8 @@ function Funnel({ data }) {
   // 미팅 단계부터는 자동 삭제 영향 없어 전환율 신뢰 가능.
   const stages = [
     { key:'interview',    label:'미팅', color:'var(--yellow)' },
-    { key:'meeting_done', label:'미팅완료', color:'var(--blue)' },
-    { key:'won',          label:'계약논의중', color:'var(--green)' },
+    { key:'meeting_done', label:'미팅 완료', color:'var(--blue)' },
+    { key:'won',          label:'계약 논의 중', color:'var(--green)' },
   ];
   const ORDER = ['interview','meeting_done','won'];
   const counts = stages.map(s => {
@@ -661,7 +661,7 @@ function Funnel({ data }) {
           const convRate = i > 0 && counts[i-1].count > 0 ? ((s.count/counts[i-1].count)*100).toFixed(0)+'%' : null;
           return (
             <div key={s.key} style={{ display:'flex', alignItems:'center', gap:12 }}>
-              <div style={{ width:74, fontSize:'0.85rem', color:'var(--text2)', textAlign:'right', flexShrink:0 }}>{s.label}</div>
+              <div style={{ width:92, fontSize:'0.85rem', color:'var(--text2)', textAlign:'right', flexShrink:0 }}>{s.label}</div>
               <div style={{ flex:1, background:'var(--surface2)', borderRadius:6, height:32, overflow:'hidden' }}>
                 <div style={{ width:`${Math.max(pct,3)}%`, height:'100%', background:s.color, borderRadius:6, transition:'width 0.8s ease-out', display:'flex', alignItems:'center', paddingLeft:10 }}>
                   <span style={{ fontSize:'0.85rem', fontWeight:600, color:'#fff', textShadow:'0 1px 2px rgba(0,0,0,0.3)' }}>{s.count}</span>
@@ -3009,7 +3009,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                     <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:8 }}>빠른 상태 변경</div>
                     <div style={{ display:'flex', gap:8 }}>
                       {project.current_status==='applied' && <button onClick={() => onSave(project,'interview','미팅 예정')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'var(--surface-warning-mid)', color:'var(--yellow)' }}>📅 미팅 예정으로 변경</button>}
-                      {project.current_status==='interview' && <button onClick={() => onSave(project,'meeting_done','미팅 완료')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'var(--surface-info-mid)', color:'var(--blue)' }}>🤝 계약 논의 중으로 변경</button>}
+                      {project.current_status==='interview' && <button onClick={() => onSave(project,'meeting_done','미팅 완료')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'var(--surface-info-mid)', color:'var(--blue)' }}>🤝 미팅 완료로 변경</button>}
                       {project.current_status==='meeting_done' && <button onClick={() => onSave(project,'interview','추가 미팅 예정')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'var(--surface-warning-mid)', color:'var(--yellow)' }}>📅 추가 미팅 예정으로 변경</button>}
                     </div>
                   </div>
@@ -3895,7 +3895,7 @@ function App({ session }) {
     // 전환된 row는 Realtime UPDATE 이벤트로 자동 동기화됨 (별도 setData 불필요).
     supabase.rpc('transition_passed_meetings').then(({ data:n, error:e }) => {
       if (e) { console.warn('미팅 자동 전환 RPC 실패:', e.message); return; }
-      if (n > 0) toast(`🤝 미팅 경과 자동 전환 ${n}건 → 계약 논의 중`, 'info');
+      if (n > 0) toast(`🤝 미팅 경과 자동 전환 ${n}건 → 미팅 완료`, 'info');
     });
     supabase.rpc('transition_passed_start_dates').then(({ data:n, error:e }) => {
       if (e) { console.warn('착수일 자동 전환 RPC 실패:', e.message); return; }
@@ -3903,7 +3903,7 @@ function App({ session }) {
     });
     supabase.rpc('transition_passed_deadlines').then(({ data:n, error:e }) => {
       if (e) { console.warn('마감일 자동 전환 RPC 실패:', e.message); return; }
-      if (n > 0) toast(`🔧 마감일 경과 자동 전환 ${n}건 → 유지보수(무상)`, 'info');
+      if (n > 0) toast(`🔧 마감일 경과 자동 전환 ${n}건 → 유지보수 (무상)`, 'info');
     });
     // (구) P2/P3 orphan 정리 cron(cleanup-p2p3.yml)은 제거됨 — 미선정은 이제 즉시 삭제
     // (handleDelete/handleBatchDelete)로 DB+파일을 함께 정리하므로 별도 정리 작업 불필요.
