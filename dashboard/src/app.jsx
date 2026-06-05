@@ -36,13 +36,15 @@ const STATUS_META = {
   won:          { label: '수주 성공',  emoji: '🎉', color: '#00b894' },
   contracted:   { label: '계약 완료',  emoji: '📝', color: '#00b894' },
   in_progress:  { label: '개발 중',    emoji: '⚙️',  color: '#a29bfe' },
+  maintenance_free: { label: '유지보수(무상)', emoji: '🔧', color: '#00b894' },
+  maintenance_paid: { label: '유지보수(유상)', emoji: '🛠️', color: '#e84393' },
   delivered:    { label: '납품 완료',  emoji: '📦', color: '#74b9ff' },
   settled:      { label: '정산 완료',  emoji: '✅', color: '#00cec9' },
   lost:         { label: '미선정',     emoji: '❌', color: '#e17055' },
 };
-const STATUS_ORDER = ['generated','applied','interview','meeting_done','won','contracted','in_progress','delivered','settled'];
-const POST_WON = ['contracted','in_progress','delivered','settled']; // stats: 수주 후 진행 단계
-const HAS_MILESTONES = ['won','contracted','in_progress','delivered','settled']; // 마일스톤 트래커 노출 대상
+const STATUS_ORDER = ['generated','applied','interview','meeting_done','won','contracted','in_progress','maintenance_free','maintenance_paid','delivered','settled'];
+const POST_WON = ['contracted','in_progress','maintenance_free','maintenance_paid','delivered','settled']; // stats: 수주 후 진행 단계
+const HAS_MILESTONES = ['won','contracted','in_progress','maintenance_free','maintenance_paid','delivered','settled']; // 마일스톤 트래커 노출 대상
 const ACTIVE_WORK = ['won','contracted','in_progress']; // 상단 '내 담당 프로젝트' 카드 노출 대상 — 납품·정산 완료 제외
 // 담당 컬럼·담당 필터·멤버 바의 단일 소스. 필터별로 노출/매칭할 담당 역할을 정의한다.
 // role.statuses 가 있으면 해당 행 상태에서만 그 역할이 적용됨('전체' 뷰의 행별 구분용).
@@ -72,8 +74,13 @@ const TRANSITION_TARGETS = {
   meeting_done:['interview','won'],
   won:         ['contracted'],
   contracted:  ['in_progress'],
-  in_progress: ['delivered'],
-  delivered:   ['settled'],
+  // 개발 중 → 유지보수(무상)/유지보수(유상)/납품 완료 수동 선택 가능.
+  // 유지보수(무상)·유지보수(유상)·납품 완료 3개 상태는 서로 자유롭게 전환 가능.
+  // 납품 완료 → 정산 완료 전환은 불필요하여 제외 (기존 settled 데이터 표시는 유지).
+  in_progress:      ['maintenance_free','maintenance_paid','delivered'],
+  maintenance_free: ['maintenance_paid','delivered'],
+  maintenance_paid: ['maintenance_free','delivered'],
+  delivered:        ['maintenance_free','maintenance_paid'],
   settled:     [],
 };
 const MEETING_TYPES = [
@@ -239,7 +246,7 @@ ALTER TABLE wishket_projects DROP CONSTRAINT IF EXISTS wishket_projects_current_
 ALTER TABLE wishket_projects ADD CONSTRAINT wishket_projects_current_status_check
   CHECK (current_status IN (
     'generated','applied','interview','meeting_done',
-    'won','contracted','in_progress','delivered','settled','lost'
+    'won','contracted','in_progress','maintenance_free','maintenance_paid','delivered','settled','lost'
   ));`;
 
 
@@ -3886,7 +3893,7 @@ function App({ session }) {
     });
     supabase.rpc('transition_passed_deadlines').then(({ data:n, error:e }) => {
       if (e) { console.warn('마감일 자동 전환 RPC 실패:', e.message); return; }
-      if (n > 0) toast(`📦 마감일 경과 자동 전환 ${n}건 → 납품 완료`, 'info');
+      if (n > 0) toast(`🔧 마감일 경과 자동 전환 ${n}건 → 유지보수(무상)`, 'info');
     });
     // (구) P2/P3 orphan 정리 cron(cleanup-p2p3.yml)은 제거됨 — 미선정은 이제 즉시 삭제
     // (handleDelete/handleBatchDelete)로 DB+파일을 함께 정리하므로 별도 정리 작업 불필요.
@@ -4505,7 +4512,7 @@ function App({ session }) {
   const avgWonDays = useMemo(() => {
     if (!data) return null;
     // won 단계 도달 이후 모든 프로젝트(contracted/in_progress/delivered/settled 포함) 평균
-    const SECURED = ['won','contracted','in_progress','delivered','settled'];
+    const SECURED = ['won','contracted','in_progress','maintenance_free','maintenance_paid','delivered','settled'];
     const samples = [];
     data.forEach(d => {
       if (!SECURED.includes(d.current_status) || !d.created_at) return;
@@ -4576,7 +4583,7 @@ function App({ session }) {
   STATUS_ORDER.forEach(s => counts[s]=data.filter(d=>d.current_status===s).length);
   const appliedOrBeyond = data.filter(d=>d.current_status!=='generated').length;
   // 수주 = won 이후 모든 단계. 한 번 수주된 이상 진행 단계와 무관하게 카운트.
-  const SECURED_STATUSES = ['won','contracted','in_progress','delivered','settled'];
+  const SECURED_STATUSES = ['won','contracted','in_progress','maintenance_free','maintenance_paid','delivered','settled'];
   const POST_MEETING = ['interview','meeting_done', ...SECURED_STATUSES];
   // 수주율 분모 = "미팅을 거친 모든 프로젝트" (interview, meeting_done, 또는 수주 후 단계)
   const wonCount = data.filter(d => SECURED_STATUSES.includes(d.current_status)).length;
