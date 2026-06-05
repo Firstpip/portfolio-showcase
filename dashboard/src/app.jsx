@@ -2625,9 +2625,10 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
               <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:4, flexWrap:'wrap' }}>
                 <span style={{ fontSize:'0.8rem', color:'var(--text2)', fontFamily:'monospace' }}>{project.slug}</span>
                 <span style={{ display:'inline-block', padding:'0.1rem 0.45rem', borderRadius:5, fontSize:'0.8rem', fontWeight:500, background:meta.color+'30', color:meta.color }}>{meta.emoji} {meta.label}</span>
-                {project.current_status === 'won'
-                  ? (managerMember && <MemberBadge member={managerMember} role="mgr" />)
-                  : (<>{mainMember && <MemberBadge member={mainMember} role="main" />}{subMember && <MemberBadge member={subMember} role="sub" />}</>)
+                {/* 담당자 뱃지 우선순위: PM → (없으면) 미팅 주 → (없으면) 미표시 */}
+                {managerMember
+                  ? <MemberBadge member={managerMember} role="mgr" />
+                  : (mainMember && <MemberBadge member={mainMember} role="main" />)
                 }
               </div>
             </div>
