@@ -3671,7 +3671,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                     const bn = parseBudgetNum(r.budget);
                     if (bn > 0 && CONTRACT_NET_STATUSES.includes(r.current_status)) {
                       return <span title={`지원가 ${r.budget} − 수수료 ${wishketFeeRate(bn)*100}% → ×1.1(부가세) = ${fmtManwon(contractNet(bn))}만원`}>
-                        {fmtManwon(contractNet(bn))}만원<span style={{ color:'var(--text2)', fontSize:'0.7rem' }}> +부</span>
+                        {fmtManwon(contractNet(bn))}만원
                       </span>;
                     }
                     return r.budget || '—';
