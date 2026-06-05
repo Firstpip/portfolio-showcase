@@ -46,6 +46,7 @@ const STATUS_ORDER = ['generated','applied','interview','meeting_done','won','co
 const POST_WON = ['contracted','in_progress','maintenance_free','maintenance_paid','delivered','settled']; // stats: 수주 후 진행 단계
 const HAS_MILESTONES = ['won','contracted','in_progress','maintenance_free','maintenance_paid','delivered','settled']; // 마일스톤 트래커 노출 대상
 const ACTIVE_WORK = ['won','contracted','in_progress']; // 상단 '내 담당 프로젝트' 카드 노출 대상 — 납품·정산 완료 제외
+const POST_DEV = ['maintenance_free','maintenance_paid','delivered','settled']; // 개발 종료 후 상태 — 주차 진행/마감 초과 등 실시간 일정 표시 숨김
 // 담당 컬럼·담당 필터·멤버 바의 단일 소스. 필터별로 노출/매칭할 담당 역할을 정의한다.
 // role.statuses 가 있으면 해당 행 상태에서만 그 역할이 적용됨('전체' 뷰의 행별 구분용).
 // - '전체'        : PM(수주 후 건) + 미팅 주(미팅예정 건만)
@@ -1954,7 +1955,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         {mgrM && <MemberBadge member={mgrM} role="mgr" />}
         {mainM && <MemberBadge member={mainM} role="main" />}
         {subM && <MemberBadge member={subM} role="sub" />}
-        {project.start_date && (() => {
+        {project.start_date && !POST_DEV.includes(project.current_status) && (() => {
           const cw = getCurrentWeek(project.start_date);
           if (cw == null) return null;
           const totalW = weekOptions.length;
@@ -1992,7 +1993,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
           return Math.round((dl - today) / 86400000);
         })();
         const dlColor = dlDiff != null ? (dlDiff < 0 ? 'var(--red)' : dlDiff <= 7 ? 'var(--yellow)' : 'var(--text2)') : null;
-        const dlLabel = dlDiff != null ? (dlDiff < 0 ? `+${-dlDiff}일 초과` : dlDiff === 0 ? '오늘 마감' : `D-${dlDiff}`) : null;
+        const dlLabel = (dlDiff != null && !POST_DEV.includes(project?.current_status)) ? (dlDiff < 0 ? `+${-dlDiff}일 초과` : dlDiff === 0 ? '오늘 마감' : `D-${dlDiff}`) : null;
         return (
           <div style={{ display:'flex', gap:10, alignItems:'center', marginBottom:14, padding:'0.6rem 0.9rem', borderRadius:10, background:'var(--surface)', border:'1px solid var(--border)', flexWrap:'wrap' }}>
             <div style={{ display:'flex', alignItems:'center', gap:6 }}>
@@ -2710,7 +2711,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                         <span style={{ fontSize:'0.8rem', color:'var(--text2)', fontWeight:400, opacity:0.8 }}>주차 자동 계산 기준</span>
                       </div>
                       <input type="date" value={editStartDate} onChange={e => { setEditStartDate(e.target.value); setStartDateChanged(e.target.value!==(project.start_date||'')); }} style={inputS} />
-                      {editStartDate && (() => { const cw = getCurrentWeek(editStartDate); return cw != null ? (
+                      {editStartDate && !POST_DEV.includes(project.current_status) && (() => { const cw = getCurrentWeek(editStartDate); return cw != null ? (
                         <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--green)', opacity:0.9 }}>→ 오늘 기준 {cw}주차 진행 중</div>
                       ) : (
                         <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--text2)', opacity:0.7 }}>→ 아직 착수 전 날짜</div>
@@ -2719,7 +2720,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                     <div style={{ flex:1 }}>
                       <div style={{ ...labelS }}>마감일</div>
                       <input type="date" value={editDeadline} onChange={e => { setEditDeadline(e.target.value); setDeadlineChanged(e.target.value!==(project.deadline||'')); }} style={inputS} />
-                      {editDeadline && (() => {
+                      {editDeadline && !POST_DEV.includes(project.current_status) && (() => {
                         const today = new Date(); today.setHours(0,0,0,0);
                         const dl = new Date(editDeadline); dl.setHours(0,0,0,0);
                         const diff = Math.round((dl - today) / 86400000);
