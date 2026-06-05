@@ -56,6 +56,8 @@ const contractNet = (manwon) => manwon > 0 ? Math.round(manwon * (1 - wishketFee
 const fmtManwon = (n) => n.toLocaleString(undefined, { maximumFractionDigits: 1 });
 // 위시켓 외 직계약(wishket_url 없음)은 수수료 미적용 — 기록 금액 그대로가 계약대금
 const projectNet = (p) => { const bn = parseBudgetNum(p.budget); return p.wishket_url ? contractNet(bn) : bn; };
+// 우리 쇼케이스 배포 링크 패턴 — [1]=slug, [2]=portfolio-N (배포까지 삭제 버튼 노출 판별용)
+const SHOWCASE_LINK_RE = /^https?:\/\/firstpip\.github\.io\/portfolio-showcase\/([^/]+)\/(portfolio-\d+)\/?$/i;
 // 담당 컬럼·담당 필터·멤버 바의 단일 소스. 필터별로 노출/매칭할 담당 역할을 정의한다.
 // role.statuses 가 있으면 해당 행 상태에서만 그 역할이 적용됨('전체' 뷰의 행별 구분용).
 // - '전체'        : PM(수주 후 건) + 미팅 주(미팅예정 건만)
@@ -2570,6 +2572,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
   const [newLinkLabel, setNewLinkLabel] = useState('');
   const [newLinkUrl, setNewLinkUrl] = useState('');
   const [editingLinkIdx, setEditingLinkIdx] = useState(-1);
+  const [deployBusy, setDeployBusy] = useState(false);   // 배포까지 삭제 진행 중
+  const [deployErr, setDeployErr] = useState('');
   const [infoChanged, setInfoChanged] = useState(false);
   const [dateChanged, setDateChanged] = useState(false);
   const [meetingChanged, setMeetingChanged] = useState(false);
@@ -2790,12 +2794,39 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                               <button onClick={() => {
                                 const next = editLinks.filter((_, i) => i !== idx);
                                 setEditLinks(next); setLinksChanged(true); setEditingLinkIdx(-1);
-                              }} style={{ background:'none', border:'none', color:'var(--red)', cursor:'pointer', fontSize:'0.8rem', padding:'2px 4px', flexShrink:0 }} title="삭제">&#x2715;</button>
+                              }} style={{ background:'none', border:'none', color:'var(--red)', cursor:'pointer', fontSize:'0.8rem', padding:'2px 4px', flexShrink:0 }} title="링크만 삭제 (배포는 유지)">&#x2715;</button>
+                              {(() => {
+                                // 우리 쇼케이스 배포 링크(이 프로젝트 slug와 일치)에만 "배포까지 삭제" 노출
+                                const m = (link.url||'').match(SHOWCASE_LINK_RE);
+                                if (!m || m[1].toLowerCase() !== project.slug.toLowerCase()) return null;
+                                const sub = m[2].toLowerCase();
+                                const doDeployDelete = async () => {
+                                  setDeployBusy(true); setDeployErr('');
+                                  try {
+                                    const { data:fnData, error:fnErr } = await supabase.functions.invoke('delete-portfolios', { body:{ slug: project.slug, path: sub } });
+                                    if (fnErr) throw new Error(fnErr.message);
+                                    if (!fnData?.deleted) throw new Error(fnData?.reason || '배포 파일 삭제 실패');
+                                    // 배포 삭제 성공 → 링크 제거 + count 감소를 즉시 저장 (대기 중이던 다른 링크 편집도 함께 저장됨)
+                                    const next = editLinks.filter((_, i) => i !== idx);
+                                    setEditLinks(next); setEditingLinkIdx(-1); setLinksChanged(false);
+                                    onFieldSave(project, { portfolio_links: next, portfolio_count: Math.max(0, (project.portfolio_count||0) - 1) });
+                                  } catch(err) { setDeployErr(String(err?.message||err)); }
+                                  finally { setDeployBusy(false); }
+                                };
+                                return <button disabled={deployBusy} onClick={() => {
+                                  const msg = `"${link.label||sub}"의 깃헙 페이지 배포 파일이 삭제됩니다.\n(${project.slug}/${sub} — Pages 빌드 후 404)\n링크도 제거되어 즉시 저장됩니다.\n\n계속할까요?`;
+                                  if (onRequestConfirm) onRequestConfirm({ title:'배포까지 삭제', message: msg, confirmLabel:'배포 삭제', onConfirm: doDeployDelete });
+                                  else if (window.confirm(msg)) doDeployDelete();
+                                }} style={{ background:'none', border:'none', color:'var(--red)', cursor:deployBusy?'wait':'pointer', fontSize:'0.8rem', padding:'2px 4px', flexShrink:0, opacity:deployBusy?0.5:1 }} title="배포까지 삭제 (깃헙 페이지 제거 + 링크 저장)">&#x1F5D1;</button>;
+                              })()}
                             </>
                           )}
                         </div>
                       ))}
                     </div>
+                  )}
+                  {deployErr && (
+                    <div style={{ fontSize:'0.75rem', color:'var(--red)', marginBottom:8 }}>⚠ 배포 삭제 실패: {deployErr}</div>
                   )}
                   <div style={{ display:'flex', gap:6 }}>
                     <input type="text" value={newLinkLabel} placeholder="라벨 (예: P1 데모)" onChange={e => setNewLinkLabel(e.target.value)}

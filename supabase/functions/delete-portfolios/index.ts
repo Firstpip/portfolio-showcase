@@ -82,6 +82,39 @@ async function deleteSlug(token: string, slug: string): Promise<{ ok: boolean; r
   return { ok: false, reason: `재시도 ${MAX_RETRIES}회 후에도 충돌: ${lastResult.reason}` };
 }
 
+// ─── 부분 삭제: slug 하위 portfolio-N 폴더만 (배포만 내리고 DB row 유지) ──
+
+async function deleteSubpath(token: string, slug: string, sub: string): Promise<{ ok: boolean; reason?: string }> {
+  let lastResult: CommitResult = { ok: false, reason: "초기 상태" };
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const head = await getHeadInfo(token);
+    if (!head) return { ok: false, reason: "HEAD 조회 실패" };
+    const rootEntries = await getTree(token, head.rootTreeSha);
+    if (!rootEntries) return { ok: false, reason: "루트 트리 조회 실패" };
+    const slugEntry = rootEntries.find(e => e.path === slug && e.type === "tree");
+    if (!slugEntry) return { ok: true }; // slug 폴더 자체가 없음 — 이미 삭제됨
+    const slugEntries = await getTree(token, slugEntry.sha);
+    if (!slugEntries) return { ok: false, reason: "slug 트리 조회 실패" };
+    const filtered = slugEntries.filter(e => e.path !== sub);
+    if (filtered.length === slugEntries.length) return { ok: true }; // 대상 폴더 없음 — 멱등 OK
+    let newRootEntries: TreeEntry[];
+    if (filtered.length === 0) {
+      // 하위가 전부 비면 slug 폴더 자체를 제거 (git은 빈 트리를 유지하지 않음)
+      newRootEntries = rootEntries.filter(e => e.path !== slug);
+    } else {
+      const newSlugSha = await createTree(token, filtered);
+      if (!newSlugSha) return { ok: false, reason: "slug 트리 재생성 실패" };
+      newRootEntries = rootEntries.map(e => e.path === slug ? { ...e, sha: newSlugSha } : e);
+    }
+    const newRootSha = await createTree(token, newRootEntries);
+    if (!newRootSha) return { ok: false, reason: "루트 트리 재생성 실패" };
+    lastResult = await commitAndPush(token, newRootSha, head.commitSha, `chore: delete ${slug}/${sub} (배포만 내림 — row 유지)`);
+    if (lastResult.ok || !lastResult.conflict) return lastResult;
+    await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt - 1) + Math.random() * 300));
+  }
+  return { ok: false, reason: `재시도 ${MAX_RETRIES}회 후에도 충돌: ${lastResult.reason}` };
+}
+
 // ─── DB 헬퍼 ─────────────────────────────────────────────────────────────
 
 const SB_URL  = Deno.env.get("SUPABASE_URL") || "";
@@ -127,7 +160,7 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "GITHUB_TOKEN not set", reqId }), { status: 500, headers });
   }
 
-  let body: { slug?: string; skip_db?: boolean };
+  let body: { slug?: string; skip_db?: boolean; path?: string };
   try {
     body = await req.json();
   } catch {
@@ -135,14 +168,30 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "Invalid JSON body", reqId }), { status: 400, headers });
   }
 
-  const { slug, skip_db } = body;
+  const { slug, skip_db, path } = body;
   // dashboard에서 supabase.functions.invoke()로 호출 시 자동 첨부되는 user JWT.
   // audit 트리거가 auth.uid()로 actor를 캡처할 수 있도록 DB DELETE에 그대로 전달.
   const userJwt = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
-  console.log(`[${reqId}] request`, { slug, skip_db, has_user_jwt: !!userJwt });
+  console.log(`[${reqId}] request`, { slug, skip_db, path, has_user_jwt: !!userJwt });
 
   if (!slug) {
     return new Response(JSON.stringify({ error: "slug is required", reqId }), { status: 400, headers });
+  }
+
+  // path 모드: <slug>/portfolio-N 폴더만 삭제 (배포만 내림). DB row는 절대 건드리지 않음.
+  // path는 portfolio-N 형식만 허용 — 임의 경로/상위 폴더 삭제 차단.
+  if (path !== undefined) {
+    if (!/^portfolio-\d+$/.test(path)) {
+      return new Response(JSON.stringify({ error: "path must match portfolio-N", reqId }), { status: 400, headers });
+    }
+    try {
+      const fileResult = await deleteSubpath(token, slug, path);
+      console.log(`[${reqId}] subpath delete`, { slug, path, ok: fileResult.ok, reason: fileResult.reason });
+      return new Response(JSON.stringify({ slug, path, deleted: fileResult.ok, db_updated: false, reason: fileResult.reason, reqId }), { headers });
+    } catch (err) {
+      console.error(`[${reqId}] subpath unhandled exception`, err);
+      return new Response(JSON.stringify({ error: String(err), reqId }), { status: 500, headers });
+    }
   }
 
   try {
