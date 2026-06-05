@@ -2831,6 +2831,20 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                   if (urlChanged)  fields.wishket_url = editUrl;
                   if (memoChanged) fields.memo = editMemo;
                   if (linksChanged) fields.portfolio_links = editLinks;
+                  // 핵심 정보 변경은 history에 변경 전→후를 기록 (예산 등 수정 이력 추적 — 2026-06-05)
+                  {
+                    const changes = [];
+                    if (infoChanged) {
+                      if (editTitle !== (project.title||''))       changes.push(`제목: ${project.title||'—'} → ${editTitle||'—'}`);
+                      if (editBudget !== (project.budget||''))     changes.push(`예산: ${project.budget||'—'} → ${editBudget||'—'}`);
+                      if (editTimeline !== (project.timeline||'')) changes.push(`기간: ${project.timeline||'—'} → ${editTimeline||'—'}`);
+                    }
+                    if (urlChanged) changes.push(`위시켓 URL: ${project.wishket_url||'—'} → ${editUrl||'—'}`);
+                    if (changes.length) {
+                      const today = new Date().toISOString().split('T')[0];
+                      fields.history = [...(project.history||[]), { status:project.current_status, date:today, note:'정보 수정 — '+changes.join(' · ') }];
+                    }
+                  }
                   onFieldSave(project, fields);
                   setInfoChanged(false); setDateChanged(false); setStartDateChanged(false); setDeadlineChanged(false); setUrlChanged(false); setMemoChanged(false); setLinksChanged(false);
                 }} disabled={saving} style={{ ...saveBtnS(true), width:'100%', marginTop:10 }}>
