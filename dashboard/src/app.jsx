@@ -54,6 +54,8 @@ const CONTRACT_NET_STATUSES = ['won', ...POST_WON];
 const wishketFeeRate = (manwon) => manwon <= 500 ? 0.25 : 0.20;
 const contractNet = (manwon) => manwon > 0 ? Math.round(manwon * (1 - wishketFeeRate(manwon)) * 1.1 * 10) / 10 : 0; // 0.1만원 단위
 const fmtManwon = (n) => n.toLocaleString(undefined, { maximumFractionDigits: 1 });
+// 위시켓 외 직계약(wishket_url 없음)은 수수료 미적용 — 기록 금액 그대로가 계약대금
+const projectNet = (p) => { const bn = parseBudgetNum(p.budget); return p.wishket_url ? contractNet(bn) : bn; };
 // 담당 컬럼·담당 필터·멤버 바의 단일 소스. 필터별로 노출/매칭할 담당 역할을 정의한다.
 // role.statuses 가 있으면 해당 행 상태에서만 그 역할이 적용됨('전체' 뷰의 행별 구분용).
 // - '전체'        : PM(수주 후 건) + 미팅 주(미팅예정 건만)
@@ -2700,7 +2702,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                         style={{ ...inputS, borderTopRightRadius:0, borderBottomRightRadius:0, borderRight:'none' }} />
                       <span style={{ padding:'0.5rem 0.6rem', borderRadius:'0 8px 8px 0', fontSize:'0.85rem', background:'var(--border)', color:'var(--text2)', border:'1px solid var(--border)', lineHeight:1.5, whiteSpace:'nowrap' }}>만원</span>
                     </div>
-                    {CONTRACT_NET_STATUSES.includes(project.current_status) && parseBudgetNum(editBudget) > 0 && (() => {
+                    {CONTRACT_NET_STATUSES.includes(project.current_status) && project.wishket_url && parseBudgetNum(editBudget) > 0 && (() => {
                       const bn = parseBudgetNum(editBudget);
                       return <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginTop:4 }}>
                         계약대금(+부) <b style={{ color:'var(--green)' }}>{fmtManwon(contractNet(bn))}만원</b> — 수수료 {wishketFeeRate(bn)*100}% 차감 후 부가세 10% 포함
@@ -3669,7 +3671,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                   </td>
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:r.budget?'var(--text)':'var(--text2)' }}>{(() => {
                     const bn = parseBudgetNum(r.budget);
-                    if (bn > 0 && CONTRACT_NET_STATUSES.includes(r.current_status)) {
+                    if (bn > 0 && CONTRACT_NET_STATUSES.includes(r.current_status) && r.wishket_url) {
                       return <span title={`지원가 ${r.budget} − 수수료 ${wishketFeeRate(bn)*100}% → ×1.1(부가세) = ${fmtManwon(contractNet(bn))}만원`}>
                         {fmtManwon(contractNet(bn))}만원
                       </span>;
@@ -4887,7 +4889,7 @@ function App({ session }) {
 
       {/* KPI 바 (상시 노출) */}
       {(() => {
-        const wonBudgetTotal = data.filter(d=>SECURED_STATUSES.includes(d.current_status)).reduce((sum,d)=>sum+contractNet(parseBudgetNum(d.budget)),0);
+        const wonBudgetTotal = data.filter(d=>SECURED_STATUSES.includes(d.current_status)).reduce((sum,d)=>sum+projectNet(d),0);
         const inProg = SECURED_STATUSES.reduce((s,k)=>s+(counts[k]||0),0);
         const kpiStyle = { flex:'1 1 0', minWidth:'fit-content', display:'flex', alignItems:'center', justifyContent:'center', gap:6, padding:'0.45rem 0.85rem', borderRadius:8, background:'var(--surface)', border:'1px solid var(--border)', fontSize:'0.8rem', whiteSpace:'nowrap' };
         const numStyle = (color) => ({ fontWeight:700, fontSize:'0.95rem', color });
@@ -4933,7 +4935,7 @@ function App({ session }) {
         {showStats && (
           <div style={{ animation:'fadeIn 0.25s ease-out' }}>
             {(() => {
-              const wonBudgetTotal = data.filter(d=>SECURED_STATUSES.includes(d.current_status)).reduce((sum,d)=>sum+contractNet(parseBudgetNum(d.budget)),0);
+              const wonBudgetTotal = data.filter(d=>SECURED_STATUSES.includes(d.current_status)).reduce((sum,d)=>sum+projectNet(d),0);
               const wonBudgetStr = wonBudgetTotal>0?fmtManwon(wonBudgetTotal)+'만원':'—';
               return (
                 <div style={{ display:'flex', gap:'0.75rem', flexWrap:'wrap', marginTop:'0.75rem', marginBottom:'1rem' }}>
