@@ -2543,7 +2543,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
   const trapRef = useFocusTrap();
   const isPostWon = HAS_MILESTONES.includes(project?.current_status);
   const [tab, setTab] = useState(
-    project?.current_status === 'meeting_done' ? 'meeting' : isPostWon ? 'tasks' : 'info'
+    // 미팅예정·미팅완료만 미팅 탭이 디폴트, 그 외 모든 상태는 정보 탭 (2026-06-05)
+    ['interview','meeting_done'].includes(project?.current_status) ? 'meeting' : 'info'
   );
   const [newStatus, setNewStatus] = useState('');
   const [note, setNote] = useState('');
