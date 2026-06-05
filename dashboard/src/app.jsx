@@ -3499,7 +3499,8 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
     const sortFn = (a,b) => {
       let va, vb;
       if (sortKey==='budget')     { va=parseBudgetNum(a.budget);  vb=parseBudgetNum(b.budget); }
-      else if (sortKey==='meeting_at') { va=a.meeting_at||''; vb=b.meeting_at||''; }
+      // 개발 종료 후 상태 행은 미팅일 대신 개발완료일(마감일) 기준으로 정렬
+      else if (sortKey==='meeting_at') { va=(POST_DEV.includes(a.current_status)?a.deadline:a.meeting_at)||''; vb=(POST_DEV.includes(b.current_status)?b.deadline:b.meeting_at)||''; }
       else { va=a.created_at||''; vb=b.created_at||''; }
       let cmp;
       if (typeof va === 'number') cmp = sortOrder==='desc' ? vb-va : va-vb;
@@ -3529,7 +3530,8 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
     { key:'title',      label:'프로젝트', sortable:false, width:'' },
     { key:'budget',     label:'예산',  sortable:true,  width:'110px' },
     { key:'created_at', label:'생성일', sortable:true,  width:'100px' },
-    ...(hideMeeting  ? [] : [{ key:'meeting_at', label:'미팅일', sortable:true,  width:'175px' }]),
+    // 개발 종료 후 상태 필터에서는 미팅일 대신 개발완료일(마감일)을 표시
+    ...(hideMeeting  ? [] : [{ key:'meeting_at', label:POST_DEV.includes(filter)?'개발완료일':'미팅일', sortable:true,  width:'175px' }]),
     ...(hideAssigned ? [] : [{ key:'assigned',   label:assignColLabel(filter), sortable:false, width:'130px' }]),
     { key:'note',       label:'메모',  sortable:false, width:'160px' },
   ];
@@ -3657,7 +3659,14 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                   <td title={r.created_at ? formatMeetingAt(r.created_at) || r.created_at : ''} style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:'var(--text2)' }}>{r.created_at ? (r.created_at.length >= 10 ? r.created_at.slice(0,10) : r.created_at) : '—'}</td>
                   {!hideMeeting && (
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem' }}>
-                    {meetingStr ? (() => {
+                    {POST_DEV.includes(r.current_status) ? (
+                      r.deadline ? (
+                        <span style={{ display:'flex', alignItems:'center', gap:4 }}>
+                          <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.8rem', fontWeight:600, background:'var(--surface-success-mid)', color:'var(--green)' }}>개발완료</span>
+                          <span style={{ color:'var(--text2)' }}>{r.deadline}</span>
+                        </span>
+                      ) : <span style={{ color:'var(--text2)' }}>—</span>
+                    ) : meetingStr ? (() => {
                       const ms = getMeetingStatus(r.meeting_at);
                       const mt = MEETING_TYPES.find(t => t.key===r.meeting_type);
                       const isDone = ms==='done';
