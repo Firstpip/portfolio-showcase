@@ -4761,6 +4761,9 @@ function App({ session }) {
       {currentMember && (() => {
         const myProjects = data.filter(d =>
           ACTIVE_WORK.includes(d.current_status) && d.assigned_manager === currentMember.id
+        ).sort((a, b) =>
+          // 개발 중(in_progress) 먼저, 계약 논의 중(won) 나중 — 같은 상태끼리는 기존 순서 유지(stable sort)
+          (a.current_status === 'in_progress' ? 0 : 1) - (b.current_status === 'in_progress' ? 0 : 1)
         );
         if (myProjects.length === 0) return null;
         return (
