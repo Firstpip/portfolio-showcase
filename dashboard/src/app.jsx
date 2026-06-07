@@ -2597,11 +2597,38 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
   const [assignSub,     setAssignSub]     = useState(project?.assigned_sub ||null);
   const [assignChanged, setAssignChanged] = useState(false);
 
+  // ── 미저장 변경 통합 플래그 — 닫기 가드 + 외부 변경 경고에 사용 (2026-06-07) ──
+  const anyDirty = infoChanged||dateChanged||startDateChanged||deadlineChanged||urlChanged||memoChanged||linksChanged||assignChanged||meetingChanged||!!newStatus;
+
+  // 편집 중(미저장 변경 존재)에 project prop이 Realtime 외부 갱신으로 교체되면 경고 배너.
+  // 자기 저장은 dirty 플래그를 같은 배치에서 해제하므로 echo에는 발화하지 않음.
+  const [externalChanged, setExternalChanged] = useState(false);
+  const projRef = useRef(project);
   useEffect(() => {
-    const handler = e => { if (e.key === 'Escape') onClose(); };
+    if (projRef.current !== project) {
+      projRef.current = project;
+      if (anyDirty && !saving) setExternalChanged(true);
+    }
+  }, [project, anyDirty, saving]);
+
+  // 닫기 가드 — 미저장 변경이 있으면 확인 후 닫기 (ESC/오버레이/✕ 모든 경로 공통)
+  const guardedClose = useCallback(() => {
+    if (!anyDirty) { onClose(); return; }
+    if (onRequestConfirm) {
+      onRequestConfirm({
+        title: '저장하지 않은 변경사항',
+        message: '저장하지 않은 변경사항이 있습니다.\n닫으면 사라집니다. 닫을까요?',
+        confirmLabel: '닫기',
+        onConfirm: onClose,
+      });
+    } else onClose();
+  }, [anyDirty, onClose, onRequestConfirm]);
+
+  useEffect(() => {
+    const handler = e => { if (e.key === 'Escape') guardedClose(); };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  }, [guardedClose]);
 
   if (!project) return null;
   const targets = TRANSITION_TARGETS[project.current_status]||[];
@@ -2634,7 +2661,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
   ];
 
   return (
-    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
+    <div onClick={guardedClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
       <div ref={trapRef} role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:500,
         border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
@@ -2655,7 +2682,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                 }
               </div>
             </div>
-            <button onClick={onClose} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem', padding:'2px 4px', flexShrink:0 }}>&#x2715;</button>
+            <button onClick={guardedClose} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem', padding:'2px 4px', flexShrink:0 }}>&#x2715;</button>
           </div>
 
           {project.wishket_url && (
@@ -2676,6 +2703,14 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
           )}
 
           <MeetingPrepButton project={project} />
+
+          {/* 외부 변경 경고 — 편집 중에 자동화/다른 기기가 이 프로젝트를 갱신한 경우 (2026-06-07) */}
+          {externalChanged && (
+            <div style={{ marginBottom:8, padding:'0.5rem 0.75rem', borderRadius:8, background:'var(--surface-warning-soft)', border:'1px solid var(--surface-warning-strong)', color:'var(--yellow)', fontSize:'0.8rem', display:'flex', alignItems:'flex-start', gap:8 }}>
+              <span style={{ flex:1 }}>⚠ 이 프로젝트가 방금 외부(자동화·다른 기기)에서 변경되었습니다. 지금 저장하면 그 변경을 덮어쓸 수 있습니다 — 모달을 닫았다 다시 열면 최신값으로 편집할 수 있습니다.</span>
+              <button onClick={() => setExternalChanged(false)} style={{ background:'none', border:'none', color:'var(--yellow)', cursor:'pointer', fontSize:'0.85rem', padding:0, flexShrink:0 }} title="경고 닫기">&#x2715;</button>
+            </div>
+          )}
 
           {/* 착수일/마감일 미설정 안내 (수주 후 단계인데 누락됐을 때) */}
           {HAS_MILESTONES.includes(project.current_status) && (!project.start_date || !project.deadline) && tab !== 'info' && (
@@ -4002,9 +4037,18 @@ function App({ session }) {
         });
       })
       .on('postgres_changes',{ event:'*', schema:'public', table:TABLE },(payload) => {
-        if (payload.eventType==='UPDATE') setData(prev => prev?prev.map(d => d.slug===payload.new.slug?payload.new:d):prev);
+        if (payload.eventType==='UPDATE') {
+          setData(prev => prev?prev.map(d => d.slug===payload.new.slug?payload.new:d):prev);
+          // 열려있는 모달의 project prop도 최신화 — 이후 저장(상태전환 history append 등)이
+          // 신선한 base를 쓰고, 모달이 편집 중이면 외부 변경 경고 배너가 발화함 (2026-06-07)
+          setSelectedProject(prev => prev && prev.slug===payload.new.slug ? payload.new : prev);
+        }
         else if (payload.eventType==='INSERT') setData(prev => prev?[payload.new,...prev]:[payload.new]);
-        else if (payload.eventType==='DELETE') setData(prev => prev?prev.filter(d => d.id!==payload.old.id):prev);
+        else if (payload.eventType==='DELETE') {
+          setData(prev => prev?prev.filter(d => d.id!==payload.old.id):prev);
+          // 외부에서 row가 삭제되면 열려있는 모달도 닫음 (유령 모달 방지)
+          setSelectedProject(prev => prev && prev.id===payload.old.id ? null : prev);
+        }
       })
       .on('postgres_changes',{ event:'*', schema:'public', table:TEAM_TABLE },(payload) => {
         if (payload.eventType === 'INSERT') {
