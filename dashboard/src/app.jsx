@@ -250,7 +250,8 @@ BEGIN
   GET DIAGNOSTICS n = ROW_COUNT;
   RETURN n;
 END $$;
-GRANT EXECUTE ON FUNCTION transition_passed_meetings() TO authenticated, anon;
+REVOKE EXECUTE ON FUNCTION transition_passed_meetings() FROM anon;
+GRANT EXECUTE ON FUNCTION transition_passed_meetings() TO authenticated;
 
 -- current_status CHECK 제약: STATUS_ORDER 전체 enum 반영
 ALTER TABLE wishket_projects DROP CONSTRAINT IF EXISTS wishket_projects_current_status_check;
@@ -704,7 +705,8 @@ function MonthlyChart({ data }) {
       if (!m) return;
       if (!months[m]) months[m] = { applied:0, won:0 };
       months[m].applied++;
-      if (d.current_status === 'won') months[m].won++;
+      // 수주 후 단계(개발중/납품/정산 등)로 넘어간 건도 수주로 집계 — 퍼널과 기준 일치 (2026-06-07)
+      if (d.current_status === 'won' || POST_WON.includes(d.current_status)) months[m].won++;
     });
     return Object.entries(months).sort((a,b) => a[0].localeCompare(b[0])).slice(-6);
   }, [data]);
@@ -4592,7 +4594,9 @@ function App({ session }) {
     const samples = [];
     data.forEach(d => {
       if (!SECURED.includes(d.current_status) || !d.created_at) return;
-      const wonDate = (d.history||[]).filter(h => h.status==='won').pop()?.date;
+      // 첫 won 엔트리 = 실제 상태 전환 시점. (.pop()이면 won 상태에서 매니저 배정 등
+      // meta 이벤트가 status:'won'으로 추가될 때 그 날짜로 오염됨 — 2026-06-07 수정)
+      const wonDate = (d.history||[]).find(h => h.status==='won')?.date;
       if (!wonDate) return;
       samples.push(daysBetween(d.created_at, wonDate));
     });
