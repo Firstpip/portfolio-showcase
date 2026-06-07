@@ -4761,10 +4761,19 @@ function App({ session }) {
       {currentMember && (() => {
         const myProjects = data.filter(d =>
           ACTIVE_WORK.includes(d.current_status) && d.assigned_manager === currentMember.id
-        ).sort((a, b) =>
-          // 개발 중(in_progress) 먼저, 계약 논의 중(won) 나중 — 같은 상태끼리는 기존 순서 유지(stable sort)
-          (a.current_status === 'in_progress' ? 0 : 1) - (b.current_status === 'in_progress' ? 0 : 1)
-        );
+        ).sort((a, b) => {
+          // 개발 중(in_progress) 먼저, 계약 논의 중(won) 나중
+          const pa = a.current_status === 'in_progress' ? 0 : 1;
+          const pb = b.current_status === 'in_progress' ? 0 : 1;
+          if (pa !== pb) return pa - pb;
+          if (pa === 0) {
+            // 개발 중끼리는 마감 가까운 순 (마감 미지정은 맨 뒤)
+            const da = a.deadline ? new Date(a.deadline).getTime() : Infinity;
+            const db = b.deadline ? new Date(b.deadline).getTime() : Infinity;
+            return da - db;
+          }
+          return 0; // 계약 논의 중끼리는 기존 순서 유지 (stable sort)
+        });
         if (myProjects.length === 0) return null;
         return (
           <div className="fade-in" style={{ marginBottom:'1rem' }}>
