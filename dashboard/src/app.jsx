@@ -2791,14 +2791,17 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                                 title={link.url}
                               >{link.label || link.url}</a>
                               <button onClick={() => setEditingLinkIdx(idx)} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'0.75rem', padding:'2px 4px', flexShrink:0 }} title="수정">&#x270E;</button>
-                              <button onClick={() => {
-                                const next = editLinks.filter((_, i) => i !== idx);
-                                setEditLinks(next); setLinksChanged(true); setEditingLinkIdx(-1);
-                              }} style={{ background:'none', border:'none', color:'var(--red)', cursor:'pointer', fontSize:'0.8rem', padding:'2px 4px', flexShrink:0 }} title="링크만 삭제 (배포는 유지)">&#x2715;</button>
                               {(() => {
-                                // 우리 쇼케이스 배포 링크(이 프로젝트 slug와 일치)에만 "배포까지 삭제" 노출
+                                // 삭제 버튼은 행마다 하나만: 쇼케이스 배포 링크(이 프로젝트 slug와 일치) → 🗑(배포까지 삭제),
+                                // 그 외(외부 링크 등) → ✕(링크만 삭제). 쇼케이스 링크를 ✕로 지우면 배포만 남는
+                                // "잊혀진 공개 페이지"가 생기므로 쇼케이스 행에는 ✕를 노출하지 않는다.
                                 const m = (link.url||'').match(SHOWCASE_LINK_RE);
-                                if (!m || m[1].toLowerCase() !== project.slug.toLowerCase()) return null;
+                                if (!m || m[1].toLowerCase() !== project.slug.toLowerCase()) {
+                                  return <button onClick={() => {
+                                    const next = editLinks.filter((_, i) => i !== idx);
+                                    setEditLinks(next); setLinksChanged(true); setEditingLinkIdx(-1);
+                                  }} style={{ background:'none', border:'none', color:'var(--red)', cursor:'pointer', fontSize:'0.8rem', padding:'2px 4px', flexShrink:0 }} title="링크 삭제">&#x2715;</button>;
+                                }
                                 const sub = m[2].toLowerCase();
                                 const doDeployDelete = async () => {
                                   setDeployBusy(true); setDeployErr('');
