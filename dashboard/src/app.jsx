@@ -261,6 +261,14 @@ ALTER TABLE wishket_projects ADD CONSTRAINT wishket_projects_current_status_chec
   ));`;
 
 
+// 착수일~마감일에서 전체 주차 산출 — getCurrentWeek와 동일한 산식(마감일이 속한 주차 = 전체 주차).
+// 주차 계획(weekly_plan/마일스톤)이 없어도 착수·마감일만 있으면 주차 진행률을 보여주기 위한 fallback.
+function totalWeeksBetween(startDate, deadline) {
+  if (!startDate || !deadline) return 0;
+  const d = daysBetween(startDate, deadline);
+  return d >= 0 ? Math.floor(d / 7) + 1 : 0;
+}
+
 // 착수일 기준 현재 몇 주차인지 계산 (1-based, 착수 전이면 null)
 function getCurrentWeek(startDate) {
   if (!startDate) return null;
@@ -4767,9 +4775,10 @@ function App({ session }) {
                 const doneCount = stat.done;
                 const totalCount = stat.total;
                 const ticketPct = totalCount > 0 ? Math.round((doneCount/totalCount)*100) : -1;
+                // 전체 주차: 주차 계획 → 마일스톤 주차 → (없으면) 착수·마감일에서 자동 산출
                 const totalWeeks = Array.isArray(p.weekly_plan) && p.weekly_plan.length > 0
                   ? p.weekly_plan.length
-                  : stat.uniqueWeeks;
+                  : (stat.uniqueWeeks || totalWeeksBetween(p.start_date, p.deadline));
                 const curWeek = getCurrentWeek(p.start_date);
                 const hasSchedule = totalWeeks > 0 && p.start_date;
                 const weekPct = hasSchedule ? (curWeek != null ? Math.min(Math.round((curWeek / totalWeeks) * 100), 100) : 0) : -1;
