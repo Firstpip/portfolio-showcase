@@ -2704,6 +2704,14 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
 
           <MeetingPrepButton project={project} />
 
+          {/* 작업페이지 바로가기 — 수주 후 단계 프로젝트에 한해 노출 */}
+          {HAS_MILESTONES.includes(project.current_status) && !milestonesSetupNeeded && (
+            <button onClick={() => { onOpenProjectView(project.slug); onClose(); }}
+              style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, width:'100%', padding:'0.55rem 0.75rem', borderRadius:8, fontSize:'0.85rem', fontWeight:600, background:'var(--accent)', color:'#fff', border:'none', cursor:'pointer', marginBottom:'0.75rem' }}>
+              🛠 작업페이지 열기 →
+            </button>
+          )}
+
           {/* 외부 변경 경고 — 편집 중에 자동화/다른 기기가 이 프로젝트를 갱신한 경우 (2026-06-07) */}
           {externalChanged && (
             <div style={{ marginBottom:8, padding:'0.5rem 0.75rem', borderRadius:8, background:'var(--surface-warning-soft)', border:'1px solid var(--surface-warning-strong)', color:'var(--yellow)', fontSize:'0.8rem', display:'flex', alignItems:'flex-start', gap:8 }}>
@@ -3198,12 +3206,6 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                     <div style={{ fontSize:'0.85rem' }}>등록된 작업이 없습니다</div>
                   </div>
                 )}
-                <button onClick={openFull} style={{ width:'100%', padding:'0.85rem', borderRadius:10, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>
-                  🎯 전체 화면에서 {list.length > 0 ? '작업 관리' : '시작하기'} →
-                </button>
-                <div style={{ fontSize:'0.8rem', color:'var(--text2)', textAlign:'center', opacity:0.7 }}>
-                  상세 편집, 메모, 서브태스크는 전체 화면에서 더 편리합니다
-                </div>
               </div>
             );
           })()}
@@ -3711,43 +3713,17 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                         <DemoTriggerButton project={r} onStartAutorun={onStartAutorun} onOpenRegenerate={onOpenRegenerate} saving={demoSaving} />
                       )}
                     </div>
-                    {HAS_MILESTONES.includes(r.current_status) && (() => {
-                      const ms = (milestones?.[r.slug])||[];
-                      const goToProject = (e) => { e.stopPropagation(); onOpenProject(r.slug); };
-                      if (ms.length === 0) {
-                        if (milestonesSetupNeeded) {
-                          return <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginTop:4, opacity:0.7 }}>📋 작업 트래커 DB 미설정</div>;
-                        }
-                        return (
-                          <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, fontSize:'0.8rem' }}>
-                            <span onClick={goToProject} title="클릭: 작업 페이지 열기"
-                              style={{ color:'var(--text2)', cursor:'pointer', textDecoration:'underline', textDecorationColor:'var(--border)', textUnderlineOffset:2 }}>📋 작업 설정 안 됨</span>
-                            <button onClick={e=>{ e.stopPropagation(); onQuickApplyTemplate(r.slug,'web_standard'); }}
-                              style={{ padding:'0.1rem 0.45rem', borderRadius:4, border:'1px solid var(--accent)44', background:'var(--accent)20', color:'var(--accent)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
-                              웹 표준 적용
-                            </button>
-                          </div>
-                        );
-                      }
-                      const sorted = [...ms].sort((a,b)=>(a.order_idx||0)-(b.order_idx||0));
-                      const doneCount = sorted.filter(m => m.status==='done').length;
-                      const pct = Math.round((doneCount/sorted.length)*100);
-                      const current = sorted.find(m => m.status==='in_progress') || sorted.find(m => m.status!=='done');
-                      const blocked = sorted.some(m => m.blocked);
-                      return (
-                        <div onClick={goToProject} title="클릭: 작업 페이지 열기"
-                          style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, fontSize:'0.8rem', cursor:'pointer', padding:'2px 4px', marginLeft:-4, borderRadius:4, transition:'background 0.12s' }}
-                          onMouseEnter={e=>e.currentTarget.style.background='var(--surface2)'}
-                          onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
-                          <div style={{ flex:'0 0 80px', height:5, background:'var(--bg)', borderRadius:3, overflow:'hidden' }}>
-                            <div style={{ width:pct+'%', height:'100%', background:blocked?'var(--red)':'var(--green)', transition:'width 0.3s' }} />
-                          </div>
-                          <span style={{ color:'var(--text2)' }}>{doneCount}/{sorted.length}</span>
-                          {current && <span style={{ color: blocked?'var(--red)':(MILESTONE_STAGES[current.status]?.color||'var(--text2)') }}>· {blocked?'🔴 ':''}{current.phase_label}</span>}
-                          <span style={{ color:'var(--accent2)', fontSize:'0.8rem', marginLeft:'auto', opacity:0.6 }}>→</span>
-                        </div>
-                      );
-                    })()}
+                    {HAS_MILESTONES.includes(r.current_status) && !milestonesSetupNeeded && (
+                      <div style={{ marginTop:6 }}>
+                        <button onClick={e=>{ e.stopPropagation(); onOpenProject(r.slug); }}
+                          title="작업 페이지 열기"
+                          style={{ display:'inline-flex', alignItems:'center', gap:4, padding:'0.18rem 0.55rem', borderRadius:6, border:'1px solid var(--accent)44', background:'var(--accent)15', color:'var(--accent)', cursor:'pointer', fontSize:'0.78rem', fontWeight:600 }}
+                          onMouseEnter={e=>e.currentTarget.style.background='var(--accent)28'}
+                          onMouseLeave={e=>e.currentTarget.style.background='var(--accent)15'}>
+                          🛠 작업페이지 →
+                        </button>
+                      </div>
+                    )}
                   </td>
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:r.budget?'var(--text)':'var(--text2)' }}>{(() => {
                     const bn = parseBudgetNum(r.budget);
@@ -4832,9 +4808,6 @@ function App({ session }) {
               {myProjects.map(p => {
                 const meta = STATUS_META[p.current_status]||{};
                 const stat = milestoneStats[p.slug] || { total:0, done:0, uniqueWeeks:0 };
-                const doneCount = stat.done;
-                const totalCount = stat.total;
-                const ticketPct = totalCount > 0 ? Math.round((doneCount/totalCount)*100) : -1;
                 // 전체 주차: 주차 계획 → 마일스톤 주차 → (없으면) 착수·마감일에서 자동 산출
                 const totalWeeks = Array.isArray(p.weekly_plan) && p.weekly_plan.length > 0
                   ? p.weekly_plan.length
@@ -4846,7 +4819,7 @@ function App({ session }) {
                 const isBeforeStartDate = hasSchedule && curWeek == null;
                 return (
                   <div key={p.slug} role="button" tabIndex={0}
-                    aria-label={`${meta.label} - ${p.title||p.slug}${hasSchedule && curWeek != null ? `, ${overdue ? '일정 초과' : `${curWeek}/${totalWeeks}주차`}` : ''}${ticketPct >= 0 ? `, 티켓 ${doneCount}/${totalCount}` : ''}`}
+                    aria-label={`${meta.label} - ${p.title||p.slug}${hasSchedule && curWeek != null ? `, ${overdue ? '일정 초과' : `${curWeek}/${totalWeeks}주차`}` : ''}`}
                     onClick={() => navigate({ name:'project', slug:p.slug })}
                     onKeyDown={e => { if (e.key==='Enter' || e.key===' ') { e.preventDefault(); navigate({ name:'project', slug:p.slug }); } }}
                     style={{
@@ -4860,26 +4833,15 @@ function App({ session }) {
                       <span style={{ padding:'0.1rem 0.4rem', borderRadius:4, fontSize:'0.7rem', fontWeight:600, background:meta.color+'25', color:meta.color }}>{meta.emoji} {meta.label}</span>
                     </div>
                     <div style={{ fontSize:'0.8rem', fontWeight:600, color:'var(--text)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.title||p.slug}</div>
-                    {(weekPct >= 0 || ticketPct >= 0) && (
+                    {weekPct >= 0 && (
                       <div style={{ marginTop:6, display:'flex', flexDirection:'column', gap:4 }}>
-                        {weekPct >= 0 && (
-                          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                            <span style={{ fontSize:'0.65rem', color:'var(--text2)', width:14, flexShrink:0 }} aria-hidden="true">📅</span>
-                            <div role="progressbar" aria-label="주차 진행률" aria-valuenow={weekPct} aria-valuemin={0} aria-valuemax={100} style={{ flex:1, height:4, borderRadius:2, background:'var(--surface2)', overflow:'hidden' }}>
-                              <div style={{ width:weekPct+'%', height:'100%', borderRadius:2, background:overdue?'var(--red)':weekPct===100?'var(--green)':meta.color, transition:'width 0.3s' }} />
-                            </div>
-                            <span style={{ fontSize:'0.65rem', color:overdue?'var(--red)':'var(--text2)', flexShrink:0, fontWeight:overdue?600:400 }}>{isBeforeStartDate ? '착수 전' : overdue ? `⚠ ${curWeek}/${totalWeeks}주` : `${curWeek}/${totalWeeks}주`}</span>
+                        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                          <span style={{ fontSize:'0.65rem', color:'var(--text2)', width:14, flexShrink:0 }} aria-hidden="true">📅</span>
+                          <div role="progressbar" aria-label="주차 진행률" aria-valuenow={weekPct} aria-valuemin={0} aria-valuemax={100} style={{ flex:1, height:4, borderRadius:2, background:'var(--surface2)', overflow:'hidden' }}>
+                            <div style={{ width:weekPct+'%', height:'100%', borderRadius:2, background:overdue?'var(--red)':weekPct===100?'var(--green)':meta.color, transition:'width 0.3s' }} />
                           </div>
-                        )}
-                        {ticketPct >= 0 && (
-                          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                            <span style={{ fontSize:'0.65rem', color:'var(--text2)', width:14, flexShrink:0 }} aria-hidden="true">🎫</span>
-                            <div role="progressbar" aria-label="티켓 완료율" aria-valuenow={ticketPct} aria-valuemin={0} aria-valuemax={100} style={{ flex:1, height:4, borderRadius:2, background:'var(--surface2)', overflow:'hidden' }}>
-                              <div style={{ width:ticketPct+'%', height:'100%', borderRadius:2, background:ticketPct===100?'var(--green)':'var(--green)', opacity:0.6, transition:'width 0.3s' }} />
-                            </div>
-                            <span style={{ fontSize:'0.65rem', color:'var(--text2)', flexShrink:0 }}>{doneCount}/{totalCount}</span>
-                          </div>
-                        )}
+                          <span style={{ fontSize:'0.65rem', color:overdue?'var(--red)':'var(--text2)', flexShrink:0, fontWeight:overdue?600:400 }}>{isBeforeStartDate ? '착수 전' : overdue ? `⚠ ${curWeek}/${totalWeeks}주` : `${curWeek}/${totalWeeks}주`}</span>
+                        </div>
                       </div>
                     )}
                   </div>
