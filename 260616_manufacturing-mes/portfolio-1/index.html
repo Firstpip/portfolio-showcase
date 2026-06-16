@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="ko" data-archetype="topbar-analytics">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>제조 MES 재고·출고 통합 관리 — 맞춤 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.414.0/dist/umd/lucide.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --ink: #101010;
+    --graphite: #242424;
+    --slate: #6b7280;
+    --stone: #898989;
+    --silver: #e5e7eb;
+    --paper: #f4f4f4;
+    --white: #ffffff;
+    --blue: #0099ff;
+    --green: #3ad98a;
+    --green-bg: #e8faf2;
+    --red: #ef4444;
+    --amber: #f59e0b;
+    --shadow-sm: rgba(36,36,36,0.07) 0px 1px 5px -4px, rgba(36,36,36,0.05) 0px 4px 8px 0px;
+    --shadow-card: rgba(34,42,53,0.05) 0px 4px 8px 0px;
+    --radius-card: 12px;
+    --radius-btn: 9999px;
+    --radius-input: 8px;
+  }
+  html, body { height: 100%; font-family: 'Pretendard', -apple-system, sans-serif; background: var(--paper); color: var(--graphite); font-size: 14px; line-height: 1.5; letter-spacing: -0.19px; }
+
+  /* ── Topbar (topbar-analytics archetype) ── */
+  .topbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: var(--white); border-bottom: 1px solid var(--silver);
+    height: 56px; display: flex; align-items: center; gap: 0;
+  }
+  .topbar-brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 24px; border-right: 1px solid var(--silver);
+    height: 100%; min-width: 220px;
+  }
+  .brand-icon {
+    width: 30px; height: 30px; background: var(--ink); border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .brand-icon svg { color: white; }
+  .brand-name { font-size: 15px; font-weight: 600; color: var(--ink); letter-spacing: 0; }
+  .brand-badge { font-size: 10px; background: var(--green); color: var(--ink); padding: 2px 6px; border-radius: 9999px; font-weight: 600; }
+
+  /* Topbar KPI strip */
+  .topbar-kpis {
+    display: flex; align-items: center; gap: 0; flex: 1; padding: 0 8px; height: 100%;
+    overflow: hidden;
+  }
+  .topbar-kpi {
+    display: flex; align-items: center; gap: 10px; padding: 0 20px; height: 100%;
+    border-right: 1px solid var(--silver); cursor: default;
+  }
+  .topbar-kpi:hover { background: var(--paper); }
+  .kpi-label { font-size: 11px; color: var(--slate); letter-spacing: 0.2px; text-transform: uppercase; font-weight: 500; }
+  .kpi-value { font-size: 20px; font-weight: 600; color: var(--ink); letter-spacing: 0.2px; }
+  .kpi-delta { font-size: 11px; color: var(--green); font-weight: 600; }
+  .kpi-delta.down { color: var(--red); }
+
+  .topbar-actions { display: flex; align-items: center; gap: 8px; padding: 0 16px; }
+  .btn-icon { width: 34px; height: 34px; border: 1px solid var(--silver); border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; background: white; color: var(--graphite); transition: all 0.15s; }
+  .btn-icon:hover { background: var(--paper); }
+  .user-avatar { width: 32px; height: 32px; border-radius: 9999px; background: var(--ink); color: white; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; cursor: pointer; }
+
+  /* ── Nav tabs (below topbar) ── */
+  .nav-tabs {
+    position: fixed; top: 56px; left: 0; right: 0; z-index: 99;
+    background: var(--white); border-bottom: 1px solid var(--silver);
+    display: flex; align-items: center; gap: 0; padding: 0 24px; height: 44px;
+  }
+  .nav-tab {
+    display: flex; align-items: center; gap: 7px; padding: 0 16px; height: 100%;
+    font-size: 13.5px; font-weight: 500; color: var(--slate); cursor: pointer;
+    border-bottom: 2px solid transparent; transition: all 0.15s; white-space: nowrap;
+    text-decoration: none;
+  }
+  .nav-tab:hover { color: var(--ink); }
+  .nav-tab.active { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+  .nav-tab svg { width: 14px; height: 14px; }
+
+  /* ── Layout ── */
+  .layout { margin-top: 100px; display: flex; flex-direction: column; min-height: calc(100vh - 100px); }
+  .view { display: none; padding: 24px; flex-direction: column; gap: 20px; }
+  .view.active { display: flex; }
+
+  /* ── Split Monitor (main view) ── */
+  .split-monitor { display: grid; grid-template-columns: 1fr 340px; gap: 20px; align-items: start; }
+  .split-bottom { margin-top: 0; }
+
+  /* Cards */
+  .card {
+    background: var(--white); border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card); overflow: hidden;
+  }
+  .card-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid var(--silver);
+  }
+  .card-title { font-size: 13px; font-weight: 600; color: var(--ink); letter-spacing: 0.2px; }
+  .card-subtitle { font-size: 12px; color: var(--slate); margin-top: 2px; }
+  .card-body { padding: 16px 20px; }
+
+  /* Chart area */
+  .chart-wrap { height: 260px; position: relative; padding: 4px 0; }
+
+  /* Feed */
+  .feed-list { max-height: 340px; overflow-y: auto; }
+  .feed-item {
+    display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px;
+    border-bottom: 1px solid var(--silver); transition: background 0.12s;
+  }
+  .feed-item:hover { background: var(--paper); }
+  .feed-item:last-child { border-bottom: none; }
+  .feed-dot {
+    width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0;
+  }
+  .feed-dot.in { background: var(--green); }
+  .feed-dot.out { background: var(--blue); }
+  .feed-dot.prod { background: var(--amber); }
+  .feed-meta { font-size: 11px; color: var(--slate); margin-top: 2px; }
+  .feed-qty { font-size: 12px; font-weight: 600; color: var(--ink); margin-left: auto; white-space: nowrap; flex-shrink: 0; padding-left: 8px; }
+
+  /* Table */
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { padding: 10px 14px; background: var(--paper); font-size: 11px; font-weight: 600; color: var(--slate); text-align: left; border-bottom: 1px solid var(--silver); text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+  tbody td { padding: 11px 14px; border-bottom: 1px solid var(--silver); color: var(--graphite); white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: var(--paper); }
+
+  /* Badges */
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+  .badge-green { background: var(--green-bg); color: #059669; }
+  .badge-blue { background: #eff6ff; color: #2563eb; }
+  .badge-amber { background: #fffbeb; color: #d97706; }
+  .badge-red { background: #fef2f2; color: #dc2626; }
+  .badge-gray { background: var(--paper); color: var(--slate); }
+
+  /* Progress bar */
+  .progress-bar { height: 6px; background: var(--silver); border-radius: 9999px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 9999px; transition: width 0.3s; }
+  .fill-green { background: var(--green); }
+  .fill-amber { background: var(--amber); }
+  .fill-red { background: var(--red); }
+
+  /* Form view */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .form-group { display: flex; flex-direction: column; gap: 6px; }
+  .form-group.full { grid-column: 1 / -1; }
+  label { font-size: 12px; font-weight: 600; color: var(--ink); letter-spacing: 0.2px; }
+  input, select, textarea {
+    padding: 9px 12px; border: 1.5px solid var(--silver); border-radius: var(--radius-input);
+    font-size: 13.5px; font-family: inherit; color: var(--graphite); background: var(--white);
+    transition: border-color 0.15s; outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--ink); }
+  textarea { resize: vertical; min-height: 80px; }
+
+  .form-actions { display: flex; gap: 8px; padding-top: 4px; }
+  .btn-primary {
+    padding: 9px 20px; background: var(--ink); color: white; border: none;
+    border-radius: var(--radius-btn); font-size: 13.5px; font-weight: 600; cursor: pointer;
+    font-family: inherit; transition: opacity 0.15s; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-primary:hover { opacity: 0.85; }
+  .btn-secondary {
+    padding: 9px 20px; background: transparent; color: var(--graphite);
+    border: 1.5px solid var(--silver); border-radius: var(--radius-btn);
+    font-size: 13.5px; font-weight: 500; cursor: pointer; font-family: inherit; transition: all 0.15s;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-secondary:hover { background: var(--paper); }
+  .btn-sm { padding: 6px 14px; font-size: 12px; border-radius: var(--radius-btn); }
+
+  /* Search bar */
+  .search-bar { position: relative; }
+  .search-bar input { padding-left: 36px; }
+  .search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--stone); }
+
+  /* Filters */
+  .filter-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .filter-chip {
+    padding: 5px 12px; border: 1.5px solid var(--silver); border-radius: 9999px;
+    font-size: 12px; font-weight: 500; color: var(--slate); cursor: pointer; background: white;
+    transition: all 0.12s; display: inline-flex; align-items: center; gap: 5px; font-family: inherit;
+  }
+  .filter-chip:hover, .filter-chip.active { border-color: var(--ink); color: var(--ink); background: var(--paper); }
+
+  /* Section header */
+  .section-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .section-title { font-size: 15px; font-weight: 600; color: var(--ink); }
+
+  /* Stat grid for user page */
+  .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .stat-card {
+    background: var(--white); border-radius: var(--radius-card); box-shadow: var(--shadow-card);
+    padding: 20px; display: flex; flex-direction: column; gap: 4px;
+  }
+  .stat-label { font-size: 11px; color: var(--slate); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+  .stat-value { font-size: 28px; font-weight: 600; color: var(--ink); }
+  .stat-hint { font-size: 12px; color: var(--slate); }
+
+  /* Permission matrix */
+  .perm-table { font-size: 13px; }
+  .perm-table th { font-size: 11px; }
+  .perm-icon { color: var(--green); }
+  .perm-icon.no { color: var(--silver); }
+
+  /* Loading pulse animation */
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+  .live-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+    animation: pulse 2s infinite; display: inline-block; margin-right: 4px;
+  }
+
+  @keyframes slideUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+  .view.active { animation: slideUp 0.18s ease-out; }
+
+  /* SSE feed animation */
+  @keyframes feedIn { from{background:var(--green-bg)} to{background:transparent} }
+  .feed-item.new { animation: feedIn 1.5s ease-out; }
+
+  /* Stagger card entrance */
+  @keyframes staggerIn { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:none} }
+  .stagger > * { animation: staggerIn 0.22s ease-out both; }
+  .stagger > *:nth-child(1){animation-delay:.04s} .stagger > *:nth-child(2){animation-delay:.1s} .stagger > *:nth-child(3){animation-delay:.16s}
+
+  /* Progress bar grow */
+  @keyframes growFill { from{width:0} to{width:var(--target-w)} }
+
+  /* Toast */
+  .toast-container { position:fixed; bottom:24px; right:24px; z-index:9999; display:flex; flex-direction:column; gap:8px; pointer-events:none; }
+  @keyframes toastIn { from{opacity:0;transform:translateX(32px)} to{opacity:1;transform:none} }
+  @keyframes toastOut { from{opacity:1} to{opacity:0;transform:translateX(32px)} }
+  .toast { background:var(--ink); color:white; padding:11px 16px; border-radius:10px; font-size:13px; font-weight:500; display:flex; align-items:center; gap:8px; box-shadow:rgba(36,36,36,0.18) 0 4px 16px; animation:toastIn 0.22s ease-out; pointer-events:auto; min-width:220px; }
+  .toast.out { animation:toastOut 0.22s ease-in forwards; }
+  .toast-icon { color:var(--green); }
+
+  /* View page title */
+  .view-title { font-size: 32px; font-weight: 600; color: var(--ink); letter-spacing: -0.5px; margin-bottom: 4px; }
+  .view-subtitle { font-size: 13px; color: var(--slate); }
+
+  /* Inbound form layout */
+  .twin-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+  .history-mini { max-height: 350px; overflow-y: auto; }
+
+  /* BOM table */
+  .bom-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--silver); }
+  .bom-row:last-child { border-bottom: none; }
+  .bom-name { flex: 1; font-size: 13px; color: var(--graphite); }
+  .bom-qty { font-size: 13px; font-weight: 600; color: var(--ink); min-width: 60px; text-align: right; }
+  .bom-stock { font-size: 11px; color: var(--slate); min-width: 80px; text-align: right; }
+  .bom-status { min-width: 70px; text-align: right; }
+
+.chart-canvas-wrap { position: relative; height: 240px; }
+.chart-canvas-wrap canvas { width: 100% !important; height: 100% !important; }
+</style>
+</head>
+<body>
+
+<!-- Topbar (topbar-analytics archetype: header 시그니처) -->
+<header class="topbar">
+  <div class="topbar-brand">
+    <div class="brand-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>
+    <div>
+      <div class="brand-name">MES 통합 관리</div>
+    </div>
+    <div class="brand-badge">LIVE</div>
+  </div>
+  <div class="topbar-kpis">
+    <div class="topbar-kpi">
+      <div>
+        <div class="kpi-label">총 재고 품목</div>
+        <div class="kpi-value">248<span style="font-size:13px;color:var(--slate)"> 종</span></div>
+      </div>
+      <div class="kpi-delta">▲ 12</div>
+    </div>
+    <div class="topbar-kpi">
+      <div>
+        <div class="kpi-label">오늘 입고</div>
+        <div class="kpi-value">38<span style="font-size:13px;color:var(--slate)"> 건</span></div>
+      </div>
+      <div class="kpi-delta">▲ 5</div>
+    </div>
+    <div class="topbar-kpi">
+      <div>
+        <div class="kpi-label">오늘 출고</div>
+        <div class="kpi-value">24<span style="font-size:13px;color:var(--slate)"> 건</span></div>
+      </div>
+      <div class="kpi-delta down">▼ 3</div>
+    </div>
+    <div class="topbar-kpi">
+      <div>
+        <div class="kpi-label">재고 부족 경고</div>
+        <div class="kpi-value" style="color:var(--red)">7<span style="font-size:13px;color:var(--slate)"> 품목</span></div>
+      </div>
+    </div>
+    <div class="topbar-kpi">
+      <div>
+        <div class="kpi-label">생산 실적 (월)</div>
+        <div class="kpi-value">1,847<span style="font-size:13px;color:var(--slate)"> EA</span></div>
+      </div>
+      <div class="kpi-delta">▲ 8%</div>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <button class="btn-icon" title="알림"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></button>
+    <button class="btn-icon" title="설정"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+    <div class="user-avatar">김</div>
+  </div>
+</header>
+
+<!-- Nav tabs -->
+<nav class="nav-tabs">
+  <button class="nav-tab active" data-view="main" onclick="switchView('main')">
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+    재고 현황
+  </button>
+  <button class="nav-tab" data-view="inbound" onclick="switchView('inbound')">
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+    입고 관리
+  </button>
+  <button class="nav-tab" data-view="production" onclick="switchView('production')">
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+    생산 실적
+  </button>
+  <button class="nav-tab" data-view="permission" onclick="switchView('permission')">
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+    사용자 관리
+  </button>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding-right:8px;">
+    <span style="font-size:11px;color:var(--slate);">2026-06-16</span>
+    <span class="badge badge-green"><span class="live-dot"></span>실시간 연결됨</span>
+  </div>
+</nav>
+
+<!-- Layout -->
+<div class="layout">
+
+  <!-- ▸ VIEW: 재고 현황 (split-monitor: live-left | live-right | bottom-list) -->
+  <div class="view active" id="view-main">
+    <div style="padding:20px 24px 0;display:flex;align-items:flex-end;justify-content:space-between;">
+      <div>
+        <div class="view-title">재고 현황 대시보드</div>
+        <div class="view-subtitle">제조 MES · 품목별 실시간 입출고·생산 복합 모니터링</div>
+      </div>
+      <button class="btn-secondary" onclick="showToast('재고 현황이 최신 상태입니다.')"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.99"/></svg> 새로고침</button>
+    </div>
+    <!-- live-left + live-right -->
+    <div class="split-monitor stagger">
+      <!-- live-left: 실시간 재고 현황 차트 -->
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">품목별 재고 추이 (이번 주)</div>
+            <div class="card-subtitle">입고·출고·생산 복합 차트 · Recharts ComposedChart</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="filter-chip active">주간</button>
+            <button class="filter-chip">월간</button>
+            <button class="btn-icon btn-sm" title="새로고침"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.99"/></svg></button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="chart-wrap"><div class="chart-canvas-wrap"><canvas id="chartStock"></canvas></div></div>
+        </div>
+        <!-- 창고별 필터 -->
+        <div style="padding:12px 20px;border-top:1px solid var(--silver);display:flex;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:12px;color:var(--slate);align-self:center;">창고:</span>
+          <button class="filter-chip active">전체</button>
+          <button class="filter-chip">1호 창고</button>
+          <button class="filter-chip">2호 창고</button>
+          <button class="filter-chip">완제품 창고</button>
+        </div>
+      </div>
+
+      <!-- live-right: 입출고 실시간 피드 -->
+      <div class="card" style="min-width:0;">
+        <div class="card-header">
+          <div>
+            <div class="card-title"><span class="live-dot"></span>실시간 이벤트 피드</div>
+            <div class="card-subtitle">SSE 기반 자동 갱신 · 최근 20건</div>
+          </div>
+        </div>
+        <div class="feed-list" id="feedList">
+          <div class="feed-item"><span class="feed-dot in"></span><div><div style="font-size:13px;font-weight:500;color:var(--ink)">SUS304 스테인리스 봉강</div><div class="feed-meta">입고 · 1호 창고 · 14:32:05</div></div><div class="feed-qty">+200 EA</div></div>
+          <div class="feed-item"><span class="feed-dot out"></span><div><div style="font-size:13px;font-weight:500;color:var(--ink)">완제품 A타입 (30A-V)</div><div class="feed-meta">출고 · (주)한국산업 · 14:28:41</div></div><div class="feed-qty">-50 EA</div></div>
+          <div class="feed-item"><span class="feed-dot prod"></span><div><div style="font-size:13px;font-weight:500;color:var(--ink)">밸브 어셈블리 (30A)</div><div class="feed-meta">생산 실적 · BOM 소모 · 14:25:17</div></div><div class="feed-qty">+30 EA</div></div>
+          <div class="feed-item"><span class="feed-dot in"></span><div><div style="font-size:13px;font-weight:500;color:var(--ink)">볼트 M10×40 (스텐)</div><div class="feed-meta">입고 · 2호 창고 · 14:18:09</div></div><div class="feed-qty">+1,000 EA</div></div>
+          <div class="feed-item"><span class="feed-dot out"></span><div><div style="font-size:13px;font-weight:500;color:var(--ink)">완제품 B타입 (50A-V)</div><div class="feed-meta">출고 · (주)영남금속 · 14:10:55</div></div><div class="feed-qty">-30 EA</div></div>
+          <div class="feed-item"><span class="feed-dot prod"></span><div><div style="font-size:13px;font-weight:500;color:var(--ink)">밸브 어셈블리 (50A)</div><div class="feed-meta">생산 실적 · 수동 처리 · 13:58:33</div></div><div class="feed-qty">+20 EA</div></div>
+          <div class="feed-item"><span class="feed-dot in"></span><div><div style="font-size:13px;font-weight:500;color:var(--ink)">가스켓 DN50 (PTFE)</div><div class="feed-meta">입고 · 1호 창고 · 13:45:20</div></div><div class="feed-qty">+500 EA</div></div>
+          <div class="feed-item"><span class="feed-dot out"></span><div><div style="font-size:13px;font-weight:500;color:var(--ink)">완제품 C타입 (80A-F)</div><div class="feed-meta">출고 · (주)부산기계 · 13:30:11</div></div><div class="feed-qty">-15 EA</div></div>
+        </div>
+        <!-- 범례 -->
+        <div style="padding:10px 16px;border-top:1px solid var(--silver);display:flex;gap:14px;">
+          <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--slate);"><span class="feed-dot in" style="margin-top:0;margin-right:0"></span>입고</span>
+          <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--slate);"><span class="feed-dot out" style="margin-top:0;margin-right:0"></span>출고</span>
+          <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--slate);"><span class="feed-dot prod" style="margin-top:0;margin-right:0"></span>생산</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- bottom-list: 품목별 재고 현황 테이블 -->
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">품목별 재고 현황 테이블</div>
+          <div class="card-subtitle">전체 248 품목 · 안전 재고 미달 7건</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-secondary btn-sm"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 엑셀 다운로드</button>
+          <div class="search-bar" style="width:200px;">
+            <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" placeholder="품목명 검색">
+          </div>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>품목코드</th>
+              <th>품목명</th>
+              <th>분류</th>
+              <th>단위</th>
+              <th>현재 재고</th>
+              <th>안전 재고</th>
+              <th>재고 비율</th>
+              <th>창고</th>
+              <th>상태</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td style="font-family:monospace;font-size:12px;">SUS-3040-6M</td><td style="font-weight:500;">SUS304 스테인리스 봉강 6M</td><td><span class="badge badge-gray">원부자재</span></td><td>EA</td><td style="font-weight:600;">540</td><td>200</td><td style="width:120px;"><div style="display:flex;align-items:center;gap:8px;"><div class="progress-bar" style="flex:1;"><div class="progress-fill fill-green" style="width:82%;"></div></div><span style="font-size:11px;color:var(--slate)">82%</span></div></td><td>1호 창고</td><td><span class="badge badge-green">정상</span></td></tr>
+            <tr><td style="font-family:monospace;font-size:12px;">VAL-30A-V</td><td style="font-weight:500;">완제품 밸브 30A-V타입</td><td><span class="badge badge-blue">완제품</span></td><td>EA</td><td style="font-weight:600;">85</td><td>100</td><td style="width:120px;"><div style="display:flex;align-items:center;gap:8px;"><div class="progress-bar" style="flex:1;"><div class="progress-fill fill-amber" style="width:57%;"></div></div><span style="font-size:11px;color:var(--slate)">57%</span></div></td><td>완제품 창고</td><td><span class="badge badge-amber">주의</span></td></tr>
+            <tr><td style="font-family:monospace;font-size:12px;">GSKT-DN50-P</td><td style="font-weight:500;">가스켓 DN50 PTFE</td><td><span class="badge badge-gray">원부자재</span></td><td>EA</td><td style="font-weight:600;">1,240</td><td>500</td><td style="width:120px;"><div style="display:flex;align-items:center;gap:8px;"><div class="progress-bar" style="flex:1;"><div class="progress-fill fill-green" style="width:90%;"></div></div><span style="font-size:11px;color:var(--slate)">90%</span></div></td><td>2호 창고</td><td><span class="badge badge-green">정상</span></td></tr>
+            <tr><td style="font-family:monospace;font-size:12px;">VAL-50A-V</td><td style="font-weight:500;">완제품 밸브 50A-V타입</td><td><span class="badge badge-blue">완제품</span></td><td>EA</td><td style="font-weight:600;">28</td><td>80</td><td style="width:120px;"><div style="display:flex;align-items:center;gap:8px;"><div class="progress-bar" style="flex:1;"><div class="progress-fill fill-red" style="width:26%;"></div></div><span style="font-size:11px;color:var(--slate)">26%</span></div></td><td>완제품 창고</td><td><span class="badge badge-red">위험</span></td></tr>
+            <tr><td style="font-family:monospace;font-size:12px;">BOLT-M10-S</td><td style="font-weight:500;">볼트 M10×40 스텐</td><td><span class="badge badge-gray">원부자재</span></td><td>EA</td><td style="font-weight:600;">3,800</td><td>2,000</td><td style="width:120px;"><div style="display:flex;align-items:center;gap:8px;"><div class="progress-bar" style="flex:1;"><div class="progress-fill fill-green" style="width:75%;"></div></div><span style="font-size:11px;color:var(--slate)">75%</span></div></td><td>1호 창고</td><td><span class="badge badge-green">정상</span></td></tr>
+            <tr><td style="font-family:monospace;font-size:12px;">VAL-80A-F</td><td style="font-weight:500;">완제품 밸브 80A-F타입</td><td><span class="badge badge-blue">완제품</span></td><td>EA</td><td style="font-weight:600;">12</td><td>50</td><td style="width:120px;"><div style="display:flex;align-items:center;gap:8px;"><div class="progress-bar" style="flex:1;"><div class="progress-fill fill-red" style="width:18%;"></div></div><span style="font-size:11px;color:var(--slate)">18%</span></div></td><td>완제품 창고</td><td><span class="badge badge-red">위험</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid var(--silver);display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:12px;color:var(--slate)">1–6 / 248 품목 표시 중</span>
+        <div style="display:flex;gap:6px;">
+          <button class="btn-secondary btn-sm">이전</button>
+          <button class="btn-primary btn-sm" style="border-radius:8px;">1</button>
+          <button class="btn-secondary btn-sm">2</button>
+          <button class="btn-secondary btn-sm">3</button>
+          <button class="btn-secondary btn-sm">다음</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ▸ VIEW: 입고 관리 -->
+  <div class="view" id="view-inbound">
+    <div style="padding:20px 24px 0;"><div class="view-title">입고 관리</div><div class="view-subtitle">자재·원부자재 입고 등록 및 입고 내역 조회</div></div>
+    <div style="padding:0 24px;"><div class="section-hd" style="margin-top:16px;"><span class="section-title" style="font-size:14px;">입고 등록</span></div></div>
+    <div class="twin-col">
+      <!-- 입고 폼 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">새 입고 등록</div>
+        </div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>입고 일자</label>
+              <input type="date" value="2026-06-16">
+            </div>
+            <div class="form-group">
+              <label>거래처 (매입처)</label>
+              <select>
+                <option>거래처 선택</option>
+                <option selected>(주)대한스틸</option>
+                <option>(주)한국소재</option>
+                <option>(주)동남금속</option>
+              </select>
+            </div>
+            <div class="form-group full">
+              <label>품목</label>
+              <select>
+                <option>품목 선택</option>
+                <option selected>SUS304 스테인리스 봉강 6M (SUS-3040-6M)</option>
+                <option>가스켓 DN50 PTFE (GSKT-DN50-P)</option>
+                <option>볼트 M10×40 스텐 (BOLT-M10-S)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>입고 수량</label>
+              <input type="number" value="200" min="1">
+            </div>
+            <div class="form-group">
+              <label>단위</label>
+              <input type="text" value="EA" readonly style="background:var(--paper);color:var(--slate);">
+            </div>
+            <div class="form-group">
+              <label>입고 창고</label>
+              <select>
+                <option selected>1호 창고</option>
+                <option>2호 창고</option>
+                <option>완제품 창고</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>단가 (원)</label>
+              <input type="number" value="45000">
+            </div>
+            <div class="form-group full">
+              <label>비고</label>
+              <textarea placeholder="비고 사항 입력">정기 발주 — 6월 2차분</textarea>
+            </div>
+          </div>
+          <div class="form-actions" style="margin-top:16px;">
+            <button class="btn-primary">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              입고 등록
+            </button>
+            <button class="btn-secondary">초기화</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 최근 입고 내역 미니 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">최근 입고 내역</div>
+          <button class="btn-secondary btn-sm"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 엑셀</button>
+        </div>
+        <div class="history-mini">
+          <table>
+            <thead><tr><th>일자</th><th>품목명</th><th>수량</th><th>거래처</th><th>상태</th></tr></thead>
+            <tbody>
+              <tr><td>06-16</td><td>SUS304 봉강</td><td style="font-weight:600;">+200 EA</td><td>(주)대한스틸</td><td><span class="badge badge-green" style="font-size:10px;">완료</span></td></tr>
+              <tr><td>06-16</td><td>볼트 M10 스텐</td><td style="font-weight:600;">+1,000 EA</td><td>(주)한국소재</td><td><span class="badge badge-green" style="font-size:10px;">완료</span></td></tr>
+              <tr><td>06-15</td><td>가스켓 DN50</td><td style="font-weight:600;">+500 EA</td><td>(주)한국소재</td><td><span class="badge badge-green" style="font-size:10px;">완료</span></td></tr>
+              <tr><td>06-15</td><td>오링 NBR-50A</td><td style="font-weight:600;">+300 EA</td><td>(주)동남금속</td><td><span class="badge badge-green" style="font-size:10px;">완료</span></td></tr>
+              <tr><td>06-14</td><td>SUS316 파이프</td><td style="font-weight:600;">+150 EA</td><td>(주)대한스틸</td><td><span class="badge badge-green" style="font-size:10px;">완료</span></td></tr>
+              <tr><td>06-13</td><td>나사 M6×15</td><td style="font-weight:600;">+2,000 EA</td><td>(주)동남금속</td><td><span class="badge badge-green" style="font-size:10px;">완료</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 조회 영역 -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">입고 내역 조회</div>
+        <div style="display:flex;gap:8px;">
+          <input type="date" value="2026-06-01" style="padding:6px 10px;font-size:12px;">
+          <input type="date" value="2026-06-16" style="padding:6px 10px;font-size:12px;">
+          <button class="btn-primary btn-sm">조회</button>
+          <button class="btn-secondary btn-sm"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 엑셀 다운로드</button>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>입고번호</th><th>입고일자</th><th>품목코드</th><th>품목명</th><th>수량</th><th>단가</th><th>금액</th><th>거래처</th><th>창고</th><th>담당자</th></tr></thead>
+          <tbody>
+            <tr><td style="font-family:monospace;font-size:12px;color:var(--blue);">IN-2026-0584</td><td>2026-06-16</td><td style="font-family:monospace;font-size:12px;">SUS-3040-6M</td><td>SUS304 봉강 6M</td><td style="font-weight:600;color:var(--green)">+200 EA</td><td>45,000</td><td style="font-weight:600;">9,000,000</td><td>(주)대한스틸</td><td>1호 창고</td><td>김입력</td></tr>
+            <tr><td style="font-family:monospace;font-size:12px;color:var(--blue);">IN-2026-0583</td><td>2026-06-16</td><td style="font-family:monospace;font-size:12px;">BOLT-M10-S</td><td>볼트 M10×40 스텐</td><td style="font-weight:600;color:var(--green)">+1,000 EA</td><td>850</td><td style="font-weight:600;">850,000</td><td>(주)한국소재</td><td>1호 창고</td><td>박입력</td></tr>
+            <tr><td style="font-family:monospace;font-size:12px;color:var(--blue);">IN-2026-0582</td><td>2026-06-15</td><td style="font-family:monospace;font-size:12px;">GSKT-DN50-P</td><td>가스켓 DN50 PTFE</td><td style="font-weight:600;color:var(--green)">+500 EA</td><td>2,200</td><td style="font-weight:600;">1,100,000</td><td>(주)한국소재</td><td>2호 창고</td><td>김입력</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ▸ VIEW: 생산 실적 -->
+  <div class="view" id="view-production">
+    <div style="padding:20px 24px 0;"><div class="view-title">생산 실적 등록</div><div class="view-subtitle">완료 건 실적 입력 · BOM 자재 소모 자동 처리</div></div>
+    <div class="twin-col">
+      <!-- 생산 폼 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">생산 실적 입력</div>
+          <span class="badge badge-blue">BOM 비율 자동 계산</span>
+        </div>
+        <div class="card-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>생산 일자</label>
+              <input type="date" value="2026-06-16">
+            </div>
+            <div class="form-group">
+              <label>생산 완료품목</label>
+              <select>
+                <option>품목 선택</option>
+                <option selected>밸브 어셈블리 30A (VAL-30A-V)</option>
+                <option>밸브 어셈블리 50A (VAL-50A-V)</option>
+                <option>밸브 어셈블리 80A (VAL-80A-F)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>생산 수량</label>
+              <input type="number" value="30" min="1">
+            </div>
+            <div class="form-group">
+              <label>소모 처리 방식</label>
+              <select>
+                <option selected>BOM 비율 자동 차감</option>
+                <option>수동 입력</option>
+              </select>
+            </div>
+            <div class="form-group full">
+              <label>비고</label>
+              <textarea>오전 라인 1 생산분</textarea>
+            </div>
+          </div>
+
+          <!-- BOM 자재 소모 미리보기 -->
+          <div style="margin-top:16px;padding:14px;background:var(--paper);border-radius:8px;">
+            <div style="font-size:12px;font-weight:600;color:var(--ink);margin-bottom:10px;">자재 소모 예상 (BOM 비율 × 30EA)</div>
+            <div class="bom-row">
+              <div class="bom-name">SUS304 봉강 6M</div>
+              <div class="bom-stock" style="color:var(--slate);">현재: 540 EA</div>
+              <div class="bom-qty" style="color:var(--red);">-60 EA</div>
+              <div class="bom-status"><span class="badge badge-green" style="font-size:10px;">✓ 충분</span></div>
+            </div>
+            <div class="bom-row">
+              <div class="bom-name">가스켓 DN50 PTFE</div>
+              <div class="bom-stock" style="color:var(--slate);">현재: 1,240 EA</div>
+              <div class="bom-qty" style="color:var(--red);">-90 EA</div>
+              <div class="bom-status"><span class="badge badge-green" style="font-size:10px;">✓ 충분</span></div>
+            </div>
+            <div class="bom-row">
+              <div class="bom-name">볼트 M10×40 스텐</div>
+              <div class="bom-stock" style="color:var(--slate);">현재: 3,800 EA</div>
+              <div class="bom-qty" style="color:var(--red);">-120 EA</div>
+              <div class="bom-status"><span class="badge badge-green" style="font-size:10px;">✓ 충분</span></div>
+            </div>
+          </div>
+
+          <div class="form-actions" style="margin-top:16px;">
+            <button class="btn-primary">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              생산 실적 등록
+            </button>
+            <button class="btn-secondary">초기화</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 최근 생산 이력 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">최근 생산 이력</div>
+          <button class="btn-secondary btn-sm"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 엑셀</button>
+        </div>
+        <div class="history-mini">
+          <table>
+            <thead><tr><th>일자</th><th>품목</th><th>생산수량</th><th>처리방식</th><th>담당</th></tr></thead>
+            <tbody>
+              <tr><td>06-16 14:25</td><td>밸브 30A</td><td style="font-weight:600;color:var(--green)">+30 EA</td><td><span class="badge badge-blue" style="font-size:10px;">BOM</span></td><td>김입력</td></tr>
+              <tr><td>06-16 13:58</td><td>밸브 50A</td><td style="font-weight:600;color:var(--green)">+20 EA</td><td><span class="badge badge-gray" style="font-size:10px;">수동</span></td><td>박입력</td></tr>
+              <tr><td>06-15 16:40</td><td>밸브 30A</td><td style="font-weight:600;color:var(--green)">+45 EA</td><td><span class="badge badge-blue" style="font-size:10px;">BOM</span></td><td>김입력</td></tr>
+              <tr><td>06-15 14:10</td><td>밸브 80A</td><td style="font-weight:600;color:var(--green)">+12 EA</td><td><span class="badge badge-blue" style="font-size:10px;">BOM</span></td><td>박입력</td></tr>
+              <tr><td>06-14 15:30</td><td>밸브 50A</td><td style="font-weight:600;color:var(--green)">+28 EA</td><td><span class="badge badge-gray" style="font-size:10px;">수동</span></td><td>김입력</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <!-- 이번 주 차트 -->
+        <div style="padding:12px 16px;border-top:1px solid var(--silver);">
+          <div style="font-size:11px;font-weight:600;color:var(--slate);margin-bottom:8px;text-transform:uppercase;">이번 주 생산량 추이</div>
+          <div style="height:80px;"><canvas id="chartProd"></canvas></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ▸ VIEW: 사용자 관리 -->
+  <div class="view" id="view-permission">
+    <div style="padding:20px 24px 0;"><div class="view-title">사용자 관리</div><div class="view-subtitle">역할 기반 접근 제어 · JWT 이중 인증</div></div>
+    <div class="stat-grid" style="padding:16px 24px;">
+      <div class="stat-card">
+        <div class="stat-label">전체 사용자</div>
+        <div class="stat-value">7</div>
+        <div class="stat-hint">입력자 2 · 조회자 5</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">현재 접속자</div>
+        <div class="stat-value" style="color:var(--green);">3</div>
+        <div class="stat-hint"><span class="live-dot"></span>실시간 세션 유지</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">권한 그룹</div>
+        <div class="stat-value">3</div>
+        <div class="stat-hint">관리자 · 입력자 · 조회자</div>
+      </div>
+    </div>
+
+    <div class="twin-col">
+      <!-- 사용자 목록 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">사용자 목록</div>
+          <button class="btn-primary btn-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            사용자 추가
+          </button>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>이름</th><th>역할</th><th>최근 접속</th><th>상태</th><th></th></tr></thead>
+            <tbody>
+              <tr><td><div style="display:flex;align-items:center;gap:8px;"><div class="user-avatar" style="width:28px;height:28px;font-size:11px;background:#101010;">관</div><span style="font-weight:500;">김관리</span></div></td><td><span class="badge badge-blue">관리자</span></td><td style="color:var(--slate);font-size:12px;">방금 전</td><td><span class="badge badge-green">접속 중</span></td><td><button class="btn-secondary btn-sm">편집</button></td></tr>
+              <tr><td><div style="display:flex;align-items:center;gap:8px;"><div class="user-avatar" style="width:28px;height:28px;font-size:11px;background:#374151;">입</div><span style="font-weight:500;">김입력</span></div></td><td><span class="badge badge-amber">입력자</span></td><td style="color:var(--slate);font-size:12px;">14:32</td><td><span class="badge badge-green">접속 중</span></td><td><button class="btn-secondary btn-sm">편집</button></td></tr>
+              <tr><td><div style="display:flex;align-items:center;gap:8px;"><div class="user-avatar" style="width:28px;height:28px;font-size:11px;background:#374151;">입</div><span style="font-weight:500;">박입력</span></div></td><td><span class="badge badge-amber">입력자</span></td><td style="color:var(--slate);font-size:12px;">14:28</td><td><span class="badge badge-green">접속 중</span></td><td><button class="btn-secondary btn-sm">편집</button></td></tr>
+              <tr><td><div style="display:flex;align-items:center;gap:8px;"><div class="user-avatar" style="width:28px;height:28px;font-size:11px;background:#6b7280;">조</div><span style="font-weight:500;">이조회</span></div></td><td><span class="badge badge-gray">조회자</span></td><td style="color:var(--slate);font-size:12px;">13:45</td><td><span class="badge badge-gray">오프라인</span></td><td><button class="btn-secondary btn-sm">편집</button></td></tr>
+              <tr><td><div style="display:flex;align-items:center;gap:8px;"><div class="user-avatar" style="width:28px;height:28px;font-size:11px;background:#6b7280;">조</div><span style="font-weight:500;">최조회</span></div></td><td><span class="badge badge-gray">조회자</span></td><td style="color:var(--slate);font-size:12px;">어제 17:00</td><td><span class="badge badge-gray">오프라인</span></td><td><button class="btn-secondary btn-sm">편집</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 권한 매트릭스 -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">역할별 권한 매트릭스</div>
+        </div>
+        <div class="tbl-wrap">
+          <table class="perm-table">
+            <thead>
+              <tr>
+                <th>기능</th>
+                <th style="text-align:center;">관리자</th>
+                <th style="text-align:center;">입력자</th>
+                <th style="text-align:center;">조회자</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>품목 마스터 등록·수정</td><td style="text-align:center;"><span class="perm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span></td><td style="text-align:center;"><span class="perm-icon no"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></td><td style="text-align:center;"><span class="perm-icon no"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></td></tr>
+              <tr><td>입고 등록</td><td style="text-align:center;"><span class="perm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span></td><td style="text-align:center;"><span class="perm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span></td><td style="text-align:center;"><span class="perm-icon no"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></td></tr>
+              <tr><td>생산 실적 등록</td><td style="text-align:center;"><span class="perm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span></td><td style="text-align:center;"><span class="perm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span></td><td style="text-align:center;"><span class="perm-icon no"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></td></tr>
+              <tr><td>출고 등록</td><td style="text-align:center;"><span class="perm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span></td><td style="text-align:center;"><span class="perm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span></td><td style="text-align:center;"><span class="perm-icon no"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></td></tr>
+              <tr><td>재고 현황 조회</td><td style="text-align:center;"><span class="perm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span></td><td style="text-align:center;"><span class="perm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span></td><td style="text-align:center;"><span class="perm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span></td></tr>
+              <tr><td>사용자 관리</td><td style="text-align:center;"><span class="perm-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span></td><td style="text-align:center;"><span class="perm-icon no"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></td><td style="text-align:center;"><span class="perm-icon no"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="padding:12px 16px;border-top:1px solid var(--silver);">
+          <div style="font-size:11px;color:var(--slate);">JWT accessToken + refreshToken 이중 인증 · React Router v6 라우트 가드 · Express 미들웨어 이중 검증</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// Toast 알림
+const toastContainer = document.createElement('div');
+toastContainer.className = 'toast-container';
+document.body.appendChild(toastContainer);
+function showToast(msg, type='success') {
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.innerHTML = `<svg class="toast-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>${msg}`;
+  toastContainer.appendChild(t);
+  setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 220); }, 3000);
+}
+
+function switchView(id) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('view-' + id).classList.add('active');
+  document.querySelector('[data-view="' + id + '"]').classList.add('active');
+  if (id === 'main') initCharts();
+  if (id === 'production') initProdChart();
+}
+
+let chartsInit = false;
+function initCharts() {
+  if (chartsInit) return; chartsInit = true;
+  const labels = ['월', '화', '수', '목', '금', '토', '일'];
+  const stockCtx = document.getElementById('chartStock');
+  if (!stockCtx) return;
+  new Chart(stockCtx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { type: 'line', label: '재고 수량', data: [480, 520, 490, 510, 540, 540, 540], borderColor: '#101010', backgroundColor: 'transparent', borderWidth: 2, tension: 0.3, pointBackgroundColor: '#101010', pointRadius: 4, yAxisID: 'y2' },
+        { type: 'bar', label: '입고', data: [80, 60, 50, 70, 200, 0, 0], backgroundColor: '#3ad98a', borderRadius: 4, yAxisID: 'y' },
+        { type: 'bar', label: '출고', data: [40, 50, 30, 70, 45, 0, 0], backgroundColor: '#0099ff', borderRadius: 4, yAxisID: 'y' }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'top', labels: { font: { family: 'Pretendard', size: 12 }, usePointStyle: true, boxWidth: 8 } } },
+      scales: {
+        y: { type: 'linear', display: true, position: 'left', grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { font: { family: 'Pretendard', size: 11 } } },
+        y2: { type: 'linear', display: true, position: 'right', grid: { drawOnChartArea: false }, ticks: { font: { family: 'Pretendard', size: 11 } } },
+        x: { grid: { display: false }, ticks: { font: { family: 'Pretendard', size: 11 } } }
+      }
+    }
+  });
+}
+
+let prodInit = false;
+function initProdChart() {
+  if (prodInit) return; prodInit = true;
+  const ctx = document.getElementById('chartProd');
+  if (!ctx) return;
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ['월', '화', '수', '목', '금'],
+      datasets: [
+        { label: '생산량', data: [45, 60, 38, 52, 50], backgroundColor: '#3ad98a', borderRadius: 3 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { font: { family: 'Pretendard', size: 10 } } },
+        x: { grid: { display: false }, ticks: { font: { family: 'Pretendard', size: 10 } } }
+      }
+    }
+  });
+}
+
+// 초기 차트 로드
+document.addEventListener('DOMContentLoaded', initCharts);
+
+// 실시간 피드 시뮬레이션
+const feedItems = [
+  { type: 'in', name: 'SUS316 파이프 2인치', meta: '입고 · 2호 창고', qty: '+150 EA' },
+  { type: 'out', name: '완제품 30A 밸브', meta: '출고 · (주)서울산업', qty: '-25 EA' },
+  { type: 'prod', name: '밸브 어셈블리 30A', meta: '생산 실적 · BOM 소모', qty: '+15 EA' },
+];
+let feedIdx = 0;
+setInterval(() => {
+  const list = document.getElementById('feedList');
+  if (!list) return;
+  const item = feedItems[feedIdx % feedItems.length];
+  feedIdx++;
+  const el = document.createElement('div');
+  el.className = 'feed-item new';
+  const now = new Date();
+  const t = `${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  el.innerHTML = `<span class="feed-dot ${item.type}"></span><div><div style="font-size:13px;font-weight:500;color:var(--ink)">${item.name}</div><div class="feed-meta">${item.meta} · ${t}</div></div><div class="feed-qty">${item.qty}</div>`;
+  list.insertBefore(el, list.firstChild);
+  if (list.children.length > 12) list.removeChild(list.lastChild);
+}, 5000);
+</script>
+</body>
+</html>
