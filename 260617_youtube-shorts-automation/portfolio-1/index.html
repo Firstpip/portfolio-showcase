@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="ko" data-archetype="kanban-board">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>쇼츠 자동화 파이프라인 — 맞춤 구현 데모</title>
+  <link href="https://cdn.jsdelivr.net/npm/pretendard@3.3.1/dist/web/variable/pretendardvariable.min.css" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --amber-50: #FFFBEB; --amber-100: #FEF3C7; --amber-200: #FDE68A;
+      --amber-400: #FBBF24; --amber-500: #F59E0B; --amber-600: #D97706;
+      --amber-700: #B45309; --amber-800: #92400E; --amber-900: #78350F;
+      --orange-500: #F97316; --orange-600: #EA580C; --orange-700: #C2410C;
+      --bg: #FFFBEB; --surface: #FFFFFF;
+      --text-primary: #1C1209; --text-secondary: #6B4E2A; --text-muted: #9A7B56;
+      --border: #E8D4B8; --border-light: #F3E8D5;
+    }
+    body { font-family: Pretendard, -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--text-primary); min-height: 100vh; }
+
+    /* ── TOP HEADER ── */
+    .top-header {
+      background: var(--surface); border-bottom: 2px solid var(--amber-500);
+      padding: 0 20px; height: 56px; display: flex; align-items: center; gap: 20px;
+      position: sticky; top: 0; z-index: 50;
+    }
+    .brand { display: flex; align-items: center; gap: 8px; }
+    .brand-icon { width: 32px; height: 32px; background: linear-gradient(135deg, var(--amber-500), var(--orange-600)); border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+    .brand-name { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+    .brand-tag { font-size: 10px; color: var(--text-muted); }
+    .header-divider { height: 28px; width: 1px; background: var(--border); }
+    .filter-tabs { display: flex; gap: 4px; flex: 1; }
+    .filter-tab {
+      padding: 6px 14px; font-size: 12px; font-weight: 500; border: 1px solid var(--border);
+      border-radius: 20px; cursor: pointer; background: var(--surface); color: var(--text-secondary);
+      transition: all 0.2s; display: flex; align-items: center; gap: 6px;
+    }
+    .filter-tab:hover { background: var(--amber-50); border-color: var(--amber-400); color: var(--amber-700); transform: translateY(-1px); }
+    .filter-tab.active { background: var(--amber-500); border-color: var(--amber-500); color: #fff; font-weight: 600; }
+    .filter-tab .count-badge { background: rgba(255,255,255,0.3); padding: 1px 6px; border-radius: 10px; font-size: 10px; }
+    .filter-tab:not(.active) .count-badge { background: var(--amber-100); color: var(--amber-700); }
+    .header-right { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+    .run-indicator { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #10B981; font-weight: 600; }
+    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: #10B981; animation: pulseDot 2s infinite; }
+    .header-btn { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); transition: all 0.2s; }
+    .header-btn:hover { background: var(--amber-50); color: var(--amber-700); border-color: var(--amber-300); transform: scale(1.05); }
+
+    /* ── STATUS STRIP ── */
+    .status-strip {
+      background: linear-gradient(to right, var(--amber-50), #FFF8F0);
+      border-bottom: 1px solid var(--border-light);
+      padding: 8px 20px; display: flex; gap: 20px; align-items: center;
+    }
+    .status-chip { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary); }
+    .status-chip .val { font-weight: 700; color: var(--text-primary); font-size: 13px; }
+    .status-chip .sep { width: 1px; height: 16px; background: var(--border); }
+    .chip-live { color: var(--orange-600); }
+    .api-bar { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-left: auto; }
+    .api-bar-track { width: 80px; height: 6px; background: var(--amber-100); border-radius: 3px; overflow: hidden; }
+    .api-bar-fill { height: 100%; background: linear-gradient(to right, var(--amber-400), var(--orange-500)); border-radius: 3px; width: 34%; animation: barGrow 1.5s ease-out; }
+
+    /* ── KANBAN BOARD ── */
+    .kanban-wrapper { padding: 16px 20px 0; }
+    .kanban-board { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 16px; min-height: calc(100vh - 200px); }
+    .kanban-column {
+      flex: 0 0 240px; background: var(--surface); border-radius: 10px;
+      border: 1px solid var(--border); display: flex; flex-direction: column;
+      animation: colSlideIn 0.5s ease-out forwards; opacity: 0;
+    }
+    .kanban-column:nth-child(1) { animation-delay: 0.05s; border-top: 3px solid #94A3B8; }
+    .kanban-column:nth-child(2) { animation-delay: 0.1s; border-top: 3px solid #3B82F6; }
+    .kanban-column:nth-child(3) { animation-delay: 0.15s; border-top: 3px solid var(--amber-500); }
+    .kanban-column:nth-child(4) { animation-delay: 0.2s; border-top: 3px solid var(--orange-500); }
+    .kanban-column:nth-child(5) { animation-delay: 0.25s; border-top: 3px solid #10B981; }
+    .col-header {
+      padding: 12px 14px 10px; display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--border-light);
+    }
+    .col-title-row { display: flex; align-items: center; gap: 8px; }
+    .col-icon { width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+    .col-title { font-size: 12px; font-weight: 700; color: var(--text-primary); }
+    .col-count { background: var(--amber-100); color: var(--amber-800); font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; }
+    .col-count.blue { background: #EFF6FF; color: #1D4ED8; }
+    .col-count.green { background: #F0FDF4; color: #166534; }
+    .col-count.red { background: #FEF2F2; color: #991B1B; }
+    .col-count.gray { background: #F8FAFC; color: #475569; }
+    .col-body { flex: 1; padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+
+    /* ── KANBAN CARDS ── */
+    .card {
+      background: var(--surface); border: 1px solid var(--border-light); border-radius: 8px;
+      padding: 10px 12px; cursor: pointer;
+      transition: all 0.25s; animation: cardFadeIn 0.4s ease-out forwards; opacity: 0;
+    }
+    .card:hover { border-color: var(--amber-400); box-shadow: 0 4px 12px rgba(245,158,11,0.15); transform: translateY(-2px); }
+    .card-product { font-size: 11px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px; }
+    .card-meta { font-size: 10px; color: var(--text-muted); margin-bottom: 6px; display: flex; align-items: center; gap: 4px; }
+    .card-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
+    .tag { font-size: 9px; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+    .tag-blue { background: #EFF6FF; color: #1D4ED8; }
+    .tag-purple { background: #F5F3FF; color: #7C3AED; }
+    .tag-amber { background: var(--amber-100); color: var(--amber-800); }
+    .tag-green { background: #F0FDF4; color: #166534; }
+    .tag-red { background: #FEF2F2; color: #991B1B; }
+    .tag-gray { background: #F8FAFC; color: #475569; }
+    .card-progress { margin-top: 6px; }
+    .progress-bar { height: 4px; background: var(--amber-100); border-radius: 2px; overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: 2px; animation: progressAnim 1.8s ease-out; }
+    .progress-fill.amber { background: linear-gradient(to right, var(--amber-400), var(--orange-500)); }
+    .progress-fill.blue { background: linear-gradient(to right, #60A5FA, #3B82F6); }
+    .progress-fill.green { background: linear-gradient(to right, #34D399, #10B981); }
+    .card-time { font-size: 9px; color: var(--text-muted); margin-top: 4px; display: flex; justify-content: space-between; }
+    .card-actions { display: flex; gap: 4px; margin-top: 8px; }
+    .card-btn { font-size: 9px; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary); cursor: pointer; transition: all 0.15s; }
+    .card-btn:hover { background: var(--amber-50); border-color: var(--amber-400); color: var(--amber-700); }
+    .card-btn.primary { background: var(--amber-500); border-color: var(--amber-500); color: #fff; }
+    .card-btn.primary:hover { background: var(--amber-600); }
+
+    /* ── STATS SECTION (below kanban) ── */
+    .stats-section { padding: 0 20px 20px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+    .stat-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px 16px; animation: fadeUp 0.5s ease-out forwards; opacity: 0;
+    }
+    .stat-card:nth-child(1) { animation-delay: 0.1s; }
+    .stat-card:nth-child(2) { animation-delay: 0.15s; }
+    .stat-card:nth-child(3) { animation-delay: 0.2s; }
+    .stat-card:nth-child(4) { animation-delay: 0.25s; }
+    .stat-label { font-size: 10px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .stat-value { font-size: 28px; font-weight: 700; color: var(--text-primary); line-height: 1; }
+    .stat-delta { font-size: 10px; margin-top: 4px; display: flex; align-items: center; gap: 3px; }
+    .delta-pos { color: #10B981; }
+    .delta-neg { color: #EF4444; }
+    .stat-sparkline { margin-top: 8px; }
+
+    /* ── CHART SECTION ── */
+    .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px; animation: fadeUp 0.5s ease-out 0.3s forwards; opacity: 0; }
+    .chart-title { font-size: 12px; font-weight: 700; color: var(--text-primary); margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+    .chart-badge { font-size: 9px; padding: 2px 8px; border-radius: 10px; background: var(--amber-100); color: var(--amber-700); font-weight: 600; }
+    .bar-chart { display: flex; align-items: flex-end; gap: 5px; height: 80px; }
+    .bar { border-radius: 3px 3px 0 0; transition: height 0.8s ease-out; animation: barRise 1.2s ease-out; }
+    .bar-amber { background: linear-gradient(to top, var(--orange-600), var(--amber-400)); }
+    .bar-green { background: linear-gradient(to top, #10B981, #34D399); }
+    .bar-blue { background: linear-gradient(to top, #3B82F6, #60A5FA); }
+    .bar-label { font-size: 9px; color: var(--text-muted); text-align: center; margin-top: 4px; }
+
+    /* ── MODAL ── */
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 100; align-items: center; justify-content: center; }
+    .modal-overlay.open { display: flex; animation: overlayFade 0.2s ease-out; }
+    .modal { background: var(--surface); border-radius: 14px; width: 520px; max-height: 85vh; overflow-y: auto; padding: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); animation: modalSlideIn 0.3s ease-out; }
+    .modal-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
+    .modal-title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+    .modal-close { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text-muted); transition: all 0.2s; }
+    .modal-close:hover { background: #FEF2F2; color: #EF4444; border-color: #FCA5A5; }
+    .modal-section { margin-bottom: 16px; }
+    .modal-section-title { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .modal-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .modal-field { background: var(--amber-50); border-radius: 8px; padding: 10px 12px; }
+    .modal-field-label { font-size: 10px; color: var(--text-muted); margin-bottom: 2px; }
+    .modal-field-value { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+    .log-block { background: #1C1209; color: #FDE68A; border-radius: 8px; padding: 12px; font-size: 10px; font-family: 'Courier New', monospace; line-height: 1.7; max-height: 140px; overflow-y: auto; }
+
+    /* ── TOAST ── */
+    .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+    .toast { background: #1C1209; color: #FFFBEB; padding: 10px 16px; border-radius: 10px; font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); animation: toastSlide 0.4s ease-out; }
+    .toast-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber-400); animation: pulseDot 1.5s infinite; }
+
+    /* ── STATS VIEW ── */
+    .stats-view { display: none; padding: 16px 20px; }
+    .stats-full-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 16px; }
+    .stats-big-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+    .sbig-label { font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.4px; }
+    .sbig-value { font-size: 36px; font-weight: 700; color: var(--text-primary); line-height: 1; }
+    .sbig-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+    .stats-row { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
+    .wide-chart { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+    .wc-title { font-size: 12px; font-weight: 700; color: var(--text-primary); margin-bottom: 12px; }
+    .tall-bar-chart { display: flex; align-items: flex-end; gap: 8px; height: 120px; }
+    .tb { border-radius: 4px 4px 0 0; animation: barRise 1.2s ease-out; }
+    .tb-label { font-size: 9px; color: var(--text-muted); text-align: center; margin-top: 4px; }
+    .side-stats { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .ss-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: var(--amber-50); border-radius: 8px; }
+    .ss-label { font-size: 10px; color: var(--text-muted); }
+    .ss-val { font-size: 18px; font-weight: 700; color: var(--text-primary); }
+
+    /* ── PIPE DETAIL VIEW (스크립트 생성, 렌더링, 업로드) ── */
+    .detail-view { display: none; padding: 16px 20px; }
+    .detail-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .detail-title { font-size: 16px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 10px; }
+    .detail-title-icon { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, var(--amber-400), var(--orange-600)); display: flex; align-items: center; justify-content: center; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .dcard { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+    .dcard-title { font-size: 12px; font-weight: 700; color: var(--text-primary); margin-bottom: 12px; }
+    .drow { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border-light); font-size: 11px; }
+    .drow:last-child { border-bottom: none; }
+    .drow-label { color: var(--text-muted); }
+    .drow-val { font-weight: 600; color: var(--text-primary); }
+    .running-pill { background: #FEF3C7; color: var(--amber-700); padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; animation: pillPulse 2s infinite; }
+    .prompt-preview { background: #1C1209; color: #FDE68A; border-radius: 8px; padding: 10px 12px; font-size: 10px; font-family: monospace; line-height: 1.6; margin-top: 10px; }
+
+    /* ── KEYFRAMES ── */
+    @keyframes pulseDot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.85)} }
+    @keyframes barGrow { from{width:0} }
+    @keyframes barRise { from{transform:scaleY(0);transform-origin:bottom} to{transform:scaleY(1)} }
+    @keyframes progressAnim { from{transform:scaleX(0);transform-origin:left} to{transform:scaleX(1)} }
+    @keyframes cardFadeIn { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes colSlideIn { from{opacity:0;transform:translateX(-12px)} to{opacity:1;transform:translateX(0)} }
+    @keyframes fadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes modalSlideIn { from{opacity:0;transform:scale(0.95) translateY(-10px)} to{opacity:1;transform:scale(1) translateY(0)} }
+    @keyframes overlayFade { from{opacity:0} to{opacity:1} }
+    @keyframes toastSlide { from{opacity:0;transform:translateY(10px) translateX(10px)} to{opacity:1;transform:translateY(0) translateX(0)} }
+    @keyframes pillPulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+    @keyframes spinnerSpin { to{transform:rotate(360deg)} }
+
+    /* ── HIDDEN STATES ── */
+    .view-section { display: none; }
+    .view-section.active { display: block; }
+  </style>
+</head>
+<body>
+
+  <!-- ── TOP HEADER ── -->
+  <header class="top-header">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </div>
+      <div>
+        <div class="brand-name">쇼츠 파이프라인</div>
+        <div class="brand-tag">자동화 관제 시스템</div>
+      </div>
+    </div>
+    <div class="header-divider"></div>
+    <nav class="filter-tabs">
+      <button class="filter-tab active" onclick="switchView('kanban','전체', this)">
+        전체 <span class="count-badge">14</span>
+      </button>
+      <button class="filter-tab" onclick="switchView('script','스크립트 생성', this)">
+        스크립트 생성 <span class="count-badge">3</span>
+      </button>
+      <button class="filter-tab" onclick="switchView('render','렌더링', this)">
+        렌더링 <span class="count-badge">2</span>
+      </button>
+      <button class="filter-tab" onclick="switchView('upload','업로드', this)">
+        업로드 <span class="count-badge">1</span>
+      </button>
+      <button class="filter-tab" onclick="switchView('stats','통계', this)">
+        통계 <span class="count-badge" style="background:var(--amber-100);color:var(--amber-700)">42건</span>
+      </button>
+    </nav>
+    <div class="header-right">
+      <div class="run-indicator">
+        <div class="pulse-dot"></div>
+        파이프라인 실행 중
+      </div>
+      <button class="header-btn" title="알림" onclick="showToast('새 알림 없음')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      </button>
+      <button class="header-btn" title="설정" onclick="showToast('설정 패널 (데모)')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ── STATUS STRIP ── -->
+  <div class="status-strip">
+    <div class="status-chip"><span>오늘 완료</span><span class="val">1건</span></div>
+    <div class="status-chip"><span class="sep"></span></div>
+    <div class="status-chip"><span>현재 실행</span><span class="val chip-live">3단계</span></div>
+    <div class="status-chip"><span class="sep"></span></div>
+    <div class="status-chip"><span>성공률</span><span class="val">99.4%</span></div>
+    <div class="status-chip"><span class="sep"></span></div>
+    <div class="status-chip"><span>평균 처리</span><span class="val">3분 24초</span></div>
+    <div class="status-chip"><span class="sep"></span></div>
+    <div class="status-chip"><span>누적 업로드</span><span class="val">42건</span></div>
+    <div class="api-bar">
+      <span style="font-size:10px;color:var(--text-muted)">API 사용률</span>
+      <div class="api-bar-track"><div class="api-bar-fill"></div></div>
+      <span style="font-size:10px;font-weight:700;color:var(--amber-700)">34%</span>
+    </div>
+  </div>
+
+  <!-- ── KANBAN BOARD VIEW (default: 전체) ── -->
+  <div id="view-kanban" class="view-section active">
+    <div class="kanban-wrapper">
+      <div class="kanban-board">
+
+        <!-- 대기 -->
+        <div class="kanban-column">
+          <div class="col-header">
+            <div class="col-title-row">
+              <div class="col-icon" style="background:#F1F5F9"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+              <span class="col-title">대기</span>
+            </div>
+            <span class="col-count gray">6</span>
+          </div>
+          <div class="col-body">
+            <div class="card" style="animation-delay:0.1s" onclick="openModal('스마트홈 허브 Pro', '대기', '2026-06-18 00:00 예정', '클로드 API 스크립트 생성 예정')">
+              <div class="card-product">스마트홈 허브 Pro</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>2026-06-18 00:00 예정</div>
+              <div class="card-tags"><span class="tag tag-gray">예정</span><span class="tag tag-blue">v2 프롬프트</span></div>
+            </div>
+            <div class="card" style="animation-delay:0.15s" onclick="openModal('무선 충전 패드 X', '대기', '2026-06-19 00:00 예정', '클로드 API 스크립트 생성 예정')">
+              <div class="card-product">무선 충전 패드 X</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>2026-06-19 00:00 예정</div>
+              <div class="card-tags"><span class="tag tag-gray">예정</span><span class="tag tag-blue">v2 프롬프트</span></div>
+            </div>
+            <div class="card" style="animation-delay:0.2s">
+              <div class="card-product">블루투스 헤드셋 Z</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>2026-06-20 00:00 예정</div>
+              <div class="card-tags"><span class="tag tag-gray">예정</span><span class="tag tag-purple">실험 프롬프트</span></div>
+            </div>
+            <div class="card" style="animation-delay:0.25s">
+              <div class="card-product">포터블 프로젝터</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>2026-06-21 00:00 예정</div>
+              <div class="card-tags"><span class="tag tag-gray">예정</span></div>
+            </div>
+            <div class="card" style="animation-delay:0.3s">
+              <div class="card-product">AI 번역기 V3</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>2026-06-22 00:00 예정</div>
+              <div class="card-tags"><span class="tag tag-gray">예정</span></div>
+            </div>
+            <div class="card" style="animation-delay:0.35s">
+              <div class="card-product">스마트 체중계 Mini</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>2026-06-23 00:00 예정</div>
+              <div class="card-tags"><span class="tag tag-gray">예정</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 스크립트 생성 -->
+        <div class="kanban-column">
+          <div class="col-header">
+            <div class="col-title-row">
+              <div class="col-icon" style="background:#EFF6FF"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2.5"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg></div>
+              <span class="col-title">스크립트 생성</span>
+            </div>
+            <span class="col-count blue">3</span>
+          </div>
+          <div class="col-body">
+            <div class="card" style="animation-delay:0.12s; border-left: 3px solid #3B82F6;" onclick="openModal('스마트워치 V2', '생성 중', '00:02:15 경과', 'Claude claude-3-haiku 호출 중 — 토큰 2,847 소모 예상')">
+              <div class="card-product">스마트워치 V2</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>생성 중 · 00:02:15</div>
+              <div class="card-tags"><span class="tag tag-blue">claude-3-haiku</span><span class="tag tag-purple">v2 프롬프트</span></div>
+              <div class="card-progress">
+                <div class="progress-bar"><div class="progress-fill blue" style="width:65%"></div></div>
+                <div class="card-time"><span>토큰: ~1,852 / 2,847</span><span>65%</span></div>
+              </div>
+            </div>
+            <div class="card" style="animation-delay:0.17s; border-left: 3px solid #3B82F6;">
+              <div class="card-product">무선 이어폰 Pro MAX</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>대기 (큐 #2)</div>
+              <div class="card-tags"><span class="tag tag-blue">claude-3-haiku</span></div>
+              <div class="card-progress">
+                <div class="progress-bar"><div class="progress-fill blue" style="width:0%"></div></div>
+                <div class="card-time"><span>큐 대기 중</span><span>-</span></div>
+              </div>
+            </div>
+            <div class="card" style="animation-delay:0.22s; border-left: 3px solid #3B82F6;">
+              <div class="card-product">태블릿 스탠드 Pro</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>대기 (큐 #3)</div>
+              <div class="card-tags"><span class="tag tag-purple">v1 프롬프트</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 영상 렌더링 -->
+        <div class="kanban-column">
+          <div class="col-header">
+            <div class="col-title-row">
+              <div class="col-icon" style="background:var(--amber-50)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--amber-600)" stroke-width="2.5"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></div>
+              <span class="col-title">영상 렌더링</span>
+            </div>
+            <span class="col-count">2</span>
+          </div>
+          <div class="col-body">
+            <div class="card" style="animation-delay:0.14s; border-left: 3px solid var(--amber-500);" onclick="openModal('포터블 스피커 360', '렌더링 중', '진행률 62% · 예상 3분 20초 남음', 'FFmpeg H.264 + MoviePy 텍스트 오버레이 합성 중 (1080×1920 세로형)')">
+              <div class="card-product">포터블 스피커 360</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--amber-600)" stroke-width="2.5"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>렌더링 중 · 예상 3분 20초</div>
+              <div class="card-tags"><span class="tag tag-amber">FFmpeg</span><span class="tag tag-purple">MoviePy</span></div>
+              <div class="card-progress">
+                <div class="progress-bar"><div class="progress-fill amber" style="width:62%"></div></div>
+                <div class="card-time"><span>프레임 124/200 · H.264</span><span>62%</span></div>
+              </div>
+            </div>
+            <div class="card" style="animation-delay:0.19s; border-left: 3px solid var(--amber-500);">
+              <div class="card-product">카메라 렌즈 EF 50</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--amber-600)" stroke-width="2.5"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>큐 대기 중</div>
+              <div class="card-tags"><span class="tag tag-amber">FFmpeg</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 유튜브 업로드 -->
+        <div class="kanban-column">
+          <div class="col-header">
+            <div class="col-title-row">
+              <div class="col-icon" style="background:#FFF1F2"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--orange-600)" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
+              <span class="col-title">유튜브 업로드</span>
+            </div>
+            <span class="col-count" style="background:#FFF1F2;color:var(--orange-700)">1</span>
+          </div>
+          <div class="col-body">
+            <div class="card" style="animation-delay:0.16s; border-left: 3px solid var(--orange-500);" onclick="openModal('스마트 공기청정기 HEPA', '업로드 중', '47% 완료 · 예상 2분 15초', 'YouTube Data API v3 resumable upload — 8.8MB / 18.7MB')">
+              <div class="card-product">스마트 공기청정기 HEPA</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--orange-600)" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>업로드 중 · 예상 2분 15초</div>
+              <div class="card-tags"><span class="tag tag-red">YouTube API</span><span class="tag tag-blue">메타데이터 적용</span></div>
+              <div class="card-progress">
+                <div class="progress-bar"><div class="progress-fill amber" style="width:47%"></div></div>
+                <div class="card-time"><span>8.8MB / 18.7MB</span><span>47%</span></div>
+              </div>
+              <div class="card-actions">
+                <button class="card-btn primary" onclick="event.stopPropagation();showToast('일시정지 (데모)')">일시정지</button>
+                <button class="card-btn" onclick="event.stopPropagation();showToast('로그 보기 (데모)')">로그</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 완료 -->
+        <div class="kanban-column">
+          <div class="col-header">
+            <div class="col-title-row">
+              <div class="col-icon" style="background:#F0FDF4"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>
+              <span class="col-title">완료</span>
+            </div>
+            <span class="col-count green">2</span>
+          </div>
+          <div class="col-body">
+            <div class="card" style="animation-delay:0.18s; border-left: 3px solid #10B981;">
+              <div class="card-product">스마트워치 V2 리뷰</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>완료 · 오늘 00:07</div>
+              <div class="card-tags"><span class="tag tag-green">업로드 완료</span></div>
+              <div class="card-time" style="margin-top:4px"><span>ID: KVYD8x2L</span><span>조회 1,247</span></div>
+              <div class="card-actions">
+                <button class="card-btn" onclick="showToast('YouTube Studio 링크 (데모)')">YouTube 확인</button>
+                <button class="card-btn" onclick="showToast('성과 지표 (데모)')">성과</button>
+              </div>
+            </div>
+            <div class="card" style="animation-delay:0.23s; border-left: 3px solid #10B981;">
+              <div class="card-product">무선 이어폰 Pro 리뷰</div>
+              <div class="card-meta"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>완료 · 어제 00:05</div>
+              <div class="card-tags"><span class="tag tag-green">업로드 완료</span></div>
+              <div class="card-time" style="margin-top:4px"><span>ID: XPQ7m3Kj</span><span>조회 1,920</span></div>
+              <div class="card-actions">
+                <button class="card-btn" onclick="showToast('YouTube Studio 링크 (데모)')">YouTube 확인</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- STAT ROW BELOW KANBAN -->
+    <div class="stats-section">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">누적 업로드</div>
+          <div class="stat-value">42</div>
+          <div class="stat-delta delta-pos">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+            오늘 +1건 예정
+          </div>
+          <div class="stat-sparkline">
+            <svg width="100%" height="28" viewBox="0 0 120 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <polyline points="0,22 20,18 40,20 60,14 80,10 100,8 120,6" stroke="var(--amber-400)" stroke-width="2" fill="none"/>
+              <circle cx="120" cy="6" r="3" fill="var(--orange-500)"/>
+            </svg>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">파이프라인 성공률</div>
+          <div class="stat-value">99.4%</div>
+          <div class="stat-delta delta-pos">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+            최근 30일 기준
+          </div>
+          <div class="stat-sparkline">
+            <svg width="100%" height="28" viewBox="0 0 120 28" fill="none">
+              <polyline points="0,20 20,8 40,18 60,6 80,4 100,6 120,4" stroke="#10B981" stroke-width="2" fill="none"/>
+              <circle cx="120" cy="4" r="3" fill="#10B981"/>
+            </svg>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">평균 처리 시간</div>
+          <div class="stat-value">3:24</div>
+          <div class="stat-delta delta-neg">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 9 12 15 6 9"/></svg>
+            전주 대비 -12초 개선
+          </div>
+          <div class="stat-sparkline">
+            <svg width="100%" height="28" viewBox="0 0 120 28" fill="none">
+              <polyline points="0,6 20,10 40,8 60,12 80,8 100,6 120,4" stroke="#3B82F6" stroke-width="2" fill="none"/>
+              <circle cx="120" cy="4" r="3" fill="#3B82F6"/>
+            </svg>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">API 할당량 잔여</div>
+          <div class="stat-value">6,600</div>
+          <div class="stat-delta delta-pos">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+            일일 10,000 units 중 66%
+          </div>
+          <div class="stat-sparkline">
+            <svg width="100%" height="28" viewBox="0 0 120 28" fill="none">
+              <rect x="0" y="16" width="120" height="6" rx="3" fill="var(--amber-100)"/>
+              <rect x="0" y="16" width="79" height="6" rx="3" fill="var(--amber-400)"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="chart-row">
+        <div class="chart-card">
+          <div class="chart-title">
+            일별 업로드 추이 (최근 7일)
+            <span class="chart-badge">성공 40 / 실패 2</span>
+          </div>
+          <div class="bar-chart">
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="bar bar-amber" style="width:24px;height:70%"></div>
+              <div class="bar-label">6/11</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="bar bar-amber" style="width:24px;height:50%"></div>
+              <div class="bar-label">6/12</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="bar bar-amber" style="width:24px;height:90%"></div>
+              <div class="bar-label">6/13</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="bar bar-amber" style="width:24px;height:80%"></div>
+              <div class="bar-label">6/14</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="bar bar-amber" style="width:24px;height:65%"></div>
+              <div class="bar-label">6/15</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="bar bar-amber" style="width:24px;height:85%"></div>
+              <div class="bar-label">6/16</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="bar bar-green" style="width:24px;height:40%"></div>
+              <div class="bar-label">6/17</div>
+            </div>
+          </div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">
+            단계별 처리 시간 분포
+            <span class="chart-badge">평균 총 3:24</span>
+          </div>
+          <div class="bar-chart">
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="bar bar-blue" style="width:36px;height:30%"></div>
+              <div class="bar-label">스크립트<br>1:05</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="bar bar-amber" style="width:36px;height:65%"></div>
+              <div class="bar-label">렌더링<br>2:40</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="bar bar-green" style="width:36px;height:8%"></div>
+              <div class="bar-label">업로드<br>0:19</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SCRIPT DETAIL VIEW (스크립트 생성 탭) ── -->
+  <div id="view-script" class="view-section">
+    <div class="detail-view" style="display:block">
+      <div class="detail-header">
+        <div class="detail-title">
+          <div class="detail-title-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg></div>
+          Claude API 스크립트 자동 생성
+        </div>
+        <span class="running-pill">3건 처리 중</span>
+      </div>
+      <div class="detail-grid">
+        <div class="dcard">
+          <div class="dcard-title">현재 진행 — 스마트워치 V2</div>
+          <div class="drow"><span class="drow-label">모델</span><span class="drow-val">claude-3-haiku-20240307</span></div>
+          <div class="drow"><span class="drow-label">프롬프트 버전</span><span class="drow-val">v2.1 (활성)</span></div>
+          <div class="drow"><span class="drow-label">입력 토큰</span><span class="drow-val">1,247</span></div>
+          <div class="drow"><span class="drow-label">출력 예상</span><span class="drow-val">~1,600 토큰</span></div>
+          <div class="drow"><span class="drow-label">진행률</span><span class="drow-val">65% <span class="running-pill">스트리밍</span></span></div>
+          <div class="drow"><span class="drow-label">경과 시간</span><span class="drow-val">00:02:15</span></div>
+          <div class="prompt-preview">
+제품 [스마트워치 V2]의 15초 분량 유튜브
+쇼츠 리뷰 스크립트를 작성하세요.
+
+- 톤: 전문적이고 친근함
+- 길이: 100~130자 (15초 기준)
+- 구조: 후킹 → 핵심 특징 → CTA
+- 금지: 과장 표현, 가격 언급
+          </div>
+        </div>
+        <div class="dcard">
+          <div class="dcard-title">생성 이력 (최근 5건)</div>
+          <div class="drow"><span class="drow-label">2026-06-17 00:15</span><span class="drow-val" style="color:#10B981">완료 · 2,847토큰</span></div>
+          <div class="drow"><span class="drow-label">2026-06-16 00:12</span><span class="drow-val" style="color:#10B981">완료 · 2,956토큰</span></div>
+          <div class="drow"><span class="drow-label">2026-06-15 00:14</span><span class="drow-val" style="color:#10B981">완료 · 2,821토큰</span></div>
+          <div class="drow"><span class="drow-label">2026-06-14 00:18</span><span class="drow-val" style="color:#EF4444">실패 후 재시도</span></div>
+          <div class="drow"><span class="drow-label">2026-06-13 00:11</span><span class="drow-val" style="color:#10B981">완료 · 2,634토큰</span></div>
+        </div>
+        <div class="dcard">
+          <div class="dcard-title">큐 대기 현황</div>
+          <div class="drow"><span class="drow-label">#1 현재 처리</span><span class="drow-val">스마트워치 V2</span></div>
+          <div class="drow"><span class="drow-label">#2 대기 중</span><span class="drow-val">무선 이어폰 Pro MAX</span></div>
+          <div class="drow"><span class="drow-label">#3 대기 중</span><span class="drow-val">태블릿 스탠드 Pro</span></div>
+          <div class="drow"><span class="drow-label">처리 방식</span><span class="drow-val">순차 처리 (API 부하 제어)</span></div>
+          <div class="drow"><span class="drow-label">실패 시 정책</span><span class="drow-val">최대 3회 재시도</span></div>
+        </div>
+        <div class="dcard">
+          <div class="dcard-title">프롬프트 성능 분석</div>
+          <div class="drow"><span class="drow-label">v2 (활성) · 18건</span><span class="drow-val" style="color:#10B981">평균 조회 2,614</span></div>
+          <div class="drow"><span class="drow-label">v1 · 22건</span><span class="drow-val">평균 조회 2,108</span></div>
+          <div class="drow"><span class="drow-label">v3 (실험) · 8건</span><span class="drow-val" style="color:#EF4444">평균 조회 1,847</span></div>
+          <div style="margin-top:10px;font-size:10px;padding:8px;background:var(--amber-50);border-radius:6px;border-left:3px solid var(--amber-400);">
+            v2 프롬프트가 v1 대비 24% 높은 조회수를 기록 중입니다. 차주 v3를 보완한 v4 실험 예정.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RENDER VIEW ── -->
+  <div id="view-render" class="view-section">
+    <div class="detail-view" style="display:block">
+      <div class="detail-header">
+        <div class="detail-title">
+          <div class="detail-title-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></div>
+          FFmpeg 영상 자동 렌더링
+        </div>
+        <span class="running-pill">2건 렌더링 중</span>
+      </div>
+      <div class="detail-grid">
+        <div class="dcard">
+          <div class="dcard-title">현재 렌더링 — 포터블 스피커 360</div>
+          <div class="drow"><span class="drow-label">진행률</span><span class="drow-val">62% <span class="running-pill">진행 중</span></span></div>
+          <div class="drow"><span class="drow-label">현재 프레임</span><span class="drow-val">124 / 200 프레임</span></div>
+          <div class="drow"><span class="drow-label">렌더링 엔진</span><span class="drow-val">FFmpeg + MoviePy</span></div>
+          <div class="drow"><span class="drow-label">해상도</span><span class="drow-val">1080×1920 (9:16)</span></div>
+          <div class="drow"><span class="drow-label">코덱</span><span class="drow-val">H.264 / AAC 128kbps</span></div>
+          <div class="drow"><span class="drow-label">예상 파일 크기</span><span class="drow-val">~18.5MB</span></div>
+          <div class="drow"><span class="drow-label">예상 완료</span><span class="drow-val">3분 20초 후</span></div>
+        </div>
+        <div class="dcard">
+          <div class="dcard-title">렌더링 완료 이력</div>
+          <div class="drow"><span class="drow-label">스마트워치 쇼츠</span><span class="drow-val">2:40 · 18.2MB</span></div>
+          <div class="drow"><span class="drow-label">무선 이어폰 쇼츠</span><span class="drow-val">2:52 · 19.1MB</span></div>
+          <div class="drow"><span class="drow-label">포터블 스피커 쇼츠</span><span class="drow-val">2:35 · 17.8MB</span></div>
+          <div class="drow"><span class="drow-label">카메라 렌즈 쇼츠</span><span class="drow-val">2:48 · 18.7MB</span></div>
+          <div class="drow"><span class="drow-label">평균 렌더링 시간</span><span class="drow-val">2분 39초</span></div>
+          <div style="margin-top:10px;font-size:10px;padding:8px;background:#F0FDF4;border-radius:6px;border-left:3px solid #10B981;">
+            Celery Worker 병렬 처리로 대용량 영상 동시 렌더링 구현
+          </div>
+        </div>
+        <div class="dcard">
+          <div class="dcard-title">텍스트 오버레이 설정</div>
+          <div class="drow"><span class="drow-label">폰트</span><span class="drow-val">Pretendard Bold</span></div>
+          <div class="drow"><span class="drow-label">폰트 크기</span><span class="drow-val">64px (자막 기준)</span></div>
+          <div class="drow"><span class="drow-label">텍스트 색상</span><span class="drow-val">흰색 (#FFFFFF)</span></div>
+          <div class="drow"><span class="drow-label">배경 블러</span><span class="drow-val">가우시안 15px</span></div>
+          <div class="drow"><span class="drow-label">자막 등장</span><span class="drow-val">페이드인 0.5초</span></div>
+          <div class="drow"><span class="drow-label">자막 위치</span><span class="drow-val">하단 20% 영역</span></div>
+        </div>
+        <div class="dcard">
+          <div class="dcard-title">인프라 리소스</div>
+          <div class="drow"><span class="drow-label">CPU 사용률</span><span class="drow-val">78% <span class="running-pill">렌더링 중</span></span></div>
+          <div class="drow"><span class="drow-label">메모리</span><span class="drow-val">2.4GB / 8GB</span></div>
+          <div class="drow"><span class="drow-label">디스크 잔여</span><span class="drow-val">48.2GB 여유</span></div>
+          <div class="drow"><span class="drow-label">Celery Workers</span><span class="drow-val">4개 활성</span></div>
+          <div class="drow"><span class="drow-label">Redis 큐</span><span class="drow-val">대기 3개 · 처리 1개</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── UPLOAD VIEW ── -->
+  <div id="view-upload" class="view-section">
+    <div class="detail-view" style="display:block">
+      <div class="detail-header">
+        <div class="detail-title">
+          <div class="detail-title-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
+          YouTube 자동 업로드 및 메타데이터 적용
+        </div>
+        <span class="running-pill">1건 업로드 중</span>
+      </div>
+      <div class="detail-grid">
+        <div class="dcard">
+          <div class="dcard-title">현재 업로드 — 스마트 공기청정기 HEPA</div>
+          <div class="drow"><span class="drow-label">업로드 진행률</span><span class="drow-val">47% <span class="running-pill">전송 중</span></span></div>
+          <div class="drow"><span class="drow-label">전송 크기</span><span class="drow-val">8.8MB / 18.7MB</span></div>
+          <div class="drow"><span class="drow-label">업로드 방식</span><span class="drow-val">Resumable Upload</span></div>
+          <div class="drow"><span class="drow-label">예상 완료</span><span class="drow-val">2분 15초 후</span></div>
+          <div class="drow"><span class="drow-label">OAuth2 토큰</span><span class="drow-val">유효 (42분 남음)</span></div>
+          <div class="drow"><span class="drow-label">채널</span><span class="drow-val">제품리뷰 채널</span></div>
+        </div>
+        <div class="dcard">
+          <div class="dcard-title">Claude 생성 메타데이터 미리보기</div>
+          <div class="drow"><span class="drow-label">제목</span><span class="drow-val" style="font-size:10px">공기청정기 진짜 필요한가요? HEPA 필터 완벽 분석</span></div>
+          <div class="drow"><span class="drow-label">해시태그</span><span class="drow-val" style="font-size:10px">#공기청정기 #HEPA #제품리뷰</span></div>
+          <div class="drow"><span class="drow-label">공개 설정</span><span class="drow-val">공개 (즉시)</span></div>
+          <div class="drow"><span class="drow-label">카테고리</span><span class="drow-val">과학기술 (28)</span></div>
+          <div style="margin-top:8px;font-size:10px;background:var(--amber-50);padding:8px;border-radius:6px">
+            <strong>설명 미리보기:</strong><br>
+            최신 공기청정기의 HEPA 필터 성능과 소음 수준을 철저히 분석합니다. 미세먼지 PM2.5 제거율 99.97%의 진실을 확인하세요.
+          </div>
+        </div>
+        <div class="dcard">
+          <div class="dcard-title">업로드 완료 이력 (최근 5건)</div>
+          <div class="drow"><span class="drow-label">스마트워치 V2</span><span class="drow-val" style="color:#10B981">완료 · ID: KVYD8x2L</span></div>
+          <div class="drow"><span class="drow-label">무선 이어폰 Pro</span><span class="drow-val" style="color:#10B981">완료 · ID: XPQ7m3Kj</span></div>
+          <div class="drow"><span class="drow-label">포터블 스피커</span><span class="drow-val" style="color:#10B981">완료 · ID: ZRL9k4Mn</span></div>
+          <div class="drow"><span class="drow-label">카메라 렌즈 EF50</span><span class="drow-val" style="color:#10B981">완료 · ID: WBN2j7Qp</span></div>
+          <div class="drow"><span class="drow-label">태블릿 프로 리뷰</span><span class="drow-val" style="color:#EF4444">실패 (재시도 예정)</span></div>
+        </div>
+        <div class="dcard">
+          <div class="dcard-title">YouTube API 할당량 관리</div>
+          <div class="drow"><span class="drow-label">일일 한도</span><span class="drow-val">10,000 units</span></div>
+          <div class="drow"><span class="drow-label">사용량</span><span class="drow-val">3,400 units (34%)</span></div>
+          <div class="drow"><span class="drow-label">업로드 1건</span><span class="drow-val">1,600 units 소모</span></div>
+          <div class="drow"><span class="drow-label">잔여 업로드 가능</span><span class="drow-val">약 4건</span></div>
+          <div class="drow"><span class="drow-label">리셋 시각</span><span class="drow-val">내일 09:00 KST</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STATS VIEW ── -->
+  <div id="view-stats" class="view-section">
+    <div style="padding:16px 20px">
+      <div class="stats-full-grid">
+        <div class="stats-big-card">
+          <div class="sbig-label">누적 업로드</div>
+          <div class="sbig-value">42<span style="font-size:16px;color:var(--text-muted)">건</span></div>
+          <div class="sbig-sub">이번 달 28건 · 지난 달 14건</div>
+        </div>
+        <div class="stats-big-card">
+          <div class="sbig-label">총 누적 조회수</div>
+          <div class="sbig-value">48,290<span style="font-size:16px;color:var(--text-muted)"></span></div>
+          <div class="sbig-sub">영상당 평균 1,150회</div>
+        </div>
+        <div class="stats-big-card">
+          <div class="sbig-label">파이프라인 성공률</div>
+          <div class="sbig-value">99.4<span style="font-size:16px;color:var(--text-muted)">%</span></div>
+          <div class="sbig-sub">42건 중 실패 1건 (재시도 성공)</div>
+        </div>
+      </div>
+      <div class="stats-row">
+        <div class="wide-chart">
+          <div class="wc-title">월별 업로드 추이</div>
+          <div class="tall-bar-chart">
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="tb bar-blue" style="width:36px;height:30%"></div>
+              <div class="tb-label">3월<br>7건</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="tb bar-blue" style="width:36px;height:42%"></div>
+              <div class="tb-label">4월<br>10건</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="tb bar-amber" style="width:36px;height:58%"></div>
+              <div class="tb-label">5월<br>14건</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+              <div class="tb bar-green" style="width:36px;height:100%"></div>
+              <div class="tb-label">6월<br>28건</div>
+            </div>
+          </div>
+        </div>
+        <div class="side-stats">
+          <div class="ss-item">
+            <div class="ss-label">평균 렌더링</div>
+            <div class="ss-val">2:39</div>
+          </div>
+          <div class="ss-item">
+            <div class="ss-label">최고 조회 영상</div>
+            <div class="ss-val">2,840회</div>
+          </div>
+          <div class="ss-item">
+            <div class="ss-label">API 비용 절감율</div>
+            <div class="ss-val">-42%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MODAL ── -->
+  <div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="modal-title">작업 상세</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:3px" id="modal-status"></div>
+        </div>
+        <button class="modal-close" onclick="closeModal()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-section">
+        <div class="modal-section-title">실행 정보</div>
+        <div class="modal-row">
+          <div class="modal-field"><div class="modal-field-label">경과/예상 시간</div><div class="modal-field-value" id="modal-time">-</div></div>
+          <div class="modal-field"><div class="modal-field-label">파이프라인 ID</div><div class="modal-field-value">PL-2026-0617-042</div></div>
+        </div>
+      </div>
+      <div class="modal-section">
+        <div class="modal-section-title">기술 상세</div>
+        <div class="log-block" id="modal-log">
+[00:00:01] 파이프라인 시작...<br>
+[00:00:02] Claude API 호출 → 스트리밍 응답 수신<br>
+[00:01:45] 스크립트 생성 완료 (2,847 토큰)<br>
+[00:01:46] 품질 검증 통과 (길이·금지어 필터)<br>
+[00:01:47] SQLAlchemy Job 테이블 저장 완료<br>
+[00:01:48] FFmpeg 렌더링 큐 투입<br>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button onclick="showToast('재시도 예약됨 (데모)');closeModal()" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:600;color:var(--text-secondary);">재시도 예약</button>
+        <button onclick="showToast('상세 로그 보기 (데모)');closeModal()" style="flex:1;padding:10px;border-radius:8px;border:none;background:var(--amber-500);color:#fff;cursor:pointer;font-size:12px;font-weight:600;">전체 로그 보기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TOAST ── -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+    // 디자인 DNA 상수 (flat/sharp compact)
+    const DESIGN_DNA = { borderRadius: 4, boxShadow: 'none', density: 'compact', elevation: 'flat' };
+
+    function switchView(view, label, el) {
+      // 모든 뷰 숨기기
+      document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
+      document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+      // 선택 뷰 활성화
+      const viewMap = { kanban: 'view-kanban', script: 'view-script', render: 'view-render', upload: 'view-upload', stats: 'view-stats' };
+      const section = document.getElementById(viewMap[view]);
+      if (section) section.classList.add('active');
+      el.classList.add('active');
+    }
+
+    function openModal(title, status, time, log) {
+      document.getElementById('modal-title').textContent = title;
+      document.getElementById('modal-status').textContent = '상태: ' + status;
+      document.getElementById('modal-time').textContent = time;
+      document.getElementById('modal-log').innerHTML = log || '[로그 없음]';
+      document.getElementById('modal').classList.add('open');
+    }
+
+    function closeModal() {
+      document.getElementById('modal').classList.remove('open');
+    }
+
+    let toastTimer = null;
+    function showToast(msg) {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.innerHTML = '<div class="toast-dot"></div>' + msg;
+      container.appendChild(toast);
+      setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 3200);
+    }
+
+    // 초기 토스트
+    setTimeout(() => showToast('파이프라인 실행 중 — 3단계 처리 완료 예정'), 800);
+  </script>
+</body>
+</html>
