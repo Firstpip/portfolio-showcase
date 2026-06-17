@@ -110,6 +110,10 @@ async function main() {
           browser = await launchBrowser();
           page = await newPage(browser);
           await login(page);
+          // 위시켓 delete_portfolio()는 네이티브 confirm()/성공 alert을 띄운다. 자동 수락 핸들러가
+          // 없으면 클릭 후 페이지가 멈춰 protocolTimeout으로 실패한다(delete-wishket-portfolio.js
+          // main()이 등록하는 것과 동일). 워커 자체 페이지에도 반드시 등록.
+          page.on('dialog', async (d) => { try { await d.accept(); } catch (_) {} });
           fp = fpClient.createClient({
             apiBase: process.env.FIRSTPIP_API_BASE || (cfg.firstpip && cfg.firstpip.apiBase) || 'https://firstpip.co.kr',
             token: process.env.FIRSTPIP_ADMIN_TOKEN,
