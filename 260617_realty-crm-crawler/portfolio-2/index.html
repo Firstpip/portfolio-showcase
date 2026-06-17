@@ -1,0 +1,1284 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>분양 데이터 파이프라인 & 영업 관리 — 구현 데모</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --primary: #101010;
+  --primary-70: rgba(16,16,16,0.7);
+  --secondary: #0099ff;
+  --accent: #3ad98a;
+  --accent-light: #d1fae5;
+  --accent-dim: rgba(58,217,138,0.12);
+  --bg: #f4f4f4;
+  --surface: #ffffff;
+  --border: #e4e4e4;
+  --border-dark: #d0d0d0;
+  --text-primary: #101010;
+  --text-secondary: #555555;
+  --text-muted: #9ca3af;
+  --radius: 6px;
+  --radius-sm: 4px;
+  --sidebar-w: 220px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Pretendard', -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text-primary);
+  height: 100vh; overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* SIDEBAR */
+.sidebar {
+  position: fixed; top: 0; left: 0;
+  width: var(--sidebar-w); height: 100vh;
+  background: var(--primary);
+  display: flex; flex-direction: column;
+  z-index: 10;
+  border-right: 1px solid #222;
+}
+.sidebar-logo {
+  padding: 20px 18px 16px;
+  border-bottom: 1px solid #222;
+  display: flex; align-items: center; gap: 10px;
+}
+.sidebar-logo-mark {
+  width: 32px; height: 32px; border-radius: var(--radius);
+  background: var(--accent); display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.sidebar-logo-mark svg { width: 16px; height: 16px; fill: var(--primary); }
+.sidebar-logo-text { font-size: 15px; font-weight: 800; color: #fff; letter-spacing: -0.3px; line-height: 1.2; }
+.sidebar-logo-sub { font-size: 10px; color: rgba(255,255,255,0.35); font-weight: 500; }
+
+.sidebar-section { padding: 10px 10px 4px; }
+.sidebar-section-label { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.25); text-transform: uppercase; letter-spacing: 0.8px; padding: 0 8px 6px; }
+.sidebar-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 10px; border-radius: var(--radius);
+  font-size: 13.5px; font-weight: 500; color: rgba(255,255,255,0.5);
+  cursor: pointer; transition: all .12s;
+  margin-bottom: 1px;
+}
+.sidebar-item:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.85); }
+.sidebar-item.active {
+  background: rgba(58,217,138,0.15); color: var(--accent);
+  font-weight: 600;
+}
+.sidebar-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+.sidebar-item .badge {
+  margin-left: auto; background: var(--accent); color: var(--primary);
+  font-size: 10px; font-weight: 800; padding: 1px 5px; border-radius: 4px;
+  min-width: 18px; text-align: center;
+}
+.sidebar-item .badge.secondary { background: #0099ff; color: #fff; }
+
+.sidebar-bottom {
+  margin-top: auto; border-top: 1px solid #222; padding: 12px 10px;
+}
+.sidebar-user {
+  display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: var(--radius);
+  cursor: pointer; transition: background .12s;
+}
+.sidebar-user:hover { background: rgba(255,255,255,0.06); }
+.sidebar-user-avatar {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--accent); display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 800; color: var(--primary); flex-shrink: 0;
+}
+.sidebar-user-name { font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.75); }
+.sidebar-user-role { font-size: 11px; color: rgba(255,255,255,0.3); margin-top: 1px; }
+.crawl-status {
+  margin: 8px 10px 0;
+  padding: 8px 10px; border-radius: var(--radius);
+  background: rgba(58,217,138,0.1); border: 1px solid rgba(58,217,138,0.2);
+  display: flex; align-items: center; gap: 8px;
+}
+.crawl-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  flex-shrink: 0; animation: pulse-green 2s infinite;
+}
+@keyframes pulse-green { 0%,100% { box-shadow: 0 0 0 0 rgba(58,217,138,0.4); } 50% { box-shadow: 0 0 0 4px rgba(58,217,138,0); } }
+.crawl-status-text { font-size: 11px; color: rgba(255,255,255,0.5); }
+.crawl-status-text strong { color: var(--accent); }
+
+/* MAIN CONTENT */
+.main-content {
+  margin-left: var(--sidebar-w);
+  height: 100vh;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+/* TOP BAR */
+.topbar {
+  height: 54px; background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 20px; gap: 16px; flex-shrink: 0;
+}
+.topbar-breadcrumb {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--text-muted);
+}
+.topbar-breadcrumb span { color: var(--text-primary); font-weight: 600; }
+.topbar-breadcrumb svg { width: 13px; height: 13px; }
+.topbar-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.tb-btn {
+  padding: 6px 12px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--surface);
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  cursor: pointer; display: flex; align-items: center; gap: 5px; transition: all .12s;
+}
+.tb-btn:hover { border-color: var(--primary); color: var(--primary); }
+.tb-btn svg { width: 13px; height: 13px; }
+.tb-btn.accent-btn { background: var(--accent); border-color: var(--accent); color: var(--primary); }
+.tb-btn.accent-btn:hover { background: #2bc97a; }
+.refresh-badge {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--text-muted);
+}
+.refresh-badge svg { width: 12px; height: 12px; color: var(--accent); }
+
+/* VIEWS */
+.view { display: none; flex: 1; overflow: hidden; }
+.view.active { display: flex; }
+
+/* === MAP VIEW (stripe-multipane 3-panel) === */
+#view-main { gap: 0; }
+.map-container {
+  flex: 1; position: relative; overflow: hidden;
+  background: linear-gradient(160deg, #e8f4ec 0%, #d4eedd 50%, #c8e8d4 100%);
+}
+.map-svg-wrap { width: 100%; height: 100%; position: relative; }
+
+/* Map placeholder with SVG map of Korea regions */
+.map-placeholder {
+  width: 100%; height: 100%; position: relative; overflow: hidden;
+}
+.korea-map { width: 100%; height: 100%; }
+.map-overlay-grid {
+  position: absolute; inset: 0;
+  display: grid;
+  background-image: linear-gradient(rgba(0,0,0,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,0,0,0.04) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+}
+
+/* Map cluster markers */
+.map-marker {
+  position: absolute;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: transform .15s;
+}
+.map-marker:hover { transform: scale(1.15); z-index: 10; }
+.map-marker-bubble {
+  background: var(--primary); color: #fff;
+  border-radius: 50%; border: 2px solid var(--accent);
+  font-size: 11px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  transition: all .15s;
+}
+.map-marker:hover .map-marker-bubble { background: var(--accent); color: var(--primary); }
+.map-marker.active .map-marker-bubble { background: var(--accent); color: var(--primary); border-color: #fff; }
+
+/* Map left panel geo-stats */
+.map-stats-strip {
+  position: absolute; top: 12px; left: 12px;
+  background: rgba(255,255,255,0.95); backdrop-filter: blur(8px);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px; display: flex; gap: 20px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.map-stat { text-align: center; }
+.map-stat-num { font-size: 20px; font-weight: 800; color: var(--text-primary); }
+.map-stat-label { font-size: 10px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; margin-top: 1px; }
+.map-stat-num.accent { color: var(--accent); }
+
+.map-legend {
+  position: absolute; bottom: 12px; left: 12px;
+  background: rgba(255,255,255,0.95); backdrop-filter: blur(8px);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.legend-title { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 2px; }
+.legend-item { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-secondary); }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+/* Geo-side panel */
+.geo-side-panel {
+  width: 280px; background: var(--surface);
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow: hidden; flex-shrink: 0;
+}
+.geo-panel-header {
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.geo-panel-title { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+.geo-panel-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.geo-property-list { flex: 1; overflow-y: auto; padding: 10px; }
+.geo-prop-item {
+  padding: 10px 12px; border-radius: var(--radius);
+  border: 1px solid var(--border); margin-bottom: 6px;
+  cursor: pointer; transition: all .12s;
+}
+.geo-prop-item:hover, .geo-prop-item.active {
+  border-color: var(--accent); background: var(--accent-dim);
+}
+.geo-prop-name { font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 3px; }
+.geo-prop-addr { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+.geo-prop-meta { display: flex; justify-content: space-between; align-items: center; }
+.geo-status { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }
+.geo-status.new { background: #fef3c7; color: #d97706; }
+.geo-status.contacted { background: #dbeafe; color: #2563eb; }
+.geo-status.order { background: var(--accent-light); color: #059669; }
+.geo-assignee { font-size: 11px; color: var(--text-muted); }
+
+/* === ANALYTICS VIEW === */
+#view-analytics {
+  flex-direction: column; overflow-y: auto; padding: 20px;
+  gap: 20px;
+}
+.analytics-header { display: flex; align-items: center; justify-content: space-between; }
+.analytics-title { font-size: 18px; font-weight: 800; color: var(--text-primary); letter-spacing: -0.4px; }
+.period-tabs { display: flex; gap: 2px; background: var(--bg); border-radius: var(--radius); padding: 3px; }
+.period-tab {
+  padding: 5px 12px; border-radius: 4px; font-size: 12px; font-weight: 600;
+  color: var(--text-muted); cursor: pointer; transition: all .12s;
+}
+.period-tab.active { background: var(--surface); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.kpi-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 18px;
+}
+.kpi-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 8px; }
+.kpi-value { font-size: 36px; font-weight: 800; color: var(--text-primary); letter-spacing: -1px; }
+.kpi-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; align-items: center; gap: 4px; }
+.kpi-sub.up { color: var(--accent); }
+.kpi-sub.down { color: #ef4444; }
+.kpi-sub svg { width: 12px; height: 12px; }
+
+.analytics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.chart-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px;
+}
+.chart-card-title { font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 14px; }
+.chart-placeholder { height: 180px; }
+.chart-bar-row { display: flex; flex-direction: column; gap: 8px; }
+.chart-bar-item { display: flex; align-items: center; gap: 10px; }
+.chart-bar-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); width: 60px; text-align: right; flex-shrink: 0; }
+.chart-bar-bg { flex: 1; height: 28px; background: var(--bg); border-radius: 4px; position: relative; overflow: hidden; }
+.chart-bar-fill {
+  position: absolute; top: 4px; bottom: 4px; left: 0;
+  border-radius: 3px;
+  display: flex; align-items: center; padding-left: 8px;
+  font-size: 11px; font-weight: 700; color: #fff;
+  transition: width .8s cubic-bezier(.4,0,.2,1);
+}
+.chart-bar-val { font-size: 12px; font-weight: 700; color: var(--text-primary); width: 36px; text-align: right; flex-shrink: 0; }
+
+.ranking-table { width: 100%; border-collapse: collapse; }
+.ranking-table th {
+  text-align: left; padding: 8px 10px; font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+.ranking-table td { padding: 10px 10px; font-size: 13px; border-bottom: 1px solid var(--bg); vertical-align: middle; }
+.ranking-table tr:hover td { background: var(--bg); }
+.rank-badge {
+  width: 20px; height: 20px; border-radius: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800;
+}
+.rank-1 { background: #fef3c7; color: #d97706; }
+.rank-2 { background: #f1f5f9; color: #64748b; }
+.rank-3 { background: #fef3c7; color: #92400e; }
+.rank-other { background: var(--bg); color: var(--text-muted); }
+.order-bar { height: 6px; border-radius: 3px; background: var(--accent); }
+
+/* === CRAWLER ADMIN VIEW === */
+#view-crawler-admin { flex-direction: column; overflow-y: auto; padding: 20px; gap: 16px; }
+.crawler-grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
+.site-cards { display: flex; flex-direction: column; gap: 10px; }
+.site-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 18px;
+  display: flex; align-items: center; gap: 16px;
+  transition: border-color .12s;
+}
+.site-card:hover { border-color: var(--accent); }
+.site-icon {
+  width: 40px; height: 40px; border-radius: var(--radius);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 800; flex-shrink: 0;
+}
+.site-info { flex: 1; }
+.site-name { font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 3px; }
+.site-meta { font-size: 12px; color: var(--text-muted); }
+.site-stats { display: flex; gap: 16px; }
+.site-stat { text-align: center; }
+.site-stat-val { font-size: 18px; font-weight: 800; color: var(--text-primary); }
+.site-stat-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+.site-actions { display: flex; gap: 6px; }
+.site-btn {
+  padding: 6px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--surface);
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  cursor: pointer; display: flex; align-items: center; gap: 4px;
+  transition: all .12s; white-space: nowrap;
+}
+.site-btn:hover { border-color: var(--primary); color: var(--primary); }
+.site-btn svg { width: 12px; height: 12px; }
+.site-btn.run-btn { background: var(--accent); border-color: var(--accent); color: var(--primary); }
+.site-btn.run-btn:hover { background: #2bc97a; }
+.status-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; }
+.status-dot { width: 6px; height: 6px; border-radius: 50%; }
+.s-green { background: #10b981; }
+.s-yellow { background: #f59e0b; }
+.s-red { background: #ef4444; }
+.s-blue { background: #3b82f6; animation: pulse-blue 2s infinite; }
+@keyframes pulse-blue { 0%,100% { box-shadow: 0 0 0 0 rgba(59,130,246,0.4); } 50% { box-shadow: 0 0 0 4px rgba(59,130,246,0); } }
+
+.queue-panel {
+  background: var(--primary); border-radius: var(--radius);
+  padding: 16px; display: flex; flex-direction: column; gap: 6px;
+  height: fit-content;
+}
+.queue-header { font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px; }
+.queue-item { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.07); }
+.queue-item:last-child { border-bottom: none; }
+.queue-site { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.75); flex: 1; }
+.queue-count { font-size: 11px; color: var(--accent); font-weight: 700; }
+.queue-time { font-size: 10px; color: rgba(255,255,255,0.3); font-family: monospace; }
+
+.log-stream {
+  background: #0d0d0d; border-radius: var(--radius);
+  padding: 14px; font-family: 'SF Mono', 'Fira Code', monospace;
+  max-height: 200px; overflow-y: auto;
+}
+.log-line { display: flex; gap: 8px; margin-bottom: 4px; }
+.log-ts { font-size: 11px; color: rgba(255,255,255,0.25); white-space: nowrap; }
+.log-text { font-size: 12px; line-height: 1.4; }
+.log-text.ok { color: #6ee7b7; }
+.log-text.warn { color: #fde68a; }
+.log-text.err { color: #fca5a5; }
+.log-text.info { color: #93c5fd; }
+
+/* === TEAM MGMT VIEW === */
+#view-team-mgmt { flex-direction: column; overflow-y: auto; padding: 20px; gap: 16px; }
+.team-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.team-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px; transition: border-color .12s;
+}
+.team-card:hover { border-color: var(--accent); }
+.team-card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.team-avatar {
+  width: 44px; height: 44px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 800; color: var(--primary); flex-shrink: 0;
+}
+.team-name { font-size: 15px; font-weight: 700; color: var(--text-primary); }
+.team-role { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.team-badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+.team-badge.lead { background: #101010; color: #fff; }
+.team-badge.member { background: var(--bg); color: var(--text-muted); }
+.team-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+.team-stat { text-align: center; padding: 8px 6px; background: var(--bg); border-radius: 4px; }
+.team-stat-val { font-size: 18px; font-weight: 800; color: var(--text-primary); }
+.team-stat-val.accent { color: var(--accent); }
+.team-stat-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; margin-top: 2px; }
+.team-regions { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; }
+.region-chip {
+  font-size: 11px; padding: 2px 7px; border-radius: 4px;
+  background: var(--bg); color: var(--text-secondary); font-weight: 600;
+}
+.team-card-footer { display: flex; gap: 6px; }
+.team-action-btn {
+  flex: 1; padding: 7px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--surface);
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  cursor: pointer; text-align: center; transition: all .12s;
+}
+.team-action-btn:hover { border-color: var(--primary); color: var(--primary); }
+
+/* === SCHEDULE SETTINGS VIEW === */
+#view-scheduler { flex-direction: column; overflow-y: auto; padding: 20px; gap: 16px; }
+.schedule-settings { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
+.schedule-form-section {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.form-title { font-size: 15px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px; }
+.form-sub { font-size: 13px; color: var(--text-muted); }
+.form-row { display: flex; flex-direction: column; gap: 5px; }
+.form-label { font-size: 12px; font-weight: 700; color: var(--text-secondary); }
+.form-input {
+  padding: 9px 12px; border: 1.5px solid var(--border); border-radius: var(--radius);
+  font-size: 13px; font-family: 'Pretendard', sans-serif; color: var(--text-primary);
+  background: var(--surface); outline: none; transition: border-color .12s;
+}
+.form-input:focus { border-color: var(--accent); }
+.form-select {
+  padding: 9px 12px; border: 1.5px solid var(--border); border-radius: var(--radius);
+  font-size: 13px; font-family: 'Pretendard', sans-serif; color: var(--text-primary);
+  background: var(--surface); outline: none; cursor: pointer;
+}
+.site-checkbox-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.site-check-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border: 1.5px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; transition: border-color .12s; font-size: 13px;
+}
+.site-check-item:hover { border-color: var(--accent); }
+.site-check-item input { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
+.form-actions { display: flex; gap: 8px; }
+.form-btn-primary {
+  padding: 10px 20px; border-radius: var(--radius);
+  background: var(--accent); border: none; color: var(--primary);
+  font-size: 13px; font-weight: 700; cursor: pointer; transition: background .12s;
+  display: flex; align-items: center; gap: 6px;
+}
+.form-btn-primary:hover { background: #2bc97a; }
+.form-btn-secondary {
+  padding: 10px 18px; border-radius: var(--radius);
+  border: 1.5px solid var(--border); background: var(--surface); color: var(--text-secondary);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+
+.schedule-history-panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+  display: flex; flex-direction: column; gap: 8px; height: fit-content;
+}
+.history-title { font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; }
+.history-item {
+  padding: 10px 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); display: flex; gap: 10px; align-items: center;
+}
+.history-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.history-body { flex: 1; }
+.history-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.history-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.history-count { font-size: 13px; font-weight: 700; color: var(--accent); }
+
+/* TOAST */
+.toast {
+  position: fixed; bottom: 20px; right: 20px;
+  background: var(--primary); color: #fff;
+  padding: 11px 16px; border-radius: var(--radius);
+  font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; gap: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  z-index: 999; opacity: 0; transition: opacity .25s;
+  pointer-events: none;
+}
+.toast.show { opacity: 1; }
+.toast-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+
+/* SCROLLBAR */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-dark); border-radius: 3px; }
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.view.active { animation: fadeIn .2s ease-out; }
+</style>
+</head>
+<body data-archetype="stripe-multipane">
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="sidebar-logo-mark">
+      <svg viewBox="0 0 16 16"><path d="M8 1L2 4.5V8c0 3 2.5 5.5 6 6.5 3.5-1 6-3.5 6-6.5V4.5L8 1z"/></svg>
+    </div>
+    <div>
+      <div class="sidebar-logo-text">PropPipeline</div>
+      <div class="sidebar-logo-sub">분양 데이터 관리 시스템</div>
+    </div>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">분석</div>
+    <div class="sidebar-item active" onclick="showView('main',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+      지도 현황
+      <span class="badge">38</span>
+    </div>
+    <div class="sidebar-item" onclick="showView('analytics',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      성과 분석
+    </div>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-section-label">운영</div>
+    <div class="sidebar-item" onclick="showView('crawler-admin',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/></svg>
+      크롤러 관리
+      <span class="badge secondary">2</span>
+    </div>
+    <div class="sidebar-item" onclick="showView('team-mgmt',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      팀 관리
+    </div>
+    <div class="sidebar-item" onclick="showView('scheduler',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>
+      스케줄 설정
+    </div>
+  </div>
+
+  <div class="sidebar-bottom">
+    <div class="crawl-status">
+      <div class="crawl-dot"></div>
+      <div class="crawl-status-text"><strong>정기 수집</strong> 완료<br>오늘 09:00 · <strong>1,247건</strong></div>
+    </div>
+    <div class="sidebar-user">
+      <div class="sidebar-user-avatar">김</div>
+      <div>
+        <div class="sidebar-user-name">김민준 팀장</div>
+        <div class="sidebar-user-role">영업1팀 · 관리자</div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- MAIN CONTENT -->
+<div class="main-content">
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <div class="topbar-breadcrumb">
+      PropPipeline
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9,18 15,12 9,6"/></svg>
+      <span id="breadcrumb-text">지도 현황</span>
+    </div>
+    <div class="topbar-right">
+      <div class="refresh-badge">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,4 23,11 16,11"/><path d="M20.49 15A9 9 0 1 1 5.64 5.64L23 11"/></svg>
+        09:02 업데이트
+      </div>
+      <button class="tb-btn" onclick="showToast('수집 실행 중...')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5,3 19,12 5,21 5,3"/></svg>
+        즉시 수집
+      </button>
+      <button class="tb-btn accent-btn" onclick="showToast('Excel 다운로드 중...')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Excel 다운로드
+      </button>
+    </div>
+  </div>
+
+  <!-- VIEW: 지도 현황 (map-geo 3-panel) -->
+  <div id="view-main" class="view active">
+    <div class="map-container">
+      <!-- Geo-stats strip (top) -->
+      <div class="map-stats-strip">
+        <div class="map-stat"><div class="map-stat-num">1,247</div><div class="map-stat-label">전체 매물</div></div>
+        <div class="map-stat"><div class="map-stat-num accent">38</div><div class="map-stat-label">신규</div></div>
+        <div class="map-stat"><div class="map-stat-num">23</div><div class="map-stat-label">오더확보</div></div>
+        <div class="map-stat"><div class="map-stat-num">5</div><div class="map-stat-label">수집 소스</div></div>
+      </div>
+
+      <!-- Korea Map SVG Placeholder -->
+      <div class="map-placeholder">
+        <div class="map-overlay-grid"></div>
+        <svg id="koreaMapSvg" viewBox="0 0 600 700" style="width:100%;height:100%;position:absolute;top:0;left:0" xmlns="http://www.w3.org/2000/svg">
+          <!-- Background -->
+          <rect width="600" height="700" fill="#e8f4ec"/>
+          <!-- Simplified Korea outline regions -->
+          <g opacity="0.6">
+            <!-- 서울/경기 -->
+            <ellipse cx="260" cy="240" rx="85" ry="70" fill="#c8e8d4" stroke="#a8d4b8" stroke-width="1.5"/>
+            <!-- 인천 -->
+            <ellipse cx="195" cy="260" rx="45" ry="40" fill="#d4eedd" stroke="#a8d4b8" stroke-width="1.5"/>
+            <!-- 강원 -->
+            <ellipse cx="360" cy="200" rx="80" ry="65" fill="#d8eee0" stroke="#a8d4b8" stroke-width="1.5"/>
+            <!-- 충청 -->
+            <ellipse cx="270" cy="360" rx="90" ry="70" fill="#c4e4d0" stroke="#a8d4b8" stroke-width="1.5"/>
+            <!-- 전라 -->
+            <ellipse cx="230" cy="490" rx="90" ry="75" fill="#cce8d8" stroke="#a8d4b8" stroke-width="1.5"/>
+            <!-- 경상 -->
+            <ellipse cx="380" cy="470" rx="100" ry="90" fill="#d0e8d8" stroke="#a8d4b8" stroke-width="1.5"/>
+            <!-- 부산 -->
+            <ellipse cx="420" cy="560" rx="40" ry="35" fill="#b8dcc8" stroke="#a8d4b8" stroke-width="1.5"/>
+          </g>
+
+          <!-- Grid lines (lighter) -->
+          <g stroke="rgba(0,0,0,0.05)" stroke-width="1">
+            <line x1="0" y1="100" x2="600" y2="100"/><line x1="0" y1="200" x2="600" y2="200"/>
+            <line x1="0" y1="300" x2="600" y2="300"/><line x1="0" y1="400" x2="600" y2="400"/>
+            <line x1="0" y1="500" x2="600" y2="500"/><line x1="0" y1="600" x2="600" y2="600"/>
+            <line x1="100" y1="0" x2="100" y2="700"/><line x1="200" y1="0" x2="200" y2="700"/>
+            <line x1="300" y1="0" x2="300" y2="700"/><line x1="400" y1="0" x2="400" y2="700"/>
+            <line x1="500" y1="0" x2="500" y2="700"/>
+          </g>
+
+          <!-- Cluster markers -->
+          <!-- 서울 -->
+          <g transform="translate(255,230)" class="map-marker" onclick="selectRegion('서울')">
+            <circle r="28" fill="#101010" stroke="#3ad98a" stroke-width="2.5"/>
+            <text y="5" text-anchor="middle" fill="white" font-size="13" font-weight="800" font-family="Pretendard,sans-serif">312</text>
+          </g>
+          <text x="255" y="268" text-anchor="middle" fill="#555" font-size="10" font-family="Pretendard,sans-serif">서울</text>
+
+          <!-- 경기 -->
+          <g transform="translate(285,290)" class="map-marker" onclick="selectRegion('경기')">
+            <circle r="24" fill="#101010" stroke="#3ad98a" stroke-width="2"/>
+            <text y="4" text-anchor="middle" fill="white" font-size="12" font-weight="800" font-family="Pretendard,sans-serif">287</text>
+          </g>
+          <text x="285" y="322" text-anchor="middle" fill="#555" font-size="10" font-family="Pretendard,sans-serif">경기</text>
+
+          <!-- 부산 -->
+          <g transform="translate(418,550)" class="map-marker" onclick="selectRegion('부산')">
+            <circle r="22" fill="#101010" stroke="#3ad98a" stroke-width="2"/>
+            <text y="4" text-anchor="middle" fill="white" font-size="12" font-weight="800" font-family="Pretendard,sans-serif">156</text>
+          </g>
+          <text x="418" y="580" text-anchor="middle" fill="#555" font-size="10" font-family="Pretendard,sans-serif">부산</text>
+
+          <!-- 인천 -->
+          <g transform="translate(195,255)" class="map-marker" onclick="selectRegion('인천')">
+            <circle r="18" fill="#101010" stroke="#3ad98a" stroke-width="1.5"/>
+            <text y="4" text-anchor="middle" fill="white" font-size="11" font-weight="700" font-family="Pretendard,sans-serif">94</text>
+          </g>
+          <text x="195" y="281" text-anchor="middle" fill="#555" font-size="10" font-family="Pretendard,sans-serif">인천</text>
+
+          <!-- 대구 -->
+          <g transform="translate(370,440)" class="map-marker" onclick="selectRegion('대구')">
+            <circle r="18" fill="#101010" stroke="#3ad98a" stroke-width="1.5"/>
+            <text y="4" text-anchor="middle" fill="white" font-size="11" font-weight="700" font-family="Pretendard,sans-serif">88</text>
+          </g>
+          <text x="370" y="466" text-anchor="middle" fill="#555" font-size="10" font-family="Pretendard,sans-serif">대구</text>
+
+          <!-- 광주 -->
+          <g transform="translate(210,490)" class="map-marker" onclick="selectRegion('광주')">
+            <circle r="16" fill="#101010" stroke="#3ad98a" stroke-width="1.5"/>
+            <text y="4" text-anchor="middle" fill="white" font-size="11" font-weight="700" font-family="Pretendard,sans-serif">72</text>
+          </g>
+          <text x="210" y="514" text-anchor="middle" fill="#555" font-size="10" font-family="Pretendard,sans-serif">광주</text>
+
+          <!-- 대전 -->
+          <g transform="translate(290,360)" class="map-marker" onclick="selectRegion('대전')">
+            <circle r="16" fill="#101010" stroke="#3ad98a" stroke-width="1.5"/>
+            <text y="4" text-anchor="middle" fill="white" font-size="11" font-weight="700" font-family="Pretendard,sans-serif">65</text>
+          </g>
+          <text x="290" y="384" text-anchor="middle" fill="#555" font-size="10" font-family="Pretendard,sans-serif">대전</text>
+
+          <!-- 기타 소형 -->
+          <g transform="translate(350,290)"><circle r="12" fill="#555" stroke="#3ad98a" stroke-width="1"/><text y="4" text-anchor="middle" fill="white" font-size="9" font-weight="700" font-family="Pretendard,sans-serif">48</text></g>
+          <text x="350" y="310" text-anchor="middle" fill="#777" font-size="9" font-family="Pretendard,sans-serif">강원</text>
+          <g transform="translate(250,420)"><circle r="12" fill="#555" stroke="#3ad98a" stroke-width="1"/><text y="4" text-anchor="middle" fill="white" font-size="9" font-weight="700" font-family="Pretendard,sans-serif">43</text></g>
+          <text x="250" y="440" text-anchor="middle" fill="#777" font-size="9" font-family="Pretendard,sans-serif">충청</text>
+          <g transform="translate(450,490)"><circle r="11" fill="#555" stroke="#3ad98a" stroke-width="1"/><text y="4" text-anchor="middle" fill="white" font-size="9" font-weight="700" font-family="Pretendard,sans-serif">38</text></g>
+          <text x="450" y="508" text-anchor="middle" fill="#777" font-size="9" font-family="Pretendard,sans-serif">경남</text>
+        </svg>
+      </div>
+
+      <!-- Legend -->
+      <div class="map-legend">
+        <div class="legend-title">클러스터 범례</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#101010;border:2px solid #3ad98a"></div>100건 이상</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#555;border:2px solid #3ad98a"></div>30~99건</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#888;border:2px solid #ccc"></div>30건 미만</div>
+      </div>
+    </div>
+
+    <!-- Geo-side panel -->
+    <div class="geo-side-panel">
+      <div class="geo-panel-header">
+        <div class="geo-panel-title" id="geoRegionTitle">서울 · 312건</div>
+        <div class="geo-panel-sub">최근 업데이트 오늘 09:02</div>
+      </div>
+      <div class="geo-property-list" id="geoPropList">
+        <div class="geo-prop-item active">
+          <div class="geo-prop-name">강남 테크밸리 상가 A동</div>
+          <div class="geo-prop-addr">강남구 테헤란로 501</div>
+          <div class="geo-prop-meta"><span class="geo-status contacted">통화중</span><span class="geo-assignee">이서연</span></div>
+        </div>
+        <div class="geo-prop-item">
+          <div class="geo-prop-name">마포 월드컵 상가</div>
+          <div class="geo-prop-addr">마포구 월드컵북로 396</div>
+          <div class="geo-prop-meta"><span class="geo-status new">미연락</span><span class="geo-assignee">미배정</span></div>
+        </div>
+        <div class="geo-prop-item">
+          <div class="geo-prop-name">신촌 메트로 상업시설</div>
+          <div class="geo-prop-addr">서대문구 신촌로 83</div>
+          <div class="geo-prop-meta"><span class="geo-status order">오더확보</span><span class="geo-assignee">최동현</span></div>
+        </div>
+        <div class="geo-prop-item">
+          <div class="geo-prop-name">잠실 롯데월드 인근 상가</div>
+          <div class="geo-prop-addr">송파구 잠실동 40-1</div>
+          <div class="geo-prop-meta"><span class="geo-status contacted">통화중</span><span class="geo-assignee">박지훈</span></div>
+        </div>
+        <div class="geo-prop-item">
+          <div class="geo-prop-name">홍대 합정 복합상가</div>
+          <div class="geo-prop-addr">마포구 합정동 456</div>
+          <div class="geo-prop-meta"><span class="geo-status new">미연락</span><span class="geo-assignee">미배정</span></div>
+        </div>
+        <div class="geo-prop-item">
+          <div class="geo-prop-name">이태원 글로벌 상가</div>
+          <div class="geo-prop-addr">용산구 이태원로 270</div>
+          <div class="geo-prop-meta"><span class="geo-status contacted">통화중</span><span class="geo-assignee">이서연</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW: 성과 분석 -->
+  <div id="view-analytics" class="view">
+    <div class="analytics-header">
+      <div class="analytics-title">담당자 성과 분석</div>
+      <div class="period-tabs">
+        <div class="period-tab" onclick="setPeriod(this)">주간</div>
+        <div class="period-tab active" onclick="setPeriod(this)">월간</div>
+        <div class="period-tab" onclick="setPeriod(this)">분기</div>
+      </div>
+    </div>
+
+    <div class="kpi-row">
+      <div class="kpi-card">
+        <div class="kpi-label">총 통화 건수</div>
+        <div class="kpi-value">284</div>
+        <div class="kpi-sub up">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,6 13.5,15.5 8.5,10.5 1,18"/><polyline points="17,6 23,6 23,12"/></svg>
+          전월 대비 +12%
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">오더 확보</div>
+        <div class="kpi-value" style="color:var(--accent)">23</div>
+        <div class="kpi-sub up">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,6 13.5,15.5 8.5,10.5 1,18"/><polyline points="17,6 23,6 23,12"/></svg>
+          전월 대비 +4건
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">평균 응답 시간</div>
+        <div class="kpi-value">1.8<span style="font-size:16px;font-weight:600;color:var(--text-muted)">일</span></div>
+        <div class="kpi-sub down">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,18 13.5,8.5 8.5,13.5 1,6"/><polyline points="17,18 23,18 23,12"/></svg>
+          전월 대비 -0.3일
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">오더 성공률</div>
+        <div class="kpi-value">8.1<span style="font-size:16px;font-weight:600;color:var(--text-muted)">%</span></div>
+        <div class="kpi-sub up">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23,6 13.5,15.5 8.5,10.5 1,18"/><polyline points="17,6 23,6 23,12"/></svg>
+          +1.2%p
+        </div>
+      </div>
+    </div>
+
+    <div class="analytics-grid">
+      <div class="chart-card">
+        <div class="chart-card-title">담당자별 통화 횟수</div>
+        <div class="chart-bar-row">
+          <div class="chart-bar-item">
+            <div class="chart-bar-label">이서연</div>
+            <div class="chart-bar-bg"><div class="chart-bar-fill" style="width:88%;background:var(--accent)">88건</div></div>
+            <div class="chart-bar-val">88</div>
+          </div>
+          <div class="chart-bar-item">
+            <div class="chart-bar-label">박지훈</div>
+            <div class="chart-bar-bg"><div class="chart-bar-fill" style="width:73%;background:#101010">73건</div></div>
+            <div class="chart-bar-val">73</div>
+          </div>
+          <div class="chart-bar-item">
+            <div class="chart-bar-label">최동현</div>
+            <div class="chart-bar-bg"><div class="chart-bar-fill" style="width:68%;background:#101010">68건</div></div>
+            <div class="chart-bar-val">68</div>
+          </div>
+          <div class="chart-bar-item">
+            <div class="chart-bar-label">김태영</div>
+            <div class="chart-bar-bg"><div class="chart-bar-fill" style="width:55%;background:#555">55건</div></div>
+            <div class="chart-bar-val">55</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-card-title">오더 확보 랭킹</div>
+        <table class="ranking-table">
+          <thead><tr><th>#</th><th>담당자</th><th>오더</th><th>성공률</th><th>목표</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="rank-badge rank-1">1</span></td>
+              <td>이서연</td>
+              <td style="font-weight:700;color:var(--accent)">9건</td>
+              <td>10.2%</td>
+              <td><div class="order-bar" style="width:90px"></div></td>
+            </tr>
+            <tr>
+              <td><span class="rank-badge rank-2">2</span></td>
+              <td>최동현</td>
+              <td style="font-weight:700;color:var(--accent)">7건</td>
+              <td>10.3%</td>
+              <td><div class="order-bar" style="width:70px"></div></td>
+            </tr>
+            <tr>
+              <td><span class="rank-badge rank-3">3</span></td>
+              <td>박지훈</td>
+              <td style="font-weight:700;color:var(--accent)">5건</td>
+              <td>6.8%</td>
+              <td><div class="order-bar" style="width:50px"></div></td>
+            </tr>
+            <tr>
+              <td><span class="rank-badge rank-other">4</span></td>
+              <td>김태영</td>
+              <td style="font-weight:700;color:var(--text-muted)">2건</td>
+              <td>3.6%</td>
+              <td><div class="order-bar" style="width:20px;background:#e5e7eb"></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="chart-card" style="grid-column:1/-1">
+        <div class="chart-card-title">월별 수집 추이 · 신규 매물 vs 오더 확보</div>
+        <div style="height:160px;display:flex;flex-direction:column;justify-content:flex-end;gap:8px;padding-top:12px">
+          <div style="display:flex;gap:6px;align-items:flex-end">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1">
+              <div style="background:#e5e7eb;width:100%;border-radius:3px 3px 0 0" class="chart-bar-fill" style="height:60px"></div>
+            </div>
+          </div>
+          <!-- Simplified bar chart visual -->
+          <div style="display:flex;align-items:flex-end;gap:8px;height:130px;padding:0 8px">
+            <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:3px">
+              <div style="width:100%;background:#e5e7eb;border-radius:3px;height:80px;position:relative;overflow:hidden">
+                <div style="position:absolute;bottom:0;left:0;right:0;background:var(--accent);height:12px;border-radius:0 0 3px 3px"></div>
+              </div>
+              <div style="font-size:10px;color:var(--text-muted)">1월</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:3px">
+              <div style="width:100%;background:#e5e7eb;border-radius:3px;height:90px;position:relative;overflow:hidden">
+                <div style="position:absolute;bottom:0;left:0;right:0;background:var(--accent);height:14px;border-radius:0 0 3px 3px"></div>
+              </div>
+              <div style="font-size:10px;color:var(--text-muted)">2월</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:3px">
+              <div style="width:100%;background:#e5e7eb;border-radius:3px;height:105px;position:relative;overflow:hidden">
+                <div style="position:absolute;bottom:0;left:0;right:0;background:var(--accent);height:16px;border-radius:0 0 3px 3px"></div>
+              </div>
+              <div style="font-size:10px;color:var(--text-muted)">3월</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:3px">
+              <div style="width:100%;background:#e5e7eb;border-radius:3px;height:98px;position:relative;overflow:hidden">
+                <div style="position:absolute;bottom:0;left:0;right:0;background:var(--accent);height:19px;border-radius:0 0 3px 3px"></div>
+              </div>
+              <div style="font-size:10px;color:var(--text-muted)">4월</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:3px">
+              <div style="width:100%;background:#e5e7eb;border-radius:3px;height:112px;position:relative;overflow:hidden">
+                <div style="position:absolute;bottom:0;left:0;right:0;background:var(--accent);height:21px;border-radius:0 0 3px 3px"></div>
+              </div>
+              <div style="font-size:10px;color:var(--text-muted)">5월</div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:3px">
+              <div style="width:100%;background:#101010;border-radius:3px 3px 0 0;height:125px;position:relative;overflow:hidden">
+                <div style="position:absolute;bottom:0;left:0;right:0;background:var(--accent);height:23px;border-radius:0 0 3px 3px"></div>
+              </div>
+              <div style="font-size:10px;color:var(--text-primary);font-weight:700">6월</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:16px;padding:0 8px">
+            <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-muted)"><div style="width:12px;height:12px;border-radius:2px;background:#e5e7eb"></div>신규 수집</div>
+            <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-muted)"><div style="width:12px;height:12px;border-radius:2px;background:var(--accent)"></div>오더 확보</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW: 크롤러 관리 -->
+  <div id="view-crawler-admin" class="view">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+      <div style="font-size:18px;font-weight:800;letter-spacing:-0.3px">크롤러 모니터링</div>
+      <button class="tb-btn accent-btn" onclick="showToast('전체 사이트 즉시 수집 시작')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><polygon points="5,3 19,12 5,21 5,3"/></svg>
+        전체 즉시 실행
+      </button>
+    </div>
+    <div class="crawler-grid">
+      <div class="site-cards">
+        <div class="site-card">
+          <div class="site-icon" style="background:#fff7e6;color:#d97706;font-size:11px">114</div>
+          <div class="site-info">
+            <div class="site-name">상가114</div>
+            <div class="site-meta">오늘 09:00 완료 · DOM 파서 v2.4</div>
+            <div class="status-pill" style="margin-top:6px"><span class="status-dot s-green"></span> 정상</div>
+          </div>
+          <div class="site-stats">
+            <div class="site-stat"><div class="site-stat-val">312</div><div class="site-stat-label">수집</div></div>
+            <div class="site-stat"><div class="site-stat-val" style="color:var(--accent)">28</div><div class="site-stat-label">신규</div></div>
+            <div class="site-stat"><div class="site-stat-val">2.3s</div><div class="site-stat-label">소요</div></div>
+          </div>
+          <div class="site-actions">
+            <button class="site-btn run-btn" onclick="showToast('상가114 즉시 수집 시작')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><polygon points="5,3 19,12 5,21 5,3"/></svg>실행
+            </button>
+            <button class="site-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>설정
+            </button>
+          </div>
+        </div>
+        <div class="site-card">
+          <div class="site-icon" style="background:#d1fae5;color:#059669;font-size:11px">N부</div>
+          <div class="site-info">
+            <div class="site-name">네이버부동산</div>
+            <div class="site-meta">오늘 09:01 완료 · Playwright headless</div>
+            <div class="status-pill" style="margin-top:6px"><span class="status-dot s-blue"></span> 재시도 성공</div>
+          </div>
+          <div class="site-stats">
+            <div class="site-stat"><div class="site-stat-val">287</div><div class="site-stat-label">수집</div></div>
+            <div class="site-stat"><div class="site-stat-val" style="color:var(--accent)">19</div><div class="site-stat-label">신규</div></div>
+            <div class="site-stat"><div class="site-stat-val">8.7s</div><div class="site-stat-label">소요</div></div>
+          </div>
+          <div class="site-actions">
+            <button class="site-btn run-btn" onclick="showToast('네이버부동산 즉시 수집 시작')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><polygon points="5,3 19,12 5,21 5,3"/></svg>실행
+            </button>
+            <button class="site-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>설정
+            </button>
+          </div>
+        </div>
+        <div class="site-card">
+          <div class="site-icon" style="background:#dbeafe;color:#2563eb;font-size:11px">분양</div>
+          <div class="site-info">
+            <div class="site-name">분양사이트</div>
+            <div class="site-meta">오늘 09:00 완료 · Cheerio 파서</div>
+            <div class="status-pill" style="margin-top:6px"><span class="status-dot s-green"></span> 정상</div>
+          </div>
+          <div class="site-stats">
+            <div class="site-stat"><div class="site-stat-val">156</div><div class="site-stat-label">수집</div></div>
+            <div class="site-stat"><div class="site-stat-val" style="color:var(--accent)">11</div><div class="site-stat-label">신규</div></div>
+            <div class="site-stat"><div class="site-stat-val">1.8s</div><div class="site-stat-label">소요</div></div>
+          </div>
+          <div class="site-actions">
+            <button class="site-btn run-btn" onclick="showToast('분양사이트 즉시 수집 시작')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><polygon points="5,3 19,12 5,21 5,3"/></svg>실행
+            </button>
+            <button class="site-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>설정</button>
+          </div>
+        </div>
+        <div class="site-card">
+          <div class="site-icon" style="background:#f0fdf4;color:#15803d;font-size:9px">시행사</div>
+          <div class="site-info">
+            <div class="site-name">시행사 홈페이지</div>
+            <div class="site-meta">오늘 08:59 완료 · 멀티 URL 크롤러</div>
+            <div class="status-pill" style="margin-top:6px"><span class="status-dot s-green"></span> 정상</div>
+          </div>
+          <div class="site-stats">
+            <div class="site-stat"><div class="site-stat-val">94</div><div class="site-stat-label">수집</div></div>
+            <div class="site-stat"><div class="site-stat-val" style="color:var(--accent)">8</div><div class="site-stat-label">신규</div></div>
+            <div class="site-stat"><div class="site-stat-val">4.2s</div><div class="site-stat-label">소요</div></div>
+          </div>
+          <div class="site-actions">
+            <button class="site-btn run-btn" onclick="showToast('시행사 즉시 수집 시작')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><polygon points="5,3 19,12 5,21 5,3"/></svg>실행</button>
+            <button class="site-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>설정</button>
+          </div>
+        </div>
+        <div class="site-card">
+          <div class="site-icon" style="background:#fff1f2;color:#be185d;font-size:9px">신탁</div>
+          <div class="site-info">
+            <div class="site-name">신탁사 공매공고</div>
+            <div class="site-meta">오늘 08:58 완료 · PDF 파서 + API</div>
+            <div class="status-pill" style="margin-top:6px"><span class="status-dot s-yellow"></span> 일부 실패</div>
+          </div>
+          <div class="site-stats">
+            <div class="site-stat"><div class="site-stat-val">63</div><div class="site-stat-label">수집</div></div>
+            <div class="site-stat"><div class="site-stat-val" style="color:var(--accent)">5</div><div class="site-stat-label">신규</div></div>
+            <div class="site-stat"><div class="site-stat-val" style="color:#ef4444">3</div><div class="site-stat-label">실패</div></div>
+          </div>
+          <div class="site-actions">
+            <button class="site-btn run-btn" onclick="showToast('신탁사 재시도 실행')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><polygon points="5,3 19,12 5,21 5,3"/></svg>재시도</button>
+            <button class="site-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>설정</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="queue-panel">
+          <div class="queue-header">Bull Queue 상태</div>
+          <div class="queue-item"><span class="queue-site">상가114</span><span class="queue-count status-pill"><span class="status-dot s-green"></span> 완료</span><span class="queue-time">09:02</span></div>
+          <div class="queue-item"><span class="queue-site">네이버부동산</span><span class="queue-count status-pill"><span class="status-dot s-green"></span> 완료</span><span class="queue-time">09:01</span></div>
+          <div class="queue-item"><span class="queue-site">분양사이트</span><span class="queue-count status-pill"><span class="status-dot s-green"></span> 완료</span><span class="queue-time">09:00</span></div>
+          <div class="queue-item"><span class="queue-site">시행사</span><span class="queue-count status-pill"><span class="status-dot s-green"></span> 완료</span><span class="queue-time">08:59</span></div>
+          <div class="queue-item"><span class="queue-site">신탁사</span><span class="queue-count status-pill"><span class="status-dot s-yellow"></span> 부분실패</span><span class="queue-time">08:58</span></div>
+          <div class="queue-item" style="border-bottom:none"><span class="queue-site" style="color:rgba(255,255,255,0.3)">대기 중</span><span class="queue-count" style="color:rgba(255,255,255,0.3)">14:00 예약</span></div>
+        </div>
+        <div class="log-stream">
+          <div class="log-line"><span class="log-ts">09:02</span><span class="log-text ok">✓ 전체 수집 완료 (912건)</span></div>
+          <div class="log-line"><span class="log-ts">09:01</span><span class="log-text info">→ 중복 정제: 335건 중복 제거</span></div>
+          <div class="log-line"><span class="log-ts">09:01</span><span class="log-text ok">✓ DB upsert 완료</span></div>
+          <div class="log-line"><span class="log-ts">09:00</span><span class="log-text warn">⚠ 네이버 봇차단 감지 (retry)</span></div>
+          <div class="log-line"><span class="log-ts">08:59</span><span class="log-text info">→ UA 교체 후 재시도 성공</span></div>
+          <div class="log-line"><span class="log-ts">08:58</span><span class="log-text err">✗ 신탁사 3건 PDF 파싱 실패</span></div>
+          <div class="log-line"><span class="log-ts">08:58</span><span class="log-text info">→ 실패 원인 JSONB 저장 완료</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW: 팀 관리 -->
+  <div id="view-team-mgmt" class="view">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div style="font-size:18px;font-weight:800;letter-spacing:-0.3px">팀 관리</div>
+      <button class="tb-btn accent-btn" onclick="showToast('새 담당자 초대 완료')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:13px;height:13px"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+        담당자 추가
+      </button>
+    </div>
+    <div class="team-grid">
+      <div class="team-card">
+        <div class="team-card-header">
+          <div class="team-avatar" style="background:var(--accent)">김</div>
+          <div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <div class="team-name">김민준</div>
+              <span class="team-badge lead">팀장</span>
+            </div>
+            <div class="team-role">영업1팀 · 전체 열람 권한</div>
+          </div>
+        </div>
+        <div class="team-stats">
+          <div class="team-stat"><div class="team-stat-val">1,247</div><div class="team-stat-label">담당 매물</div></div>
+          <div class="team-stat"><div class="team-stat-val accent">23</div><div class="team-stat-label">오더</div></div>
+          <div class="team-stat"><div class="team-stat-val">8.1%</div><div class="team-stat-label">성공률</div></div>
+        </div>
+        <div class="team-regions"><span class="region-chip">전체</span></div>
+        <div class="team-card-footer">
+          <button class="team-action-btn" onclick="showToast('CRM 열람 시작')">CRM 열람</button>
+          <button class="team-action-btn" onclick="showToast('권한 설정 열기')">권한 설정</button>
+        </div>
+      </div>
+      <div class="team-card">
+        <div class="team-card-header">
+          <div class="team-avatar" style="background:#7b68ee">이</div>
+          <div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <div class="team-name">이서연</div>
+              <span class="team-badge member">담당자</span>
+            </div>
+            <div class="team-role">서울 지역 담당</div>
+          </div>
+        </div>
+        <div class="team-stats">
+          <div class="team-stat"><div class="team-stat-val">312</div><div class="team-stat-label">담당 매물</div></div>
+          <div class="team-stat"><div class="team-stat-val accent">9</div><div class="team-stat-label">오더</div></div>
+          <div class="team-stat"><div class="team-stat-val">10.2%</div><div class="team-stat-label">성공률</div></div>
+        </div>
+        <div class="team-regions"><span class="region-chip">서울</span></div>
+        <div class="team-card-footer">
+          <button class="team-action-btn" onclick="showToast('이서연 CRM 열람')">CRM 열람</button>
+          <button class="team-action-btn" onclick="showToast('지역 재배정')">지역 재배정</button>
+        </div>
+      </div>
+      <div class="team-card">
+        <div class="team-card-header">
+          <div class="team-avatar" style="background:#f59e0b">박</div>
+          <div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <div class="team-name">박지훈</div>
+              <span class="team-badge member">담당자</span>
+            </div>
+            <div class="team-role">경기·인천 지역 담당</div>
+          </div>
+        </div>
+        <div class="team-stats">
+          <div class="team-stat"><div class="team-stat-val">381</div><div class="team-stat-label">담당 매물</div></div>
+          <div class="team-stat"><div class="team-stat-val accent">5</div><div class="team-stat-label">오더</div></div>
+          <div class="team-stat"><div class="team-stat-val">6.8%</div><div class="team-stat-label">성공률</div></div>
+        </div>
+        <div class="team-regions"><span class="region-chip">경기</span><span class="region-chip">인천</span></div>
+        <div class="team-card-footer">
+          <button class="team-action-btn" onclick="showToast('박지훈 CRM 열람')">CRM 열람</button>
+          <button class="team-action-btn" onclick="showToast('지역 재배정')">지역 재배정</button>
+        </div>
+      </div>
+      <div class="team-card">
+        <div class="team-card-header">
+          <div class="team-avatar" style="background:#10b981">최</div>
+          <div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <div class="team-name">최동현</div>
+              <span class="team-badge member">담당자</span>
+            </div>
+            <div class="team-role">부산·경상 지역 담당</div>
+          </div>
+        </div>
+        <div class="team-stats">
+          <div class="team-stat"><div class="team-stat-val">244</div><div class="team-stat-label">담당 매물</div></div>
+          <div class="team-stat"><div class="team-stat-val accent">7</div><div class="team-stat-label">오더</div></div>
+          <div class="team-stat"><div class="team-stat-val">10.3%</div><div class="team-stat-label">성공률</div></div>
+        </div>
+        <div class="team-regions"><span class="region-chip">부산</span><span class="region-chip">경상</span></div>
+        <div class="team-card-footer">
+          <button class="team-action-btn" onclick="showToast('최동현 CRM 열람')">CRM 열람</button>
+          <button class="team-action-btn" onclick="showToast('지역 재배정')">지역 재배정</button>
+        </div>
+      </div>
+      <div class="team-card">
+        <div class="team-card-header">
+          <div class="team-avatar" style="background:#6b7280">김</div>
+          <div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <div class="team-name">김태영</div>
+              <span class="team-badge member">담당자</span>
+            </div>
+            <div class="team-role">기타 지역 담당</div>
+          </div>
+        </div>
+        <div class="team-stats">
+          <div class="team-stat"><div class="team-stat-val">310</div><div class="team-stat-label">담당 매물</div></div>
+          <div class="team-stat"><div class="team-stat-val accent">2</div><div class="team-stat-label">오더</div></div>
+          <div class="team-stat"><div class="team-stat-val">3.6%</div><div class="team-stat-label">성공률</div></div>
+        </div>
+        <div class="team-regions"><span class="region-chip">대구</span><span class="region-chip">광주</span><span class="region-chip">대전</span></div>
+        <div class="team-card-footer">
+          <button class="team-action-btn" onclick="showToast('김태영 CRM 열람')">CRM 열람</button>
+          <button class="team-action-btn" onclick="showToast('지역 재배정')">지역 재배정</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW: 스케줄 설정 -->
+  <div id="view-scheduler" class="view">
+    <div style="font-size:18px;font-weight:800;letter-spacing:-0.3px;margin-bottom:4px">스케줄 설정</div>
+    <div class="schedule-settings">
+      <div class="schedule-form-section">
+        <div>
+          <div class="form-title">정기 수집 스케줄</div>
+          <div class="form-sub">크롤링 실행 시간과 대상 사이트를 설정할 수 있습니다</div>
+        </div>
+        <div class="form-row">
+          <div class="form-label">스케줄 이름</div>
+          <input class="form-input" type="text" value="정기 전체 수집 (오전)">
+        </div>
+        <div class="form-row">
+          <div class="form-label">실행 시간 (Cron)</div>
+          <input class="form-input" type="text" value="0 9 * * 1-5" placeholder="0 9 * * 1-5">
+        </div>
+        <div class="form-row">
+          <div class="form-label">수집 대상 사이트</div>
+          <div class="site-checkbox-grid">
+            <label class="site-check-item"><input type="checkbox" checked> 상가114</label>
+            <label class="site-check-item"><input type="checkbox" checked> 네이버부동산</label>
+            <label class="site-check-item"><input type="checkbox" checked> 분양사이트</label>
+            <label class="site-check-item"><input type="checkbox" checked> 시행사 홈페이지</label>
+            <label class="site-check-item"><input type="checkbox" checked> 신탁사 공매공고</label>
+            <label class="site-check-item"><input type="checkbox"> 신규 사이트 추가...</label>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-label">중복 제거 전략</div>
+          <select class="form-select">
+            <option selected>SHA-256 해시 비교 (권장)</option>
+            <option>현장명 + 주소 조합</option>
+            <option>URL 기반 dedup</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-label">실패 재시도 횟수</div>
+          <select class="form-select">
+            <option>1회</option>
+            <option>2회</option>
+            <option selected>3회 (권장)</option>
+            <option>5회</option>
+          </select>
+        </div>
+        <div class="form-actions">
+          <button class="form-btn-primary" onclick="showToast('스케줄이 저장되었습니다')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17,21 17,13 7,13 7,21"/><polyline points="7,3 7,8 15,8"/></svg>
+            저장
+          </button>
+          <button class="form-btn-secondary">취소</button>
+        </div>
+      </div>
+      <div class="schedule-history-panel">
+        <div class="history-title">최근 실행 이력</div>
+        <div class="history-item"><div class="history-dot" style="background:#10b981"></div><div class="history-body"><div class="history-name">전체 수집</div><div class="history-meta">2026-06-17 09:00 · 912건</div></div><div class="history-count">+38</div></div>
+        <div class="history-item"><div class="history-dot" style="background:#10b981"></div><div class="history-body"><div class="history-name">전체 수집</div><div class="history-meta">2026-06-16 09:00 · 874건</div></div><div class="history-count">+22</div></div>
+        <div class="history-item"><div class="history-dot" style="background:#f59e0b"></div><div class="history-body"><div class="history-name">전체 수집</div><div class="history-meta">2026-06-15 09:00 · 851건</div></div><div class="history-count">+15</div></div>
+        <div class="history-item"><div class="history-dot" style="background:#10b981"></div><div class="history-body"><div class="history-name">N부동산 단독</div><div class="history-meta">2026-06-14 14:00 · 287건</div></div><div class="history-count">+9</div></div>
+        <div class="history-item"><div class="history-dot" style="background:#10b981"></div><div class="history-body"><div class="history-name">전체 수집</div><div class="history-meta">2026-06-13 09:00 · 836건</div></div><div class="history-count">+31</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"><div class="toast-dot"></div><span id="toastMsg"></span></div>
+
+<script>
+// Design token constants (flat elevation, 6px radius)
+const CARD_STYLE = {
+  borderRadius: '6px',
+};
+
+const breadcrumbs = {
+  main: '지도 현황',
+  analytics: '성과 분석',
+  'crawler-admin': '크롤러 관리',
+  'team-mgmt': '팀 관리',
+  scheduler: '스케줄 설정',
+};
+
+function showView(name, sidebarEl) {
+  document.querySelectorAll('.view').forEach(v => {
+    v.style.display = 'none';
+    v.classList.remove('active');
+  });
+  document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+
+  const target = document.getElementById('view-' + name);
+  if (target) {
+    target.style.display = 'flex';
+    target.classList.add('active');
+  }
+  if (sidebarEl) sidebarEl.classList.add('active');
+  document.getElementById('breadcrumb-text').textContent = breadcrumbs[name] || name;
+}
+
+function selectRegion(region) {
+  document.getElementById('geoRegionTitle').textContent = region + ' · ' + ({서울:312,경기:287,부산:156,인천:94,대구:88,광주:72,대전:65}[region]||'?') + '건';
+}
+
+function setPeriod(el) {
+  document.querySelectorAll('.period-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+}
+
+let toastTimer;
+function showToast(msg) {
+  const toast = document.getElementById('toast');
+  document.getElementById('toastMsg').textContent = msg;
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
+}
+
+// Init all views hidden except main
+document.querySelectorAll('.view').forEach(v => { v.style.display = 'none'; });
+document.getElementById('view-main').style.display = 'flex';
+document.getElementById('view-main').classList.add('active');
+</script>
+</body>
+</html>
