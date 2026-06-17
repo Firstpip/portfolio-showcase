@@ -1,12 +1,20 @@
 # 대시보드발 3-way 캐스케이드 삭제 — 설계문서
 
-> 상태: **구현됨(showcase 측)** · 워커는 wishket-portfolio-system에 배치 대기
+> 상태: **라이브 동작 검증 완료 (E2E, 2026-06-17)**
 >
 > **구현 현황 (2026-06-17)**
-> - ✅ 큐 테이블 마이그레이션 — `supabase/migrations/20260617120000_portfolio_delete_jobs.sql` (SQL Editor 수동 적용 필요)
-> - ✅ 엣지함수 enqueue — `supabase/functions/delete-portfolios/index.ts` (서버사이드, 대시보드 변경 0 / 배포 필요)
-> - ✅ 워커 레퍼런스 — `docs/cascade-delete/worker/poll-delete-jobs.js` (+ README) → wishket-portfolio-system/scripts/로 복사 + 1줄 export 패치 + creds로 테스트
-> - ✅ 조인키 **이미 충전됨(99/99)** — `backfill-link-refs.js`로 백필 완료(wishket-portfolio-system `docs/automation-overview.md`, 2026-06-16) + 정기정리 잡에 백필이 선행 스텝으로 내장. 워커가 대부분 정상 타겟팅, manual_review는 예외적.
+> - ✅ 큐 테이블 마이그레이션 — `supabase/migrations/20260617120000_portfolio_delete_jobs.sql` (**라이브 적용됨**, SQL Editor 수동). `claim_delete_job` EXECUTE는 public까지 회수(보안).
+> - ✅ 엣지함수 enqueue — `supabase/functions/delete-portfolios/index.ts` (**배포됨**, v19+, 서버사이드 / 대시보드 변경 0)
+> - ✅ 워커 — `wishket-portfolio-system/scripts/poll-delete-jobs.js` (PR #2로 머지 `93c670e` + export `deleteWishketPortfolio`). 레퍼런스는 `docs/cascade-delete/worker/`에 동기 유지.
+> - ✅ **주기 실행(E)** — `wishket-portfolio-system/scripts/run-portfolio-cleanup.sh`에 큐소비 후행 스텝 내장(`78b0e4e`). 기존 정기정리 launchd(평일 12·18시)에 자동 합류 → launchctl 변경 0, dev-1은 `git pull`만.
+> - ✅ 조인키 **이미 충전됨(99/99)** — `backfill-link-refs.js`로 백필 완료 + 정기정리 잡에 백필 선행 스텝 내장. 워커가 대부분 정상 타겟팅, manual_review는 예외적.
+>
+> **E2E 검증 (2026-06-17, `260504_pod-pdf-generator`)**: 대시보드 경로(엣지함수 호출) → 큐 적재 → 워커 소비로
+> **4면(위시켓 296186/296188 · 홈페이지 2카드 · showcase 파일 · DB row) 전부 삭제 + job `done`** 확인.
+> - 🐛 이 과정에서 **워커 페이지 다이얼로그 핸들러 누락 버그**를 발견·수정(`92a6aff`). 위시켓 `delete_portfolio()`의
+>   네이티브 `confirm()`을 수락할 핸들러가 없어 첫 실행이 `partial`(protocolTimeout)이었고, `delete-wishket-portfolio.js`
+>   `main()`과 동일한 `page.on('dialog', d=>d.accept())`를 워커에도 등록해 재실행 시 `done`. **재시도 멱등성도 입증**
+>   (부분실패 후 재claim → 이미 삭제된 홈페이지도 무에러).
 >
 > **⚠️ 정정(2026-06-17)**: 이 문서 초안의 "라이브 DB 조인키 0건 / 백필이 0순위 블로커" 서술은 오류였음.
 > 근거였던 `dashboard/data.json`은 커밋된 **stale 스냅샷**. 실제 라이브는 99/99 충전 상태(SSOT = wishket-portfolio-system `docs/automation-overview.md`). §6 참조.
@@ -90,7 +98,7 @@
 | 텔레그램 `폐기 <slug>`→`폐기확정` (ⓒ `purge-project.js`) | ✅ | ✅ | ✅ | 단건 폐기, won/contracted/nda 차단 |
 | 정기정리 launchd 평일 12·18시 (ⓑ `delete-wishket-portfolio.js`) | ✅ | ✅ | ✅ | 위시켓 "지원종료/실패" 탭 순회. 선행 백필 내장 |
 | 수동 `reconcile.js`(ⓓ) | ✅ | ✅ | — | out-of-band 위시켓 삭제분 정리(파괴적, 수동) |
-| **대시보드 삭제 버튼** | ❌ | ❌ | ✅ | **← 이 칸이 공백. 본 설계가 채움** |
+| **대시보드 삭제 버튼** (ⓔ `delete-portfolios`→큐→`poll-delete-jobs.js`) | ✅ | ✅ | ✅ | **구현·E2E 검증 완료(2026-06-17)** |
 
 > 참고: **생성**(텔레그램 `지원 <slug>` ⓐ)은 데모생성→배포→위시켓등록→홈카드생성(sync-firstpip)
 > + 조인키 즉시기록까지 셋 동기화가 이미 완비. 본 설계의 범위는 **삭제의 대시보드 출처**뿐이다.
