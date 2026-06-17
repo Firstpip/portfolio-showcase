@@ -138,6 +138,107 @@ async function deleteRow(slug: string, userJwt?: string): Promise<{ ok: boolean;
   return { ok: true };
 }
 
+// ─── 캐스케이드 큐: 삭제 성공 후 위시켓/홈페이지 삭제 작업을 적재(아웃박스) ──
+// 엣지함수(Deno)는 Puppeteer(위시켓 로그인)·홈페이지 관리자토큰을 못 다루므로, 위시켓·홈페이지
+// 삭제는 자격증명을 가진 워커(wishket-portfolio-system)에 위임한다. 여기서는 "삭제 의도"만
+// portfolio_delete_jobs 에 기록한다. 적재 실패가 본 삭제를 막지 않도록 전부 best-effort.
+
+const SHOWCASE_RE = /\/portfolio-showcase\/([^/]+)\/(portfolio-\d+)\/?$/i;
+
+type DeleteTarget = {
+  portfolio_path: string;
+  showcase_url: string;
+  wishket_portfolio_id: string | null;
+  firstpip_slug: string | null;
+};
+
+// 삭제 직전 row의 portfolio_links에서 이 slug의 쇼케이스 링크 + 조인키를 수집.
+// 조인키가 비어 있어도 showcase_url(=slug 경로)을 담아두면 워커가 삭제 시점에 재해결한다.
+async function collectTargets(slug: string): Promise<DeleteTarget[]> {
+  if (!SB_URL || !SB_SR) return [];
+  try {
+    const res = await fetch(
+      `${SB_URL}/rest/v1/${TABLE}?slug=eq.${encodeURIComponent(slug)}&select=portfolio_links`,
+      { headers: { apikey: SB_SR, Authorization: `Bearer ${SB_SR}` } },
+    );
+    if (!res.ok) return [];
+    const rows = await res.json();
+    const links = Array.isArray(rows?.[0]?.portfolio_links) ? rows[0].portfolio_links : [];
+    const out: DeleteTarget[] = [];
+    for (const l of links) {
+      const m = (l?.url || "").match(SHOWCASE_RE);
+      if (!m || m[1].toLowerCase() !== slug.toLowerCase()) continue; // 이 slug의 쇼케이스 링크만
+      out.push({
+        portfolio_path: m[2].toLowerCase(),
+        showcase_url: l.url,
+        wishket_portfolio_id: l.wishket_portfolio_id ?? null,
+        firstpip_slug: l.firstpip_slug ?? null,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+// user JWT payload에서 actor(sub/email) 추출 — 감사용, best-effort.
+function decodeJwtActor(jwt?: string): { sub: string | null; email: string | null } {
+  try {
+    const payload = JSON.parse(atob((jwt || "").split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return { sub: payload.sub ?? null, email: payload.email ?? null };
+  } catch {
+    return { sub: null, email: null };
+  }
+}
+
+// best-effort 적재. 실패해도 throw하지 않음(본 삭제 결과를 보존). 적재 여부를 반환.
+async function enqueueCascade(
+  slug: string,
+  scope: "project" | "portfolio",
+  portfolioPath: string | null,
+  targets: DeleteTarget[],
+  userJwt: string | undefined,
+  reqId: string,
+): Promise<boolean> {
+  if (!SB_URL || !SB_SR) {
+    console.warn(`[${reqId}] enqueue skip — SUPABASE service_role 미설정`);
+    return false;
+  }
+  if (targets.length === 0) {
+    console.log(`[${reqId}] enqueue skip — 캐스케이드 대상(쇼케이스 링크) 없음`, { slug, scope });
+    return false;
+  }
+  const actor = decodeJwtActor(userJwt);
+  try {
+    const res = await fetch(`${SB_URL}/rest/v1/portfolio_delete_jobs`, {
+      method: "POST",
+      headers: {
+        apikey: SB_SR,
+        Authorization: `Bearer ${SB_SR}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({
+        slug,
+        scope,
+        portfolio_path: portfolioPath,
+        targets,
+        requested_by: actor.sub,
+        requested_email: actor.email,
+      }),
+    });
+    if (!res.ok) {
+      console.error(`[${reqId}] enqueue 실패 ${res.status}`, await res.text().catch(() => ""));
+      return false;
+    }
+    console.log(`[${reqId}] enqueue ok`, { slug, scope, targets: targets.length });
+    return true;
+  } catch (err) {
+    console.error(`[${reqId}] enqueue 예외`, err);
+    return false;
+  }
+}
+
 // ─── Handler ─────────────────────────────────────────────────────────────
 
 const CORS_HEADERS = {
@@ -185,9 +286,14 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "path must match portfolio-N", reqId }), { status: 400, headers });
     }
     try {
+      // 삭제 전에 이 portfolio-N의 조인키 수집(파일 삭제 후엔 row가 남아도 의미는 동일).
+      const targets = (await collectTargets(slug)).filter(t => t.portfolio_path === path.toLowerCase());
       const fileResult = await deleteSubpath(token, slug, path);
       console.log(`[${reqId}] subpath delete`, { slug, path, ok: fileResult.ok, reason: fileResult.reason });
-      return new Response(JSON.stringify({ slug, path, deleted: fileResult.ok, db_updated: false, reason: fileResult.reason, reqId }), { headers });
+      const cascade_enqueued = fileResult.ok
+        ? await enqueueCascade(slug, "portfolio", path.toLowerCase(), targets, userJwt, reqId)
+        : false;
+      return new Response(JSON.stringify({ slug, path, deleted: fileResult.ok, db_updated: false, cascade_enqueued, reason: fileResult.reason, reqId }), { headers });
     } catch (err) {
       console.error(`[${reqId}] subpath unhandled exception`, err);
       return new Response(JSON.stringify({ error: String(err), reqId }), { status: 500, headers });
@@ -195,14 +301,17 @@ Deno.serve(async (req) => {
   }
 
   try {
+    // 조인키는 row 삭제 전에 수집해야 함(deleteRow가 portfolio_links를 지움).
+    const targets = await collectTargets(slug);
     const fileResult = await deleteSlug(token, slug);
     if (!fileResult.ok) {
       console.error(`[${reqId}] delete fail`, { slug, reason: fileResult.reason });
       return new Response(JSON.stringify({ slug, deleted: false, db_updated: false, reason: fileResult.reason, reqId }), { headers });
     }
     const dbResult = skip_db ? { ok: true } : await deleteRow(slug, userJwt);
-    console.log(`[${reqId}] delete ok`, { slug, db_updated: dbResult.ok });
-    return new Response(JSON.stringify({ slug, deleted: true, db_updated: dbResult.ok, reason: dbResult.reason, reqId }), { headers });
+    const cascade_enqueued = await enqueueCascade(slug, "project", null, targets, userJwt, reqId);
+    console.log(`[${reqId}] delete ok`, { slug, db_updated: dbResult.ok, cascade_enqueued });
+    return new Response(JSON.stringify({ slug, deleted: true, db_updated: dbResult.ok, cascade_enqueued, reason: dbResult.reason, reqId }), { headers });
   } catch (err) {
     console.error(`[${reqId}] unhandled exception`, err);
     return new Response(JSON.stringify({ error: String(err), reqId }), { status: 500, headers });
