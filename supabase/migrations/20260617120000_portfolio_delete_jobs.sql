@@ -67,7 +67,10 @@ BEGIN
    )
   RETURNING j.*;
 END $$;
-REVOKE EXECUTE ON FUNCTION public.claim_delete_job(INT) FROM anon;
+-- ⚠️ anon 뿐 아니라 public까지 회수해야 함 — 함수는 기본 PUBLIC에 EXECUTE가 부여되어,
+--    FROM anon만 회수하면 anon이 public 경유로 여전히 실행 가능(2026-06-17 실측 HTTP 200).
+--    (레포 기존 패턴 20260607000000_revoke_anon_rpc.sql와 동일.)
+REVOKE EXECUTE ON FUNCTION public.claim_delete_job(INT) FROM anon, public;
 GRANT  EXECUTE ON FUNCTION public.claim_delete_job(INT) TO authenticated, service_role;
 
 -- ── 롤백 ────────────────────────────────────────────────────────────────────
