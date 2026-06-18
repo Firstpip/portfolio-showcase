@@ -47,6 +47,9 @@ const POST_WON = ['in_progress','maintenance_free','maintenance_paid','delivered
 const HAS_MILESTONES = ['won','in_progress','maintenance_free','maintenance_paid','delivered','settled']; // 마일스톤 트래커 노출 대상
 const ACTIVE_WORK = ['won','in_progress']; // 상단 '내 담당 프로젝트' 카드 노출 대상 — 납품·정산 완료 제외
 const POST_DEV = ['maintenance_free','maintenance_paid','delivered','settled']; // 개발 종료 후 상태 — 주차 진행/마감 초과 등 실시간 일정 표시 숨김
+// 능동(계약~정산) 상태 — 일괄삭제에서 제외 + DB 트리거/엣지함수 보호 대상과 동일하게 유지.
+// (단일 '프로젝트 삭제'는 슬러그 입력 확인 후 force로 이 보호를 의도적으로 우회한다.)
+const PROTECTED_DELETE_STATUSES = ['won','contracted','in_progress','maintenance_free','maintenance_paid','delivered','settled'];
 // ─── 위시켓 수수료 차감 — '계약 논의 중'(won) 이후 상태에서 예산 대신 표시하는 계약대금(부가세 제외) ───
 // 수수료: 지원가 500만원 이하 25% / 500만원 초과 20% → 차감액 (부가세 별도, 표시 금액은 부가세 제외)
 // ⚠️ DB의 budget은 원본(지원가)을 그대로 보존 — 저장값 변환 금지, 표시 시점에만 계산 (통계 왜곡·상태 되돌림 오염 방지)
@@ -3282,7 +3285,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
             if (onRequestConfirm) {
               onRequestConfirm({
                 title: '❌ 미선정·프로젝트 삭제',
-                message: `이 프로젝트를 '미선정'으로 확정하고 완전히 삭제합니다.\n연결된 모든 티켓, 마일스톤, 포트폴리오 파일이 영구 제거됩니다.\n\n확인하려면 아래에 프로젝트 슬러그를 입력하세요.`,
+                message: `이 프로젝트를 '미선정'으로 확정하고 완전히 삭제합니다.\n연결된 모든 티켓·마일스톤·포트폴리오 파일과 함께,\n해당 포트폴리오의 위시켓 등록 카드 + 퍼스트핍 홈페이지 카드도 삭제됩니다.\n(개발중 등 보호상태도 이 버튼으로는 강제 삭제됩니다 — 되돌릴 수 없음)\n\n확인하려면 아래에 프로젝트 슬러그를 입력하세요.`,
                 confirmLabel: '영구 삭제',
                 destructive: true,
                 confirmInput: { label: `슬러그 입력: ${project.slug}`, match: project.slug },
@@ -4493,12 +4496,18 @@ function App({ session }) {
   }, [toast]);
 
   const handleBatchDelete = useCallback(async (slugs) => {
-    // won 상태는 보호 — 수주된 프로젝트는 일괄 삭제에서 제외
+    // 능동(계약~정산) 상태는 일괄삭제에서 전부 제외 — 대량 작업의 실수 삭제 방지.
+    // (개별 삭제가 필요하면 단일 '프로젝트 삭제' 버튼으로 슬러그 입력 후 force 삭제.)
+    const protectedSkipped = slugs.filter(s => {
+      const p = data.find(d => d.slug===s);
+      return p && PROTECTED_DELETE_STATUSES.includes(p.current_status);
+    });
     const targets = slugs.filter(s => {
       const p = data.find(d => d.slug===s);
-      return p && p.current_status!=='won';
+      return p && !PROTECTED_DELETE_STATUSES.includes(p.current_status);
     });
-    if (targets.length === 0) { toast('삭제할 프로젝트가 없습니다','info'); return; }
+    if (targets.length === 0) { toast(protectedSkipped.length ? `삭제 대상 없음 — 보호상태 ${protectedSkipped.length}건 제외됨` : '삭제할 프로젝트가 없습니다','info'); return; }
+    if (protectedSkipped.length) toast(`보호상태(개발중·계약 등) ${protectedSkipped.length}건은 일괄삭제에서 제외됩니다`,'info');
     if (!confirm(`${targets.length}건 프로젝트를 완전히 삭제합니다.\nDB 레코드 + 포트폴리오 파일이 전부 제거되며 되돌릴 수 없습니다.\n계속하시겠습니까?`)) return;
     setSaving(true);
     let success = 0, failSlugs = [];
@@ -4531,13 +4540,15 @@ function App({ session }) {
   const handleDelete = useCallback(async (project) => {
     setSaving(true);
     try {
+      // 사람이 직접 누른 '프로젝트 삭제'는 의도적 행위 → force로 능동상태 보호(개발중 등)를 우회해
+      // 4면(showcase·row·위시켓·홈페이지) 전부 삭제. (보호 트리거/가드는 스크립트·실수·직접삭제만 막음.)
       // 파일 → DB 순으로 함수가 책임짐. 실패 시 row 보존되어 재시도 가능.
-      const { data:fnData, error:fnErr } = await supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug } });
+      const { data:fnData, error:fnErr } = await supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug, force:true } });
       if (fnErr) throw new Error(fnErr.message);
       if (!fnData?.deleted) throw new Error(fnData?.reason || 'GitHub 파일 삭제 실패');
       if (!fnData?.db_updated) {
-        // 파일은 지워졌으나 DB row 삭제 실패 — 명시적 fallback
-        const { error } = await supabase.from(TABLE).delete().eq('slug',project.slug);
+        // 파일은 지워졌으나 DB row 삭제 실패 — force RPC로 명시적 fallback(보호 트리거 우회).
+        const { error } = await supabase.rpc('delete_project_force', { p_slug: project.slug });
         if (error) throw error;
       }
       setData(prev => prev.filter(d => d.slug!==project.slug));

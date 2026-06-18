@@ -122,19 +122,74 @@ const SB_SR   = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const SB_ANON = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const TABLE   = "wishket_projects";
 
+// ─── 보호 상태 가드 ───────────────────────────────────────────────────────
+// 계약 논의~정산까지의 "능동 비즈니스" 상태는 대시보드 삭제 버튼으로 row/showcase/캐스케이드가
+// 통째로 날아가면 안 된다(예: in_progress=개발 중, won=계약 논의 중). 과거에 개발중 프로젝트가
+// 실수로 삭제·캐스케이드된 사고가 있어, 삭제 직전 current_status를 확인해 보호한다.
+// 안전 삭제 가능: generated / applied / interview / meeting_done / lost.
+const PROTECTED_STATUSES = new Set([
+  "won", "contracted", "in_progress",
+  "maintenance_free", "maintenance_paid", "delivered", "settled",
+]);
+
+type StatusProbe =
+  | { kind: "ok"; status: string | null }   // row 존재 — status 판정 가능
+  | { kind: "absent" }                       // row 없음 — 보호 대상 아님(멱등 정리)
+  | { kind: "error"; reason: string };       // 조회 실패 — 안전을 위해 차단
+
+async function getStatus(slug: string): Promise<StatusProbe> {
+  if (!SB_URL || !SB_SR) return { kind: "error", reason: "SUPABASE service_role 미설정" };
+  try {
+    const res = await fetch(
+      `${SB_URL}/rest/v1/${TABLE}?slug=eq.${encodeURIComponent(slug)}&select=current_status`,
+      { headers: { apikey: SB_SR, Authorization: `Bearer ${SB_SR}` } },
+    );
+    if (!res.ok) return { kind: "error", reason: `status 조회 실패 ${res.status}` };
+    const rows = await res.json();
+    if (!Array.isArray(rows) || rows.length === 0) return { kind: "absent" };
+    return { kind: "ok", status: rows[0]?.current_status ?? null };
+  } catch (err) {
+    return { kind: "error", reason: `status 조회 예외 ${String(err)}` };
+  }
+}
+
+// 풀 삭제(row+showcase+project-scope 캐스케이드)를 막아야 하는가?
+// force=true면 우회(대시보드가 명시적 확인 후 전달). row 없음(absent)은 허용(멱등).
+function blockDecision(probe: StatusProbe, force: boolean): { block: boolean; reason?: string } {
+  if (force) return { block: false };
+  if (probe.kind === "absent") return { block: false };
+  if (probe.kind === "error") return { block: true, reason: `상태 확인 실패 — 안전을 위해 차단(${probe.reason}). 확인 후 force로 재시도.` };
+  if (probe.status && PROTECTED_STATUSES.has(probe.status)) {
+    return { block: true, reason: `보호된 상태(${probe.status})의 프로젝트는 삭제할 수 없습니다. 정말 삭제하려면 force 옵션이 필요합니다.` };
+  }
+  return { block: false };
+}
+
 // userJwt가 있으면 그것으로 호출 → audit 트리거가 auth.uid()로 actor 캡처.
 // 없으면 service_role로 fallback (audit는 actor=NULL로 적재됨).
-async function deleteRow(slug: string, userJwt?: string): Promise<{ ok: boolean; reason?: string }> {
+async function deleteRow(slug: string, userJwt?: string, force = false): Promise<{ ok: boolean; reason?: string }> {
   if (!SB_URL) return { ok: false, reason: "SUPABASE_URL 미설정" };
   const useUser = !!userJwt && !!SB_ANON;
   const apikey  = useUser ? SB_ANON : SB_SR;
   const auth    = useUser ? userJwt!  : SB_SR;
   if (!apikey || !auth) return { ok: false, reason: "SUPABASE 인증 정보 미설정" };
+  // force일 때는 보호 트리거(tg_protect_active_project_delete)를 통과해야 하므로 일반 DELETE 대신
+  // delete_project_force RPC로 삭제(트랜잭션 로컬 플래그로만 우회). 비-force는 일반 DELETE.
+  if (force) {
+    const res = await fetch(`${SB_URL}/rest/v1/rpc/delete_project_force`, {
+      method: "POST",
+      headers: { apikey, Authorization: `Bearer ${auth}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ p_slug: slug }),
+    });
+    if (!res.ok) return { ok: false, reason: `force DELETE(RPC) 실패 ${res.status}: ${await res.text().catch(() => "")}` };
+    return { ok: true };
+  }
   const res = await fetch(`${SB_URL}/rest/v1/${TABLE}?slug=eq.${encodeURIComponent(slug)}`, {
     method: "DELETE",
     headers: { apikey, Authorization: `Bearer ${auth}`, Prefer: "return=minimal" },
   });
-  if (!res.ok) return { ok: false, reason: `DELETE 실패 ${res.status}` };
+  // 보호 트리거가 막으면 PostgREST는 보통 409/400으로 응답 — 사유를 그대로 전달.
+  if (!res.ok) return { ok: false, reason: `DELETE 실패 ${res.status}: ${await res.text().catch(() => "")}` };
   return { ok: true };
 }
 
@@ -261,7 +316,7 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "GITHUB_TOKEN not set", reqId }), { status: 500, headers });
   }
 
-  let body: { slug?: string; skip_db?: boolean; path?: string };
+  let body: { slug?: string; skip_db?: boolean; path?: string; force?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -269,7 +324,7 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "Invalid JSON body", reqId }), { status: 400, headers });
   }
 
-  const { slug, skip_db, path } = body;
+  const { slug, skip_db, path, force = false } = body;
   // dashboard에서 supabase.functions.invoke()로 호출 시 자동 첨부되는 user JWT.
   // audit 트리거가 auth.uid()로 actor를 캡처할 수 있도록 DB DELETE에 그대로 전달.
   const userJwt = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
@@ -286,6 +341,10 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "path must match portfolio-N", reqId }), { status: 400, headers });
     }
     try {
+      // 🗑(포트폴리오 링크 단위 삭제) = "이 데모 하나를 3면(showcase·위시켓·홈페이지)에서 게시종료".
+      // 프로젝트 row는 유지(데모는 프로젝트의 산출물일 뿐, 프로젝트는 계속 진행 중). 따라서 보호상태든
+      // 아니든 위시켓/홈페이지 캐스케이드는 그대로 수행한다 — row를 지우는 게 아니므로 안전.
+      // (능동 프로젝트의 row 삭제만 보호 대상이고, 그건 풀 삭제 경로 + DB 트리거가 막는다.)
       // 삭제 전에 이 portfolio-N의 조인키 수집(파일 삭제 후엔 row가 남아도 의미는 동일).
       const targets = (await collectTargets(slug)).filter(t => t.portfolio_path === path.toLowerCase());
       const fileResult = await deleteSubpath(token, slug, path);
@@ -301,6 +360,16 @@ Deno.serve(async (req) => {
   }
 
   try {
+    // ── 보호 가드: 능동 비즈니스 상태(개발 중·계약 등)는 풀 삭제 차단(force로만 우회). ──
+    const probe = await getStatus(slug);
+    const decision = blockDecision(probe, force);
+    if (decision.block) {
+      console.warn(`[${reqId}] delete blocked`, { slug, probe, reason: decision.reason });
+      return new Response(
+        JSON.stringify({ slug, deleted: false, db_updated: false, blocked: true, reason: decision.reason, reqId }),
+        { status: 409, headers },
+      );
+    }
     // 조인키는 row 삭제 전에 수집해야 함(deleteRow가 portfolio_links를 지움).
     const targets = await collectTargets(slug);
     const fileResult = await deleteSlug(token, slug);
@@ -308,7 +377,7 @@ Deno.serve(async (req) => {
       console.error(`[${reqId}] delete fail`, { slug, reason: fileResult.reason });
       return new Response(JSON.stringify({ slug, deleted: false, db_updated: false, reason: fileResult.reason, reqId }), { headers });
     }
-    const dbResult = skip_db ? { ok: true } : await deleteRow(slug, userJwt);
+    const dbResult = skip_db ? { ok: true } : await deleteRow(slug, userJwt, force);
     const cascade_enqueued = await enqueueCascade(slug, "project", null, targets, userJwt, reqId);
     console.log(`[${reqId}] delete ok`, { slug, db_updated: dbResult.ok, cascade_enqueued });
     return new Response(JSON.stringify({ slug, deleted: true, db_updated: dbResult.ok, cascade_enqueued, reason: dbResult.reason, reqId }), { headers });

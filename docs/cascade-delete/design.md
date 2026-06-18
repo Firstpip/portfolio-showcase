@@ -208,6 +208,43 @@ SSOT(wishket-portfolio-system `docs/automation-overview.md`, 2026-06-16) 기준 
 
 ---
 
+## 9. 사후 보강 — 보호 가드 & 삭제 복구 (2026-06-18)
+
+**사고**: 대시보드 삭제 경로에 `current_status` 보호장치가 없어, **개발 중(`in_progress`)·계약(`won`) 등
+능동 프로젝트**(career-workbook, pod-pdf, daycare-crm[NDA], kiosk 등)가 row·캐스케이드까지 삭제됨.
+설계 §3.3/§5.3은 "보호는 워커가" 한다고 적었으나, **워커는 row 삭제 *후*에 도므로 status를 재확인할 수
+없다**(원천 row가 이미 없음). 따라서 보호는 **삭제 직전의 엣지함수**에 있어야 한다.
+
+### 9.1 보호 가드 (구현: `delete-portfolios/index.ts`)
+- `PROTECTED_STATUSES = {won, contracted, in_progress, maintenance_free, maintenance_paid, delivered, settled}`.
+- **풀 삭제 경로**: 삭제 직전 `current_status` 조회 → 보호상태면 **409로 차단**(row/파일/캐스케이드 전부 미실행).
+  `force:true`로만 우회. row 부재(absent)는 멱등 허용, 조회 실패는 안전차단.
+- **배포만 내림(subpath, 포트폴리오 링크 🗑) 경로**: status 무관하게 **3면(showcase·위시켓·홈페이지)
+  캐스케이드를 그대로 수행**한다(=의도된 동작). 🗑는 "데모 1개 게시종료"이지 프로젝트 삭제가 아니므로
+  row를 건드리지 않고, row 삭제가 아니기에 보호 대상도 아니다. (능동 프로젝트의 *row 삭제*만 보호 대상 —
+  풀 삭제 경로 + DB 트리거가 막음.)
+- TODO(대시보드 UI): 409 `blocked` 응답을 사용자에게 노출하고, 확인 다이얼로그 후 `force:true` 전송.
+
+### 9.1b DB 레벨 방어선 (구현: `20260618030000_protect_active_project_deletes.sql`)
+앱 가드는 **엣지함수 경유 삭제만** 막는다. 정리 스크립트가 DB를 직접 DELETE하면 우회된다(2026-06-17
+사고의 실제 경로). → `wishket_projects`에 **BEFORE DELETE 트리거**를 둬, 어떤 경로의 삭제든 보호상태면
+예외로 중단한다.
+- 의도적 삭제는 `delete_project_force(slug)` RPC로만(트랜잭션 로컬 `app.allow_protected_delete` 플래그로 우회).
+- 엣지함수 `deleteRow(force=true)`는 일반 DELETE 대신 이 RPC를 호출하도록 연동됨.
+- **사고 원인 직격**: "portfolio_links 빈 row 정리" 스크립트가 in_progress row를 직접 DELETE해도 트리거가 차단.
+- ⚠️ 적용: 다른 마이그레이션과 동일하게 **Supabase SQL Editor 수동 실행** 필요(라이브 반영).
+
+### 9.2 삭제 복구 — **데이터는 사라지지 않았다**
+`project_audit_log`(마이그레이션 `20260427003842_audit_log.sql`)가 `wishket_projects`의 모든 DELETE를
+`before`(삭제 당시 **row 전체 JSONB**)로 보존. → 삭제된 모든 row는 **100% 재삽입 복원 가능**.
+- 포렌식·복구 스크립트: **`docs/cascade-delete/recover-deleted-rows.js`** (service_role 필요).
+  - `--list [--protected]` 삭제 이벤트(시각·actor·status) / `--jobs` 캐스케이드 큐 덤프
+  - `--show <slug>` 삭제 전 row / `--restore <slug>` 재삽입 / `--restore-protected --yes` 보호상태 일괄복원
+- ⚠️ 위시켓 카드·홈페이지 카드는 audit 대상이 아님 — row 복원 후 재등록(sync-firstpip/위시켓 재업로드) 필요.
+- ⚠️ NDA 건(daycare 등)의 **공개 showcase는 재배포 금지** — 복구는 워크룸 row 한정.
+
+---
+
 ## 부록 — 관련 파일
 
 **portfolio-showcase**
