@@ -231,8 +231,29 @@ SSOT(wishket-portfolio-system `docs/automation-overview.md`, 2026-06-16) 기준 
 예외로 중단한다.
 - 의도적 삭제는 `delete_project_force(slug)` RPC로만(트랜잭션 로컬 `app.allow_protected_delete` 플래그로 우회).
 - 엣지함수 `deleteRow(force=true)`는 일반 DELETE 대신 이 RPC를 호출하도록 연동됨.
-- **사고 원인 직격**: "portfolio_links 빈 row 정리" 스크립트가 in_progress row를 직접 DELETE해도 트리거가 차단.
-- ⚠️ 적용: 다른 마이그레이션과 동일하게 **Supabase SQL Editor 수동 실행** 필요(라이브 반영).
+- **사고 원인 직격**: 어떤 경로(엣지함수/직접 DELETE/ad-hoc)로 in_progress row를 지우려 해도 트리거가 차단.
+- ⚠️ 적용: 다른 마이그레이션과 동일하게 **Supabase SQL Editor 수동 실행** 필요(라이브 반영). (`supabase db push`로 적용 완료.)
+
+### 9.1c 삭제 primitive 자체 가드 (구현: wishket-portfolio-system `scripts/lib/supabase.js`)
+**#3 사고 추적 결론(2026-06-18)**: 6/17 개발중 4건 삭제는 *스케줄 악성 스크립트가 아니라*, 가드가 호출자
+(정기정리/purge)에만 있고 **삭제 primitive `deleteProjectViaFunction` 자체엔 없어서**, 이 함수를 ad-hoc로
+직접 호출했을 때 보호가 통째로 우회된 것. (career-workbook의 `chore: delete project` 커밋 = 엣지함수
+풀삭제 흔적, actor=null = service_role 직접 호출.)
+→ 교훈대로 **primitive 자체에 가드 내장**: `deleteProjectViaFunction(slug, {force})`는 force가 없으면
+삭제 직전 `current_status`를 조회해 보호상태면 엣지 호출 전에 `blocked`로 fast-fail. 정기정리의 won 정리는
+`force:true`로 통과. **라이브 검증 완료**(in_progress slug, no force → blocked + row 생존).
+
+### 9.1d 삭제 방어 3층 모델 (최종)
+| 층 | 위치 | 막는 것 |
+|---|---|---|
+| ① primitive 가드 | `lib/supabase.js deleteProjectViaFunction` | 라이브러리/ad-hoc 호출이 보호상태 삭제(force 없이) |
+| ② 엣지함수 가드 | `delete-portfolios/index.ts` (409) | 엣지함수 경유 보호상태 풀삭제(force 없이) |
+| ③ DB 트리거 | `tg_protect_active_project_delete` | **모든 경로**의 보호상태 row DELETE (직접 SQL·worker 포함) |
+의도적 삭제만 `force:true` / `delete_project_force(slug)` RPC로 통과. 비보호 상태(applied/lost 등)는 ③ 정책상
+삭제 허용이며, 실수 삭제도 `project_audit_log.before`로 100% 복원 가능(§9.2).
+> 잔여 주의: portfolio-showcase `worker/test-*.ts`가 service_role로 `wishket_projects`를 id 직접 `.delete()`
+> 함(테스트 probe 정리용, 수동 실행). 보호상태는 ③ 트리거가 차단하나, 비보호 실데이터 id는 가능 →
+> **테스트 데이터에만 사용**할 것(프로덕션 id 금지).
 
 ### 9.2 삭제 복구 — **데이터는 사라지지 않았다**
 `project_audit_log`(마이그레이션 `20260427003842_audit_log.sql`)가 `wishket_projects`의 모든 DELETE를
