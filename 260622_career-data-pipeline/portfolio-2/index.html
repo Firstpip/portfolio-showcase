@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>데이터 파이프라인 운영 모니터링 플랫폼 — 구현 데모</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/phosphor-icons@1.4.2/src/index.js"></script>
+<style>
+:root {
+  --bg:#040506; --surface:#07080a; --surface2:#0f1014; --surface3:#1a1c22;
+  --border:#363739; --border2:#4a4d58;
+  --text:#ffffff; --muted:#9c9c9d; --sub:#5a6077;
+  --primary:#e6e6e6;
+  --accent:#ff6363; --accent-dim:rgba(255,99,99,.12);
+  --green:#4dbb78; --green-bg:rgba(77,187,120,.12);
+  --blue:#5b9cf6; --blue-bg:rgba(91,156,246,.12);
+  --warn:#f5a623; --warn-bg:rgba(245,166,35,.12);
+  --shadow:0 4px 20px rgba(0,0,0,.5);
+  --r:8px; --pill:200px;
+  --font:'Pretendard','Inter',sans-serif;
+  --mono:'JetBrains Mono','IBM Plex Mono',monospace;
+}
+
+@keyframes fadeIn {
+  from { opacity:0; }
+  to   { opacity:1; }
+}
+@keyframes slideInLeft {
+  from { opacity:0; transform:translateX(-12px); }
+  to   { opacity:1; transform:translateX(0); }
+}
+@keyframes pulseGlow {
+  0%,100% { box-shadow:0 0 0 0 rgba(255,99,99,0); }
+  50%      { box-shadow:0 0 0 5px rgba(255,99,99,.2); }
+}
+@keyframes barGrow {
+  from { width:0; }
+  to   { width:var(--w,100%); }
+}
+@keyframes sparkPulse {
+  0%,100% { opacity:.7; }
+  50%      { opacity:1; }
+}
+@keyframes countPop {
+  0%   { opacity:0; transform:scale(.85); }
+  70%  { transform:scale(1.05); }
+  100% { opacity:1; transform:scale(1); }
+}
+@keyframes statusBlink {
+  0%,100% { opacity:1; }
+  50%      { opacity:.3; }
+}
+
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:var(--font); background:var(--bg); color:var(--text); min-height:100vh; display:flex; overflow:hidden; }
+
+/* ===== App Shell — stripe-multipane ===== */
+.app-shell { display:flex; width:100%; height:100vh; overflow:hidden; }
+
+/* ===== Sidebar — stripe-multipane Signature ===== */
+aside.sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+aside.sidebar::-webkit-scrollbar { display:none; }
+
+.sidebar-brand {
+  display:flex; align-items:center; gap:10px; padding:20px 16px 16px;
+  border-bottom:1px solid var(--border);
+}
+.brand-badge {
+  width:32px; height:32px; background:var(--accent); border-radius:7px;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+}
+.brand-badge ph-icon { width:18px; height:18px; --ph-color:white; }
+.sidebar-brand-name { font-size:15px; font-weight:700; color:var(--text); }
+.sidebar-brand-sub  { font-size:11px; color:var(--muted); margin-top:1px; }
+
+.sidebar-section-lbl {
+  font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em;
+  color:var(--sub); padding:16px 16px 6px;
+}
+.nav-item {
+  display:flex; align-items:center; gap:9px; padding:8px 12px; margin:1px 6px;
+  border-radius:6px; cursor:pointer; transition:background .12s;
+  font-size:14px; color:var(--muted);
+}
+.nav-item:hover { background:var(--surface2); color:var(--text); }
+.nav-item.active { background:rgba(255,99,99,.12); color:var(--accent); }
+.nav-item ph-icon { width:16px; height:16px; flex-shrink:0; }
+.nav-item span { flex:1; }
+.nav-badge { font-size:11px; font-weight:600; padding:1px 6px; border-radius:var(--pill); background:var(--surface3); color:var(--muted); }
+.nav-item.active .nav-badge { background:var(--accent-dim); color:var(--accent); }
+
+.sidebar-footer { margin-top:auto; padding:12px 6px; border-top:1px solid var(--border); }
+.api-status {
+  display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:6px;
+  background:var(--surface2);
+}
+.status-dot { width:7px; height:7px; border-radius:50%; background:var(--green); flex-shrink:0; animation:statusBlink 2s ease-in-out infinite; }
+.api-status-text { font-size:12px; color:var(--muted); }
+.api-status-val { font-size:12px; font-weight:600; color:var(--green); }
+
+/* ===== Main Area ===== */
+.main-area { flex:1; min-width:0; display:flex; flex-direction:column; overflow:hidden; }
+
+/* Status strip — stripe-multipane Signature */
+.status-strip {
+  background:var(--surface); border-bottom:1px solid var(--border);
+  padding:8px 24px; display:flex; align-items:center; gap:16px;
+  font-size:12px; color:var(--muted); flex-shrink:0;
+}
+.strip-item { display:flex; align-items:center; gap:6px; }
+.strip-item ph-icon { width:13px; height:13px; }
+.strip-val { color:var(--text); font-weight:500; }
+.strip-sep { color:var(--border); }
+.strip-ok  { color:var(--green); }
+.strip-warn{ color:var(--warn);  }
+
+/* Page header */
+.page-header {
+  padding:20px 24px 0; flex-shrink:0;
+}
+.page-title {
+  font-size:32px;
+  font-weight:700;
+  color:var(--text);
+  line-height:1.2;
+}
+.page-sub { font-size:14px; color:var(--muted); margin-top:4px; }
+
+/* ===== Stat Row — stripe-multipane Signature ===== */
+.stat-row {
+  display:flex; gap:14px; padding:18px 24px 0; flex-shrink:0;
+}
+.stat-card {
+  flex:1; background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:14px 16px;
+  transition:border-color .15s;
+}
+.stat-card:hover { border-color:var(--border2); }
+.stat-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin-bottom:6px; display:flex; align-items:center; gap:5px; }
+.stat-label ph-icon { width:12px; height:12px; }
+.stat-value { font-size:32px; font-weight:700; color:var(--text); line-height:1.15; animation:countPop .5s ease; }
+.stat-delta { font-size:12px; margin-top:4px; }
+.stat-delta.up   { color:var(--green); }
+.stat-delta.down { color:var(--accent); }
+.stat-delta.neu  { color:var(--muted); }
+/* SVG sparkline — stripe-multipane Signature */
+svg.stat-sparkline { display:block; margin-top:8px; animation:sparkPulse 3s ease-in-out infinite; }
+
+/* Tab bar — stripe-multipane Signature */
+.tab-bar {
+  display:flex; gap:2px; padding:14px 24px 0; border-bottom:1.5px solid var(--border); flex-shrink:0;
+}
+.tab-bar .tab {
+  display:inline-flex; align-items:center; gap:6px; padding:8px 14px;
+  font-size:14px; font-weight:500; color:var(--muted); border:none; background:transparent;
+  cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1.5px;
+  transition:all .15s; font-family:var(--font);
+}
+.tab-bar .tab.active { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+.tab-bar .tab:hover:not(.active) { color:var(--text); }
+.tab-bar .tab ph-icon { width:14px; height:14px; }
+
+/* Scroll area */
+.scroll-area { flex:1; overflow-y:auto; padding:18px 24px 24px; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+.scroll-area::-webkit-scrollbar { width:6px; }
+.scroll-area::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+
+.tab-panel { display:none; animation:fadeIn .25s ease; }
+.tab-panel.active { display:block; }
+
+/* ===== DAG View ===== */
+.dag-header { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:14px; }
+.dag-title { font-size:16px; font-weight:700; }
+.dag-meta  { font-size:12px; color:var(--muted); margin-top:2px; font-family:var(--mono); }
+.run-btn {
+  display:inline-flex; align-items:center; gap:7px; padding:8px 16px;
+  background:var(--accent); color:white; border:none; border-radius:var(--pill);
+  font-size:13px; font-weight:600; cursor:pointer; transition:background .15s; font-family:var(--font);
+  animation:pulseGlow 2.5s ease-in-out infinite;
+}
+.run-btn:hover { background:#e05252; }
+.run-btn ph-icon { width:13px; height:13px; }
+
+.dag-canvas {
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--r);
+  padding:20px; margin-bottom:14px; position:relative; overflow-x:auto;
+}
+.dag-row { display:flex; align-items:center; gap:0; }
+.dag-node {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  width:110px; height:64px; border-radius:var(--r); border:1.5px solid var(--border);
+  background:var(--surface2); font-size:11px; font-weight:600; color:var(--muted); text-align:center;
+  transition:border-color .15s; flex-shrink:0; gap:3px;
+}
+.dag-node ph-icon { width:18px; height:18px; }
+.dag-node.ok   { border-color:var(--green); color:var(--green); }
+.dag-node.run  { border-color:var(--blue); color:var(--blue); animation:pulseGlow 1.2s ease-in-out infinite; }
+.dag-node.wait { border-color:var(--border2); color:var(--sub); }
+.dag-node.err  { border-color:var(--accent); color:var(--accent); }
+.dag-arrow { padding:0 6px; color:var(--sub); font-size:16px; flex-shrink:0; }
+
+.dag-run-rows { display:flex; flex-direction:column; gap:8px; margin-top:4px; }
+.dag-run-row { display:flex; align-items:center; gap:10px; background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:10px 14px; }
+.run-id  { font-size:12px; font-family:var(--mono); color:var(--muted); min-width:100px; }
+.run-status { font-size:11px; font-weight:700; padding:2px 8px; border-radius:var(--pill); }
+.run-status.ok   { background:var(--green-bg); color:var(--green); }
+.run-status.run  { background:var(--blue-bg); color:var(--blue); }
+.run-status.err  { background:var(--accent-dim); color:var(--accent); }
+.run-ts   { font-size:11px; color:var(--muted); font-family:var(--mono); margin-left:auto; }
+.run-dur  { font-size:11px; color:var(--sub); font-family:var(--mono); }
+.run-bar-bg { flex:1; max-width:120px; height:4px; background:var(--border); border-radius:2px; overflow:hidden; }
+.run-bar-fill { height:100%; border-radius:2px; }
+.run-bar-fill.ok { background:var(--green); }
+.run-bar-fill.run { background:var(--blue); animation:barGrow 1.5s ease; }
+
+/* ===== Rate Limit Panel ===== */
+.rate-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }
+.rate-card {
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:14px;
+}
+.rate-card-title { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin-bottom:10px; display:flex; align-items:center; gap:6px; }
+.rate-card-title ph-icon { width:13px; height:13px; }
+.gauge-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
+.gauge-lbl { font-size:12px; color:var(--muted); }
+.gauge-val { font-size:12px; font-weight:600; font-family:var(--mono); }
+.gauge-bg { height:6px; background:var(--border); border-radius:3px; overflow:hidden; margin-bottom:10px; }
+.gauge-fill { height:100%; border-radius:3px; }
+.gauge-fill.green { background:var(--green); }
+.gauge-fill.yellow{ background:var(--warn); }
+.gauge-fill.red   { background:var(--accent); }
+.redis-block { background:var(--surface2); border:1px solid var(--border); border-radius:var(--r); padding:12px; }
+.redis-title { font-size:12px; font-weight:700; color:var(--muted); margin-bottom:8px; display:flex; align-items:center; gap:6px; }
+.redis-title ph-icon { width:12px; height:12px; }
+.redis-cmd { font-family:var(--mono); font-size:11px; padding:4px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; }
+.redis-cmd:last-child { border-bottom:none; }
+.cmd-k { color:var(--accent); }
+.cmd-v { color:var(--green); }
+
+/* ===== RAG Panel ===== */
+.rag-layout { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.rag-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:16px; }
+.rag-card-title { font-size:14px; font-weight:700; margin-bottom:12px; display:flex; align-items:center; gap:7px; }
+.rag-card-title ph-icon { width:15px; height:15px; }
+.vector-item { display:flex; align-items:flex-start; gap:8px; padding:8px 0; border-bottom:1px solid var(--border); font-size:12px; }
+.vector-item:last-child { border-bottom:none; }
+.sim-score { font-size:11px; font-weight:700; padding:2px 7px; border-radius:var(--pill); background:var(--green-bg); color:var(--green); flex-shrink:0; }
+.vector-text { color:var(--muted); line-height:1.5; }
+.chat-messages { display:flex; flex-direction:column; gap:10px; max-height:280px; overflow-y:auto; }
+.chat-msg { display:flex; flex-direction:column; gap:4px; }
+.chat-msg.user .msg-bubble { background:var(--accent-dim); color:var(--text); align-self:flex-end; }
+.chat-msg.bot  .msg-bubble { background:var(--surface2); color:var(--text); }
+.msg-bubble { padding:10px 14px; border-radius:var(--r); font-size:13px; line-height:1.5; max-width:90%; }
+.msg-role { font-size:10px; color:var(--sub); margin-bottom:2px; }
+.chat-input-row { display:flex; gap:8px; margin-top:10px; }
+.chat-input { flex:1; background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:8px 12px; font-size:13px; color:var(--text); font-family:var(--font); }
+.chat-send { padding:8px 16px; background:var(--accent); color:white; border:none; border-radius:6px; font-size:13px; font-weight:600; cursor:pointer; font-family:var(--font); display:flex; align-items:center; gap:5px; transition:background .15s; }
+.chat-send:hover { background:#e05252; }
+.chat-send ph-icon { width:13px; height:13px; }
+
+/* ===== Data Log Panel ===== */
+.log-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:16px; }
+.log-stat { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:12px; text-align:center; }
+.log-stat-val { font-size:22px; font-weight:700; margin-bottom:3px; }
+.log-stat-lbl { font-size:11px; color:var(--muted); }
+
+/* Data table — stripe-multipane Signature */
+.data-table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); overflow:hidden; }
+.data-table-header { padding:10px 16px; background:var(--surface2); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+.data-table-title { font-size:13px; font-weight:700; }
+.data-table-filter { padding:4px 10px; background:var(--surface); border:1px solid var(--border); border-radius:4px; font-size:12px; color:var(--text); font-family:var(--font); }
+table.data-table {
+  width:100%; border-collapse:collapse; font-size:13px;
+}
+table.data-table thead tr { background:var(--surface2); border-bottom:1px solid var(--border); }
+table.data-table th { padding:8px 14px; text-align:left; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+table.data-table tbody tr { border-bottom:1px solid var(--border); transition:background .12s; }
+table.data-table tbody tr:last-child { border-bottom:none; }
+table.data-table tbody tr:hover { background:var(--surface2); }
+table.data-table td { padding:10px 14px; color:var(--text); font-size:13px; }
+.td-mono { font-family:var(--mono); font-size:12px; color:var(--muted); }
+.td-status { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:var(--pill); }
+.td-status.ok   { background:var(--green-bg); color:var(--green); }
+.td-status.warn { background:var(--warn-bg); color:var(--warn); }
+.td-status.err  { background:var(--accent-dim); color:var(--accent); }
+
+/* Toast */
+#toast2 {
+  position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(30px);
+  background:#1e2028; color:white; border:1px solid var(--border);
+  padding:10px 20px; border-radius:var(--pill);
+  font-size:14px; font-weight:600; z-index:600; opacity:0; pointer-events:none;
+  transition:opacity .25s, transform .25s;
+}
+#toast2.visible { opacity:1; transform:translateX(-50%) translateY(0); }
+</style>
+</head>
+<body data-archetype="stripe-multipane">
+
+<div class="app-shell">
+  <!-- ===== Sidebar ===== -->
+  <aside class="sidebar" data-sidebar>
+    <div class="sidebar-brand">
+      <div class="brand-badge"><ph-icon name="graph" style="--ph-color:white;width:18px;height:18px"></ph-icon></div>
+      <div>
+        <div class="sidebar-brand-name">PipeOps</div>
+        <div class="sidebar-brand-sub">데이터 파이프라인 운영</div>
+      </div>
+    </div>
+
+    <div class="sidebar-section-lbl">모니터링</div>
+    <div class="nav-item active" data-panel="etl" onclick="switchPanel('etl')">
+      <ph-icon name="flow-arrow" style="--ph-color:var(--accent);width:16px;height:16px"></ph-icon>
+      <span>ETL 파이프라인</span>
+      <span class="nav-badge">3</span>
+    </div>
+    <div class="nav-item" data-panel="rate-limit" onclick="switchPanel('rate-limit')">
+      <ph-icon name="gauge" style="--ph-color:var(--blue);width:16px;height:16px"></ph-icon>
+      <span>Rate Limit 관리</span>
+    </div>
+    <div class="nav-item" data-panel="rag-report" onclick="switchPanel('rag-report')">
+      <ph-icon name="robot" style="--ph-color:var(--green);width:16px;height:16px"></ph-icon>
+      <span>경력 보고서 생성</span>
+    </div>
+    <div class="nav-item" data-panel="data-log" onclick="switchPanel('data-log')">
+      <ph-icon name="list-bullets" style="--ph-color:var(--muted);width:16px;height:16px"></ph-icon>
+      <span>데이터 적재 로그</span>
+    </div>
+
+    <div class="sidebar-section-lbl">구성</div>
+    <div class="nav-item" data-panel="etl">
+      <ph-icon name="sliders-horizontal" style="--ph-color:var(--muted);width:16px;height:16px"></ph-icon>
+      <span>API 설정</span>
+    </div>
+    <div class="nav-item" data-panel="etl">
+      <ph-icon name="bell" style="--ph-color:var(--muted);width:16px;height:16px"></ph-icon>
+      <span>알림 설정</span>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="api-status">
+        <div class="status-dot"></div>
+        <div class="api-status-text">커리어넷 API</div>
+        <div class="api-status-val">정상</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ===== Main Area ===== -->
+  <div class="main-area">
+    <!-- Status strip — stripe-multipane Signature -->
+    <div class="status-strip">
+      <div class="strip-item">
+        <ph-icon name="clock" style="--ph-color:var(--muted);width:13px;height:13px"></ph-icon>
+        마지막 동기화: <span class="strip-val">07:30 KST</span>
+      </div>
+      <span class="strip-sep">|</span>
+      <div class="strip-item">
+        <ph-icon name="check-circle" style="--ph-color:var(--green);width:13px;height:13px"></ph-icon>
+        <span class="strip-ok">커리어넷 정상</span>
+      </div>
+      <span class="strip-sep">|</span>
+      <div class="strip-item">
+        <ph-icon name="warning" style="--ph-color:var(--warn);width:13px;height:13px"></ph-icon>
+        <span class="strip-warn">워크넷 Rate Limit 78%</span>
+      </div>
+      <span class="strip-sep">|</span>
+      <div class="strip-item">
+        <ph-icon name="database" style="--ph-color:var(--muted);width:13px;height:13px"></ph-icon>
+        Redis: <span class="strip-val">7.2ms RTT</span>
+      </div>
+    </div>
+
+    <!-- Page header -->
+    <div class="page-header">
+      <div class="page-title" id="panel-title">ETL 파이프라인</div>
+      <div class="page-sub">FastAPI + SQLAlchemy + PostgreSQL — 공공 API 데이터 수집·변환·적재</div>
+    </div>
+
+    <!-- KPI stat row — stripe-multipane Signature -->
+    <div class="stat-row">
+      <div class="stat-card">
+        <div class="stat-label"><ph-icon name="database" style="--ph-color:var(--muted);width:12px;height:12px"></ph-icon>총 수집 건수</div>
+        <div class="stat-value" id="stat-total">4,028</div>
+        <div class="stat-delta up">+2,807 신규 (07:30 기준)</div>
+        <svg class="stat-sparkline" width="100%" height="28" viewBox="0 0 100 28">
+          <polyline points="0,22 14,18 28,20 42,14 56,10 70,8 84,5 100,3"
+            fill="none" stroke="var(--green)" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="100" cy="3" r="3" fill="var(--green)"/>
+        </svg>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label"><ph-icon name="check-circle" style="--ph-color:var(--muted);width:12px;height:12px"></ph-icon>금일 배치 성공률</div>
+        <div class="stat-value" id="stat-success">98.7%</div>
+        <div class="stat-delta up">전주 대비 +1.2%p</div>
+        <svg class="stat-sparkline" width="100%" height="28" viewBox="0 0 100 28">
+          <polyline points="0,20 12,18 24,16 36,15 48,12 60,10 72,9 84,7 100,4"
+            fill="none" stroke="var(--blue)" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="100" cy="4" r="3" fill="var(--blue)"/>
+        </svg>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label"><ph-icon name="clock-clockwise" style="--ph-color:var(--muted);width:12px;height:12px"></ph-icon>평균 파이프라인 시간</div>
+        <div class="stat-value" id="stat-avg">3.4s</div>
+        <div class="stat-delta down">전주 대비 +0.3s (API 429 재시도)</div>
+        <svg class="stat-sparkline" width="100%" height="28" viewBox="0 0 100 28">
+          <polyline points="0,10 14,12 28,11 42,9 56,13 70,14 84,16 100,18"
+            fill="none" stroke="var(--warn)" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="100" cy="18" r="3" fill="var(--warn)"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Tab bar — stripe-multipane Signature -->
+    <nav class="tab-bar">
+      <button class="tab active" data-panel="etl" onclick="switchPanel('etl')">
+        <ph-icon name="flow-arrow" style="--ph-color:currentColor;width:14px;height:14px"></ph-icon>ETL 파이프라인
+      </button>
+      <button class="tab" data-panel="rate-limit" onclick="switchPanel('rate-limit')">
+        <ph-icon name="gauge" style="--ph-color:currentColor;width:14px;height:14px"></ph-icon>Rate Limit 관리
+      </button>
+      <button class="tab" data-panel="rag-report" onclick="switchPanel('rag-report')">
+        <ph-icon name="robot" style="--ph-color:currentColor;width:14px;height:14px"></ph-icon>경력 보고서 생성
+      </button>
+      <button class="tab" data-panel="data-log" onclick="switchPanel('data-log')">
+        <ph-icon name="list-bullets" style="--ph-color:currentColor;width:14px;height:14px"></ph-icon>데이터 적재 로그
+      </button>
+    </nav>
+
+    <!-- Scroll area with panels -->
+    <div class="scroll-area">
+
+      <!-- ETL Panel -->
+      <div class="tab-panel active" id="panel-etl">
+        <div class="dag-header">
+          <div>
+            <div class="dag-title">파이프라인 DAG</div>
+            <div class="dag-meta">dag_id: career_etl_pipeline / schedule: @hourly / Celery + Redis</div>
+          </div>
+          <button class="run-btn" onclick="triggerRun()">
+            <ph-icon name="play" style="--ph-color:white;width:13px;height:13px"></ph-icon>수동 실행
+          </button>
+        </div>
+        <div class="dag-canvas">
+          <div class="dag-row">
+            <div class="dag-node ok" id="dag-extract">
+              <ph-icon name="cloud-arrow-down" style="--ph-color:currentColor;width:18px;height:18px"></ph-icon>
+              <span>Extract</span>
+            </div>
+            <div class="dag-arrow">→</div>
+            <div class="dag-node ok" id="dag-validate">
+              <ph-icon name="shield-check" style="--ph-color:currentColor;width:18px;height:18px"></ph-icon>
+              <span>Validate</span>
+            </div>
+            <div class="dag-arrow">→</div>
+            <div class="dag-node run" id="dag-transform">
+              <ph-icon name="arrows-clockwise" style="--ph-color:currentColor;width:18px;height:18px"></ph-icon>
+              <span>Transform</span>
+            </div>
+            <div class="dag-arrow">→</div>
+            <div class="dag-node wait" id="dag-load">
+              <ph-icon name="database" style="--ph-color:currentColor;width:18px;height:18px"></ph-icon>
+              <span>Load</span>
+            </div>
+            <div class="dag-arrow">→</div>
+            <div class="dag-node wait" id="dag-embed">
+              <ph-icon name="atom" style="--ph-color:currentColor;width:18px;height:18px"></ph-icon>
+              <span>Embed</span>
+            </div>
+          </div>
+        </div>
+        <div class="dag-run-rows">
+          <div class="dag-run-row">
+            <span class="run-id">dag_run_20250622_0730</span>
+            <span class="run-status run">실행중</span>
+            <div class="run-bar-bg"><div class="run-bar-fill run" style="width:60%;--w:60%"></div></div>
+            <span class="run-dur">3.2s</span>
+            <span class="run-ts">09:12:03</span>
+          </div>
+          <div class="dag-run-row">
+            <span class="run-id">dag_run_20250622_0630</span>
+            <span class="run-status ok">완료</span>
+            <div class="run-bar-bg"><div class="run-bar-fill ok" style="width:100%"></div></div>
+            <span class="run-dur">2.9s</span>
+            <span class="run-ts">08:12:04</span>
+          </div>
+          <div class="dag-run-row">
+            <span class="run-id">dag_run_20250622_0530</span>
+            <span class="run-status ok">완료</span>
+            <div class="run-bar-bg"><div class="run-bar-fill ok" style="width:100%"></div></div>
+            <span class="run-dur">3.1s</span>
+            <span class="run-ts">07:12:01</span>
+          </div>
+          <div class="dag-run-row">
+            <span class="run-id">dag_run_20250622_0430</span>
+            <span class="run-status err">오류</span>
+            <div class="run-bar-bg"><div class="run-bar-fill ok" style="width:40%;background:var(--accent)"></div></div>
+            <span class="run-dur">7.8s</span>
+            <span class="run-ts">06:12:14</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Rate Limit Panel -->
+      <div class="tab-panel" id="panel-rate-limit">
+        <div class="rate-grid">
+          <div class="rate-card">
+            <div class="rate-card-title"><ph-icon name="cloud" style="--ph-color:var(--muted);width:13px;height:13px"></ph-icon>커리어넷 API</div>
+            <div class="gauge-row"><span class="gauge-lbl">사용량 (7req/s)</span><span class="gauge-val" style="color:var(--green)">35%</span></div>
+            <div class="gauge-bg"><div class="gauge-fill green" style="width:35%"></div></div>
+            <div class="gauge-row"><span class="gauge-lbl">asyncio.Semaphore 설정</span><span class="gauge-val">10</span></div>
+            <div class="gauge-bg"><div class="gauge-fill green" style="width:70%"></div></div>
+            <div class="gauge-row"><span class="gauge-lbl">일일 할당량</span><span class="gauge-val">48k / 100k</span></div>
+            <div class="gauge-bg"><div class="gauge-fill yellow" style="width:48%"></div></div>
+          </div>
+          <div class="rate-card">
+            <div class="rate-card-title"><ph-icon name="cloud" style="--ph-color:var(--warn);width:13px;height:13px"></ph-icon>워크넷 API</div>
+            <div class="gauge-row"><span class="gauge-lbl">사용량 (2req/s)</span><span class="gauge-val" style="color:var(--warn)">78%</span></div>
+            <div class="gauge-bg"><div class="gauge-fill yellow" style="width:78%"></div></div>
+            <div class="gauge-row"><span class="gauge-lbl">asyncio.Semaphore 설정</span><span class="gauge-val">2</span></div>
+            <div class="gauge-bg"><div class="gauge-fill yellow" style="width:20%"></div></div>
+            <div class="gauge-row"><span class="gauge-lbl">429 재시도 (지난 1h)</span><span class="gauge-val" style="color:var(--warn)">7회</span></div>
+            <div class="gauge-bg"><div class="gauge-fill red" style="width:7%"></div></div>
+          </div>
+        </div>
+        <div class="redis-block">
+          <div class="redis-title"><ph-icon name="cube" style="--ph-color:var(--accent);width:12px;height:12px"></ph-icon>Redis Rate Limit 카운터 (INCR / EXPIRE)</div>
+          <div class="redis-cmd"><span class="cmd-k">INCR worknet:rate:1750000000</span><span class="cmd-v">78</span></div>
+          <div class="redis-cmd"><span class="cmd-k">EXPIRE worknet:rate:1750000000 1</span><span class="cmd-v">OK</span></div>
+          <div class="redis-cmd"><span class="cmd-k">GET worknet:rate:1750000000</span><span class="cmd-v">"78"</span></div>
+          <div class="redis-cmd"><span class="cmd-k">TTL worknet:rate:1750000000</span><span class="cmd-v">0.3s</span></div>
+        </div>
+      </div>
+
+      <!-- RAG Report Panel -->
+      <div class="tab-panel" id="panel-rag-report">
+        <div class="rag-layout">
+          <div class="rag-card">
+            <div class="rag-card-title"><ph-icon name="magnifying-glass" style="--ph-color:var(--blue);width:15px;height:15px"></ph-icon>pgvector 유사도 검색</div>
+            <div class="vector-item"><span class="sim-score">0.96</span><div class="vector-text">정보처리기사 — IT 분야 핵심 국가기술자격. 알고리즘·DB·SW공학 포함.</div></div>
+            <div class="vector-item"><span class="sim-score">0.91</span><div class="vector-text">빅데이터분석기사 — Python·R·통계 기반 데이터 분석 실무 자격.</div></div>
+            <div class="vector-item"><span class="sim-score">0.87</span><div class="vector-text">SQL개발자(SQLD) — 데이터 모델링과 SQL 최적화 전문 자격.</div></div>
+            <div class="vector-item"><span class="sim-score">0.83</span><div class="vector-text">ADsP — 데이터 분석 준전문가. 통계·시각화·ML 기초 포함.</div></div>
+          </div>
+          <div class="rag-card">
+            <div class="rag-card-title"><ph-icon name="chat-centered-text" style="--ph-color:var(--green);width:15px;height:15px"></ph-icon>ChatCompletion 스트리밍 보고서</div>
+            <div class="chat-messages" id="chat-messages">
+              <div class="chat-msg user">
+                <div class="msg-role">사용자</div>
+                <div class="msg-bubble">IT 직군으로 취업하고 싶어요. 어떤 자격증을 취득해야 할까요?</div>
+              </div>
+              <div class="chat-msg bot">
+                <div class="msg-role">AI 경력 상담</div>
+                <div class="msg-bubble">IT 직군 취업을 위해 <strong>정보처리기사(합격률 49%)</strong>를 우선 추천드립니다. 이 자격증은 CS 기초·알고리즘·DB 설계를 포괄하며 IT 기업에서 가장 선호하는 국가기술자격입니다. 데이터 분야에 관심이 있다면 <strong>SQLD</strong>(합격률 72%)로 시작해 빅데이터분석기사로 확장하는 경로도 효과적입니다.</div>
+              </div>
+            </div>
+            <div class="chat-input-row">
+              <input class="chat-input" id="chat-input" placeholder="직군·희망 직종을 입력하세요...">
+              <button class="chat-send" onclick="sendChat()"><ph-icon name="paper-plane-right" style="--ph-color:white;width:13px;height:13px"></ph-icon>전송</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Data Log Panel -->
+      <div class="tab-panel" id="panel-data-log">
+        <div class="log-stats">
+          <div class="log-stat"><div class="log-stat-val" style="color:var(--green)">3,994</div><div class="log-stat-lbl">신규 적재</div></div>
+          <div class="log-stat"><div class="log-stat-val" style="color:var(--blue)">34</div><div class="log-stat-lbl">중복 스킵</div></div>
+          <div class="log-stat"><div class="log-stat-val" style="color:var(--warn)">17</div><div class="log-stat-lbl">검증 거부</div></div>
+          <div class="log-stat"><div class="log-stat-val" style="color:var(--accent)">2</div><div class="log-stat-lbl">API 오류</div></div>
+        </div>
+        <div class="data-table-wrap">
+          <div class="data-table-header">
+            <div class="data-table-title">수집 로그 — 최근 10건</div>
+            <select class="data-table-filter">
+              <option>전체 상태</option>
+              <option>성공만</option>
+              <option>오류만</option>
+            </select>
+          </div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>배치 ID</th>
+                <th>소스 API</th>
+                <th>수집 건수</th>
+                <th>신규/중복/거부</th>
+                <th>처리 시간</th>
+                <th>상태</th>
+                <th>실행 시각</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td class="td-mono">run_20250622_0730</td><td>커리어넷</td><td>2,841</td><td>2,807 / 30 / 4</td><td>1.8s</td><td><span class="td-status ok">완료</span></td><td class="td-mono">09:12:01</td></tr>
+              <tr><td class="td-mono">run_20250622_0730</td><td>워크넷</td><td>1,204</td><td>1,187 / 4 / 13</td><td>1.6s</td><td><span class="td-status warn">재시도</span></td><td class="td-mono">09:12:03</td></tr>
+              <tr><td class="td-mono">run_20250622_0630</td><td>커리어넷</td><td>2,839</td><td>2,802 / 37 / 0</td><td>1.7s</td><td><span class="td-status ok">완료</span></td><td class="td-mono">08:12:01</td></tr>
+              <tr><td class="td-mono">run_20250622_0630</td><td>한국고용통계</td><td>508</td><td>495 / 8 / 5</td><td>0.9s</td><td><span class="td-status ok">완료</span></td><td class="td-mono">08:12:02</td></tr>
+              <tr><td class="td-mono">run_20250622_0530</td><td>커리어넷</td><td>2,840</td><td>2,798 / 42 / 0</td><td>1.9s</td><td><span class="td-status ok">완료</span></td><td class="td-mono">07:12:00</td></tr>
+              <tr><td class="td-mono">run_20250622_0530</td><td>워크넷</td><td>1,201</td><td>1,188 / 10 / 3</td><td>2.2s</td><td><span class="td-status ok">완료</span></td><td class="td-mono">07:12:03</td></tr>
+              <tr><td class="td-mono">run_20250622_0430</td><td>커리어넷</td><td>0</td><td>0 / 0 / 0</td><td>7.8s</td><td><span class="td-status err">오류</span></td><td class="td-mono">06:12:14</td></tr>
+              <tr><td class="td-mono">run_20250622_0330</td><td>커리어넷</td><td>2,837</td><td>2,790 / 47 / 0</td><td>1.8s</td><td><span class="td-status ok">완료</span></td><td class="td-mono">05:12:00</td></tr>
+              <tr><td class="td-mono">run_20250622_0230</td><td>워크넷</td><td>1,199</td><td>1,180 / 15 / 4</td><td>2.1s</td><td><span class="td-status ok">완료</span></td><td class="td-mono">04:12:02</td></tr>
+              <tr><td class="td-mono">run_20250622_0130</td><td>한국고용통계</td><td>506</td><td>491 / 11 / 4</td><td>1.0s</td><td><span class="td-status ok">완료</span></td><td class="td-mono">03:12:01</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- scroll-area -->
+  </div><!-- main-area -->
+</div><!-- app-shell -->
+
+<div id="toast2"></div>
+
+<script>
+/* ===== Tab / Nav switching ===== */
+const PANEL_TITLES = {
+  etl: 'ETL 파이프라인',
+  'rate-limit': 'Rate Limit 관리',
+  'rag-report': '경력 보고서 생성',
+  'data-log': '데이터 적재 로그',
+};
+function switchPanel(panelId) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const panel = document.getElementById('panel-' + panelId);
+  if (panel) panel.classList.add('active');
+  document.querySelectorAll(`[data-panel="${panelId}"]`).forEach(el => {
+    if (el.classList.contains('tab') || el.classList.contains('nav-item')) el.classList.add('active');
+  });
+  document.getElementById('panel-title').textContent = PANEL_TITLES[panelId] || panelId;
+}
+
+/* ===== ETL Trigger animation ===== */
+function triggerRun() {
+  const nodes = ['dag-extract','dag-validate','dag-transform','dag-load','dag-embed'];
+  nodes.forEach((id, i) => {
+    const el = document.getElementById(id);
+    el.className = 'dag-node wait';
+    setTimeout(() => {
+      el.className = 'dag-node run';
+      setTimeout(() => {
+        el.className = 'dag-node ok';
+        if (i === nodes.length - 1) showToast2('파이프라인 완료 — 3,994건 적재');
+      }, 1000);
+    }, i * 1200);
+  });
+}
+
+/* ===== Chat ===== */
+const BOT_REPLIES = [
+  '입력하신 조건을 기반으로 pgvector에서 유사 직군·자격증을 검색 중입니다...',
+  '분석 결과: 해당 분야에서 가장 합격률이 높은 자격증은 정보처리기사(49.2%)이며, SQLD(72.1%)를 먼저 취득하는 전략을 권장드립니다.',
+  '추가 상담이 필요하시면 구체적인 목표 직종이나 경력 단계를 알려주시면 더 정확한 경로를 안내드릴 수 있습니다.',
+];
+let replyIdx = 0;
+function sendChat() {
+  const input = document.getElementById('chat-input');
+  const val = input.value.trim();
+  if (!val) return;
+  const messages = document.getElementById('chat-messages');
+  messages.innerHTML += `<div class="chat-msg user"><div class="msg-role">사용자</div><div class="msg-bubble">${val}</div></div>`;
+  input.value = '';
+  setTimeout(() => {
+    const reply = BOT_REPLIES[replyIdx % BOT_REPLIES.length]; replyIdx++;
+    messages.innerHTML += `<div class="chat-msg bot"><div class="msg-role">AI 경력 상담</div><div class="msg-bubble">${reply}</div></div>`;
+    messages.scrollTop = messages.scrollHeight;
+  }, 800);
+  messages.scrollTop = messages.scrollHeight;
+}
+document.getElementById('chat-input').addEventListener('keypress', e => { if (e.key === 'Enter') sendChat(); });
+
+/* ===== CountUp with setInterval ===== */
+function countUp(el, targetStr) {
+  const isFloat = targetStr.includes('%') || targetStr.includes('s');
+  const num = parseFloat(targetStr.replace(/[^0-9.]/g, ''));
+  const suffix = targetStr.replace(/[0-9.,]/g, '');
+  let cur = 0;
+  const step = num / 40;
+  const iv = setInterval(() => {
+    cur = Math.min(cur + step, num);
+    el.textContent = (isFloat ? cur.toFixed(1) : Math.round(cur).toLocaleString()) + suffix;
+    if (cur >= num) clearInterval(iv);
+  }, 30);
+}
+
+/* ===== Toast ===== */
+let t2timer;
+function showToast2(msg) {
+  const el = document.getElementById('toast2');
+  el.textContent = msg;
+  el.classList.add('visible');
+  clearTimeout(t2timer);
+  t2timer = setTimeout(() => el.classList.remove('visible'), 3000);
+}
+
+/* ===== Init: stagger countup for stat values ===== */
+document.querySelectorAll('.stat-value').forEach((el, i) => {
+  const original = el.textContent;
+  el.textContent = '...';
+  setTimeout(() => countUp(el, original), i * 200 + 300);
+});
+</script>
+</body>
+</html>
