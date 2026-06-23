@@ -3033,6 +3033,12 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                   const s = hist[i].status;
                   if (s && s !== project.current_status) { prevStatus = s; break; }
                 }
+                // history에 직전 상태 기록이 없으면(초기 상태에서 바로 전이돼 이전 단계가 history에 안 남은 경우)
+                // 표준 파이프라인(STATUS_ORDER)상 한 단계 이전으로 폴백 — 그래야 되돌리기 버튼이 노출된다.
+                if (!prevStatus) {
+                  const oi = STATUS_ORDER.indexOf(project.current_status);
+                  if (oi > 0) prevStatus = STATUS_ORDER[oi - 1];
+                }
                 const canRevert = prevStatus && STATUS_ORDER.includes(prevStatus) && !targets.includes(prevStatus);
                 if (!canRevert) return null;
                 const pm = STATUS_META[prevStatus];
