@@ -330,6 +330,18 @@ Deno.serve(async (req) => {
   const userJwt = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
   console.log(`[${reqId}] request`, { slug, skip_db, path, has_user_jwt: !!userJwt });
 
+  // 인증 게이트 — 로그인(authenticated) 세션만 허용. 공개 anon 키/비로그인 호출은 거부한다.
+  // verify_jwt=true(config.toml)가 게이트웨이에서 서명을 검증하므로 여기서 디코드한 role 클레임은 신뢰 가능.
+  // (anon 키도 유효 서명 JWT라 verify_jwt만으로는 못 막음 → role을 직접 확인해 anon을 배제.)
+  const jwtRole = (() => {
+    try { return JSON.parse(atob((userJwt || "").split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).role ?? null; }
+    catch { return null; }
+  })();
+  if (jwtRole !== "authenticated" && jwtRole !== "service_role") {
+    console.warn(`[${reqId}] unauthorized — role=${jwtRole}`);
+    return new Response(JSON.stringify({ error: "unauthorized", reqId }), { status: 401, headers });
+  }
+
   if (!slug) {
     return new Response(JSON.stringify({ error: "slug is required", reqId }), { status: 400, headers });
   }
