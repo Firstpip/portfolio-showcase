@@ -1922,6 +1922,11 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
     return { completedWeeks: completed, focusWeek: focus, staleWeeks: stale };
   })();
   const weekPct = totalWeeks > 0 ? Math.round((completedWeeks / totalWeeks) * 100) : 0;
+  // 타임라인(시간 경과) 진행률의 전체 주차 — 완료일(deadline) 기준이라 완료일 연장을 즉시 반영한다.
+  // (완료된 주차 수 weekPct·주차 계획 입력은 주차 계획 콘텐츠 기준이라 totalWeeks(weekOptions.length)를 그대로 사용)
+  const scheduleWeeks = (project?.start_date && project?.deadline)
+    ? totalWeeksBetween(project.start_date, project.deadline)
+    : totalWeeks;
 
   const cycleStatus = (m) => {
     const next = m.status === 'planned' ? 'in_progress' : m.status === 'in_progress' ? 'done' : 'planned';
@@ -1981,7 +1986,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         {project.start_date && !POST_DEV.includes(project.current_status) && (() => {
           const cw = getCurrentWeek(project.start_date);
           if (cw == null) return null;
-          const totalW = weekOptions.length;
+          const totalW = scheduleWeeks;
           const overdue = totalW > 0 && cw > totalW;
           return (
             <span title={`착수일: ${project.start_date} 기준`}
@@ -2055,12 +2060,12 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
 
       {/* Progress summary */}
       <div style={{ padding:'0.9rem 1.1rem', borderRadius:12, background:'var(--surface)', border:'1px solid var(--border)', marginBottom:14 }}>
-        {/* Week timeline (primary) */}
-        {totalWeeks > 0 && (
+        {/* Week timeline (primary) — 전체 주차는 완료일(deadline) 기준 scheduleWeeks */}
+        {scheduleWeeks > 0 && (
           <div style={{ marginBottom:12 }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
               <div style={{ fontSize:'0.95rem', fontWeight:700 }}>
-                📅 타임라인 {(() => { const cw = getCurrentWeek(project?.start_date); return cw != null ? `${cw}/${totalWeeks}주차` : `0/${totalWeeks}주차`; })()}
+                📅 타임라인 {(() => { const cw = getCurrentWeek(project?.start_date); return cw != null ? `${cw}/${scheduleWeeks}주차` : `0/${scheduleWeeks}주차`; })()}
                 {focusWeek != null && (
                   <button onClick={() => setWeekFilter(weekFilter === focusWeek ? 'all' : focusWeek)}
                     title="이 주차로 칸반 필터링"
@@ -2069,9 +2074,9 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                   </button>
                 )}
               </div>
-              {(() => { const cw = getCurrentWeek(project?.start_date); const timePct = cw != null ? Math.min(Math.round((cw/totalWeeks)*100),100) : 0; const overdue = cw != null && cw > totalWeeks; return <div style={{ fontSize:'1.2rem', fontWeight:700, color:overdue?'var(--red)':'var(--accent2)' }}>{timePct}%</div>; })()}
+              {(() => { const cw = getCurrentWeek(project?.start_date); const timePct = cw != null ? Math.min(Math.round((cw/scheduleWeeks)*100),100) : 0; const overdue = cw != null && cw > scheduleWeeks; return <div style={{ fontSize:'1.2rem', fontWeight:700, color:overdue?'var(--red)':'var(--accent2)' }}>{timePct}%</div>; })()}
             </div>
-            {(() => { const cw = getCurrentWeek(project?.start_date); const timePct = cw != null ? Math.min(Math.round((cw/totalWeeks)*100),100) : 0; const overdue = cw != null && cw > totalWeeks; return (
+            {(() => { const cw = getCurrentWeek(project?.start_date); const timePct = cw != null ? Math.min(Math.round((cw/scheduleWeeks)*100),100) : 0; const overdue = cw != null && cw > scheduleWeeks; return (
               <div style={{ height:10, background:'var(--bg)', borderRadius:5, overflow:'hidden' }}>
                 <div style={{ width:timePct+'%', height:'100%', background:overdue?'var(--red)':'var(--accent2)', transition:'width 0.3s' }} />
               </div>
