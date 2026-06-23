@@ -3275,6 +3275,42 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
               ) : (
                 <div style={{ textAlign:'center', padding:'1rem', color:'var(--text2)', fontSize:'0.85rem', background:'var(--surface2)', borderRadius:8 }}>현재 전환 가능한 상태가 없습니다</div>
               )}
+              {(() => {
+                // ── 이전 상태로 되돌리기 ──
+                // history(append-only)를 역순으로 훑어 현재 상태와 다른 가장 최근 상태 = 직전 상태.
+                // 정방향(TRANSITION_TARGETS)으로 이미 갈 수 있는 상태는 중복이라 숨긴다.
+                // 되돌리기도 일반 상태 변경과 동일하게 history에 기록으로 누적(.find 1st-match 통계 비오염).
+                const hist = project.history || [];
+                let prevStatus = null;
+                for (let i = hist.length - 1; i >= 0; i--) {
+                  const s = hist[i].status;
+                  if (s && s !== project.current_status) { prevStatus = s; break; }
+                }
+                const canRevert = prevStatus && STATUS_ORDER.includes(prevStatus) && !targets.includes(prevStatus);
+                if (!canRevert) return null;
+                const pm = STATUS_META[prevStatus];
+                const doRevert = () => {
+                  const run = () => onSave(project, prevStatus, '↩ 이전 상태로 되돌리기');
+                  if (onRequestConfirm) {
+                    const leavingWon = project.current_status === 'won';
+                    onRequestConfirm({
+                      title: '↩ 이전 상태로 되돌리기',
+                      message: `'${meta.label}' → '${pm.label}'(으)로 되돌립니다.\n변경 이력에 기록으로 남습니다.${leavingWon ? '\n\n(이미 생성된 마일스톤은 그대로 유지됩니다)' : ''}\n\n계속할까요?`,
+                      confirmLabel: `${pm.emoji} ${pm.label}으로 되돌리기`,
+                      onConfirm: run,
+                    });
+                  } else run();
+                };
+                return (
+                  <div style={{ marginTop:'1.25rem', paddingTop:'1rem', borderTop:'1px solid var(--border)' }}>
+                    <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:8 }}>되돌리기</div>
+                    <button onClick={doRevert} disabled={saving}
+                      style={{ width:'100%', padding:'0.6rem', borderRadius:10, cursor:saving?'not-allowed':'pointer', fontSize:'0.85rem', fontWeight:600, background:'var(--surface2)', color:pm.color, border:`1px solid ${pm.color}55`, opacity:saving?0.7:1 }}>
+                      ↩ 이전 상태로 되돌리기 ({pm.emoji} {pm.label})
+                    </button>
+                  </div>
+                );
+              })()}
             </>
           )}
         </div>
