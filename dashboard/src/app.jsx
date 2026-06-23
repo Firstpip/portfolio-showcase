@@ -1558,6 +1558,16 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
   const [weekFilter, setWeekFilter] = useState('all'); // 'all' | number | 'none'
   const [editStart, setEditStart] = useState(project?.start_date || '');
   const [editDeadline, setEditDeadline] = useState(project?.deadline || '');
+  // 외부(Realtime)로 착수/마감일이 바뀌면, 사용자가 손대지 않은 필드만 입력값을 재동기화한다.
+  // (이전엔 ProjectView가 remount되지 않아 stale 값이 남았고, 그대로 저장하면 남의 변경을 덮어썼음)
+  const dateSyncRef = useRef({ start: project?.start_date || '', deadline: project?.deadline || '' });
+  useEffect(() => {
+    const seen = dateSyncRef.current;
+    const ns = project?.start_date || '', nd = project?.deadline || '';
+    if (ns !== seen.start) setEditStart(prev => prev === seen.start ? ns : prev);
+    if (nd !== seen.deadline) setEditDeadline(prev => prev === seen.deadline ? nd : prev);
+    dateSyncRef.current = { start: ns, deadline: nd };
+  }, [project?.start_date, project?.deadline]);
 
   const sorted = useMemo(() => {
     if (weekFilter === 'all') return sortedAll;
