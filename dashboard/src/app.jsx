@@ -2306,7 +2306,7 @@ function MeetingPrepButton({ project }) {
 }
 
 // ─── StatusModal ───
-function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, teamMembers, milestones, milestonesSetupNeeded, onMilestoneUpdate, onMilestoneDelete, onMilestoneAdd, onMilestoneReorder, onCreateFromTemplate, onOpenProjectView, onBulkCreateWeekly, onClearWeeklyPlan, onRequestConfirm, onBackfillAssignees }) {
+function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, onDelete, saving, teamMembers, milestones, milestonesSetupNeeded, onMilestoneUpdate, onMilestoneDelete, onMilestoneAdd, onMilestoneReorder, onCreateFromTemplate, onOpenProjectView, onBulkCreateWeekly, onClearWeeklyPlan, onRequestConfirm, onBackfillAssignees }) {
   const trapRef = useFocusTrap();
   const isPostWon = HAS_MILESTONES.includes(project?.current_status);
   const [tab, setTab] = useState(
@@ -2693,11 +2693,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                   />
                   {assignChanged && assignManager !== (project.assigned_manager||null) && (
                     <button onClick={() => {
-                      const today = new Date().toISOString().split('T')[0];
                       const mgrName = (teamMembers||[]).find(m => m.id===assignManager)?.name;
                       const noteStr = mgrName ? `매니저 배정 — ${mgrName}` : '매니저 해제';
-                      const newHistory = [...(project.history||[]), { status:project.current_status, date:today, note:noteStr }];
-                      onFieldSave(project, { assigned_manager:assignManager||null, history:newHistory });
+                      onAppendHistory(project, [{ status:project.current_status, note:noteStr }], { assigned_manager:assignManager||null });
                       setAssignChanged(false);
                     }} disabled={saving} style={{ ...saveBtnS(true), width:'100%', marginTop:10, background:'var(--accent)' }}>
                       {saving?'저장 중...':'매니저 저장'}
@@ -2799,18 +2797,17 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                   const shouldArchive = willTransition && currentMeeting;
                   return (
                     <button onClick={() => {
-                      const today = new Date().toISOString().split('T')[0];
-                      let newHistory = [...(project.history||[])];
-                      if (shouldArchive) newHistory.push({ status:'meeting_done', date:today, note:'미팅 완료 (아카이브)', meeting_at:currentMeeting.meeting_at, meeting_type:currentMeeting.meeting_type, meeting_memo:editMeetingMemo||null });
+                      const entries = [];
+                      if (shouldArchive) entries.push({ status:'meeting_done', note:'미팅 완료 (아카이브)', meeting_at:currentMeeting.meeting_at, meeting_type:currentMeeting.meeting_type, meeting_memo:editMeetingMemo||null });
                       if (willTransition) {
-                        newHistory.push({ status:'interview', date:today, note:'추가 미팅 예정', meeting_at:iso, meeting_type:editMeetingType||null, meeting_memo:editMeetingMemo||null });
-                        onFieldSave(project, { meeting_at:iso, meeting_type:editMeetingType||null, current_status:'interview', history:newHistory });
+                        entries.push({ status:'interview', note:'추가 미팅 예정', meeting_at:iso, meeting_type:editMeetingType||null, meeting_memo:editMeetingMemo||null });
+                        onAppendHistory(project, entries, { meeting_at:iso, meeting_type:editMeetingType||null, current_status:'interview' });
                       } else {
                         const isChange = !!currentMeeting;
                         const changeNote = isChange
                           ? `미팅 변경 (${currentMeeting.meeting_at?.slice(0,10)} → ${iso?.slice(0,10)||'삭제'})`
                           : '미팅 등록';
-                        onFieldSave(project, { meeting_at:iso, meeting_type:editMeetingType||null, history:[...(project.history||[]), { status:project.current_status, date:today, note:changeNote, meeting_at:iso, meeting_type:editMeetingType||null, meeting_memo:editMeetingMemo||null }] });
+                        onAppendHistory(project, [{ status:project.current_status, note:changeNote, meeting_at:iso, meeting_type:editMeetingType||null, meeting_memo:editMeetingMemo||null }], { meeting_at:iso, meeting_type:editMeetingType||null });
                       }
                       setEditMeetingMemo('');
                       setMeetingChanged(false);
@@ -2846,15 +2843,13 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                   </div>
                   {assignChanged && (assignMain!==(project.assigned_main||null) || assignSub!==(project.assigned_sub||null)) && (
                     <button onClick={() => {
-                      const today = new Date().toISOString().split('T')[0];
                       const mName = (teamMembers||[]).find(m => m.id===assignMain)?.name;
                       const sName = (teamMembers||[]).find(m => m.id===assignSub)?.name;
                       const parts = [];
                       if (mName) parts.push(`주담당: ${mName}`);
                       if (sName) parts.push(`보조: ${sName}`);
                       const noteStr = parts.length ? `미팅 담당 배정 — ${parts.join(', ')}` : '미팅 담당자 해제';
-                      const newHistory = [...(project.history||[]), { status:project.current_status, date:today, note:noteStr }];
-                      onFieldSave(project, { assigned_main:assignMain||null, assigned_sub:assignSub||null, history:newHistory });
+                      onAppendHistory(project, [{ status:project.current_status, note:noteStr }], { assigned_main:assignMain||null, assigned_sub:assignSub||null });
                       setAssignChanged(false);
                     }} disabled={saving} style={{ ...saveBtnS(true), width:'100%', marginTop:10, background:'var(--accent)' }}>
                       {saving?'저장 중...':'담당자 저장'}
@@ -3909,6 +3904,25 @@ function App({ session }) {
     toast(`📋 ${tpl.label} 템플릿 적용 (${rows.length}개 작업)`,'success');
   }, [toast, defaultAssigneeFor]);
 
+  // 다중 세션 history lost-update 방지 — 서버 RPC로 원자적 append + 동반 컬럼 set, 권위행 반환.
+  // entries: history에 추가할 항목(객체 1개 또는 배열). fields: 함께 set할 컬럼(없으면 {}). date는 서버가 KST로 stamp.
+  const handleAppendHistory = useCallback(async (project, entries, fields = {}) => {
+    try {
+      const { data:row, error } = await supabase.rpc('append_project_history', {
+        p_slug: project.slug,
+        p_entries: Array.isArray(entries) ? entries : [entries],
+        p_fields: fields || {},
+      });
+      if (error) throw error;
+      const r = Array.isArray(row) ? row[0] : row;  // RETURNS row를 객체/1-요소 배열 어느 쪽으로 주든 정규화
+      if (r) {
+        setData(prev => prev ? prev.map(d => d.slug===project.slug ? r : d) : prev);
+        setSelectedProject(prev => prev && prev.slug===project.slug ? r : prev);
+      }
+      return r;
+    } catch(err) { toast('저장 실패: '+friendlyError(err),'error'); return null; }
+  }, [toast]);
+
   const handleMilestoneUpdate = useCallback(async (milestone, fields) => {
     setSaving(true);
     try {
@@ -3928,26 +3942,15 @@ function App({ session }) {
       next[milestone.project_slug] = list;
       return next;
     });
-    // append milestone completion to project history (race-safe: read from latest state)
+    // 마일스톤 완료를 프로젝트 history에 기록 — 서버 RPC 원자적 append(다중 세션 안전)
     if (fields.status === 'done' && milestone.status !== 'done') {
-      const today = new Date().toISOString().split('T')[0];
-      setData(prev => {
-        if (!prev) return prev;
-        const idx = prev.findIndex(d => d.slug === milestone.project_slug);
-        if (idx < 0) return prev;
-        const project = prev[idx];
-        const entry = { status: project.current_status, date: today, note: `✅ ${milestone.phase_label} 완료` };
-        const newHistory = [...(project.history||[]), entry];
-        supabase.from(TABLE).update({ history:newHistory, updated_at:today }).eq('slug',project.slug).then(({ error:he }) => {
-          if (he) toast('이력 저장 실패: '+he.message,'error');
-        });
-        const next = prev.slice();
-        next[idx] = { ...project, history:newHistory, updated_at:today };
-        return next;
-      });
+      // 프로젝트 현재 상태는 최신 로컬 상태에서 읽는다(closure stale 방지)
+      let proj = null;
+      setData(prev => { proj = prev?.find(d => d.slug === milestone.project_slug) || null; return prev; });
+      if (proj) handleAppendHistory(proj, [{ status: proj.current_status, note: `✅ ${milestone.phase_label} 완료` }]);
     }
     } finally { setSaving(false); }
-  }, [toast]);
+  }, [toast, handleAppendHistory]);
 
   const handleMilestoneDelete = useCallback(async (milestone) => {
     if (!confirm(`"${milestone.phase_label}" 작업을 삭제하시겠습니까?`)) return;
@@ -4351,25 +4354,19 @@ function App({ session }) {
   const handleSave = useCallback(async (project, newStatus, note) => {
     setSaving(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const historyEntry = { status:newStatus, date:today, note:note||'' };
-      if (newStatus==='meeting_done' && project.meeting_at) { historyEntry.meeting_at=project.meeting_at; historyEntry.meeting_type=project.meeting_type||null; }
-      const newHistory = [...(project.history||[]),historyEntry];
-      const updatePayload = { current_status:newStatus, history:newHistory, updated_at:today };
+      const entry = { status:newStatus, note:note||'' };
+      if (newStatus==='meeting_done' && project.meeting_at) { entry.meeting_at=project.meeting_at; entry.meeting_type=project.meeting_type||null; }
+      const fields = { current_status:newStatus };
       // 개발 중 → 계약 논의 중 되돌리기: 착수일/마감일을 비워 시간기반 자동전환(won→in_progress)이 다시 끌어올리지 않게 한다.
       // (이 전이는 되돌리기 버튼으로만 발생 — 정방향 TRANSITION_TARGETS에는 in_progress→won 경로가 없음)
-      if (project.current_status === 'in_progress' && newStatus === 'won') {
-        updatePayload.start_date = null;
-        updatePayload.deadline = null;
-      }
-      const { error } = await supabase.from(TABLE).update(updatePayload).eq('slug',project.slug);
-      if (error) throw error;
-      setData(prev => prev.map(d => d.slug===project.slug?{...d,...updatePayload}:d));
+      if (project.current_status === 'in_progress' && newStatus === 'won') { fields.start_date = null; fields.deadline = null; }
+      const row = await handleAppendHistory(project, [entry], fields);  // 서버 원자적 append + 권위행 반환
+      if (!row) return;  // 실패 시 handleAppendHistory가 toast 처리
       const sm = STATUS_META[newStatus];
       toast(`${sm.emoji} ${project.slug} → ${sm.label}`,'success');
       const enteredWon = newStatus === 'won' && project.current_status !== 'won';
       if (enteredWon) {
-        setSelectedProject(prev => prev ? { ...prev, ...updatePayload } : prev);
+        setSelectedProject(prev => prev ? row : prev);
         if (!milestonesSetupNeeded) {
           const existing = milestones[project.slug] || [];
           if (existing.length === 0) {
@@ -4382,7 +4379,7 @@ function App({ session }) {
         setSelectedProject(null);
       }
     } catch(err) { toast('저장 실패: '+friendlyError(err),'error'); } finally { setSaving(false); }
-  }, [toast, milestones, milestonesSetupNeeded, handleCreateMilestonesFromTemplate]);
+  }, [toast, milestones, milestonesSetupNeeded, handleCreateMilestonesFromTemplate, handleAppendHistory]);
 
   const handleQuickAdd = useCallback(async (fields) => {
     setSaving(true);
@@ -4516,6 +4513,7 @@ function App({ session }) {
           onClose={() => setSelectedProject(null)}
           onSave={handleSave}
           onFieldSave={handleFieldSave}
+          onAppendHistory={handleAppendHistory}
           onDelete={handleDelete}
           saving={saving}
           teamMembers={teamMembers}
