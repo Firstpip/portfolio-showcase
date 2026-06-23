@@ -286,6 +286,15 @@ function getCurrentWeek(startDate) {
   return Math.floor(diffDays / 7) + 1;
 }
 
+// 일정 대비 실제 진행 신호 — 시간 경과율(timePct) 대비 작업 완료율(donePct) 비교.
+// gap>0 = 시간이 더 빨리 흐름(=지연). 임계: 25%p↑ 지연, 10%p↑ 주의, 그 외 순항.
+function scheduleHealth(timePct, donePct) {
+  const gap = timePct - donePct;
+  if (gap >= 25) return { label: '일정 지연', color: 'var(--red)',    emoji: '🔴' };
+  if (gap >= 10) return { label: '주의',      color: 'var(--yellow)', emoji: '🟡' };
+  return                 { label: '순항',      color: 'var(--green)',  emoji: '🟢' };
+}
+
 // ─── Theme ───
 function useTheme() {
   const [theme, setThemeState] = useState(() => document.documentElement.getAttribute('data-theme') || 'dark');
@@ -2012,8 +2021,12 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         };
         const handleStartChange = (val) => {
           setEditStart(val);
-          if (val && totalWeeks > 0) setEditDeadline(computeDeadline(val));
+          // 완료일이 진행률의 기준이므로, 이미 입력된 마감일은 착수일 변경으로 덮어쓰지 않는다.
+          // 마감일이 비어 있을 때만 주차계획 기준으로 초기 자동 채움(편의 기능).
+          if (val && totalWeeks > 0 && !editDeadline) setEditDeadline(computeDeadline(val));
         };
+        // 마감일이 착수일보다 빠르면 totalWeeksBetween=0이 되어 타임라인이 말없이 사라지므로 저장 차단.
+        const dateInvalid = !!editStart && !!editDeadline && editDeadline < editStart;
         const dlDiff = (() => {
           if (!editDeadline) return null;
           const today = new Date(); today.setHours(0,0,0,0);
@@ -2037,13 +2050,15 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
               {dlLabel && <span style={{ fontSize:'0.7rem', fontWeight:600, color:dlColor, whiteSpace:'nowrap' }}>{dlLabel}</span>}
             </div>
             {totalWeeks > 0 && editStart && <span style={{ fontSize:'0.7rem', color:'var(--accent2)', opacity:0.8, whiteSpace:'nowrap' }}>{totalWeeks}주 기준</span>}
+            {dateInvalid && <span style={{ fontSize:'0.72rem', fontWeight:600, color:'var(--red)', whiteSpace:'nowrap' }}>⚠️ 마감일이 착수일보다 빠릅니다</span>}
             {changed && (
               <button onClick={() => {
+                if (dateInvalid) return;
                 const fields = {};
                 if (editStart !== (project?.start_date || '')) fields.start_date = editStart || null;
                 if (editDeadline !== (project?.deadline || '')) fields.deadline = editDeadline || null;
                 onFieldSave(project, fields);
-              }} disabled={saving} style={{ padding:'0.3rem 0.7rem', borderRadius:6, border:'none', background:'var(--accent)', color:'#fff', cursor:'pointer', fontSize:'0.8rem', fontWeight:600, whiteSpace:'nowrap', marginLeft:'auto' }}>
+              }} disabled={saving || dateInvalid} title={dateInvalid ? '마감일이 착수일보다 빠릅니다' : ''} style={{ padding:'0.3rem 0.7rem', borderRadius:6, border:'none', background:dateInvalid?'var(--surface2)':'var(--accent)', color:dateInvalid?'var(--text2)':'#fff', cursor:(saving||dateInvalid)?'not-allowed':'pointer', fontSize:'0.8rem', fontWeight:600, whiteSpace:'nowrap', marginLeft:'auto', opacity:saving?0.7:1 }}>
                 {saving ? '저장 중...' : '저장'}
               </button>
             )}
@@ -2081,6 +2096,19 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                 <div style={{ width:timePct+'%', height:'100%', background:overdue?'var(--red)':'var(--accent2)', transition:'width 0.3s' }} />
               </div>
             ); })()}
+            {/* 일정 대비 실제 진행 신호 — 시간 경과(timePct) vs 티켓 완료(pct) */}
+            {sortedAll.length > 0 && (() => {
+              const cw = getCurrentWeek(project?.start_date);
+              if (cw == null) return null; // 착수 전이면 생략
+              const timePct = Math.min(Math.round((cw/scheduleWeeks)*100),100);
+              const h = scheduleHealth(timePct, pct);
+              return (
+                <div style={{ marginTop:8, display:'flex', alignItems:'center', gap:6, fontSize:'0.8rem', fontWeight:600, color:h.color }}>
+                  <span>{h.emoji} {h.label}</span>
+                  <span style={{ fontWeight:400, color:'var(--text2)' }}>시간 {timePct}% vs 완료 {pct}%</span>
+                </div>
+              );
+            })()}
             {staleWeeks.length > 0 && (
               <div style={{ marginTop:6, fontSize:'0.8rem', color:'var(--yellow)', opacity:0.85 }}>
                 ⚠️ {staleWeeks.join(', ')}주차가 미완료인데 이후 주차 작업이 진행됨 — 작업 순서 점검 필요
@@ -4895,6 +4923,17 @@ function App({ session }) {
                           </div>
                           <span style={{ fontSize:'0.65rem', color:overdue?'var(--red)':'var(--text2)', flexShrink:0, fontWeight:overdue?600:400 }}>{isBeforeStartDate ? '착수 전' : overdue ? `⚠ ${curWeek}/${totalWeeks}주` : `${curWeek}/${totalWeeks}주`}</span>
                         </div>
+                        {/* 일정 대비 실제 진행 신호 — 시간 경과(weekPct) vs 티켓 완료 */}
+                        {!isBeforeStartDate && stat.total > 0 && (() => {
+                          const donePct = Math.round((stat.done / stat.total) * 100);
+                          const h = scheduleHealth(weekPct, donePct);
+                          return (
+                            <div style={{ display:'flex', alignItems:'center', gap:5, fontSize:'0.65rem', fontWeight:600, color:h.color, paddingLeft:20 }}>
+                              <span>{h.emoji} {h.label}</span>
+                              <span style={{ fontWeight:400, color:'var(--text2)' }}>완료 {donePct}%</span>
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
