@@ -2387,6 +2387,19 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
 
   if (!project) return null;
   const targets = TRANSITION_TARGETS[project.current_status]||[];
+  // 직전 상태(되돌리기 대상): history 역순의 최근 다른 상태(STATUS_ORDER에 있는 것), 없으면 STATUS_ORDER상 한 단계 이전.
+  const prevStatus = (() => {
+    const hist = project.history || [];
+    for (let i = hist.length - 1; i >= 0; i--) {
+      const s = hist[i].status;
+      if (s && s !== project.current_status && STATUS_ORDER.includes(s)) return s;
+    }
+    const oi = STATUS_ORDER.indexOf(project.current_status);
+    return oi > 0 ? STATUS_ORDER[oi - 1] : null;
+  })();
+  const canRevert = !!prevStatus;
+  // 전진 후보에서 직전 상태는 제외 — 되돌리기 버튼이 담당하므로 같은 상태가 중복 노출되지 않게 한다.
+  const forwardTargets = targets.filter(s => s !== prevStatus);
   const meta    = STATUS_META[project.current_status]||{};
 
   const inputS  = { width:'100%', padding:'0.5rem 0.7rem', borderRadius:8, fontSize:'0.85rem', border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', outline:'none' };
@@ -2981,11 +2994,11 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                   </div>
                 </div>
               )}
-              {targets.length > 0 ? (
+              {forwardTargets.length > 0 ? (
                 <>
                   <div style={{ fontSize:'0.85rem', fontWeight:600, marginBottom:8 }}>상태 변경</div>
                   <div style={{ display:'flex', gap:8, marginBottom:'1rem', flexWrap:'wrap' }}>
-                    {targets.map(s => {
+                    {forwardTargets.map(s => {
                       const sm = STATUS_META[s]; const selected = newStatus===s;
                       return (<button key={s} onClick={() => setNewStatus(s)} style={{ padding:'0.5rem 1rem', borderRadius:10, cursor:'pointer', transition:'all 0.15s', fontSize:'0.85rem', fontWeight:selected?600:400, background:selected?sm.color+'33':'var(--surface2)', color:selected?sm.color:'var(--text2)', border:selected?`2px solid ${sm.color}`:'2px solid transparent' }}>{sm.emoji} {sm.label}</button>);
                     })}
@@ -3019,28 +3032,12 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                     );
                   })()}
                 </>
-              ) : (
+              ) : (!canRevert ? (
                 <div style={{ textAlign:'center', padding:'1rem', color:'var(--text2)', fontSize:'0.85rem', background:'var(--surface2)', borderRadius:8 }}>현재 전환 가능한 상태가 없습니다</div>
-              )}
-              {(() => {
-                // ── 이전 상태로 되돌리기 ──
-                // history(append-only)를 역순으로 훑어 현재 상태와 다른 가장 최근 상태 = 직전 상태.
-                // 정방향(TRANSITION_TARGETS)으로 이미 갈 수 있는 상태는 중복이라 숨긴다.
-                // 되돌리기도 일반 상태 변경과 동일하게 history에 기록으로 누적(.find 1st-match 통계 비오염).
-                const hist = project.history || [];
-                let prevStatus = null;
-                for (let i = hist.length - 1; i >= 0; i--) {
-                  const s = hist[i].status;
-                  if (s && s !== project.current_status) { prevStatus = s; break; }
-                }
-                // history에 직전 상태 기록이 없으면(초기 상태에서 바로 전이돼 이전 단계가 history에 안 남은 경우)
-                // 표준 파이프라인(STATUS_ORDER)상 한 단계 이전으로 폴백 — 그래야 되돌리기 버튼이 노출된다.
-                if (!prevStatus) {
-                  const oi = STATUS_ORDER.indexOf(project.current_status);
-                  if (oi > 0) prevStatus = STATUS_ORDER[oi - 1];
-                }
-                const canRevert = prevStatus && STATUS_ORDER.includes(prevStatus) && !targets.includes(prevStatus);
-                if (!canRevert) return null;
+              ) : null)}
+              {canRevert && (() => {
+                // ── 이전 상태로 되돌리기 ── (직전 상태 prevStatus는 위에서 hoist: history 최근값 또는 STATUS_ORDER 한 단계 이전)
+                // 전진 후보(forwardTargets)에서 직전 상태를 제외했으므로 이 버튼과 중복되지 않는다.
                 const pm = STATUS_META[prevStatus];
                 const doRevert = () => {
                   const run = () => onSave(project, prevStatus, '↩ 이전 상태로 되돌리기');
