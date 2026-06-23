@@ -4855,10 +4855,11 @@ function App({ session }) {
               {myProjects.map(p => {
                 const meta = STATUS_META[p.current_status]||{};
                 const stat = milestoneStats[p.slug] || { total:0, done:0, uniqueWeeks:0 };
-                // 전체 주차: 주차 계획 → 마일스톤 주차 → (없으면) 착수·마감일에서 자동 산출
-                const totalWeeks = Array.isArray(p.weekly_plan) && p.weekly_plan.length > 0
-                  ? p.weekly_plan.length
-                  : (stat.uniqueWeeks || totalWeeksBetween(p.start_date, p.deadline));
+                // 전체 주차: 완료일(deadline)이 진행률의 기준 — 착수·마감일에서 산출해 완료일 연장을 즉시 반영한다.
+                // weekly_plan/마일스톤 주차는 한 번 생성되면 고정되는 스냅샷(내용 표시용)이라, 완료일이 없을 때만 폴백으로 쓴다.
+                const totalWeeks = (p.start_date && p.deadline)
+                  ? totalWeeksBetween(p.start_date, p.deadline)
+                  : ((Array.isArray(p.weekly_plan) && p.weekly_plan.length > 0 ? p.weekly_plan.length : 0) || stat.uniqueWeeks);
                 const curWeek = getCurrentWeek(p.start_date);
                 const hasSchedule = totalWeeks > 0 && p.start_date;
                 const weekPct = hasSchedule ? (curWeek != null ? Math.min(Math.round((curWeek / totalWeeks) * 100), 100) : 0) : -1;
