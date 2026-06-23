@@ -286,15 +286,6 @@ function getCurrentWeek(startDate) {
   return Math.floor(diffDays / 7) + 1;
 }
 
-// 일정 대비 실제 진행 신호 — 시간 경과율(timePct) 대비 작업 완료율(donePct) 비교.
-// gap>0 = 시간이 더 빨리 흐름(=지연). 임계: 25%p↑ 지연, 10%p↑ 주의, 그 외 순항.
-function scheduleHealth(timePct, donePct) {
-  const gap = timePct - donePct;
-  if (gap >= 25) return { label: '일정 지연', color: 'var(--red)',    emoji: '🔴' };
-  if (gap >= 10) return { label: '주의',      color: 'var(--yellow)', emoji: '🟡' };
-  return                 { label: '순항',      color: 'var(--green)',  emoji: '🟢' };
-}
-
 // ─── Theme ───
 function useTheme() {
   const [theme, setThemeState] = useState(() => document.documentElement.getAttribute('data-theme') || 'dark');
@@ -2096,19 +2087,6 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                 <div style={{ width:timePct+'%', height:'100%', background:overdue?'var(--red)':'var(--accent2)', transition:'width 0.3s' }} />
               </div>
             ); })()}
-            {/* 일정 대비 실제 진행 신호 — 시간 경과(timePct) vs 티켓 완료(pct) */}
-            {sortedAll.length > 0 && (() => {
-              const cw = getCurrentWeek(project?.start_date);
-              if (cw == null) return null; // 착수 전이면 생략
-              const timePct = Math.min(Math.round((cw/scheduleWeeks)*100),100);
-              const h = scheduleHealth(timePct, pct);
-              return (
-                <div style={{ marginTop:8, display:'flex', alignItems:'center', gap:6, fontSize:'0.8rem', fontWeight:600, color:h.color }}>
-                  <span>{h.emoji} {h.label}</span>
-                  <span style={{ fontWeight:400, color:'var(--text2)' }}>시간 {timePct}% vs 완료 {pct}%</span>
-                </div>
-              );
-            })()}
             {staleWeeks.length > 0 && (
               <div style={{ marginTop:6, fontSize:'0.8rem', color:'var(--yellow)', opacity:0.85 }}>
                 ⚠️ {staleWeeks.join(', ')}주차가 미완료인데 이후 주차 작업이 진행됨 — 작업 순서 점검 필요
@@ -3326,9 +3304,11 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onDelete, saving, 
                   const run = () => onSave(project, prevStatus, '↩ 이전 상태로 되돌리기');
                   if (onRequestConfirm) {
                     const leavingWon = project.current_status === 'won';
+                    // 개발 중 → 계약 논의 중 되돌리기: 착수일/마감일이 과거면 자동전환이 다시 끌어올리므로 날짜를 비운다.
+                    const clearingDates = project.current_status === 'in_progress' && prevStatus === 'won' && (project.start_date || project.deadline);
                     onRequestConfirm({
                       title: '↩ 이전 상태로 되돌리기',
-                      message: `'${meta.label}' → '${pm.label}'(으)로 되돌립니다.\n변경 이력에 기록으로 남습니다.${leavingWon ? '\n\n(이미 생성된 마일스톤은 그대로 유지됩니다)' : ''}\n\n계속할까요?`,
+                      message: `'${meta.label}' → '${pm.label}'(으)로 되돌립니다.\n변경 이력에 기록으로 남습니다.${leavingWon ? '\n\n(이미 생성된 마일스톤은 그대로 유지됩니다)' : ''}${clearingDates ? '\n\n⚠️ 착수일·마감일이 함께 삭제됩니다 (재진행 시 다시 입력).' : ''}\n\n계속할까요?`,
                       confirmLabel: `${pm.emoji} ${pm.label}으로 되돌리기`,
                       onConfirm: run,
                     });
@@ -4635,6 +4615,12 @@ function App({ session }) {
       if (newStatus==='meeting_done' && project.meeting_at) { historyEntry.meeting_at=project.meeting_at; historyEntry.meeting_type=project.meeting_type||null; }
       const newHistory = [...(project.history||[]),historyEntry];
       const updatePayload = { current_status:newStatus, history:newHistory, updated_at:today };
+      // 개발 중 → 계약 논의 중 되돌리기: 착수일/마감일을 비워 시간기반 자동전환(won→in_progress)이 다시 끌어올리지 않게 한다.
+      // (이 전이는 되돌리기 버튼으로만 발생 — 정방향 TRANSITION_TARGETS에는 in_progress→won 경로가 없음)
+      if (project.current_status === 'in_progress' && newStatus === 'won') {
+        updatePayload.start_date = null;
+        updatePayload.deadline = null;
+      }
       const { error } = await supabase.from(TABLE).update(updatePayload).eq('slug',project.slug);
       if (error) throw error;
       setData(prev => prev.map(d => d.slug===project.slug?{...d,...updatePayload}:d));
@@ -4923,17 +4909,6 @@ function App({ session }) {
                           </div>
                           <span style={{ fontSize:'0.65rem', color:overdue?'var(--red)':'var(--text2)', flexShrink:0, fontWeight:overdue?600:400 }}>{isBeforeStartDate ? '착수 전' : overdue ? `⚠ ${curWeek}/${totalWeeks}주` : `${curWeek}/${totalWeeks}주`}</span>
                         </div>
-                        {/* 일정 대비 실제 진행 신호 — 시간 경과(weekPct) vs 티켓 완료 */}
-                        {!isBeforeStartDate && stat.total > 0 && (() => {
-                          const donePct = Math.round((stat.done / stat.total) * 100);
-                          const h = scheduleHealth(weekPct, donePct);
-                          return (
-                            <div style={{ display:'flex', alignItems:'center', gap:5, fontSize:'0.65rem', fontWeight:600, color:h.color, paddingLeft:20 }}>
-                              <span>{h.emoji} {h.label}</span>
-                              <span style={{ fontWeight:400, color:'var(--text2)' }}>완료 {donePct}%</span>
-                            </div>
-                          );
-                        })()}
                       </div>
                     )}
                   </div>
