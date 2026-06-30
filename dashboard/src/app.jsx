@@ -57,8 +57,12 @@ const CONTRACT_NET_STATUSES = ['won', ...POST_WON];
 const wishketFeeRate = (manwon) => manwon <= 500 ? 0.25 : 0.20;
 const contractNet = (manwon) => manwon > 0 ? Math.round(manwon * (1 - wishketFeeRate(manwon)) * 10) / 10 : 0; // 0.1만원 단위, 부가세 제외
 const fmtManwon = (n) => n.toLocaleString(undefined, { maximumFractionDigits: 1 });
-// 위시켓 외 직계약(wishket_url 없음)은 수수료 미적용 — 기록 금액 그대로가 계약대금
-const projectNet = (p) => { const bn = parseBudgetNum(p.budget); return p.wishket_url ? contractNet(bn) : bn; };
+// 위시켓 외 직계약은 수수료 미적용 — 기록 금액 그대로가 계약대금.
+//  ① wishket_url 자체가 없거나, ② URL은 유지하되 memo에 [직계약]/#nofee 마커가 있으면 직계약으로 본다.
+//  (위시켓 공고 참고 링크는 살리고 싶지만 위시켓 외 경로로 계약한 건 — 수수료를 떼면 안 됨)
+const DIRECT_CONTRACT_RE = /\[직계약\]|#직계약|#nofee/;
+const isDirectContract = (p) => !p.wishket_url || DIRECT_CONTRACT_RE.test(p.memo || '');
+const projectNet = (p) => { const bn = parseBudgetNum(p.budget); return isDirectContract(p) ? bn : contractNet(bn); };
 // 우리 쇼케이스 배포 링크 패턴 — [1]=slug, [2]=portfolio-N (배포까지 삭제 버튼 노출 판별용)
 const SHOWCASE_LINK_RE = /^https?:\/\/firstpip\.github\.io\/portfolio-showcase\/([^/]+)\/(portfolio-\d+)\/?$/i;
 // 담당 컬럼·담당 필터·멤버 바의 단일 소스. 필터별로 노출/매칭할 담당 역할을 정의한다.
@@ -2538,7 +2542,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                         style={{ ...inputS, borderTopRightRadius:0, borderBottomRightRadius:0, borderRight:'none' }} />
                       <span style={{ padding:'0.5rem 0.6rem', borderRadius:'0 8px 8px 0', fontSize:'0.85rem', background:'var(--border)', color:'var(--text2)', border:'1px solid var(--border)', lineHeight:1.5, whiteSpace:'nowrap' }}>만원</span>
                     </div>
-                    {CONTRACT_NET_STATUSES.includes(project.current_status) && project.wishket_url && parseBudgetNum(editBudget) > 0 && (() => {
+                    {CONTRACT_NET_STATUSES.includes(project.current_status) && !isDirectContract({ wishket_url: editUrl, memo: editMemo }) && parseBudgetNum(editBudget) > 0 && (() => {
                       const bn = parseBudgetNum(editBudget);
                       return <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginTop:4 }}>
                         계약대금 <b style={{ color:'var(--green)' }}>{fmtManwon(contractNet(bn))}만원</b> — 수수료 {wishketFeeRate(bn)*100}% 차감 (부가세 제외)
@@ -3528,7 +3532,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                   </td>
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:r.budget?'var(--text)':'var(--text2)' }}>{(() => {
                     const bn = parseBudgetNum(r.budget);
-                    if (bn > 0 && CONTRACT_NET_STATUSES.includes(r.current_status) && r.wishket_url) {
+                    if (bn > 0 && CONTRACT_NET_STATUSES.includes(r.current_status) && !isDirectContract(r)) {
                       return <span title={`지원가 ${r.budget} − 수수료 ${wishketFeeRate(bn)*100}% = ${fmtManwon(contractNet(bn))}만원 (부가세 제외)`}>
                         {fmtManwon(contractNet(bn))}만원
                       </span>;
