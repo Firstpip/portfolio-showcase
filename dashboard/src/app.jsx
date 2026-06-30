@@ -58,10 +58,9 @@ const wishketFeeRate = (manwon) => manwon <= 500 ? 0.25 : 0.20;
 const contractNet = (manwon) => manwon > 0 ? Math.round(manwon * (1 - wishketFeeRate(manwon)) * 10) / 10 : 0; // 0.1만원 단위, 부가세 제외
 const fmtManwon = (n) => n.toLocaleString(undefined, { maximumFractionDigits: 1 });
 // 위시켓 외 직계약은 수수료 미적용 — 기록 금액 그대로가 계약대금.
-//  ① wishket_url 자체가 없거나, ② URL은 유지하되 memo에 [직계약]/#nofee 마커가 있으면 직계약으로 본다.
-//  (위시켓 공고 참고 링크는 살리고 싶지만 위시켓 외 경로로 계약한 건 — 수수료를 떼면 안 됨)
-const DIRECT_CONTRACT_RE = /\[직계약\]|#직계약|#nofee/;
-const isDirectContract = (p) => !p.wishket_url || DIRECT_CONTRACT_RE.test(p.memo || '');
+//  ① wishket_url 자체가 없거나, ② direct_contract=true (위시켓 공고 URL은 참고로 남기되
+//     위시켓 외 경로로 직접 계약한 건 — 편집 모달의 '직계약' 체크박스로 토글).
+const isDirectContract = (p) => p.direct_contract === true || !p.wishket_url;
 const projectNet = (p) => { const bn = parseBudgetNum(p.budget); return isDirectContract(p) ? bn : contractNet(bn); };
 // 우리 쇼케이스 배포 링크 패턴 — [1]=slug, [2]=portfolio-N (배포까지 삭제 버튼 노출 판별용)
 const SHOWCASE_LINK_RE = /^https?:\/\/firstpip\.github\.io\/portfolio-showcase\/([^/]+)\/(portfolio-\d+)\/?$/i;
@@ -2343,6 +2342,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const [memoChanged, setMemoChanged] = useState(false);
   const [editUrl, setEditUrl] = useState(project?.wishket_url||'');
   const [urlChanged, setUrlChanged] = useState(false);
+  const [editDirect, setEditDirect] = useState(project?.direct_contract===true);
+  const [directChanged, setDirectChanged] = useState(false);
   const [editLinks, setEditLinks] = useState(() => {
     const saved = project?.portfolio_links || [];
     return saved.map(l => ({...l}));
@@ -2542,7 +2543,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                         style={{ ...inputS, borderTopRightRadius:0, borderBottomRightRadius:0, borderRight:'none' }} />
                       <span style={{ padding:'0.5rem 0.6rem', borderRadius:'0 8px 8px 0', fontSize:'0.85rem', background:'var(--border)', color:'var(--text2)', border:'1px solid var(--border)', lineHeight:1.5, whiteSpace:'nowrap' }}>만원</span>
                     </div>
-                    {CONTRACT_NET_STATUSES.includes(project.current_status) && !isDirectContract({ wishket_url: editUrl, memo: editMemo }) && parseBudgetNum(editBudget) > 0 && (() => {
+                    {CONTRACT_NET_STATUSES.includes(project.current_status) && !isDirectContract({ wishket_url: editUrl, direct_contract: editDirect }) && parseBudgetNum(editBudget) > 0 && (() => {
                       const bn = parseBudgetNum(editBudget);
                       return <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginTop:4 }}>
                         계약대금 <b style={{ color:'var(--green)' }}>{fmtManwon(contractNet(bn))}만원</b> — 수수료 {wishketFeeRate(bn)*100}% 차감 (부가세 제외)
@@ -2589,6 +2590,12 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                 <div>
                   <div style={labelS}>위시켓 공고 URL</div>
                   <input type="url" value={editUrl} placeholder="https://www.wishket.com/project/..." onChange={e => { setEditUrl(e.target.value); setUrlChanged(e.target.value!==(project.wishket_url||'')); }} style={inputS} />
+                </div>
+                <div>
+                  <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:'0.85rem', color:'var(--text)' }}>
+                    <input type="checkbox" checked={editDirect} onChange={e => { setEditDirect(e.target.checked); setDirectChanged(e.target.checked!==(project.direct_contract===true)); }} style={{ width:16, height:16, cursor:'pointer', accentColor:'var(--green)' }} />
+                    직계약 <span style={{ fontSize:'0.78rem', color:'var(--text2)' }}>(위시켓 외 직접 계약 — URL은 유지하되 수수료 미적용)</span>
+                  </label>
                 </div>
                 <div>
                   <div style={labelS}>메모</div>
@@ -2691,7 +2698,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                   </div>
                 </div>
               </div>
-              {(infoChanged||dateChanged||startDateChanged||deadlineChanged||urlChanged||memoChanged||linksChanged) && (
+              {(infoChanged||dateChanged||startDateChanged||deadlineChanged||urlChanged||memoChanged||linksChanged||directChanged) && (
                 <button onClick={() => {
                   const fields = {};
                   if (infoChanged) { fields.title=editTitle; fields.budget=editBudget; fields.timeline=editTimeline; }
@@ -2700,9 +2707,10 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                   if (deadlineChanged) fields.deadline = editDeadline || null;
                   if (urlChanged)  fields.wishket_url = editUrl;
                   if (memoChanged) fields.memo = editMemo;
+                  if (directChanged) fields.direct_contract = editDirect;
                   if (linksChanged) fields.portfolio_links = editLinks;
                   onFieldSave(project, fields);
-                  setInfoChanged(false); setDateChanged(false); setStartDateChanged(false); setDeadlineChanged(false); setUrlChanged(false); setMemoChanged(false); setLinksChanged(false);
+                  setInfoChanged(false); setDateChanged(false); setStartDateChanged(false); setDeadlineChanged(false); setUrlChanged(false); setMemoChanged(false); setLinksChanged(false); setDirectChanged(false);
                 }} disabled={saving} style={{ ...saveBtnS(true), width:'100%', marginTop:10 }}>
                   {saving ? '저장 중...' : '저장'}
                 </button>
