@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>실시간 배차 관제 플랫폼 — 맞춤 구현 데모</title>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css" rel="stylesheet">
+<style>
+/* ===== STEEP DESIGN TOKENS ===== */
+:root {
+  --ink: #17191c;
+  --primary: #17191c;
+  --accent: #5d2a1a;
+  --apricot: #fbe1d1;
+  --apricot-mid: #f0c8ac;
+  --sky-wash: #d3e3fc;
+  --bg: #ffffff;
+  --fog: #f7f7f8;
+  --dove: #a3a6af;
+  --graphite: #777b86;
+  --ash: #4c4c4c;
+  --r: 20px;
+  --r-sm: 10px;
+  --r-pill: 9999px;
+  --shadow-sm: 0 2px 8px rgba(23,25,28,.08);
+  --shadow-md: 0 8px 24px rgba(23,25,28,.12);
+  --shadow-lg: 0 16px 48px rgba(23,25,28,.18);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Pretendard Variable',sans-serif;background:var(--bg);color:var(--ink);height:100vh;overflow:hidden;}
+input,button,select{font-family:inherit;}
+
+/* ===== KEYFRAME ANIMATIONS ===== */
+@keyframes pulse-marker{0%,100%{transform:scale(1) translateX(-50%) translateY(-50%);box-shadow:0 0 0 0 rgba(210,105,30,.5);}50%{transform:scale(1.12) translateX(-45%) translateY(-45%);box-shadow:0 0 0 8px rgba(210,105,30,0);}}
+@keyframes fade-in{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+@keyframes slide-left{from{opacity:0;transform:translateX(-16px);}to{opacity:1;transform:translateX(0);}}
+@keyframes blink-dot{0%,100%{opacity:1;}50%{opacity:.25;}}
+@keyframes draw-path{from{stroke-dashoffset:300;}to{stroke-dashoffset:0;}}
+@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+@keyframes count-up{from{opacity:0;transform:scale(.9);}to{opacity:1;transform:scale(1);}}
+
+/* ===== LARGE METRIC + TOAST ===== */
+.metric-display{font-size:52px;font-weight:800;letter-spacing:-2px;color:var(--ink);line-height:1;}
+.metric-sub{font-size:13px;color:var(--graphite);margin-top:6px;}
+.toast-msg{position:fixed;bottom:28px;right:28px;z-index:999;background:var(--ink);color:#fff;padding:12px 22px;border-radius:var(--r-pill);font-size:13px;font-weight:500;box-shadow:0 8px 32px rgba(23,25,28,.25);animation:fade-in .25s ease-out;pointer-events:none;display:none;}
+.toast-msg.visible{display:block;}
+
+/* ===== TOP NAV ===== */
+.topnav{
+  position:fixed;top:0;left:0;right:0;z-index:200;
+  height:56px;background:rgba(255,255,255,.96);backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--dove);
+  display:flex;align-items:center;padding:0 24px;gap:0;
+}
+.brand{display:flex;align-items:center;gap:10px;min-width:200px;}
+.brand-icon{width:32px;height:32px;border-radius:10px;background:var(--ink);display:flex;align-items:center;justify-content:center;color:#fff;}
+.brand-name{font-size:15px;font-weight:700;letter-spacing:-.3px;}
+.brand-badge{font-size:10px;color:var(--accent);background:var(--apricot);padding:2px 8px;border-radius:9999px;font-weight:600;}
+.nav-tabs{display:flex;gap:2px;flex:1;justify-content:center;}
+.nav-tab{
+  padding:8px 18px;border:none;background:none;cursor:pointer;
+  font-size:13px;font-weight:500;color:var(--graphite);border-radius:8px;
+  transition:all .15s;white-space:nowrap;
+}
+.nav-tab:hover{background:var(--fog);color:var(--ink);}
+.nav-tab.active{background:var(--ink);color:#fff;}
+.topnav-right{display:flex;align-items:center;gap:12px;min-width:200px;justify-content:flex-end;}
+.live-badge{display:flex;align-items:center;gap:5px;padding:5px 12px;background:var(--apricot);border-radius:var(--r-pill);font-size:11px;font-weight:600;color:var(--accent);}
+.live-dot{width:6px;height:6px;border-radius:50%;background:#e83c1e;animation:blink-dot 1.2s infinite;}
+.icon-btn{width:34px;height:34px;border:1px solid var(--dove);border-radius:8px;background:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--graphite);transition:all .15s;}
+.icon-btn:hover{background:var(--fog);color:var(--ink);}
+
+/* ===== MAP SHELL (data-archetype root) ===== */
+[data-archetype="map-canvas"]{
+  position:fixed;top:56px;left:0;right:0;bottom:0;
+}
+
+/* ===== MAP BACKGROUND ===== */
+.map{
+  position:absolute;inset:0;
+  background:linear-gradient(160deg,#efe7db 0%,#e7dccc 30%,#f0e8dc 60%,#e0d3c0 100%);
+  overflow:hidden;
+}
+.map-svg{position:absolute;inset:0;width:100%;height:100%;}
+
+/* Road paths */
+.road-major{stroke:#f5efe4;stroke-width:12;fill:none;stroke-linecap:round;}
+.road-minor{stroke:#ece2d4;stroke-width:6;fill:none;stroke-linecap:round;}
+.road-label{font-size:10px;fill:#b6a892;font-family:'Pretendard Variable',sans-serif;}
+.block{fill:#e4d7c4;rx:4;}
+.park{fill:#cdd4b2;opacity:.7;}
+.water{fill:#ccbfa6;opacity:.7;}
+
+/* ===== DRIVER MARKERS ===== */
+.marker{
+  position:absolute;cursor:pointer;
+  transform:translateX(-50%) translateY(-50%);
+  transition:z-index 0s;
+}
+.marker-icon{
+  width:30px;height:30px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;font-size:13px;
+  box-shadow:var(--shadow-md);border:2px solid rgba(255,255,255,.8);
+  transition:transform .15s;
+}
+.marker:hover .marker-icon{transform:scale(1.18);}
+.marker.available .marker-icon{background:var(--ink);color:#fff;}
+.marker.busy .marker-icon{background:var(--accent);color:#fff;}
+.marker.idle .marker-icon{background:var(--dove);color:#fff;}
+.marker.calling .marker-icon{background:#d2691e;color:#fff;animation:pulse-marker 1s infinite;}
+.marker-tip{
+  position:absolute;top:34px;left:50%;transform:translateX(-50%);
+  background:rgba(23,25,28,.88);color:#fff;font-size:9px;padding:2px 7px;
+  border-radius:4px;white-space:nowrap;pointer-events:none;
+}
+.marker-tip::before{content:'';position:absolute;bottom:100%;left:50%;transform:translateX(-50%);border:4px solid transparent;border-bottom-color:rgba(23,25,28,.88);}
+
+/* Passenger request pin */
+.pin-call{
+  position:absolute;transform:translateX(-50%) translateY(-100%);cursor:pointer;
+}
+.pin-body{
+  background:#d2691e;color:#fff;font-size:11px;font-weight:600;padding:6px 10px;
+  border-radius:8px;box-shadow:var(--shadow-md);white-space:nowrap;
+  animation:fade-in .3s ease-out;
+}
+.pin-body::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:#d2691e;}
+.pin-body.urgent{background:var(--accent);}
+.pin-body.urgent::after{border-top-color:var(--accent);}
+
+/* ===== FLOATING DRAWER (left) ===== */
+.drawer{
+  position:absolute;left:16px;top:16px;bottom:16px;
+  width:300px;background:rgba(255,255,255,.97);backdrop-filter:blur(16px);
+  border-radius:var(--r);box-shadow:var(--shadow-lg);
+  display:flex;flex-direction:column;overflow:hidden;
+  animation:slide-left .3s ease-out;
+}
+.drawer-header{padding:18px 18px 12px;border-bottom:1px solid var(--fog);}
+.drawer-title{font-size:14px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;}
+.drawer-count{font-size:11px;color:var(--graphite);font-weight:400;}
+.search-box{position:relative;}
+.search-input{
+  width:100%;padding:8px 12px 8px 34px;border:1.5px solid var(--dove);border-radius:var(--r-sm);
+  font-size:12px;background:var(--fog);outline:none;transition:border-color .15s;
+}
+.search-input:focus{border-color:var(--ink);}
+.search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--graphite);}
+.drawer-body{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:6px;}
+.drawer-body::-webkit-scrollbar{width:4px;}
+.drawer-body::-webkit-scrollbar-track{background:transparent;}
+.drawer-body::-webkit-scrollbar-thumb{background:var(--dove);border-radius:2px;}
+
+/* Request cards */
+.req-card{
+  padding:12px 13px;border-radius:12px;border:1.5px solid var(--fog);
+  background:#fff;cursor:pointer;transition:all .15s;
+  animation:fade-in .25s ease-out;
+}
+.req-card:hover{border-color:var(--dove);box-shadow:var(--shadow-sm);}
+.req-card.selected{border-color:var(--ink);}
+.req-card.urgent{border-color:#bfdbfe;}
+.req-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
+.req-id{font-size:10px;color:var(--graphite);font-weight:500;}
+.req-badge{font-size:9px;padding:2px 7px;border-radius:var(--r-pill);font-weight:600;}
+.badge-wait{background:var(--apricot);color:var(--accent);}
+.badge-match{background:#d1fae5;color:#065f46;}
+.badge-onway{background:var(--sky-wash);color:#1e40af;}
+.req-route{font-size:12px;font-weight:600;color:var(--ink);margin-bottom:4px;line-height:1.4;}
+.req-meta{display:flex;gap:10px;font-size:10px;color:var(--graphite);}
+
+/* ===== DETAIL CARD (right, bottom) ===== */
+.detail-card{
+  position:absolute;right:16px;bottom:88px;
+  width:268px;background:rgba(255,255,255,.97);backdrop-filter:blur(16px);
+  border-radius:var(--r);box-shadow:var(--shadow-lg);padding:18px;
+  animation:fade-in .25s ease-out;
+}
+.dc-header{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
+.dc-avatar{width:44px;height:44px;border-radius:50%;background:var(--ink);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:17px;}
+.dc-info{flex:1;}
+.dc-name{font-size:14px;font-weight:700;}
+.dc-rating{font-size:12px;color:var(--graphite);display:flex;align-items:center;gap:4px;margin-top:2px;}
+.star{color:#f59e0b;}
+.dc-stats{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:14px;}
+.dc-stat{background:var(--fog);border-radius:10px;padding:9px 11px;}
+.dc-stat-label{font-size:9px;color:var(--graphite);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px;}
+.dc-stat-value{font-size:15px;font-weight:700;color:var(--ink);}
+.dc-route{background:var(--apricot);border-radius:10px;padding:9px 11px;margin-bottom:14px;font-size:11px;color:var(--accent);font-weight:500;line-height:1.5;}
+.dispatch-btn{
+  width:100%;padding:11px;border:none;border-radius:var(--r-pill);
+  background:var(--ink);color:#fff;font-size:13px;font-weight:600;cursor:pointer;
+  transition:transform .1s,box-shadow .1s;
+}
+.dispatch-btn:hover{transform:scale(1.02);box-shadow:var(--shadow-md);}
+
+/* ===== MAP CONTROLS (top right) ===== */
+.map-controls{position:absolute;right:16px;top:16px;display:flex;flex-direction:column;gap:4px;}
+.ctrl-btn{
+  width:36px;height:36px;background:rgba(255,255,255,.97);backdrop-filter:blur(8px);
+  border:1.5px solid var(--dove);border-radius:10px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;color:var(--ink);
+  font-size:16px;font-weight:700;transition:background .15s;
+}
+.ctrl-btn:hover{background:var(--fog);}
+
+/* ===== LEGEND (bottom left of map) ===== */
+.legend{
+  position:absolute;left:330px;bottom:88px;
+  background:rgba(255,255,255,.97);backdrop-filter:blur(8px);
+  border-radius:12px;box-shadow:var(--shadow-md);padding:11px 14px;
+}
+.legend-title{font-size:9px;font-weight:700;color:var(--graphite);text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px;}
+.legend-items{display:flex;flex-direction:column;gap:5px;}
+.legend-item{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--ink);}
+.ld{width:10px;height:10px;border-radius:50%;}
+.ld-avail{background:var(--ink);}
+.ld-busy{background:var(--accent);}
+.ld-idle{background:var(--dove);}
+.ld-call{background:#d2691e;}
+
+/* ===== STATUS BAR (bottom) ===== */
+.status-bar{
+  position:absolute;left:330px;right:58px;bottom:16px;
+  background:rgba(255,255,255,.97);backdrop-filter:blur(8px);
+  border-radius:14px;box-shadow:var(--shadow-md);
+  padding:12px 20px;display:flex;gap:20px;align-items:center;
+}
+.sb-item{display:flex;flex-direction:column;gap:2px;align-items:center;}
+.sb-num{font-size:20px;font-weight:800;color:var(--ink);animation:count-up .4s ease-out;}
+.sb-label{font-size:9px;color:var(--graphite);text-transform:uppercase;letter-spacing:.05em;}
+.sb-divider{width:1px;height:32px;background:var(--fog);}
+
+/* ===== OVERLAY PANELS ===== */
+.overlay-panel{
+  position:absolute;inset:0;background:rgba(247,247,248,.96);backdrop-filter:blur(4px);
+  overflow-y:auto;padding:24px;display:none;
+  animation:fade-in .25s ease-out;
+}
+.overlay-panel.visible{display:block;}
+.panel-grid{max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:20px;}
+
+.p-card{background:#fff;border-radius:var(--r);padding:24px;box-shadow:var(--shadow-sm);}
+.p-card-header{margin-bottom:20px;}
+.p-h1{font-size:20px;font-weight:800;margin-bottom:4px;}
+.p-sub{font-size:13px;color:var(--graphite);}
+
+/* Algorithm weights */
+.weight-list{display:flex;flex-direction:column;gap:18px;}
+.weight-row{display:flex;align-items:center;gap:16px;}
+.wt-label{width:180px;font-size:13px;font-weight:500;flex-shrink:0;}
+.wt-track{flex:1;height:8px;background:var(--fog);border-radius:var(--r-pill);position:relative;cursor:pointer;}
+.wt-fill{height:100%;border-radius:var(--r-pill);background:linear-gradient(90deg,var(--accent),#8b3a1e);transition:width .3s;}
+.wt-thumb{position:absolute;top:50%;transform:translateY(-50%);width:20px;height:20px;border-radius:50%;background:var(--ink);cursor:grab;box-shadow:var(--shadow-md);border:2.5px solid #fff;transition:left .3s;}
+.wt-val{width:44px;text-align:right;font-size:14px;font-weight:700;color:var(--ink);}
+
+.strategy-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:20px;}
+.strat-card{padding:16px 18px;border:2px solid var(--fog);border-radius:14px;cursor:pointer;transition:all .15s;}
+.strat-card:hover{border-color:var(--dove);}
+.strat-card.active{border-color:var(--ink);background:linear-gradient(135deg,#f7f7f8,#fff);}
+.strat-icon{margin-bottom:10px;color:var(--graphite);}
+.strat-card.active .strat-icon{color:var(--accent);}
+.strat-name{font-size:13px;font-weight:700;margin-bottom:4px;}
+.strat-desc{font-size:11px;color:var(--graphite);line-height:1.5;}
+
+.algo-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:20px;}
+.algo-stat{background:var(--fog);border-radius:12px;padding:14px 16px;}
+.algo-stat-label{font-size:10px;color:var(--graphite);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
+.algo-stat-value{font-size:22px;font-weight:800;color:var(--ink);}
+.algo-stat-sub{font-size:11px;color:var(--graphite);margin-top:2px;}
+.tag-pos{color:#059669;font-size:10px;font-weight:600;}
+
+/* Approval table */
+.approval-tbl{width:100%;border-collapse:collapse;}
+.approval-tbl th{
+  padding:10px 16px;text-align:left;font-size:10px;font-weight:700;color:var(--graphite);
+  text-transform:uppercase;letter-spacing:.05em;border-bottom:2px solid var(--fog);
+  background:var(--fog);
+}
+.approval-tbl td{padding:13px 16px;border-bottom:1px solid var(--fog);font-size:12px;vertical-align:middle;}
+.approval-tbl tr:hover td{background:#fafafa;}
+.driver-cell{display:flex;align-items:center;gap:10px;}
+.d-avatar{width:32px;height:32px;border-radius:50%;background:var(--ink);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:12px;flex-shrink:0;}
+.d-name{font-size:12px;font-weight:600;}
+.d-date{font-size:10px;color:var(--graphite);}
+.doc-pill{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:600;padding:3px 8px;border-radius:var(--r-pill);}
+.doc-ok{background:#d1fae5;color:#065f46;}
+.doc-miss{background:var(--apricot);color:var(--accent);}
+.act-btn{padding:6px 14px;border:none;border-radius:var(--r-pill);cursor:pointer;font-size:11px;font-weight:600;font-family:inherit;transition:transform .1s;}
+.act-approve{background:var(--ink);color:#fff;}
+.act-reject{background:var(--fog);color:var(--graphite);border:1.5px solid var(--dove);}
+.act-btn:hover{transform:scale(1.04);}
+.status-pill{font-size:10px;font-weight:600;padding:3px 8px;border-radius:var(--r-pill);}
+.sp-pending{background:var(--apricot);color:var(--accent);}
+.sp-review{background:var(--sky-wash);color:#1e40af;}
+.sp-done{background:#d1fae5;color:#065f46;}
+
+/* Matching panel */
+.match-header{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;margin-bottom:20px;}
+.match-party{background:var(--fog);border-radius:14px;padding:16px;text-align:center;}
+.match-lbl{font-size:10px;color:var(--graphite);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;}
+.match-name{font-size:15px;font-weight:700;margin-bottom:3px;}
+.match-sub{font-size:11px;color:var(--graphite);}
+.match-arrow{text-align:center;font-size:24px;display:flex;flex-direction:column;align-items:center;gap:6px;}
+.arrow-icon{color:var(--accent);width:32px;height:32px;}
+.match-eta{font-size:11px;color:var(--graphite);}
+
+.ws-terminal{
+  background:var(--ink);border-radius:14px;padding:16px 18px;
+  font-family:'SF Mono','Fira Code',monospace;font-size:11px;
+  height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;
+  margin-bottom:20px;
+}
+.ws-line{animation:fade-in .2s ease-out;line-height:1.6;}
+.ws-ts{color:#777b86;margin-right:8px;}
+.ws-ok{color:#6ee7b7;}
+.ws-info{color:#93c5fd;}
+.ws-warn{color:#fca5a5;}
+.ws-white{color:#ededf3;}
+
+.match-steps{display:flex;flex-direction:column;gap:8px;}
+.step-row{display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:12px;transition:background .15s;}
+.step-row:hover{background:var(--fog);}
+.step-num{width:24px;height:24px;border-radius:50%;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;}
+.step-num.done{background:#059669;}
+.step-num.current{background:#d2691e;animation:blink-dot .8s infinite;}
+.step-body{flex:1;}
+.step-name{font-size:13px;font-weight:600;}
+.step-detail{font-size:11px;color:var(--graphite);}
+.step-time{font-size:11px;color:var(--graphite);}
+
+.map-view-toggle{display:flex;align-items:center;justify-content:center;height:100%;}
+</style>
+</head>
+<body>
+
+<!-- TOP NAV -->
+<nav class="topnav">
+  <div class="brand">
+    <div class="brand-icon"><i data-lucide="navigation" style="width:16px;height:16px;"></i></div>
+    <span class="brand-name">DispatchOS</span>
+    <span class="brand-badge">관제</span>
+  </div>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="showView('map')">관제 지도</button>
+    <button class="nav-tab" onclick="showView('algorithm')">배차 알고리즘</button>
+    <button class="nav-tab" onclick="showView('approval')">기사 승인</button>
+    <button class="nav-tab" onclick="showView('matching')">배차 매칭</button>
+  </div>
+  <div class="topnav-right">
+    <div class="live-badge"><div class="live-dot"></div>실시간 연결</div>
+    <button class="icon-btn" title="알림" onclick="showToast('새 알림이 없습니다.')"><i data-lucide="bell" style="width:15px;height:15px;"></i></button>
+    <button class="icon-btn" title="설정" onclick="showToast('설정 패널을 준비 중입니다.')"><i data-lucide="settings" style="width:15px;height:15px;"></i></button>
+  </div>
+</nav>
+
+<!-- MAP-CANVAS ROOT -->
+<div data-archetype="map-canvas">
+
+  <!-- ===== MAP VIEW ===== -->
+  <div class="map" id="view-map">
+
+    <!-- SVG Map Background -->
+    <svg class="map-svg" viewBox="0 0 1200 700" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <filter id="blur-light"><feGaussianBlur stdDeviation="1"/></filter>
+        <linearGradient id="sky" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" style="stop-color:#ece1d0"/>
+          <stop offset="100%" style="stop-color:#ddcdb6"/>
+        </linearGradient>
+      </defs>
+      <rect width="1200" height="700" fill="url(#sky)"/>
+      <!-- Water -->
+      <ellipse cx="900" cy="580" rx="200" ry="80" class="water"/>
+      <!-- Parks -->
+      <rect x="420" y="80" width="120" height="80" rx="8" class="park"/>
+      <rect x="700" y="300" width="90" height="60" rx="6" class="park"/>
+      <!-- City blocks -->
+      <rect x="100" y="160" width="80" height="60" rx="4" class="block"/>
+      <rect x="200" y="140" width="100" height="80" rx="4" class="block"/>
+      <rect x="320" y="170" width="80" height="70" rx="4" class="block"/>
+      <rect x="560" y="120" width="120" height="90" rx="4" class="block"/>
+      <rect x="720" y="100" width="80" height="60" rx="4" class="block"/>
+      <rect x="820" y="130" width="100" height="80" rx="4" class="block"/>
+      <rect x="180" y="300" width="90" height="70" rx="4" class="block"/>
+      <rect x="300" y="320" width="100" height="80" rx="4" class="block"/>
+      <rect x="520" y="280" width="80" height="70" rx="4" class="block"/>
+      <rect x="620" y="260" width="60" height="60" rx="4" class="block"/>
+      <rect x="800" y="240" width="90" height="70" rx="4" class="block"/>
+      <rect x="950" y="180" width="110" height="90" rx="4" class="block"/>
+      <rect x="1050" y="300" width="80" height="70" rx="4" class="block"/>
+      <rect x="200" y="430" width="100" height="80" rx="4" class="block"/>
+      <rect x="380" y="410" width="120" height="90" rx="4" class="block"/>
+      <rect x="600" y="400" width="80" height="70" rx="4" class="block"/>
+      <rect x="750" y="420" width="100" height="80" rx="4" class="block"/>
+      <!-- Major roads -->
+      <path d="M0,220 L1200,220" class="road-major"/>
+      <path d="M0,420 L1200,420" class="road-major"/>
+      <path d="M450,0 L450,700" class="road-major"/>
+      <path d="M900,0 L900,700" class="road-major"/>
+      <!-- Minor roads -->
+      <path d="M0,120 L1200,120" class="road-minor"/>
+      <path d="M0,340 L1200,340" class="road-minor"/>
+      <path d="M0,540 L1200,540" class="road-minor"/>
+      <path d="M220,0 L220,700" class="road-minor"/>
+      <path d="M680,0 L680,700" class="road-minor"/>
+      <path d="M1050,0 L1050,700" class="road-minor"/>
+      <!-- Road labels -->
+      <text x="460" y="215" class="road-label">강남대로</text>
+      <text x="910" y="215" class="road-label">테헤란로</text>
+      <text x="150" y="415" class="road-label">올림픽대로</text>
+      <!-- Match line (animated) -->
+      <path id="match-path" d="M640,280 Q700,250 760,230" stroke="#d2691e" stroke-width="2.5" fill="none" stroke-dasharray="200" stroke-dashoffset="200" style="animation:draw-path 1.5s ease-out forwards .5s;"/>
+    </svg>
+
+    <!-- Driver Markers -->
+    <div class="marker available" style="left:32%;top:38%;" onclick="selectDriver('김도훈')">
+      <div class="marker-icon"><i data-lucide="car" style="width:14px;height:14px;"></i></div>
+      <div class="marker-tip">김도훈 · ★4.9</div>
+    </div>
+    <div class="marker busy" style="left:55%;top:28%;" onclick="selectDriver('이수연')">
+      <div class="marker-icon"><i data-lucide="car" style="width:14px;height:14px;"></i></div>
+      <div class="marker-tip">이수연 · 운행중</div>
+    </div>
+    <div class="marker available" style="left:72%;top:42%;" onclick="selectDriver('박재민')">
+      <div class="marker-icon"><i data-lucide="car" style="width:14px;height:14px;"></i></div>
+      <div class="marker-tip">박재민 · ★4.7</div>
+    </div>
+    <div class="marker idle" style="left:41%;top:58%;" onclick="selectDriver('최유나')">
+      <div class="marker-icon"><i data-lucide="car" style="width:14px;height:14px;"></i></div>
+      <div class="marker-tip">최유나 · 휴식중</div>
+    </div>
+    <div class="marker calling" style="left:63%;top:33%;" onclick="selectDriver('정우성')">
+      <div class="marker-icon"><i data-lucide="car" style="width:14px;height:14px;"></i></div>
+      <div class="marker-tip">정우성 · 호출수신</div>
+    </div>
+    <div class="marker available" style="left:82%;top:22%;" onclick="selectDriver('오민지')">
+      <div class="marker-icon"><i data-lucide="car" style="width:14px;height:14px;"></i></div>
+      <div class="marker-tip">오민지 · ★4.8</div>
+    </div>
+    <div class="marker busy" style="left:25%;top:55%;" onclick="selectDriver('한지훈')">
+      <div class="marker-icon"><i data-lucide="car" style="width:14px;height:14px;"></i></div>
+      <div class="marker-tip">한지훈 · 운행중</div>
+    </div>
+    <div class="marker available" style="left:48%;top:68%;" onclick="selectDriver('강서영')">
+      <div class="marker-icon"><i data-lucide="car" style="width:14px;height:14px;"></i></div>
+      <div class="marker-tip">강서영 · ★4.6</div>
+    </div>
+    <div class="marker idle" style="left:88%;top:55%;" onclick="selectDriver('윤태현')">
+      <div class="marker-icon"><i data-lucide="car" style="width:14px;height:14px;"></i></div>
+      <div class="marker-tip">윤태현 · 휴식중</div>
+    </div>
+    <div class="marker busy" style="left:15%;top:30%;" onclick="selectDriver('신은지')">
+      <div class="marker-icon"><i data-lucide="car" style="width:14px;height:14px;"></i></div>
+      <div class="marker-tip">신은지 · 운행중</div>
+    </div>
+
+    <!-- Passenger call pins -->
+    <div class="pin-call" style="left:53%;top:38%;">
+      <div class="pin-body urgent">🚨 #1042 강남구청 → 삼성역</div>
+    </div>
+    <div class="pin-call" style="left:38%;top:22%;">
+      <div class="pin-body">📍 #1043 홍대 → 신촌</div>
+    </div>
+    <div class="pin-call" style="left:76%;top:48%;">
+      <div class="pin-body">📍 #1044 잠실역 → 강남역</div>
+    </div>
+
+    <!-- Floating Drawer -->
+    <aside class="drawer">
+      <div class="drawer-header">
+        <div class="drawer-title">
+          호출 현황
+          <span class="drawer-count">7건 대기</span>
+        </div>
+        <div class="search-box">
+          <i data-lucide="search" style="width:13px;height:13px;" class="search-icon"></i>
+          <input class="search-input" placeholder="출발지·목적지 검색">
+        </div>
+      </div>
+      <div class="drawer-body">
+        <div class="req-card selected urgent" onclick="selectRequest(this)">
+          <div class="req-top">
+            <span class="req-id">#1042</span>
+            <span class="req-badge badge-wait">긴급배차</span>
+          </div>
+          <div class="req-route">강남구청 → 삼성역 2번 출구</div>
+          <div class="req-meta">
+            <span><i data-lucide="map-pin" style="width:10px;height:10px;display:inline;"></i> 1.2km</span>
+            <span><i data-lucide="clock" style="width:10px;height:10px;display:inline;"></i> 방금</span>
+            <span>예상 ₩12,400</span>
+          </div>
+        </div>
+        <div class="req-card" onclick="selectRequest(this)">
+          <div class="req-top">
+            <span class="req-id">#1043</span>
+            <span class="req-badge badge-match">배차완료</span>
+          </div>
+          <div class="req-route">홍대입구역 → 신촌 현대백화점</div>
+          <div class="req-meta">
+            <span>2.8km</span>
+            <span>1분 전</span>
+            <span>예상 ₩9,800</span>
+          </div>
+        </div>
+        <div class="req-card" onclick="selectRequest(this)">
+          <div class="req-top">
+            <span class="req-id">#1044</span>
+            <span class="req-badge badge-wait">대기중</span>
+          </div>
+          <div class="req-route">잠실역 2번 출구 → 강남역</div>
+          <div class="req-meta">
+            <span>7.4km</span>
+            <span>2분 전</span>
+            <span>예상 ₩18,200</span>
+          </div>
+        </div>
+        <div class="req-card" onclick="selectRequest(this)">
+          <div class="req-top">
+            <span class="req-id">#1045</span>
+            <span class="req-badge badge-onway">이동중</span>
+          </div>
+          <div class="req-route">서울역 → 용산 아이파크몰</div>
+          <div class="req-meta">
+            <span>3.1km</span>
+            <span>4분 전</span>
+            <span>예상 ₩11,600</span>
+          </div>
+        </div>
+        <div class="req-card" onclick="selectRequest(this)">
+          <div class="req-top">
+            <span class="req-id">#1046</span>
+            <span class="req-badge badge-wait">대기중</span>
+          </div>
+          <div class="req-route">이태원 경리단길 → 한남동 블루보틀</div>
+          <div class="req-meta">
+            <span>1.8km</span>
+            <span>5분 전</span>
+            <span>예상 ₩8,400</span>
+          </div>
+        </div>
+        <div class="req-card" onclick="selectRequest(this)">
+          <div class="req-top">
+            <span class="req-id">#1047</span>
+            <span class="req-badge badge-match">배차완료</span>
+          </div>
+          <div class="req-route">성수역 → 건대입구역</div>
+          <div class="req-meta">
+            <span>4.2km</span>
+            <span>6분 전</span>
+            <span>예상 ₩14,000</span>
+          </div>
+        </div>
+        <div class="req-card" onclick="selectRequest(this)">
+          <div class="req-top">
+            <span class="req-id">#1048</span>
+            <span class="req-badge badge-wait">대기중</span>
+          </div>
+          <div class="req-route">여의도 IFC → 영등포역</div>
+          <div class="req-meta">
+            <span>2.2km</span>
+            <span>7분 전</span>
+            <span>예상 ₩9,200</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Detail Card -->
+    <div class="detail-card" id="detail-card">
+      <div class="dc-header">
+        <div class="dc-avatar" id="dc-avatar">김</div>
+        <div class="dc-info">
+          <div class="dc-name" id="dc-name">김도훈 기사</div>
+          <div class="dc-rating"><span class="star">★</span><span id="dc-rating">4.9</span> · 운행 <span id="dc-trips">1,247</span>회</div>
+        </div>
+      </div>
+      <div class="dc-stats">
+        <div class="dc-stat">
+          <div class="dc-stat-label">이번달 수입</div>
+          <div class="dc-stat-value">₩3.2M</div>
+        </div>
+        <div class="dc-stat">
+          <div class="dc-stat-label">수락률</div>
+          <div class="dc-stat-value">96%</div>
+        </div>
+        <div class="dc-stat">
+          <div class="dc-stat-label">배차 우선순위</div>
+          <div class="dc-stat-value" style="color:var(--accent);">P1</div>
+        </div>
+        <div class="dc-stat">
+          <div class="dc-stat-label">현재 상태</div>
+          <div class="dc-stat-value" style="font-size:12px;">영업중</div>
+        </div>
+      </div>
+      <div class="dc-route">
+        📍 현재위치: 강남구청 앞<br>
+        🎯 최근 배차: 강남대로 → 선릉역
+      </div>
+      <button class="dispatch-btn" onclick="alert('배차 지시가 전송되었습니다.')">즉시 배차 지시</button>
+    </div>
+
+    <!-- Map Controls -->
+    <div class="map-controls">
+      <button class="ctrl-btn" onclick="alert('확대')" title="확대"><i data-lucide="plus" style="width:15px;height:15px;"></i></button>
+      <button class="ctrl-btn" onclick="alert('축소')" title="축소"><i data-lucide="minus" style="width:15px;height:15px;"></i></button>
+      <button class="ctrl-btn" onclick="alert('현재 위치 중심')" title="현재 위치"><i data-lucide="crosshair" style="width:15px;height:15px;"></i></button>
+      <button class="ctrl-btn" onclick="alert('레이어 설정')" title="레이어"><i data-lucide="layers" style="width:15px;height:15px;"></i></button>
+    </div>
+
+    <!-- Legend -->
+    <div class="legend">
+      <div class="legend-title">기사 상태</div>
+      <div class="legend-items">
+        <div class="legend-item"><div class="ld ld-avail"></div>영업중 (4)</div>
+        <div class="legend-item"><div class="ld ld-busy"></div>운행중 (3)</div>
+        <div class="legend-item"><div class="ld ld-call"></div>호출수신 (1)</div>
+        <div class="legend-item"><div class="ld ld-idle"></div>휴식중 (2)</div>
+      </div>
+    </div>
+
+    <!-- Status Bar -->
+    <div class="status-bar">
+      <div class="sb-item">
+        <div class="sb-num">10</div>
+        <div class="sb-label">온라인 기사</div>
+      </div>
+      <div class="sb-divider"></div>
+      <div class="sb-item">
+        <div class="sb-num">7</div>
+        <div class="sb-label">대기 호출</div>
+      </div>
+      <div class="sb-divider"></div>
+      <div class="sb-item">
+        <div class="sb-num">3</div>
+        <div class="sb-label">운행중</div>
+      </div>
+      <div class="sb-divider"></div>
+      <div class="sb-item">
+        <div class="sb-num">94%</div>
+        <div class="sb-label">배차 성공률</div>
+      </div>
+      <div class="sb-divider"></div>
+      <div class="sb-item">
+        <div class="sb-num">2.3분</div>
+        <div class="sb-label">평균 매칭</div>
+      </div>
+    </div>
+  </div><!-- /view-map -->
+
+  <!-- ===== ALGORITHM PANEL ===== -->
+  <div class="overlay-panel" id="view-algorithm">
+    <div class="panel-grid">
+      <div class="p-card">
+        <div class="p-card-header">
+          <div class="p-h1">배차 알고리즘 설정</div>
+          <div class="p-sub">고평점 기사 우선 배차 가중치와 배차 전략을 실시간으로 조정합니다.</div>
+        </div>
+        <div style="display:flex;gap:32px;align-items:center;padding:16px 0 20px;border-bottom:1px solid var(--fog);margin-bottom:20px;">
+          <div style="text-align:center;">
+            <div class="metric-display" style="color:var(--ink);">94.2<span style="font-size:28px;">%</span></div>
+            <div class="metric-sub">배차 성공률</div>
+          </div>
+          <div style="text-align:center;">
+            <div class="metric-display" style="font-size:48px;">847</div>
+            <div class="metric-sub">오늘 매칭 수</div>
+          </div>
+          <div style="text-align:center;">
+            <div class="metric-display" style="font-size:48px;">2.3<span style="font-size:24px;">분</span></div>
+            <div class="metric-sub">평균 매칭 시간</div>
+          </div>
+        </div>
+        <div class="weight-list">
+          <div class="weight-row">
+            <div class="wt-label"><i data-lucide="star" style="width:13px;height:13px;display:inline;margin-right:6px;color:var(--accent);"></i>평점 가중치</div>
+            <div class="wt-track" onclick="adjustWeight(this,event)">
+              <div class="wt-fill" style="width:70%;"></div>
+              <div class="wt-thumb" style="left:calc(70% - 10px);"></div>
+            </div>
+            <div class="wt-val">70%</div>
+          </div>
+          <div class="weight-row">
+            <div class="wt-label"><i data-lucide="map-pin" style="width:13px;height:13px;display:inline;margin-right:6px;color:#d2691e;"></i>거리 우선 가중치</div>
+            <div class="wt-track" onclick="adjustWeight(this,event)">
+              <div class="wt-fill" style="width:20%;"></div>
+              <div class="wt-thumb" style="left:calc(20% - 10px);"></div>
+            </div>
+            <div class="wt-val">20%</div>
+          </div>
+          <div class="weight-row">
+            <div class="wt-label"><i data-lucide="percent" style="width:13px;height:13px;display:inline;margin-right:6px;color:#059669;"></i>수락률 가중치</div>
+            <div class="wt-track" onclick="adjustWeight(this,event)">
+              <div class="wt-fill" style="width:10%;"></div>
+              <div class="wt-thumb" style="left:calc(10% - 10px);"></div>
+            </div>
+            <div class="wt-val">10%</div>
+          </div>
+        </div>
+
+        <div class="strategy-grid">
+          <div class="strat-card active" onclick="selectStrategy(this)">
+            <div class="strat-icon"><i data-lucide="star" style="width:20px;height:20px;"></i></div>
+            <div class="strat-name">평점 우선</div>
+            <div class="strat-desc">고평점 기사에게 먼저 호출을 전송하여 승객 만족도를 최대화합니다.</div>
+          </div>
+          <div class="strat-card" onclick="selectStrategy(this)">
+            <div class="strat-icon"><i data-lucide="zap" style="width:20px;height:20px;"></i></div>
+            <div class="strat-name">근거리 우선</div>
+            <div class="strat-desc">가장 가까운 기사에게 우선 배차하여 대기 시간을 최소화합니다.</div>
+          </div>
+          <div class="strat-card" onclick="selectStrategy(this)">
+            <div class="strat-icon"><i data-lucide="sliders" style="width:20px;height:20px;"></i></div>
+            <div class="strat-name">혼합 가중치</div>
+            <div class="strat-desc">평점, 거리, 수락률을 복합 계산하는 최적화 배차 전략입니다.</div>
+          </div>
+        </div>
+
+        <div class="algo-stats">
+          <div class="algo-stat">
+            <div class="algo-stat-label">오늘 매칭 수</div>
+            <div class="algo-stat-value">847</div>
+            <div class="algo-stat-sub"><span class="tag-pos">▲ 12%</span> 어제 대비</div>
+          </div>
+          <div class="algo-stat">
+            <div class="algo-stat-label">매칭 성공률</div>
+            <div class="algo-stat-value">94.2%</div>
+            <div class="algo-stat-sub"><span class="tag-pos">▲ 2.1%</span> 목표 대비</div>
+          </div>
+          <div class="algo-stat">
+            <div class="algo-stat-label">평균 매칭 시간</div>
+            <div class="algo-stat-value">2.3분</div>
+            <div class="algo-stat-sub"><span class="tag-pos">▼ 0.4분</span> 개선</div>
+          </div>
+          <div class="algo-stat">
+            <div class="algo-stat-label">우선 배차 기사</div>
+            <div class="algo-stat-value">28명</div>
+            <div class="algo-stat-sub">평점 4.8 이상</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== APPROVAL PANEL ===== -->
+  <div class="overlay-panel" id="view-approval">
+    <div class="panel-grid">
+      <div class="p-card">
+        <div class="p-card-header">
+          <div class="p-h1">기사 승인 및 서류 검수</div>
+          <div class="p-sub">신규 기사 가입 신청 목록과 서류를 검수하고 최종 승인 또는 반려를 처리합니다.</div>
+        </div>
+        <div style="display:flex;gap:10px;margin-bottom:16px;">
+          <button class="act-btn act-approve" onclick="alert('일괄 승인 처리되었습니다.')">선택 일괄 승인</button>
+          <button class="act-btn act-reject" style="background:var(--fog);color:var(--graphite);border:1.5px solid var(--dove);" onclick="alert('필터 적용')">서류 미비 필터</button>
+        </div>
+        <table class="approval-tbl">
+          <thead>
+            <tr>
+              <th><input type="checkbox" onclick="toggleAll(this)"></th>
+              <th>기사 정보</th>
+              <th>신청일</th>
+              <th>면허증</th>
+              <th>보험증</th>
+              <th>신분증</th>
+              <th>상태</th>
+              <th>처리</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><div class="driver-cell"><div class="d-avatar">김</div><div><div class="d-name">김민준</div><div class="d-date">010-3244-5678</div></div></div></td>
+              <td>2026.06.28</td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="status-pill sp-review">검토중</span></td>
+              <td><button class="act-btn act-approve" onclick="alert('승인 처리되었습니다.')">승인</button><button class="act-btn act-reject" onclick="alert('반려 처리되었습니다.')">반려</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><div class="driver-cell"><div class="d-avatar">이</div><div><div class="d-name">이지수</div><div class="d-date">010-9871-2345</div></div></div></td>
+              <td>2026.06.27</td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="doc-pill doc-miss"><i data-lucide="x" style="width:10px;height:10px;"></i>미비</span></td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="status-pill sp-pending">서류미비</span></td>
+              <td><button class="act-btn act-approve" style="opacity:.4;cursor:not-allowed;" disabled>승인</button><button class="act-btn act-reject" onclick="alert('보험증 재제출 요청을 발송했습니다.')">재요청</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><div class="driver-cell"><div class="d-avatar">박</div><div><div class="d-name">박성호</div><div class="d-date">010-5566-7890</div></div></div></td>
+              <td>2026.06.26</td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="status-pill sp-done">승인완료</span></td>
+              <td><button class="act-btn" style="background:var(--fog);color:var(--graphite);cursor:default;" disabled>처리완료</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><div class="driver-cell"><div class="d-avatar">최</div><div><div class="d-name">최한솔</div><div class="d-date">010-8821-3344</div></div></div></td>
+              <td>2026.06.25</td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="doc-pill doc-miss"><i data-lucide="x" style="width:10px;height:10px;"></i>미비</span></td>
+              <td><span class="status-pill sp-pending">서류미비</span></td>
+              <td><button class="act-btn act-approve" style="opacity:.4;cursor:not-allowed;" disabled>승인</button><button class="act-btn act-reject" onclick="alert('신분증 재제출 요청을 발송했습니다.')">재요청</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox"></td>
+              <td><div class="driver-cell"><div class="d-avatar">정</div><div><div class="d-name">정다은</div><div class="d-date">010-4433-8812</div></div></div></td>
+              <td>2026.06.24</td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="doc-pill doc-ok"><i data-lucide="check" style="width:10px;height:10px;"></i>확인</span></td>
+              <td><span class="status-pill sp-review">검토중</span></td>
+              <td><button class="act-btn act-approve" onclick="alert('승인 처리되었습니다.')">승인</button><button class="act-btn act-reject" onclick="alert('반려 처리되었습니다.')">반려</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== MATCHING PANEL ===== -->
+  <div class="overlay-panel" id="view-matching">
+    <div class="panel-grid">
+      <div class="p-card">
+        <div class="p-card-header">
+          <div class="p-h1">실시간 WebSocket 배차 매칭</div>
+          <div class="p-sub">WebSocket 연결을 통해 승객 호출 수신부터 배차 완료까지 실시간 매칭 과정을 시뮬레이션합니다.</div>
+        </div>
+
+        <!-- Match parties -->
+        <div class="match-header">
+          <div class="match-party">
+            <div class="match-lbl">승객</div>
+            <div class="match-name">김서연 님</div>
+            <div class="match-sub">📍 강남구청 앞</div>
+            <div class="match-sub">🎯 삼성역 2번 출구</div>
+          </div>
+          <div class="match-arrow">
+            <svg class="arrow-icon" viewBox="0 0 32 32" fill="none">
+              <path d="M6 16h20M18 8l8 8-8 8" stroke="#5d2a1a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="animation:draw-path 1s ease-out forwards .3s;stroke-dasharray:60;stroke-dashoffset:60;"/>
+            </svg>
+            <div class="match-eta">~2.1분</div>
+          </div>
+          <div class="match-party">
+            <div class="match-lbl">배차 기사</div>
+            <div class="match-name">김도훈 기사</div>
+            <div class="match-sub">★ 4.9 · 수락률 96%</div>
+            <div class="match-sub">📍 강남대로 300m</div>
+          </div>
+        </div>
+
+        <!-- WebSocket Log -->
+        <div class="ws-terminal">
+          <div class="ws-line"><span class="ws-ts">14:32:01.024</span><span class="ws-info">[WS] CLIENT_CONNECTED</span> <span class="ws-white">passenger_id=usr_83920 socket=wss://dispatch.api</span></div>
+          <div class="ws-line"><span class="ws-ts">14:32:01.198</span><span class="ws-ok">[EVENT] RIDE_REQUEST</span> <span class="ws-white">req_id=1042 origin=37.5174,127.0474 dest=37.5087,127.0628</span></div>
+          <div class="ws-line"><span class="ws-ts">14:32:01.241</span><span class="ws-info">[ALGO] SCORING</span> <span class="ws-white">candidates=8 strategy=rating_weighted</span></div>
+          <div class="ws-line"><span class="ws-ts">14:32:01.289</span><span class="ws-white">[SCORE] drv_1205=94.2 drv_0847=88.7 drv_2341=82.4 drv_0991=79.1</span></div>
+          <div class="ws-line"><span class="ws-ts">14:32:01.301</span><span class="ws-ok">[DISPATCH] OFFER_SENT</span> <span class="ws-white">driver=drv_1205 (김도훈) distance=0.3km rating=4.9</span></div>
+          <div class="ws-line"><span class="ws-ts">14:32:04.882</span><span class="ws-ok">[EVENT] DRIVER_ACCEPTED</span> <span class="ws-white">driver=drv_1205 latency=3.58s req_id=1042</span></div>
+          <div class="ws-line"><span class="ws-ts">14:32:04.901</span><span class="ws-info">[LOCK] REDIS_RELEASE</span> <span class="ws-white">lock_key=req_1042 released race_condition=none</span></div>
+          <div class="ws-line"><span class="ws-ts">14:32:05.012</span><span class="ws-ok">[BROADCAST] MATCH_CONFIRMED</span> <span class="ws-white">req_id=1042 eta=2.1min status=DRIVER_ENROUTE</span></div>
+        </div>
+
+        <!-- Steps -->
+        <div class="match-steps">
+          <div class="step-row">
+            <div class="step-num done"><i data-lucide="check" style="width:12px;height:12px;"></i></div>
+            <div class="step-body">
+              <div class="step-name">호출 요청 수신</div>
+              <div class="step-detail">WebSocket 이벤트 RIDE_REQUEST — 출발지/목적지 좌표 파싱 완료</div>
+            </div>
+            <div class="step-time">+0ms</div>
+          </div>
+          <div class="step-row">
+            <div class="step-num done"><i data-lucide="check" style="width:12px;height:12px;"></i></div>
+            <div class="step-body">
+              <div class="step-name">가중치 스코어링</div>
+              <div class="step-detail">반경 5km 내 영업중 기사 8명 대상 평점×0.7 + 거리×0.2 + 수락률×0.1 계산</div>
+            </div>
+            <div class="step-time">+77ms</div>
+          </div>
+          <div class="step-row">
+            <div class="step-num done"><i data-lucide="check" style="width:12px;height:12px;"></i></div>
+            <div class="step-body">
+              <div class="step-name">최우선 기사 선정 및 오퍼 전송</div>
+              <div class="step-detail">Redis 분산 락 획득 → drv_1205(김도훈, 94.2점)에게 배차 오퍼 전송</div>
+            </div>
+            <div class="step-time">+103ms</div>
+          </div>
+          <div class="step-row">
+            <div class="step-num current">4</div>
+            <div class="step-body">
+              <div class="step-name">기사 수락 확인</div>
+              <div class="step-detail">기사 앱 수락 이벤트 수신 (DRIVER_ACCEPTED) — 분산 락 해제</div>
+            </div>
+            <div class="step-time">+3.58s</div>
+          </div>
+          <div class="step-row">
+            <div class="step-num" style="background:var(--dove);">5</div>
+            <div class="step-body">
+              <div class="step-name">배차 완료 브로드캐스팅</div>
+              <div class="step-detail">승객·기사 양측에 MATCH_CONFIRMED 이벤트 전파 — ETA 2.1분 안내</div>
+            </div>
+            <div class="step-time">예정</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /data-archetype="map-canvas" -->
+<div id="toast-el" class="toast-msg"></div>
+
+<script>
+lucide.createIcons();
+
+function showToast(msg) {
+  const t = document.getElementById('toast-el');
+  t.textContent = msg;
+  t.classList.add('visible');
+  t.style.boxShadow = '0 8px 32px rgba(23,25,28,.28)';
+  setTimeout(function() { t.classList.remove('visible'); }, 3000);
+}
+
+const driverData = {
+  '김도훈': {rating:'4.9',trips:'1,247',avatar:'김',priority:'P1'},
+  '이수연': {rating:'4.7',trips:'892',avatar:'이',priority:'P2'},
+  '박재민': {rating:'4.7',trips:'1,043',avatar:'박',priority:'P2'},
+  '최유나': {rating:'4.6',trips:'634',avatar:'최',priority:'P3'},
+  '정우성': {rating:'4.8',trips:'1,521',avatar:'정',priority:'P1'},
+  '오민지': {rating:'4.8',trips:'1,108',avatar:'오',priority:'P1'},
+  '한지훈': {rating:'4.5',trips:'447',avatar:'한',priority:'P3'},
+  '강서영': {rating:'4.6',trips:'773',avatar:'강',priority:'P3'},
+  '윤태현': {rating:'4.9',trips:'2,031',avatar:'윤',priority:'P1'},
+  '신은지': {rating:'4.7',trips:'958',avatar:'신',priority:'P2'},
+};
+
+function selectDriver(name) {
+  const d = driverData[name];
+  if(!d) return;
+  document.getElementById('dc-name').textContent = name + ' 기사';
+  document.getElementById('dc-rating').textContent = d.rating;
+  document.getElementById('dc-trips').textContent = d.trips;
+  document.getElementById('dc-avatar').textContent = d.avatar;
+  document.getElementById('dc-avatar').style.background = d.priority === 'P1' ? 'var(--ink)' : d.priority === 'P2' ? 'var(--accent)' : 'var(--dove)';
+  const card = document.getElementById('detail-card');
+  card.style.animation = 'none';
+  card.offsetHeight;
+  card.style.animation = 'fade-in .25s ease-out';
+}
+
+function showView(id) {
+  // Hide all
+  document.getElementById('view-map').style.display = 'none';
+  document.querySelectorAll('.overlay-panel').forEach(p => p.classList.remove('visible'));
+  // Update tabs
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  if(id === 'map') {
+    document.getElementById('view-map').style.display = 'block';
+    document.querySelector('[onclick="showView(\'map\')"]').classList.add('active');
+  } else {
+    const panel = document.getElementById('view-' + id);
+    if(panel) panel.classList.add('visible');
+    const tab = document.querySelector(`[onclick="showView('${id}')"]`);
+    if(tab) tab.classList.add('active');
+  }
+  lucide.createIcons();
+}
+
+function selectRequest(el) {
+  document.querySelectorAll('.req-card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+function selectStrategy(el) {
+  document.querySelectorAll('.strat-card').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  const icons = document.querySelectorAll('.strat-icon');
+  icons.forEach(i => i.style.color = 'var(--graphite)');
+  el.querySelector('.strat-icon').style.color = 'var(--accent)';
+}
+
+function adjustWeight(track, e) {
+  const rect = track.getBoundingClientRect();
+  const pct = Math.max(5, Math.min(95, Math.round((e.clientX - rect.left) / rect.width * 100)));
+  track.querySelector('.wt-fill').style.width = pct + '%';
+  track.querySelector('.wt-thumb').style.left = 'calc(' + pct + '% - 10px)';
+  track.closest('.weight-row').querySelector('.wt-val').textContent = pct + '%';
+}
+
+function toggleAll(cb) {
+  document.querySelectorAll('.approval-tbl tbody input[type=checkbox]').forEach(c => c.checked = cb.checked);
+}
+
+// Re-initialize icons whenever view changes
+document.addEventListener('DOMContentLoaded', function() { lucide.createIcons(); });
+</script>
+</body>
+</html>
