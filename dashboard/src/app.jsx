@@ -4705,6 +4705,8 @@ function App({ session }) {
         <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
           <button onClick={() => setShowQuickAdd(true)}
             style={btn.primary({ padding:'0.4rem 0.85rem', display:'flex', alignItems:'center', gap:4 })}>＋ 등록</button>
+          <button onClick={() => setShowDeleted(true)} title="최근 삭제 (복원)"
+            style={btn.secondary({ padding:'0.4rem 0.55rem', lineHeight:1 })}>🗑</button>
           <button onClick={toggleTheme} title={theme === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}
             style={btn.secondary({ padding:'0.4rem 0.55rem', lineHeight:1 })}>
             {theme === 'dark' ? '☀️' : '🌙'}
