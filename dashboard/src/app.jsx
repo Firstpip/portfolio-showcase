@@ -576,7 +576,7 @@ function LiveDot({ connected }) {
 }
 
 // ─── UserMenu ───
-function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onShortcuts, onSignOut }) {
+function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onDeleted, onShortcuts, onSignOut }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -624,6 +624,11 @@ function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onS
               </button>
             </>
           )}
+          <div style={{ height:1, background:'var(--border)', margin:'2px 6px' }} />
+          <button onClick={select(onDeleted)} style={itemStyle}
+            onMouseEnter={e=>onItemHover(e,true)} onMouseLeave={e=>onItemHover(e,false)}>
+            <span style={{ width:18 }}>🗑</span> 최근 삭제
+          </button>
           <div style={{ height:1, background:'var(--border)', margin:'2px 6px' }} />
           <button onClick={select(onShortcuts)} style={itemStyle}
             onMouseEnter={e=>onItemHover(e,true)} onMouseLeave={e=>onItemHover(e,false)}>
@@ -889,6 +894,106 @@ function AssignPicker({ label, members, value, onChange, exclude }) {
           );
         })}
         {active.length === 0 && <span style={{ fontSize:'0.8rem', color:'var(--text2)', padding:'0.3rem 0', fontStyle:'italic' }}>팀원 없음 — 팀원 관리에서 추가하세요</span>}
+      </div>
+    </div>
+  );
+}
+
+// ─── DeletedProjectsModal (최근 삭제 복원) ───
+const DELETED_RESTORE_SQL = `-- Supabase SQL 에디터에서 1회 실행 후 새로고침
+create or replace function public.list_deleted_projects()
+returns table(slug text, title text, current_status text, deleted_at timestamptz, deleted_by text)
+language sql security definer set search_path = public as $$
+  select slug, title, current_status, deleted_at, deleted_by
+  from public.deleted_projects order by deleted_at desc limit 100;
+$$;
+grant execute on function public.list_deleted_projects() to authenticated;
+
+create or replace function public.restore_deleted_project(p_slug text)
+returns text language plpgsql security definer set search_path = public as $$
+declare snap jsonb;
+begin
+  select row_data into snap from public.deleted_projects
+    where slug = p_slug order by deleted_at desc limit 1;
+  if snap is null then raise exception '삭제 스냅샷 없음: %', p_slug; end if;
+  if exists(select 1 from public.wishket_projects where slug = p_slug) then
+    raise exception '이미 존재하는 프로젝트: %', p_slug; end if;
+  insert into public.wishket_projects overriding system value
+    select * from jsonb_populate_record(null::public.wishket_projects, snap);
+  return p_slug;
+end $$;
+grant execute on function public.restore_deleted_project(text) to authenticated;`;
+
+function DeletedProjectsModal({ onClose, onRestored, toast }) {
+  const trapRef = useFocusTrap();
+  const [list, setList] = useState(null);   // null=loading
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(null);   // 복원 진행 중인 slug
+
+  const fetchList = useCallback(async () => {
+    const { data, error } = await supabase.rpc('list_deleted_projects');
+    if (error) { setErr(error.message); setList([]); return; }
+    setErr(null); setList(data || []);
+  }, []);
+
+  useEffect(() => { fetchList(); }, [fetchList]);
+  useEffect(() => {
+    const h = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+
+  const restore = async (slug) => {
+    if (!window.confirm(`'${slug}'를 워크룸에 복원합니다.\n생성일·상태·미팅일 등 삭제 직전 값 그대로 되살아납니다. 계속할까요?`)) return;
+    setBusy(slug);
+    const { error } = await supabase.rpc('restore_deleted_project', { p_slug: slug });
+    setBusy(null);
+    if (error) { toast('복원 실패: ' + error.message, 'error'); return; }
+    toast(`복원 완료 (${slug})`, 'success');
+    setList(prev => prev.filter(r => r.slug !== slug));
+    onRestored && onRestored();
+  };
+
+  const fmt = t => t ? String(t).slice(0, 16).replace('T', ' ') : '-';
+
+  return (
+    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
+      <div ref={trapRef} role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
+        background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:560,
+        border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
+        boxShadow:'0 20px 60px var(--shadow)', maxHeight:'80vh', display:'flex', flexDirection:'column' }}>
+        <div style={{ padding:'1.25rem 1.5rem', borderBottom:'1px solid var(--border)', display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0 }}>
+          <div>
+            <div style={{ fontWeight:700, fontSize:'1rem' }}>🗑 최근 삭제</div>
+            <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginTop:2 }}>삭제된 프로젝트를 워크룸 DB에만 원상 복원합니다 (포트폴리오/배포 제외)</div>
+          </div>
+          <button onClick={onClose} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem', padding:'2px 4px' }}>✕</button>
+        </div>
+        <div style={{ padding:'1rem 1.5rem', overflowY:'auto' }}>
+          {list === null && !err && <div style={{ color:'var(--text2)', fontSize:'0.85rem' }}>불러오는 중…</div>}
+          {err && (
+            <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>
+              <div style={{ color:'var(--red)', marginBottom:8, fontWeight:600 }}>복원 기능 SQL이 아직 설치되지 않았습니다.</div>
+              <div style={{ marginBottom:6 }}>Supabase → SQL 에디터에서 아래를 실행 후 새로고침하세요:</div>
+              <pre style={{ background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:8, padding:'0.7rem', overflowX:'auto', fontSize:'0.7rem', lineHeight:1.5, whiteSpace:'pre' }}>{DELETED_RESTORE_SQL}</pre>
+            </div>
+          )}
+          {list && list.length === 0 && !err && <div style={{ color:'var(--text2)', fontSize:'0.85rem' }}>삭제된 프로젝트가 없습니다.</div>}
+          {list && list.map(r => (
+            <div key={r.slug + r.deleted_at} style={{ display:'flex', alignItems:'center', gap:10, padding:'0.6rem 0', borderBottom:'1px solid var(--border)' }}>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:'0.85rem', fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{r.title || r.slug}</div>
+                <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                  {r.slug} · 상태 {r.current_status || '-'} · 삭제 {fmt(r.deleted_at)}{r.deleted_by ? ' · ' + r.deleted_by : ''}
+                </div>
+              </div>
+              <button onClick={() => restore(r.slug)} disabled={busy === r.slug}
+                style={{ padding:'0.3rem 0.75rem', borderRadius:6, border:'none', background:'var(--accent)', color:'#fff', fontSize:'0.78rem', fontWeight:600, cursor:busy===r.slug?'default':'pointer', opacity:busy===r.slug?0.6:1, flexShrink:0 }}>
+                {busy === r.slug ? '복원 중…' : '복원'}
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -3669,6 +3774,7 @@ function App({ session }) {
     return () => window.removeEventListener('hashchange', h);
   }, []);
   const [showTeamMgr, setShowTeamMgr]     = useState(false);
+  const [showDeleted, setShowDeleted]     = useState(false);
   const [showQuickAdd, setShowQuickAdd]   = useState(false);
   const [memberFilter, setMemberFilter]   = useState('');
 
@@ -4582,6 +4688,13 @@ function App({ session }) {
           onDeactivate={handleDeactivateMember}
         />
       )}
+      {showDeleted && (
+        <DeletedProjectsModal
+          onClose={() => setShowDeleted(false)}
+          onRestored={loadData}
+          toast={toast}
+        />
+      )}
 
       {/* Header */}
       <div className="fade-in" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1.25rem', flexWrap:'wrap', gap:'0.75rem', position:'relative', zIndex:50 }}>
@@ -4602,6 +4715,7 @@ function App({ session }) {
             displayName={displayName}
             isAdmin={isAdmin}
             onTeamMgr={() => setShowTeamMgr(true)}
+            onDeleted={() => setShowDeleted(true)}
             onShortcuts={() => setShowShortcuts(true)}
             onSignOut={() => supabase.auth.signOut()}
           />
