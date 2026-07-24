@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 보조 HAZOP 위험성평가 워크플로우 — 맞춤 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.23.0/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
+<style>
+:root{
+  --ink:#17191c;
+  --paper:#ffffff;
+  --mist:#f2f2f3;
+  --fog:#fafafb;
+  --peach:#fbe1d1;
+  --sienna:#5d2a1a;
+  --slate:#777b86;
+  --ash:#979799;
+  --smoke:#a3a6af;
+  --hairline:rgba(23,25,28,.09);
+  --low-fg:#2f6b48; --low-bg:#e5f1e9;
+  --mid-fg:#93641c; --mid-bg:#f5e8cd;
+  --high-fg:#5d2a1a; --high-bg:#fbe1d1;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;width:100%;}
+body{
+  font-family:'Pretendard',ui-sans-serif,system-ui,-apple-system,sans-serif;
+  background:var(--paper);
+  color:var(--ink);
+  -webkit-font-smoothing:antialiased;
+}
+#root{width:100%;min-height:100vh;}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit;}
+input,select,textarea{font-family:inherit;}
+::-webkit-scrollbar{height:8px;width:8px;}
+::-webkit-scrollbar-thumb{background:#e2e2e3;border-radius:8px;}
+
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+@keyframes pulseDot{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.45;transform:scale(1.25);}}
+@keyframes shimmer{0%{background-position:-320px 0;}100%{background-position:320px 0;}}
+@keyframes slideUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
+@keyframes cardLift{from{box-shadow:0 1px 2px rgba(23,25,28,.06);}to{box-shadow:0 10px 24px -12px rgba(23,25,28,.28);}}
+
+.screen{animation:fadeIn .32s ease both;}
+
+.topnav{
+  position:sticky;top:0;z-index:40;display:flex;align-items:center;justify-content:space-between;
+  padding:0 28px;height:64px;background:rgba(255,255,255,.92);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--hairline);
+}
+.brand{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:600;letter-spacing:-.4px;}
+.brand .mark{width:28px;height:28px;border-radius:8px;background:var(--ink);color:var(--paper);display:flex;align-items:center;justify-content:center;font-size:14px;}
+.navtabs{display:flex;gap:2px;}
+.navtab{display:flex;align-items:center;gap:7px;padding:9px 14px;border-radius:999px;font-size:14px;color:var(--slate);transition:.15s;}
+.navtab:hover{background:var(--fog);color:var(--ink);}
+.navtab.active{background:var(--ink);color:var(--paper);}
+.navright{display:flex;align-items:center;gap:12px;flex-shrink:0;}
+@media (max-width:480px){ .navright .btn-soft{display:none;} .navtabs{overflow-x:auto;max-width:38vw;} .topnav{padding:0 14px;gap:8px;} }
+.avatar{width:32px;height:32px;border-radius:999px;overflow:hidden;flex-shrink:0;border:1px solid var(--hairline);}
+.avatar img{width:100%;height:100%;object-fit:cover;}
+
+.btn{display:inline-flex;align-items:center;gap:7px;padding:9px 18px;border-radius:999px;font-size:14px;font-weight:500;white-space:nowrap;transition:.15s;}
+.btn-dark{background:var(--ink);color:var(--paper);}
+.btn-dark:hover{background:#000;}
+.btn-ghost{border:1px solid var(--ink);color:var(--ink);}
+.btn-ghost:hover{background:var(--fog);}
+.btn-soft{background:var(--mist);color:var(--ink);}
+.btn-soft:hover{background:#e7e7e8;}
+.btn-sm{padding:6px 12px;font-size:12.5px;border-radius:999px;}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+
+.card{background:var(--paper);border:1px solid var(--hairline);border-radius:18px;}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:600;}
+.badge-low{color:var(--low-fg);background:var(--low-bg);}
+.badge-mid{color:var(--mid-fg);background:var(--mid-bg);}
+.badge-high{color:var(--high-fg);background:var(--high-bg);}
+
+/* ---- Board (kanban-board archetype) ---- */
+.board-wrap{padding:28px 28px 40px;}
+.hero-line{font-size:46px;line-height:1.14;font-weight:300;letter-spacing:-1.1px;margin:0 0 6px;color:var(--ink);}
+.hero-sub{font-size:15px;color:var(--slate);margin:0 0 22px;}
+.board-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap;}
+.board-filters{display:flex;gap:8px;align-items:center;}
+.chip{padding:7px 13px;border-radius:999px;font-size:12.5px;border:1px solid var(--hairline);color:var(--slate);background:var(--paper);}
+.chip.active{background:var(--ink);color:var(--paper);border-color:var(--ink);}
+.board-body{display:flex;gap:20px;align-items:flex-start;}
+.board{display:flex;gap:16px;overflow-x:auto;flex:1;padding-bottom:10px;}
+.column{flex:0 0 272px;background:var(--fog);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:10px;min-height:120px;}
+.col-header{display:flex;align-items:center;justify-content:space-between;padding:4px 6px 8px;font-size:13.5px;font-weight:600;}
+.col-header .count{font-size:11.5px;font-weight:700;background:var(--mist);color:var(--ink);border-radius:999px;padding:2px 9px;}
+.card.task{padding:13px 14px;cursor:pointer;transition:.15s;animation:fadeIn .3s ease both;}
+.column .card.task:nth-child(2){animation-delay:.04s;}
+.column .card.task:nth-child(3){animation-delay:.08s;}
+.column .card.task:nth-child(4){animation-delay:.12s;}
+.card.task:hover{animation:cardLift .18s forwards;transform:translateY(-1px);}
+.task-node{font-size:11.5px;color:var(--ash);font-weight:600;letter-spacing:.2px;margin-bottom:4px;}
+.task-title{font-size:13.6px;font-weight:600;line-height:1.4;margin-bottom:10px;}
+.task-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.tag{font-size:11px;padding:3px 8px;border-radius:999px;background:var(--mist);color:var(--slate);font-weight:500;}
+.task-foot{display:flex;align-items:center;gap:6px;}
+.mini-avatar{width:20px;height:20px;border-radius:999px;overflow:hidden;border:1px solid var(--hairline);}
+.mini-avatar img{width:100%;height:100%;object-fit:cover;}
+
+.matrix-side{flex:0 0 268px;position:sticky;top:92px;}
+.matrix-title{font-size:13.5px;font-weight:600;margin-bottom:3px;}
+.matrix-sub{font-size:11.5px;color:var(--ash);margin-bottom:12px;}
+.matrix-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;}
+.matrix-cell{aspect-ratio:1;border-radius:5px;cursor:pointer;transition:.15s;position:relative;}
+.matrix-cell span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;color:rgba(0,0,0,.55);}
+.matrix-cell.selected{outline:2px solid var(--ink);outline-offset:1px;}
+.matrix-axis{font-size:10px;color:var(--ash);text-align:center;margin-top:6px;}
+.matrix-legend{display:flex;flex-direction:column;gap:6px;margin-top:16px;font-size:11.5px;color:var(--slate);}
+.legend-row{display:flex;align-items:center;gap:7px;}
+.legend-dot{width:9px;height:9px;border-radius:3px;}
+
+/* card detail drawer */
+.overlay{position:fixed;inset:0;background:rgba(23,25,28,.32);z-index:60;display:flex;justify-content:flex-end;animation:fadeIn .2s ease;}
+.drawer{width:420px;max-width:92vw;height:100%;background:var(--paper);padding:26px 24px;overflow-y:auto;animation:slideUp .22s ease;box-shadow:-16px 0 40px rgba(0,0,0,.12);}
+.drawer h3{font-size:19px;margin:0 0 4px;}
+.hist-item{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--hairline);font-size:12.5px;}
+.hist-item i{color:var(--ash);margin-top:2px;}
+
+/* ---- Worksheet ---- */
+.ws-wrap{padding:24px 28px 40px;}
+.ws-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;}
+.search{display:flex;align-items:center;gap:8px;background:var(--fog);border:1px solid var(--hairline);border-radius:12px;padding:8px 12px;font-size:13px;min-width:220px;}
+.search input{border:none;background:none;outline:none;font-size:13px;width:100%;color:var(--ink);}
+.select-mini{border:1px solid var(--hairline);border-radius:12px;padding:8px 10px;font-size:12.5px;background:var(--paper);color:var(--ink);}
+.table-scroll{overflow-x:auto;border:1px solid var(--hairline);border-radius:16px;}
+table.ws{border-collapse:collapse;width:100%;min-width:1580px;}
+table.ws th{position:sticky;top:0;background:var(--ink);color:var(--paper);font-size:11px;font-weight:600;text-align:left;padding:10px 12px;white-space:nowrap;z-index:2;}
+table.ws td{padding:8px 12px;font-size:12.5px;border-bottom:1px solid var(--hairline);vertical-align:middle;background:var(--paper);}
+table.ws tr:hover td{background:var(--fog);}
+.cell-input{border:1px solid transparent;background:none;font-size:12.5px;font-family:inherit;color:var(--ink);width:100%;padding:4px 6px;border-radius:6px;}
+.cell-input:focus{outline:none;border-color:var(--ink);background:var(--paper);}
+.cell-select{border:1px solid var(--hairline);border-radius:6px;font-size:12px;padding:4px 6px;background:var(--paper);}
+.rowbtn{width:26px;height:26px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;color:var(--ash);}
+.rowbtn:hover{background:var(--mist);color:var(--ink);}
+
+/* ---- AI Draft ---- */
+.ai-wrap{padding:24px 28px 40px;display:flex;gap:20px;}
+.ai-list{flex:0 0 280px;display:flex;flex-direction:column;gap:8px;}
+.ai-node-btn{text-align:left;padding:12px 13px;border-radius:14px;border:1px solid var(--hairline);background:var(--paper);}
+.ai-node-btn.active{background:var(--ink);color:var(--paper);border-color:var(--ink);}
+.ai-node-btn .n{font-size:12px;font-weight:700;opacity:.7;}
+.ai-node-btn .t{font-size:13px;margin-top:2px;}
+.ai-status-dot{width:8px;height:8px;border-radius:999px;display:inline-block;}
+.dot-pending{background:var(--ash);}
+.dot-progress{background:#c98a2f;animation:pulseDot 1s ease-in-out infinite;}
+.dot-done{background:var(--low-fg);}
+.dot-failed{background:var(--high-fg);}
+.ai-panel{flex:1;min-width:0;}
+.field-card{border:1px solid var(--hairline);border-radius:16px;padding:16px;margin-bottom:12px;}
+.field-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.field-name{font-size:12.5px;font-weight:700;color:var(--ash);text-transform:uppercase;letter-spacing:.4px;}
+.src-tag{font-size:10.5px;padding:2px 8px;border-radius:999px;font-weight:600;}
+.src-ai{background:var(--peach);color:var(--sienna);}
+.src-user{background:var(--mist);color:var(--slate);}
+.field-textarea{width:100%;border:1px solid var(--hairline);border-radius:10px;padding:9px 11px;font-size:13px;font-family:inherit;resize:vertical;min-height:44px;color:var(--ink);}
+.field-textarea:focus{outline:none;border-color:var(--ink);}
+.field-actions{display:flex;gap:6px;margin-top:8px;}
+.skeleton{height:44px;border-radius:10px;background:linear-gradient(90deg,#f2f2f3 0px,#fafafb 80px,#f2f2f3 160px);background-size:640px 100%;animation:shimmer 1.3s linear infinite;}
+.evidence{font-size:11.5px;color:var(--ash);display:flex;align-items:center;gap:6px;margin-top:4px;}
+
+/* ---- Workspace ---- */
+.wsp-wrap{padding:24px 28px 40px;}
+.org-row{display:flex;gap:16px;}
+.org-list{flex:0 0 250px;display:flex;flex-direction:column;gap:8px;}
+.org-item{padding:13px 14px;border-radius:14px;border:1px solid var(--hairline);cursor:pointer;}
+.org-item.active{background:var(--ink);color:var(--paper);border-color:var(--ink);}
+.org-item .m{font-size:11.5px;opacity:.65;margin-top:3px;}
+.org-detail{flex:1;min-width:0;}
+.iso-banner{display:flex;align-items:center;gap:10px;background:var(--fog);border:1px solid var(--hairline);border-radius:14px;padding:12px 16px;font-size:12.5px;color:var(--slate);margin-bottom:16px;}
+.iso-banner i{color:var(--low-fg);font-size:17px;}
+table.mem{width:100%;border-collapse:collapse;}
+table.mem th{text-align:left;font-size:11.5px;color:var(--ash);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--hairline);}
+table.mem td{padding:9px 10px;font-size:13px;border-bottom:1px solid var(--hairline);}
+.perm-grid{margin-top:22px;}
+.perm-table{width:100%;border-collapse:collapse;font-size:12px;}
+.perm-table th,.perm-table td{padding:8px 10px;border-bottom:1px solid var(--hairline);text-align:center;}
+.perm-table th:first-child,.perm-table td:first-child{text-align:left;}
+.modal-back{position:fixed;inset:0;background:rgba(23,25,28,.34);z-index:70;display:flex;align-items:center;justify-content:center;animation:fadeIn .18s ease;}
+.modal{width:400px;max-width:92vw;background:var(--paper);border-radius:20px;padding:24px;animation:slideUp .2s ease;}
+.field-label{font-size:12px;color:var(--slate);margin:14px 0 6px;font-weight:600;}
+.field-in{width:100%;border:1px solid var(--hairline);border-radius:10px;padding:10px 12px;font-size:13.5px;color:var(--ink);}
+.field-in:focus{outline:none;border-color:var(--ink);}
+
+.toast-wrap{position:fixed;bottom:24px;right:24px;z-index:80;display:flex;flex-direction:column;gap:8px;}
+.toast{display:flex;align-items:center;gap:9px;background:var(--ink);color:var(--paper);padding:12px 16px;border-radius:12px;font-size:13px;animation:slideUp .22s ease;box-shadow:0 12px 30px rgba(0,0,0,.2);}
+
+.section-title{font-size:22px;font-weight:600;letter-spacing:-.4px;margin:0 0 4px;}
+.section-sub{font-size:13.5px;color:var(--slate);margin:0 0 18px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef } = React;
+
+function Icon({ name, size = 16, style }) {
+  return <i className={`ph ph-${name}`} style={{ fontSize: size, lineHeight: 1, ...style }}></i>;
+}
+function Avatar({ seed, size = 32, className = 'avatar' }) {
+  return (
+    <div className={className} style={{ width: size, height: size }}>
+      <img src={`https://source.boringavatars.com/beam/${size * 2}/${encodeURIComponent(seed)}?colors=17191c,777b86,fbe1d1,5d2a1a,f2f2f3`} alt="" />
+    </div>
+  );
+}
+
+const GUIDE_WORDS = ['압력 초과', '유량 없음', '역류', '온도 초과', '레벨 이상', '조성 이상'];
+const REVIEWERS = ['박서준 검토위원', '이하윤 검토위원', '정도현 안전팀장'];
+
+function riskLevel(score) {
+  if (score >= 16) return 'high';
+  if (score >= 7) return 'mid';
+  return 'low';
+}
+const RISK_LABEL = { low: '낮음', mid: '중간', high: '높음' };
+
+const INITIAL_CARDS = [
+  { id: 1, col: 'draft', node: 'N-04 반응기 R-201', title: '교반 정지에 따른 국부 발열 편차 검토', tag: '온도 초과', likelihood: 3, severity: 4, reviewer: REVIEWERS[0], due: '07-29' },
+  { id: 2, col: 'draft', node: 'N-11 배관 P-118', title: '질소 퍼지 라인 역류 가능성 초안 작성', tag: '역류', likelihood: 2, severity: 3, reviewer: REVIEWERS[1], due: '07-30' },
+  { id: 3, col: 'draft', node: 'N-02 저장탱크 T-101', title: '벤트 라인 막힘 시 압력 초과 시나리오', tag: '압력 초과', likelihood: 3, severity: 5, reviewer: REVIEWERS[2], due: '07-28' },
+  { id: 4, col: 'ai', node: 'N-07 펌프 P-305', title: 'AI가 캐비테이션 발생 원인 초안 생성 중', tag: '유량 없음', likelihood: 4, severity: 3, reviewer: REVIEWERS[0], due: '07-31' },
+  { id: 5, col: 'ai', node: 'N-15 배관 P-221', title: 'AI가 조성 편차 원인·결과 분석 중', tag: '조성 이상', likelihood: 2, severity: 4, reviewer: REVIEWERS[1], due: '08-01' },
+  { id: 6, col: 'review', node: 'N-01 저장탱크 T-100', title: '레벨 센서 오작동 시 과충전 리스크 검토대기', tag: '레벨 이상', likelihood: 3, severity: 5, reviewer: REVIEWERS[2], due: '07-27', history: [{ t: '07-25 14:02', who: 'AI 분석', act: '초안 생성 완료' }] },
+  { id: 7, col: 'review', node: 'N-09 열교환기 E-410', title: '냉각수 유량 저하에 따른 온도 초과 검토대기', tag: '온도 초과', likelihood: 2, severity: 3, reviewer: REVIEWERS[0], due: '07-29', history: [{ t: '07-24 10:11', who: 'AI 분석', act: '초안 생성 완료' }] },
+  { id: 8, col: 'review', node: 'N-18 배관 P-330', title: '드레인 밸브 오조작 역류 시나리오 검토대기', tag: '역류', likelihood: 2, severity: 2, reviewer: REVIEWERS[1], due: '08-02', history: [] },
+  { id: 9, col: 'approved', node: 'N-03 반응기 R-202', title: '비상 인터록 작동 조건 최종 승인', tag: '압력 초과', likelihood: 2, severity: 4, reviewer: REVIEWERS[2], due: '07-20', history: [{ t: '07-18 09:30', who: 'AI 분석', act: '초안 생성' }, { t: '07-19 16:40', who: '정도현 안전팀장', act: '수정 후 승인' }] },
+  { id: 10, col: 'approved', node: 'N-06 펌프 P-306', title: '예비 펌프 자동 절체 로직 최종 승인', tag: '유량 없음', likelihood: 1, severity: 3, reviewer: REVIEWERS[0], due: '07-19', history: [{ t: '07-17 11:00', who: '박서준 검토위원', act: '승인' }] },
+  { id: 11, col: 'approved', node: 'N-13 저장탱크 T-104', title: '질소 블랭킷 압력 유지 조건 최종 승인', tag: '레벨 이상', likelihood: 1, severity: 2, reviewer: REVIEWERS[1], due: '07-15', history: [{ t: '07-14 15:20', who: '이하윤 검토위원', act: '승인' }] },
+  { id: 12, col: 'draft', node: 'N-20 배관 P-402', title: '샘플링 라인 조성 이상 초안 작성 대기', tag: '조성 이상', likelihood: 3, severity: 3, reviewer: REVIEWERS[2], due: '08-03' },
+];
+
+const COLUMNS = [
+  { id: 'draft', label: '초안 작성' },
+  { id: 'ai', label: 'AI 분석중' },
+  { id: 'review', label: '검증 대기' },
+  { id: 'approved', label: '승인 완료' },
+];
+const NEXT_COL = { draft: 'ai', ai: 'review', review: 'approved', approved: 'approved' };
+
+function TaskCard({ c, onOpen }) {
+  const lvl = riskLevel(c.likelihood * c.severity);
+  return (
+    <div className="card task" style={{ borderRadius: 18, boxShadow: '0 1px 2px rgba(23,25,28,0.06)' }} onClick={() => onOpen(c)}>
+      <div className="task-node">{c.node}</div>
+      <div className="task-title">{c.title}</div>
+      <div className="task-meta">
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span className="tag">{c.tag}</span>
+          <span className={`badge badge-${lvl}`}>위험 {RISK_LABEL[lvl]}</span>
+        </div>
+        <div className="task-foot">
+          <span style={{ fontSize: 11, color: 'var(--ash)' }}>{c.due}</span>
+          <div className="mini-avatar"><Avatar seed={c.reviewer} size={20} className="mini-avatar" /></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RiskMatrix({ cards, selected, onSelect }) {
+  const counts = useMemo(() => {
+    const m = {};
+    cards.forEach(c => { const k = `${c.likelihood}-${c.severity}`; m[k] = (m[k] || 0) + 1; });
+    return m;
+  }, [cards]);
+  const cellColor = (l, s) => {
+    const score = l * s;
+    if (score >= 16) return 'var(--high-bg)';
+    if (score >= 7) return 'var(--mid-bg)';
+    return 'var(--low-bg)';
+  };
+  return (
+    <div className="matrix-side">
+      <div className="matrix-title">위험도 매트릭스</div>
+      <div className="matrix-sub">빈도(Likelihood) × 심각도(Severity) — 셀 클릭 시 보드 필터링</div>
+      <div className="matrix-grid">
+        {[5, 4, 3, 2, 1].map(s => (
+          [1, 2, 3, 4, 5].map(l => {
+            const key = `${l}-${s}`;
+            const sel = selected === key;
+            return (
+              <div key={key} className={`matrix-cell ${sel ? 'selected' : ''}`}
+                style={{ background: cellColor(l, s) }}
+                onClick={() => onSelect(sel ? null : key)}>
+                <span>{counts[key] || ''}</span>
+              </div>
+            );
+          })
+        ))}
+      </div>
+      <div className="matrix-axis">← 빈도 낮음 · 심각도 낮음(하단) · 클릭하여 필터 →</div>
+      <div className="matrix-legend">
+        <div className="legend-row"><span className="legend-dot" style={{ background: 'var(--low-bg)' }}></span>낮음 (1~6점)</div>
+        <div className="legend-row"><span className="legend-dot" style={{ background: 'var(--mid-bg)' }}></span>중간 (7~15점)</div>
+        <div className="legend-row"><span className="legend-dot" style={{ background: 'var(--high-bg)' }}></span>높음 (16~25점)</div>
+      </div>
+    </div>
+  );
+}
+
+function CardDrawer({ card, onClose, onAdvance, notify }) {
+  const [note, setNote] = useState('');
+  const lvl = riskLevel(card.likelihood * card.severity);
+  const advance = (action) => {
+    onAdvance(card.id, action, note);
+    notify(`${card.node} — ${action} 처리되어 이력에 기록되었습니다`);
+    onClose();
+  };
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="drawer" onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <div className="task-node">{card.node}</div>
+            <h3>{card.title}</h3>
+          </div>
+          <button className="rowbtn" onClick={onClose}><Icon name="x" size={18} /></button>
+        </div>
+        <div style={{ display: 'flex', gap: 8, margin: '10px 0 18px' }}>
+          <span className="tag">{card.tag}</span>
+          <span className={`badge badge-${lvl}`}>Risk Ranking {card.likelihood * card.severity} · {RISK_LABEL[lvl]}</span>
+        </div>
+        <div className="field-label">검토 의견 작성</div>
+        <textarea className="field-textarea" placeholder="검토 코멘트를 입력합니다" value={note} onChange={e => setNote(e.target.value)}></textarea>
+        <div style={{ display: 'flex', gap: 8, margin: '12px 0 22px' }}>
+          <button className="btn btn-dark btn-sm" onClick={() => advance('승인')}><Icon name="check" size={14} />승인·다음 단계로</button>
+          <button className="btn btn-soft btn-sm" onClick={() => advance('재검토 요청')}><Icon name="arrow-counter-clockwise" size={14} />재검토 요청</button>
+        </div>
+        <div className="field-label">변경 이력</div>
+        {(card.history || []).length === 0 && <div style={{ fontSize: 12.5, color: 'var(--ash)' }}>아직 기록된 이력이 없습니다.</div>}
+        {(card.history || []).slice().reverse().map((h, i) => (
+          <div className="hist-item" key={i}>
+            <Icon name="clock-counter-clockwise" size={13} />
+            <div><strong>{h.who}</strong> · {h.act}<div style={{ color: 'var(--ash)' }}>{h.t}</div></div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BoardScreen({ notify }) {
+  const [cards, setCards] = useState(INITIAL_CARDS);
+  const [selectedCell, setSelectedCell] = useState(null);
+  const [reviewerFilter, setReviewerFilter] = useState('전체');
+  const [open, setOpen] = useState(null);
+
+  const filtered = useMemo(() => cards.filter(c =>
+    (reviewerFilter === '전체' || c.reviewer === reviewerFilter) &&
+    (!selectedCell || `${c.likelihood}-${c.severity}` === selectedCell)
+  ), [cards, reviewerFilter, selectedCell]);
+
+  const advance = (id, action, note) => {
+    setCards(prev => prev.map(c => {
+      if (c.id !== id) return c;
+      const nextCol = action === '승인' ? NEXT_COL[c.col] : (c.col === 'approved' ? 'review' : c.col);
+      const hist = [...(c.history || []), { t: '오늘 방금', who: '나(검토자)', act: `${action}${note ? ' — ' + note.slice(0, 24) : ''}` }];
+      return { ...c, col: nextCol, history: hist };
+    }));
+  };
+
+  return (
+    <div className="screen board-wrap">
+      <div className="hero-line">전문가 검증 진행 보드</div>
+      <div className="hero-sub">노드별 HAZOP 분석 항목을 초안 작성 → AI 분석중 → 검증 대기 → 승인 완료 흐름으로 관리합니다.</div>
+      <div className="board-header">
+        <div className="board-filters">
+          <span className="chip active"><Icon name="funnel" size={12} style={{ marginRight: 4 }} />검토자</span>
+          {['전체', ...REVIEWERS].map(r => (
+            <button key={r} className={`chip ${reviewerFilter === r ? 'active' : ''}`} onClick={() => setReviewerFilter(r)}>{r}</button>
+          ))}
+        </div>
+        <button className="btn btn-dark" onClick={() => notify('새 HAZOP 분석 항목이 초안 작성 컬럼에 추가되었습니다')}>
+          <Icon name="plus" size={14} />새 분석 항목
+        </button>
+      </div>
+      <div className="board-body">
+        <div className="board">
+          <section className="column">
+            <div className="col-header"><span>초안 작성</span><span className="count">{filtered.filter(c => c.col === 'draft').length}</span></div>
+            {filtered.filter(c => c.col === 'draft').map(c => <TaskCard key={c.id} c={c} onOpen={setOpen} />)}
+          </section>
+          <section className="column">
+            <div className="col-header"><span>AI 분석중</span><span className="count">{filtered.filter(c => c.col === 'ai').length}</span></div>
+            {filtered.filter(c => c.col === 'ai').map(c => <TaskCard key={c.id} c={c} onOpen={setOpen} />)}
+          </section>
+          <section className="column">
+            <div className="col-header"><span>검증 대기</span><span className="count">{filtered.filter(c => c.col === 'review').length}</span></div>
+            {filtered.filter(c => c.col === 'review').map(c => <TaskCard key={c.id} c={c} onOpen={setOpen} />)}
+          </section>
+          <section className="column">
+            <div className="col-header"><span>승인 완료</span><span className="count">{filtered.filter(c => c.col === 'approved').length}</span></div>
+            {filtered.filter(c => c.col === 'approved').map(c => <TaskCard key={c.id} c={c} onOpen={setOpen} />)}
+          </section>
+        </div>
+        <RiskMatrix cards={cards} selected={selectedCell} onSelect={setSelectedCell} />
+      </div>
+      {open && <CardDrawer card={open} onClose={() => setOpen(null)} onAdvance={advance} notify={notify} />}
+    </div>
+  );
+}
+
+/* ---------------- Worksheet ---------------- */
+const INITIAL_ROWS = [
+  { id: 1, node: 'N-02 저장탱크 T-101', intent: '상압 저장', param: '압력', guide: '압력 초과', deviation: '벤트 막힘으로 인한 압력 상승', cause: '벤트 라인 이물질 막힘', consequence: '탱크 변형 및 누출 위험', safeguard: '압력 릴리프 밸브', likelihood: 3, severity: 5, recommendation: '벤트 라인 정기 점검 주기 단축', owner: '박서준', due: '07-28', status: '검토대기' },
+  { id: 2, node: 'N-07 펌프 P-305', intent: '이송 유량 유지', param: '유량', guide: '유량 없음', deviation: '흡입측 막힘으로 유량 상실', cause: '스트레이너 막힘', consequence: '펌프 공회전 및 손상', safeguard: '저유량 트립 인터록', likelihood: 4, severity: 3, recommendation: '스트레이너 차압계 알람 추가', owner: '이하윤', due: '07-31', status: 'AI 분석중' },
+  { id: 3, node: 'N-11 배관 P-118', intent: '질소 퍼지 유지', param: '흐름 방향', guide: '역류', deviation: '공정 유체의 퍼지 라인 역류', cause: '체크밸브 고착', consequence: '질소 라인 오염', safeguard: '이중 체크밸브', likelihood: 2, severity: 3, recommendation: '체크밸브 이중화 및 정기 교체', owner: '정도현', due: '07-30', status: '초안' },
+  { id: 4, node: 'N-04 반응기 R-201', intent: '반응 온도 유지', param: '온도', guide: '온도 초과', deviation: '교반 정지로 인한 국부 발열', cause: '교반기 모터 트립', consequence: '반응 폭주 가능성', safeguard: '비상 냉각수 자동 투입', likelihood: 3, severity: 4, recommendation: '교반기 이중화 검토', owner: '박서준', due: '07-29', status: '검토대기' },
+  { id: 5, node: 'N-01 저장탱크 T-100', intent: '레벨 관리', param: '레벨', guide: '레벨 이상', deviation: '레벨 센서 오작동으로 과충전', cause: '센서 캘리브레이션 오류', consequence: '탱크 오버플로우', safeguard: '이중 레벨 스위치', likelihood: 3, severity: 5, recommendation: '레벨 센서 이중화', owner: '정도현', due: '07-27', status: '승인' },
+  { id: 6, node: 'N-15 배관 P-221', intent: '조성 균질 유지', param: '조성', guide: '조성 이상', deviation: '샘플링 라인 혼합 편차', cause: '정적 믹서 마모', consequence: '제품 품질 이탈', safeguard: '온라인 조성 분석기', likelihood: 2, severity: 4, recommendation: '정적 믹서 교체 주기 단축', owner: '이하윤', due: '08-01', status: 'AI 분석중' },
+  { id: 7, node: 'N-09 열교환기 E-410', intent: '냉각 성능 유지', param: '온도', guide: '온도 초과', deviation: '냉각수 유량 저하', cause: '냉각수 펌프 성능 저하', consequence: '공정 온도 상승', safeguard: '냉각수 유량 저유량 알람', likelihood: 2, severity: 3, recommendation: '냉각수 펌프 예방정비 강화', owner: '박서준', due: '07-29', status: '검토대기' },
+  { id: 8, node: 'N-18 배관 P-330', intent: '드레인 차단 유지', param: '흐름 방향', guide: '역류', deviation: '드레인 밸브 오조작 역류', cause: '운전원 조작 실수', consequence: '배수 라인 역오염', safeguard: '드레인 밸브 인터록', likelihood: 2, severity: 2, recommendation: '드레인 밸브 개방 시 경고 알람 추가', owner: '이하윤', due: '08-02', status: '초안' },
+];
+const GUIDE_OPTS = ['전체', ...GUIDE_WORDS];
+const STATUS_OPTS = ['초안', 'AI 분석중', '검토대기', '승인'];
+
+function EditableCell({ value, onChange, width }) {
+  return <input className="cell-input" style={{ width: width || 130 }} value={value} onChange={e => onChange(e.target.value)} />;
+}
+
+function WorksheetScreen({ notify }) {
+  const [rows, setRows] = useState(INITIAL_ROWS);
+  const [q, setQ] = useState('');
+  const [guideFilter, setGuideFilter] = useState('전체');
+
+  const update = (id, key, val) => setRows(prev => prev.map(r => r.id === id ? { ...r, [key]: val } : r));
+  const addRow = () => {
+    const id = Math.max(...rows.map(r => r.id)) + 1;
+    setRows(prev => [...prev, { id, node: `N-${id.toString().padStart(2, '0')} 신규 노드`, intent: '', param: '', guide: GUIDE_WORDS[0], deviation: '', cause: '', consequence: '', safeguard: '', likelihood: 1, severity: 1, recommendation: '', owner: '박서준', due: '-', status: '초안' }]);
+    notify('워크시트에 새 행이 추가되었습니다');
+  };
+  const copyRow = (row) => {
+    const id = Math.max(...rows.map(r => r.id)) + 1;
+    setRows(prev => [...prev, { ...row, id, node: row.node + ' (사본)' }]);
+    notify('행이 복제되었습니다');
+  };
+  const delRow = (id) => { setRows(prev => prev.filter(r => r.id !== id)); notify('행이 삭제되었습니다'); };
+
+  const filtered = rows.filter(r =>
+    (guideFilter === '전체' || r.guide === guideFilter) &&
+    (q === '' || r.node.includes(q) || r.deviation.includes(q))
+  );
+
+  return (
+    <div className="screen ws-wrap">
+      <div className="section-title">HAZOP 15필드 워크시트</div>
+      <div className="section-sub">셀을 클릭해 직접 수정하고, Likelihood·Severity 입력 시 Risk Ranking이 즉시 재계산됩니다.</div>
+      <div className="ws-toolbar">
+        <div className="search"><Icon name="magnifying-glass" size={14} /><input placeholder="노드/이탈 검색" value={q} onChange={e => setQ(e.target.value)} /></div>
+        <select className="select-mini" value={guideFilter} onChange={e => setGuideFilter(e.target.value)}>
+          {GUIDE_OPTS.map(g => <option key={g}>{g}</option>)}
+        </select>
+        <button className="btn btn-dark btn-sm" onClick={addRow}><Icon name="plus" size={13} />행 추가</button>
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--ash)' }}>{filtered.length}개 항목 · 자동저장됨</span>
+      </div>
+      <div className="table-scroll">
+        <table className="ws">
+          <thead>
+            <tr>
+              {['Node', 'Design Intent', 'Parameter', 'Guide Word', 'Deviation', 'Cause', 'Consequence', 'Existing Safeguard', 'L', 'S', 'Risk Ranking', 'Recommendation', 'Responsible', 'Due Date', 'Review Status', ''].map(h =>
+                <th key={h}>{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(r => {
+              const score = r.likelihood * r.severity;
+              const lvl = riskLevel(score);
+              return (
+                <tr key={r.id}>
+                  <td><EditableCell value={r.node} onChange={v => update(r.id, 'node', v)} width={150} /></td>
+                  <td><EditableCell value={r.intent} onChange={v => update(r.id, 'intent', v)} width={110} /></td>
+                  <td><EditableCell value={r.param} onChange={v => update(r.id, 'param', v)} width={80} /></td>
+                  <td>
+                    <select className="cell-select" value={r.guide} onChange={e => update(r.id, 'guide', e.target.value)}>
+                      {GUIDE_WORDS.map(g => <option key={g}>{g}</option>)}
+                    </select>
+                  </td>
+                  <td><EditableCell value={r.deviation} onChange={v => update(r.id, 'deviation', v)} width={190} /></td>
+                  <td><EditableCell value={r.cause} onChange={v => update(r.id, 'cause', v)} width={150} /></td>
+                  <td><EditableCell value={r.consequence} onChange={v => update(r.id, 'consequence', v)} width={150} /></td>
+                  <td><EditableCell value={r.safeguard} onChange={v => update(r.id, 'safeguard', v)} width={140} /></td>
+                  <td>
+                    <select className="cell-select" value={r.likelihood} onChange={e => update(r.id, 'likelihood', Number(e.target.value))}>
+                      {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  </td>
+                  <td>
+                    <select className="cell-select" value={r.severity} onChange={e => update(r.id, 'severity', Number(e.target.value))}>
+                      {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  </td>
+                  <td><span className={`badge badge-${lvl}`}>{score} · {RISK_LABEL[lvl]}</span></td>
+                  <td><EditableCell value={r.recommendation} onChange={v => update(r.id, 'recommendation', v)} width={170} /></td>
+                  <td><EditableCell value={r.owner} onChange={v => update(r.id, 'owner', v)} width={70} /></td>
+                  <td><EditableCell value={r.due} onChange={v => update(r.id, 'due', v)} width={64} /></td>
+                  <td>
+                    <select className="cell-select" value={r.status} onChange={e => update(r.id, 'status', e.target.value)}>
+                      {STATUS_OPTS.map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 2 }}>
+                      <button className="rowbtn" title="복사" onClick={() => copyRow(r)}><Icon name="copy" size={14} /></button>
+                      <button className="rowbtn" title="삭제" onClick={() => delRow(r.id)}><Icon name="trash" size={14} /></button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- AI Draft ---------------- */
+const AI_NODES = [
+  { id: 1, node: 'N-07 펌프 P-305', title: '캐비테이션 발생 원인 분석', status: 'pending' },
+  { id: 2, node: 'N-15 배관 P-221', title: '조성 편차 원인·결과 분석', status: 'pending' },
+  { id: 3, node: 'N-01 저장탱크 T-100', title: '레벨 이상 시나리오 분석', status: 'done' },
+  { id: 4, node: 'N-20 배관 P-402', title: '샘플링 라인 조성 이상 분석', status: 'failed' },
+];
+const DONE_DRAFT = {
+  deviation: '레벨 센서 오작동으로 인한 탱크 과충전(레벨 이상)',
+  cause: '레벨 센서 캘리브레이션 주기 초과로 인한 측정값 드리프트',
+  consequence: '탱크 오버플로우로 인한 공정 유체 유출 및 주변 오염',
+  safeguard: '이중 레벨 스위치 및 고레벨 경보 인터록',
+  recommendation: '레벨 센서 캘리브레이션 주기를 단축하고 독립 고레벨 스위치를 추가 설치',
+};
+const FIELD_META = [
+  { key: 'deviation', label: 'Deviation' },
+  { key: 'cause', label: 'Cause' },
+  { key: 'consequence', label: 'Consequence' },
+  { key: 'safeguard', label: 'Existing Safeguard' },
+  { key: 'recommendation', label: 'Recommendation' },
+];
+
+function AiDraftScreen({ notify }) {
+  const [nodes, setNodes] = useState(AI_NODES);
+  const [selId, setSelId] = useState(1);
+  const [draft, setDraft] = useState(null);
+  const [origin, setOrigin] = useState({});
+  const [extra, setExtra] = useState('');
+  const [history, setHistory] = useState([]);
+  const sel = nodes.find(n => n.id === selId);
+
+  useEffect(() => {
+    if (sel && sel.status === 'done') { setDraft(DONE_DRAFT); setOrigin({ deviation: 'ai', cause: 'ai', consequence: 'ai', safeguard: 'ai', recommendation: 'ai' }); }
+    else { setDraft(null); setOrigin({}); }
+    setHistory([]);
+  }, [selId]);
+
+  const requestAnalysis = () => {
+    setNodes(prev => prev.map(n => n.id === selId ? { ...n, status: 'progress' } : n));
+    setTimeout(() => {
+      setNodes(prev => prev.map(n => n.id === selId ? { ...n, status: 'done' } : n));
+      setDraft(DONE_DRAFT);
+      setOrigin({ deviation: 'ai', cause: 'ai', consequence: 'ai', safeguard: 'ai', recommendation: 'ai' });
+      notify(`${sel.node} — AI 분석 초안이 생성되었습니다`);
+    }, 1400);
+  };
+  const retry = () => {
+    setNodes(prev => prev.map(n => n.id === selId ? { ...n, status: 'progress' } : n));
+    setTimeout(() => {
+      setNodes(prev => prev.map(n => n.id === selId ? { ...n, status: 'done' } : n));
+      setDraft(DONE_DRAFT);
+      setOrigin({ deviation: 'ai', cause: 'ai', consequence: 'ai', safeguard: 'ai', recommendation: 'ai' });
+      notify('재시도 성공 — 초안이 생성되었습니다');
+    }, 1200);
+  };
+  const editField = (key, val) => { setDraft(prev => ({ ...prev, [key]: val })); setOrigin(prev => ({ ...prev, [key]: 'user' })); };
+  const rejectField = (key) => { setDraft(prev => ({ ...prev, [key]: '' })); setOrigin(prev => ({ ...prev, [key]: 'user' })); notify('AI 제안이 거절되어 직접 입력이 가능합니다'); };
+  const acceptField = (key) => notify(`${FIELD_META.find(f => f.key === key).label} 필드가 채택되었습니다`);
+  const regenerate = () => {
+    if (!extra.trim()) { notify('추가 조건을 입력한 뒤 재생성해 주세요'); return; }
+    setHistory(prev => [...prev, { ...draft }]);
+    setNodes(prev => prev.map(n => n.id === selId ? { ...n, status: 'progress' } : n));
+    setTimeout(() => {
+      setNodes(prev => prev.map(n => n.id === selId ? { ...n, status: 'done' } : n));
+      setDraft(prev => ({ ...prev, recommendation: prev.recommendation + ` (조건 반영: ${extra.trim()})` }));
+      setOrigin(prev => ({ ...prev, recommendation: 'ai' }));
+      notify('조건을 반영해 초안을 재생성했습니다');
+      setExtra('');
+    }, 1200);
+  };
+
+  return (
+    <div className="screen ai-wrap">
+      <div className="ai-list">
+        <div className="section-title" style={{ fontSize: 18 }}>AI 분석 대상 노드</div>
+        {nodes.map(n => (
+          <button key={n.id} className={`ai-node-btn ${selId === n.id ? 'active' : ''}`} onClick={() => setSelId(n.id)}>
+            <div className="n">{n.node}</div>
+            <div className="t">{n.title}</div>
+            <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5 }}>
+              <span className={`ai-status-dot dot-${n.status}`}></span>
+              {{ pending: '대기', progress: '진행중', done: '완료', failed: '실패' }[n.status]}
+            </div>
+          </button>
+        ))}
+      </div>
+      <div className="ai-panel">
+        <div className="section-title">AI 분석 초안 생성</div>
+        <div className="section-sub">선택한 노드 정보를 LLM API로 전송해 5개 필드 초안을 생성하고, 채택·수정·거절할 수 있습니다.</div>
+
+        {sel.status === 'pending' && (
+          <div className="card" style={{ padding: 20, textAlign: 'center' }}>
+            <p style={{ fontSize: 13.5, color: 'var(--slate)', marginBottom: 14 }}>이 노드는 아직 분석 요청 전입니다.</p>
+            <button className="btn btn-dark" onClick={requestAnalysis}><Icon name="sparkle" size={14} />AI 분석 요청</button>
+          </div>
+        )}
+        {sel.status === 'failed' && (
+          <div className="card" style={{ padding: 20, textAlign: 'center', borderColor: 'var(--high-fg)' }}>
+            <p style={{ fontSize: 13.5, color: 'var(--high-fg)', marginBottom: 14 }}><Icon name="warning-circle" size={15} style={{ marginRight: 6 }} />분석 요청이 실패했습니다 (LLM API 응답 시간 초과)</p>
+            <button className="btn btn-dark" onClick={retry}><Icon name="arrow-clockwise" size={14} />재시도</button>
+          </div>
+        )}
+        {sel.status === 'progress' && (
+          <div>
+            {FIELD_META.map(f => <div key={f.key} className="skeleton" style={{ marginBottom: 12 }}></div>)}
+          </div>
+        )}
+        {sel.status === 'done' && draft && (
+          <div>
+            {FIELD_META.map(f => (
+              <div className="field-card" key={f.key}>
+                <div className="field-head">
+                  <span className="field-name">{f.label}</span>
+                  <span className={`src-tag ${origin[f.key] === 'user' ? 'src-user' : 'src-ai'}`}>{origin[f.key] === 'user' ? '사용자 입력' : 'AI 생성'}</span>
+                </div>
+                <textarea className="field-textarea" value={draft[f.key]} onChange={e => editField(f.key, e.target.value)} />
+                <div className="evidence"><Icon name="file-text" size={12} />근거: 공정 P&amp;ID 문서 · {f.label} 관련 페이지</div>
+                <div className="field-actions">
+                  <button className="btn btn-soft btn-sm" onClick={() => acceptField(f.key)}><Icon name="check" size={12} />채택</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => rejectField(f.key)}><Icon name="x" size={12} />거절</button>
+                </div>
+              </div>
+            ))}
+            <div className="card" style={{ padding: 16, marginTop: 8 }}>
+              <div className="field-label" style={{ margin: '0 0 8px' }}>조건 반영 재생성</div>
+              <textarea className="field-textarea" placeholder="예: 겨울철 저온 조건을 반영해 다시 분석" value={extra} onChange={e => setExtra(e.target.value)} />
+              <button className="btn btn-dark btn-sm" style={{ marginTop: 8 }} onClick={regenerate}><Icon name="arrows-clockwise" size={13} />조건 반영 재생성</button>
+            </div>
+            {history.length > 0 && (
+              <div className="card" style={{ padding: 16, marginTop: 12 }}>
+                <div className="field-label" style={{ margin: '0 0 8px' }}>이전 초안 이력 ({history.length})</div>
+                {history.map((h, i) => <div key={i} style={{ fontSize: 12, color: 'var(--ash)', padding: '4px 0' }}>v{i + 1} · {h.recommendation.slice(0, 40)}...</div>)}
+              </div>
+            )}
+            <div className="card" style={{ padding: 16, marginTop: 12, background: 'var(--fog)' }}>
+              <div className="field-label" style={{ margin: '0 0 8px' }}>API 관리 설정 (읽기 전용)</div>
+              <div style={{ fontSize: 12, color: 'var(--slate)', lineHeight: 1.8 }}>
+                모델: Claude API · 프롬프트 템플릿: HAZOP-분석-v3 · 예외 처리: 3회 재시도 후 실패 처리
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Workspace ---------------- */
+const ORGS = [
+  { id: 1, name: '동해에너지 제2공장', members: 12, workspaces: 3 },
+  { id: 2, name: '서한화학 여수사업장', members: 8, workspaces: 2 },
+  { id: 3, name: '대성정유 안전기획팀', members: 5, workspaces: 1 },
+];
+const MEMBERS_INIT = [
+  { id: 1, name: '박서준', email: 'sj.park@demo-corp.kr', role: '관리자' },
+  { id: 2, name: '이하윤', email: 'hy.lee@demo-corp.kr', role: '검토자' },
+  { id: 3, name: '정도현', email: 'dh.jung@demo-corp.kr', role: '분석자' },
+  { id: 4, name: '최민서', email: 'ms.choi@demo-corp.kr', role: '분석자' },
+];
+const ROLES = ['관리자', '분석자', '검토자'];
+const PERMS = ['프로젝트 생성', '워크시트 편집', 'AI 분석 요청', '승인/반려', '조직 설정'];
+const PERM_MATRIX = {
+  관리자: [1, 1, 1, 1, 1],
+  분석자: [1, 1, 1, 0, 0],
+  검토자: [0, 1, 0, 1, 0],
+};
+
+function InviteModal({ onClose, onInvite }) {
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState('분석자');
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: 0, fontSize: 18 }}>사용자 초대</h3>
+        <div className="field-label">이메일</div>
+        <input className="field-in" placeholder="name@company.kr" value={email} onChange={e => setEmail(e.target.value)} />
+        <div className="field-label">역할</div>
+        <select className="field-in" value={role} onChange={e => setRole(e.target.value)}>
+          {ROLES.map(r => <option key={r}>{r}</option>)}
+        </select>
+        <div style={{ display: 'flex', gap: 8, marginTop: 20, justifyContent: 'flex-end' }}>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>취소</button>
+          <button className="btn btn-dark btn-sm" onClick={() => { if (email.trim()) { onInvite(email, role); onClose(); } }}>초대 보내기</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceScreen({ notify }) {
+  const [orgId, setOrgId] = useState(1);
+  const [members, setMembers] = useState(MEMBERS_INIT);
+  const [showInvite, setShowInvite] = useState(false);
+  const org = ORGS.find(o => o.id === orgId);
+
+  const changeRole = (id, role) => { setMembers(prev => prev.map(m => m.id === id ? { ...m, role } : m)); notify('역할이 변경되었습니다'); };
+  const invite = (email, role) => {
+    const id = Math.max(...members.map(m => m.id)) + 1;
+    setMembers(prev => [...prev, { id, name: email.split('@')[0], email, role }]);
+    notify(`${email} 님을 ${role}로 초대했습니다`);
+  };
+
+  return (
+    <div className="screen wsp-wrap">
+      <div className="section-title">조직·역할 기반 권한 관리</div>
+      <div className="section-sub">조직별 워크스페이스와 구성원 역할을 관리하고, 데이터 분리를 보장합니다.</div>
+      <div className="org-row">
+        <div className="org-list">
+          {ORGS.map(o => (
+            <div key={o.id} className={`org-item ${orgId === o.id ? 'active' : ''}`} onClick={() => setOrgId(o.id)}>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{o.name}</div>
+              <div className="m">워크스페이스 {o.workspaces} · 구성원 {o.members}명</div>
+            </div>
+          ))}
+          <button className="btn btn-soft btn-sm" style={{ justifyContent: 'center' }} onClick={() => notify('새 조직 생성 폼이 열립니다')}><Icon name="plus" size={13} />조직 생성</button>
+        </div>
+        <div className="org-detail">
+          <div className="iso-banner"><Icon name="shield-check" size={18} />‘{org.name}’ 조직 데이터는 다른 조직에서 조회·접근할 수 없도록 분리되어 있습니다.</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>구성원 ({members.length})</div>
+            <button className="btn btn-dark btn-sm" onClick={() => setShowInvite(true)}><Icon name="user-plus" size={13} />사용자 초대</button>
+          </div>
+          <table className="mem">
+            <thead><tr><th>이름</th><th>이메일</th><th>역할</th></tr></thead>
+            <tbody>
+              {members.map(m => (
+                <tr key={m.id}>
+                  <td>{m.name}</td><td style={{ color: 'var(--ash)' }}>{m.email}</td>
+                  <td>
+                    <select className="cell-select" value={m.role} onChange={e => changeRole(m.id, e.target.value)}>
+                      {ROLES.map(r => <option key={r}>{r}</option>)}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="perm-grid">
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>역할별 권한 매트릭스</div>
+            <table className="perm-table">
+              <thead><tr><th>권한</th>{ROLES.map(r => <th key={r}>{r}</th>)}</tr></thead>
+              <tbody>
+                {PERMS.map((p, i) => (
+                  <tr key={p}>
+                    <td>{p}</td>
+                    {ROLES.map((r, ri) => <td key={r}>{PERM_MATRIX[r][i] ? <Icon name="check" size={14} style={{ color: 'var(--low-fg)' }} /> : <span style={{ color: 'var(--smoke)' }}>—</span>}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      {showInvite && <InviteModal onClose={() => setShowInvite(false)} onInvite={invite} />}
+    </div>
+  );
+}
+
+/* ---------------- App shell ---------------- */
+function App() {
+  const [screen, setScreen] = useState('main');
+  const [toasts, setToasts] = useState([]);
+  const notify = (msg) => {
+    const id = Math.random().toString(36).slice(2);
+    setToasts(prev => [...prev, { id, msg }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 2800);
+  };
+  const tabs = [
+    { id: 'main', label: 'HAZOP 전문가 검증 진행 보드' },
+    { id: 'worksheet', label: 'HAZOP 15필드 워크시트' },
+    { id: 'ai-draft', label: 'AI 분석 초안 생성' },
+    { id: 'workspace', label: '조직·역할 기반 권한 관리' },
+  ];
+  return (
+    <div data-archetype="kanban-board">
+      <header className="topnav">
+        <div className="brand"><span className="mark">H</span>HazOps</div>
+        <nav className="navtabs">
+          {tabs.map(t => (
+            <button key={t.id} className={`navtab ${screen === t.id ? 'active' : ''}`} onClick={() => setScreen(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </nav>
+        <div className="navright">
+          <button className="btn btn-soft btn-sm" onClick={() => notify('전체 프로젝트 데이터가 최신 상태로 동기화되었습니다')}><Icon name="arrows-clockwise" size={13} />동기화</button>
+          <Avatar seed="박서준 관리자" size={32} />
+        </div>
+      </header>
+      {screen === 'main' && <BoardScreen notify={notify} />}
+      {screen === 'worksheet' && <WorksheetScreen notify={notify} />}
+      {screen === 'ai-draft' && <AiDraftScreen notify={notify} />}
+      {screen === 'workspace' && <WorkspaceScreen notify={notify} />}
+      <div className="toast-wrap">
+        {toasts.map(t => <div className="toast" key={t.id}><Icon name="check-circle" size={15} />{t.msg}</div>)}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
