@@ -354,6 +354,14 @@ function friendlyError(error) {
   if (code === 'PGRST116') return '대상 데이터를 찾을 수 없습니다.';
   if (code === '42501' || /permission|policy/i.test(msg)) return '권한이 없습니다. 로그인 상태를 확인해주세요.';
   if (/network|fetch|Failed to fetch/i.test(msg)) return '네트워크 연결이 불안정합니다. 잠시 후 다시 시도해주세요.';
+  // PGRST303 = "JWT issued at future" — 만료가 아니라 **서버(PostgREST) 시각이 뒤처져**
+  // 방금 발급된 토큰을 '미래에 발급된 것'으로 오판해 거부하는 상태다. 아래 generic JWT 분기에
+  // 걸리면 "만료됐으니 다시 로그인하라"는 정반대 안내가 나가고, 재로그인은 iat를 더 미래로
+  // 만들 뿐이라 영원히 풀리지 않는다. (2026-08-28 사고: 워크룸 전면 마비 — 로그인은 성공하는데
+  //  데이터만 401. 발급 5분 지난 토큰도 거부됐고, Supabase 프로젝트 Restart로 즉시 복구.)
+  if (code === 'PGRST303' || /issued at future/i.test(msg)) {
+    return '서버 시각 오류로 인증 토큰이 거부되었습니다 (PGRST303). 재로그인으로는 해결되지 않습니다 — Supabase 프로젝트를 재시작해야 합니다.';
+  }
   if (/JWT|token|auth/i.test(msg)) return '인증이 만료되었습니다. 다시 로그인해주세요.';
   return msg || '요청을 처리할 수 없습니다.';
 }
