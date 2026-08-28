@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>다지점 QR 보고서 관리 통합 콘솔 — 구현 데모</title>
+<link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<style>
+:root{
+  --iris:#5683da; --iris-dim:#eaf0fb; --frost:#d1d1d1; --ember:#ff8964; --ember-dim:#fff1ec;
+  --bg:#ffffff; --surface:#f6f7fb; --card:#ffffff; --ink:#090a0c; --muted:#95979e;
+  --border:#e7e8ee; --danger:#e0433f; --danger-dim:#fdeceb; --warn:#c9820a; --warn-dim:#fdf3e2;
+  --ok:#1f9d64; --ok-dim:#e6f7ee; --radius:20px; --radius-sm:12px;
+}
+*{box-sizing:border-box;}
+html,body{width:100%;margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:'Pretendard',ui-sans-serif,system-ui,-apple-system,sans-serif;}
+#root{width:100%;}
+button{font-family:inherit;cursor:pointer;}
+input,select,textarea{font-family:inherit;}
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:8px;}
+
+@keyframes fadeInUp{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:translateY(0);}}
+@keyframes fadeInScale{from{opacity:0;transform:scale(.95);}to{opacity:1;transform:scale(1);}}
+@keyframes slideInRight{from{opacity:0;transform:translateX(24px);}to{opacity:1;transform:translateX(0);}}
+@keyframes livePulse{0%{box-shadow:0 0 0 0 rgba(86,131,218,.5);}70%{box-shadow:0 0 0 9px rgba(86,131,218,0);}100%{box-shadow:0 0 0 0 rgba(86,131,218,0);}}
+@keyframes barGrow{from{width:0;}to{width:var(--w);}}
+@keyframes glowShift{0%,100%{opacity:.55;}50%{opacity:1;}}
+@keyframes toastIn{from{opacity:0;transform:translate(-50%,12px);}to{opacity:1;transform:translate(-50%,0);}}
+
+.tab{transition:color .15s ease;position:relative;}
+.tab.active::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--iris);border-radius:2px;}
+.stat-card{transition:transform .15s ease;}
+.stat-card:hover{transform:translateY(-2px);}
+.card-hover{transition:transform .15s ease,box-shadow .15s ease;box-shadow:0 6px 20px rgba(86,131,218,.08);}
+.card-hover:hover{transform:translateY(-2px);box-shadow:0 14px 32px rgba(86,131,218,.16);}
+.aurora-hero{position:relative;overflow:hidden;border-radius:24px;padding:26px 32px;margin-bottom:22px;background:linear-gradient(135deg,#5683da 0%,#8b6fe0 45%,#ff8964 100%);color:#fff;box-shadow:0 16px 40px rgba(86,131,218,.28);}
+.aurora-glow{position:absolute;border-radius:50%;background:rgba(255,255,255,.22);filter:blur(28px);animation:glowShift 4.5s ease-in-out infinite;}
+.btn-primary{background:var(--iris);color:#fff;border:none;border-radius:9999px;font-weight:600;font-size:14px;padding:10px 20px;transition:filter .12s ease,transform .12s ease;box-shadow:0 6px 18px rgba(86,131,218,.28);}
+.btn-primary:hover{filter:brightness(1.06);transform:translateY(-1px);}
+.btn-ghost{background:transparent;color:var(--ink);border:1px solid var(--border);border-radius:9999px;font-weight:600;font-size:13px;padding:8px 16px;transition:background .12s ease;}
+.btn-ghost:hover{background:var(--surface);}
+.pill-tag{display:inline-flex;align-items:center;gap:4px;border-radius:9999px;padding:3px 10px;font-size:11px;font-weight:700;}
+.progress-track{height:6px;border-radius:9999px;background:var(--border);overflow:hidden;}
+.progress-fill{height:100%;border-radius:9999px;background:linear-gradient(90deg,var(--iris),var(--ember));animation:barGrow .8s ease forwards;}
+</style>
+</head>
+<body data-archetype="topbar-analytics">
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const {useState, useEffect, useRef} = React;
+
+/* ---------- mock data ---------- */
+const BRANCHES = [
+  {id:'b1', name:'본사', org:'임상보고서 스튜디오', reports:9, staff:[{id:'s1', name:'김민수', role:'관리자', status:'active'},{id:'s2', name:'이지은', role:'담당자', status:'active'}]},
+  {id:'b2', name:'수도권 지점', org:'임상보고서 스튜디오', reports:4, staff:[{id:'s3', name:'박서준', role:'담당자', status:'active'},{id:'s4', name:'최유진', role:'담당자', status:'revoked'}]},
+  {id:'b3', name:'영남 지점', org:'임상보고서 스튜디오', reports:2, staff:[{id:'s5', name:'한도윤', role:'담당자', status:'active'}]},
+];
+
+const AUDIT_LOG = [
+  {id:'a1', actor:'김민수', ip:'10.20.4.11', target:'RPT-2024-0142', type:'조회', at:'11.12 09:02', anomaly:false},
+  {id:'a2', actor:'정수아(뷰티코스메틱)', ip:'118.34.2.9', target:'RPT-2024-0142', type:'다운로드', at:'11.12 09:11', anomaly:false},
+  {id:'a3', actor:'미확인 사용자', ip:'203.0.113.5', target:'RPT-2024-0138', type:'조회', at:'11.12 09:14', anomaly:true, reason:'5분 내 7회 반복 조회'},
+  {id:'a4', actor:'이지은', ip:'10.20.4.18', target:'RPT-2024-0145', type:'수정', at:'11.12 10:32', anomaly:false},
+  {id:'a5', actor:'한도윤(글로우랩)', ip:'112.85.6.2', target:'RPT-2024-0143', type:'조회', at:'11.12 10:40', anomaly:false},
+  {id:'a6', actor:'미확인 사용자', ip:'203.0.113.5', target:'RPT-2024-0130', type:'다운로드', at:'11.12 11:02', anomaly:true, reason:'동일 IP 단기 대량 다운로드'},
+];
+
+const TIMELINE = [
+  {id:'t1', text:'RPT-2024-0146 QR 발급 대기 등록', at:'방금'},
+  {id:'t2', text:'뷰티코스메틱 — QR 재다운로드 (RPT-2024-0142)', at:'6분 전'},
+  {id:'t3', text:'RPT-2024-0138 QR 재발급 완료', at:'22분 전'},
+  {id:'t4', text:'글로우랩 — 신규 담당자 계정 생성', at:'41분 전'},
+  {id:'t5', text:'배치 업로드 12건 처리 완료', at:'1시간 전'},
+];
+
+const QUEUE = [
+  {id:'q1', label:'RPT-2024-0143 QR 대기', due:'오늘 마감', level:'high'},
+  {id:'q2', label:'RPT-2024-0146 QR 대기', due:'오늘 마감', level:'high'},
+  {id:'q3', label:'RPT-2024-0140 재발급 필요', due:'2일 남음', level:'mid'},
+];
+
+function Icon({name, size=17, style, className=''}) {
+  return <i className={`ph ph-${name} ${className}`} style={{fontSize:size, lineHeight:1, ...style}}></i>;
+}
+
+function Toast({message, onDone}) {
+  useEffect(()=>{ const t=setTimeout(onDone, 2400); return ()=>clearTimeout(t); },[]);
+  return (
+    <div style={{position:'fixed', left:'50%', bottom:28, transform:'translateX(-50%)', background:'var(--ink)', color:'#fff', padding:'12px 22px', borderRadius:9999, fontSize:14, fontWeight:600, zIndex:900, animation:'toastIn .25s ease', display:'flex', alignItems:'center', gap:8, boxShadow:'0 10px 30px rgba(0,0,0,.25)'}}>
+      <Icon name="check-circle" size={16} style={{color:'var(--ember)'}} />{message}
+    </div>
+  );
+}
+
+function Modal({onClose, width=520, children}) {
+  return (
+    <div onClick={onClose} style={{position:'fixed', inset:0, background:'rgba(9,10,12,.5)', zIndex:800, display:'flex', alignItems:'center', justifyContent:'center', padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'#fff', borderRadius:20, width:'100%', maxWidth:width, maxHeight:'86vh', overflowY:'auto', animation:'fadeInScale .18s ease', boxShadow:'0 20px 60px rgba(9,10,12,.25)'}}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Drawer({onClose, children, width=400}) {
+  return (
+    <div style={{position:'fixed', inset:0, zIndex:850, display:'flex', justifyContent:'flex-end'}}>
+      <div onClick={onClose} style={{position:'absolute', inset:0, background:'rgba(9,10,12,.42)'}}></div>
+      <div style={{position:'relative', width, maxWidth:'92vw', height:'100%', background:'#fff', animation:'slideInRight .22s ease', padding:26, overflowY:'auto', boxShadow:'-16px 0 40px rgba(9,10,12,.18)'}}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- header + tabs ---------- */
+function Header({tab, setTab, pushToast}) {
+  const [navOpen, setNavOpen] = useState(false);
+  return (
+    <>
+      <header className="app-header" style={{position:'sticky', top:0, zIndex:100, background:'rgba(255,255,255,.92)', backdropFilter:'blur(8px)', borderBottom:'1px solid var(--border)', height:60, display:'flex', alignItems:'center', padding:'0 28px', gap:20}}>
+        <div className="brand" style={{display:'flex', alignItems:'center', gap:8, fontWeight:800, fontSize:16}}>
+          <span style={{width:26, height:26, borderRadius:8, background:'linear-gradient(135deg,var(--iris),var(--ember))', display:'inline-flex', alignItems:'center', justifyContent:'center'}}><Icon name="qr-code" size={15} style={{color:'#fff'}} /></span>
+          QR 콘솔
+        </div>
+        <button className="project-switcher" onClick={()=>pushToast('프로젝트 전환 메뉴를 엽니다')} style={{display:'flex', alignItems:'center', gap:6, background:'var(--surface)', border:'none', borderRadius:9999, padding:'7px 14px', fontSize:13, fontWeight:600}}>
+          임상보고서 스튜디오 <Icon name="caret-down" size={13} />
+        </button>
+        <nav className="global-nav" style={{display:'flex', gap:18, marginLeft:8}}>
+          {['대시보드','문서','설정'].map((s,i)=>(
+            <a key={s} className={`nav-link ${i===0?'active':''}`} onClick={()=>pushToast(`${s} 메뉴로 이동합니다`)} style={{fontSize:13.5, fontWeight:600, color: i===0 ? 'var(--iris)' : 'var(--muted)', cursor:'pointer'}}>{s}</a>
+          ))}
+        </nav>
+        <div className="header-actions" style={{marginLeft:'auto', display:'flex', alignItems:'center', gap:14}}>
+          <button onClick={()=>pushToast('검색을 실행합니다')} style={{background:'none', border:'none', color:'var(--muted)'}}><Icon name="magnifying-glass" size={19} /></button>
+          <button onClick={()=>setNavOpen(v=>!v)} style={{background:'none', border:'none', color:'var(--muted)', position:'relative'}}>
+            <Icon name="bell" size={19} />
+            <span style={{position:'absolute', top:-2, right:-2, width:7, height:7, borderRadius:'50%', background:'var(--ember)'}}></span>
+          </button>
+          {navOpen && (
+            <div style={{position:'absolute', top:56, right:28, background:'#fff', border:'1px solid var(--border)', borderRadius:14, padding:14, width:240, boxShadow:'0 16px 40px rgba(9,10,12,.16)', animation:'fadeInUp .15s ease'}}>
+              <div style={{fontSize:12.5, fontWeight:700, marginBottom:8}}>알림</div>
+              <div style={{fontSize:12.5, color:'var(--muted)', marginBottom:6}}>이상 접근 패턴 2건이 감지되었습니다</div>
+              <div style={{fontSize:12.5, color:'var(--muted)'}}>배치 업로드 1건이 완료되었습니다</div>
+            </div>
+          )}
+          <button onClick={()=>pushToast('내 계정 메뉴를 엽니다')} style={{width:30, height:30, borderRadius:'50%', background:'linear-gradient(135deg,var(--iris),var(--ember))', border:'none', color:'#fff', fontSize:12, fontWeight:700}}>김민</button>
+        </div>
+      </header>
+      <nav className="tab-bar" style={{display:'flex', gap:4, padding:'0 28px', borderBottom:'1px solid var(--border)', background:'#fff'}}>
+        <button className="tab" role="tab" onClick={()=>setTab('main')} style={{background:'none', border:'none', padding:'14px 6px', margin:'0 10px', fontSize:14, fontWeight:600, color: tab==='main' ? 'var(--ink)' : 'var(--muted)'}}>발급 현황</button>
+        <button className="tab" role="tab" onClick={()=>setTab('batch-upload')} style={{background:'none', border:'none', padding:'14px 6px', margin:'0 10px', fontSize:14, fontWeight:600, color: tab==='batch-upload' ? 'var(--ink)' : 'var(--muted)'}}>배치 업로드</button>
+        <button className="tab" role="tab" onClick={()=>setTab('audit-log')} style={{background:'none', border:'none', padding:'14px 6px', margin:'0 10px', fontSize:14, fontWeight:600, color: tab==='audit-log' ? 'var(--ink)' : 'var(--muted)'}}>감사 로그</button>
+        <button className="tab" role="tab" onClick={()=>setTab('multi-branch')} style={{background:'none', border:'none', padding:'14px 6px', margin:'0 10px', fontSize:14, fontWeight:600, color: tab==='multi-branch' ? 'var(--ink)' : 'var(--muted)'}}>지점 계정 관리</button>
+      </nav>
+    </>
+  );
+}
+
+/* ---------- main: 발급 현황 (command-tower) ---------- */
+function OverviewScreen({pushToast}) {
+  const [queueItem, setQueueItem] = useState(null);
+  const stats = [
+    {label:'오늘 발급', value:'12', icon:'qr-code'},
+    {label:'QR 대기', value:'5', icon:'hourglass'},
+    {label:'재발급 대기', value:'3', icon:'arrows-clockwise'},
+    {label:'만료 임박', value:'2', icon:'warning'},
+    {label:'활성 지점', value:'3', icon:'buildings'},
+  ];
+  const dist = [
+    {name:'본사', pct:56, color:'var(--iris)'},
+    {name:'수도권 지점', pct:28, color:'var(--ember)'},
+    {name:'영남 지점', pct:16, color:'#c9a3ff'},
+  ];
+
+  return (
+    <div style={{maxWidth:1280, margin:'0 auto', padding:'28px 28px 48px'}}>
+      <div className="aurora-hero">
+        <span className="aurora-glow" style={{width:220, height:220, top:-70, right:-40}}></span>
+        <span className="aurora-glow" style={{width:140, height:140, bottom:-60, left:120, animationDelay:'1.2s'}}></span>
+        <div style={{position:'relative', zIndex:1, display:'flex', alignItems:'flex-end', justifyContent:'space-between', flexWrap:'wrap', gap:12}}>
+          <div>
+            <div style={{fontSize:12, fontWeight:700, letterSpacing:'.08em', opacity:.85, marginBottom:8, textTransform:'uppercase'}}>QR 발급 관제 오로라</div>
+            <h1 style={{fontSize:42, fontWeight:800, letterSpacing:'-0.02em', margin:'0 0 6px', color:'#fff'}}>발급 현황</h1>
+            <p style={{fontSize:14, color:'rgba(255,255,255,.85)', margin:0}}>QR 발급 건수와 우선 대응 항목을 통합 모니터링합니다.</p>
+          </div>
+          <div style={{display:'flex', alignItems:'center', gap:6, fontSize:12.5, color:'#fff', fontWeight:700, background:'rgba(255,255,255,.16)', borderRadius:9999, padding:'6px 14px'}}>
+            <span style={{width:8, height:8, borderRadius:'50%', background:'#fff', animation:'livePulse 1.8s infinite'}}></span> 실시간
+          </div>
+        </div>
+      </div>
+
+      {/* status-strip */}
+      <div className="status-strip" style={{display:'flex', gap:10, marginBottom:24, flexWrap:'wrap'}}>
+        {stats.map(s=>(
+          <div key={s.label} className="stat-card" style={{display:'flex', alignItems:'center', gap:10, background:'var(--surface)', borderRadius:9999, padding:'10px 18px 10px 14px'}}>
+            <span style={{width:30, height:30, borderRadius:'50%', background:'#fff', display:'inline-flex', alignItems:'center', justifyContent:'center', color:'var(--iris)'}}><Icon name={s.icon} size={15} /></span>
+            <div>
+              <div className="stat-value" style={{fontSize:18, fontWeight:800, lineHeight:1}}>{s.value}</div>
+              <div className="stat-label" style={{fontSize:10.5, color:'var(--muted)', fontWeight:600}}>{s.label}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:'grid', gridTemplateColumns:'1.6fr 1fr', gap:20}}>
+        {/* primary-focus: timeline */}
+        <div className="card-hover" style={{background:'var(--card)', border:'1px solid var(--border)', borderRadius:20, padding:24}}>
+          <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:16}}>
+            <Icon name="activity" size={17} style={{color:'var(--iris)'}} />
+            <h3 style={{fontSize:15, fontWeight:700, margin:0}}>발급 이벤트 타임라인</h3>
+          </div>
+          <div>
+            {TIMELINE.map((t,i)=>(
+              <div key={t.id} style={{display:'flex', gap:12, padding:'11px 0', borderBottom: i<TIMELINE.length-1 ? '1px dashed var(--border)' : 'none', animation:'fadeInUp .25s ease', animationDelay:`${i*0.04}s`, animationFillMode:'backwards'}}>
+                <span style={{width:8, height:8, borderRadius:'50%', background: i===0 ? 'var(--ember)' : 'var(--frost)', marginTop:5, flexShrink:0, animation: i===0 ? 'livePulse 1.8s infinite' : 'none'}}></span>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13.5}}>{t.text}</div>
+                  <div style={{fontSize:11.5, color:'var(--muted)', marginTop:2}}>{t.at}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <svg className="chart sparkline" viewBox="0 0 240 40" style={{width:'100%', height:40, marginTop:14}}>
+            <polyline points="0,30 24,26 48,28 72,18 96,22 120,10 144,16 168,8 192,14 216,6 240,12" fill="none" stroke="var(--iris)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+
+        {/* priority-rail */}
+        <div className="card-hover" style={{background:'var(--card)', border:'1px solid var(--border)', borderRadius:20, padding:24}}>
+          <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:16}}>
+            <Icon name="list-checks" size={17} style={{color:'var(--ember)'}} />
+            <h3 style={{fontSize:15, fontWeight:700, margin:0}}>우선 대응 큐</h3>
+          </div>
+          {QUEUE.map(q=>(
+            <div key={q.id} onClick={()=>setQueueItem(q)} style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'11px 12px', borderRadius:12, background: q.level==='high' ? 'var(--ember-dim)' : 'var(--surface)', marginBottom:8, cursor:'pointer'}}>
+              <div>
+                <div style={{fontSize:13, fontWeight:700}}>{q.label}</div>
+                <div style={{fontSize:11.5, color:'var(--muted)'}}>{q.due}</div>
+              </div>
+              <Icon name="caret-right" size={14} style={{color:'var(--muted)'}} />
+            </div>
+          ))}
+
+          {/* secondary widgets */}
+          <div style={{marginTop:18, paddingTop:16, borderTop:'1px solid var(--border)'}}>
+            <div style={{fontSize:12.5, fontWeight:700, marginBottom:10}}>고객사별 발급 분포</div>
+            {dist.map(d=>(
+              <div key={d.name} style={{marginBottom:8}}>
+                <div style={{display:'flex', justifyContent:'space-between', fontSize:12, color:'var(--muted)', marginBottom:3}}><span>{d.name}</span><span>{d.pct}%</span></div>
+                <div className="progress-track"><div className="progress-fill" style={{'--w':`${d.pct}%`, background:d.color}}></div></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {queueItem && (
+        <Modal onClose={()=>setQueueItem(null)} width={400}>
+          <div style={{padding:26, textAlign:'center'}}>
+            <Icon name="warning-circle" size={26} style={{color:'var(--ember)'}} />
+            <h3 style={{fontSize:17, margin:'10px 0 6px'}}>{queueItem.label}</h3>
+            <p style={{fontSize:13, color:'var(--muted)', margin:'0 0 18px'}}>{queueItem.due} · 지금 처리하면 큐에서 제거됩니다.</p>
+            <div style={{display:'flex', gap:10}}>
+              <button className="btn-ghost" style={{flex:1}} onClick={()=>setQueueItem(null)}>닫기</button>
+              <button className="btn-primary" style={{flex:1}} onClick={()=>{pushToast('처리가 완료되어 큐에서 제거되었습니다'); setQueueItem(null);}}>지금 처리</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ---------- 배치 업로드 ---------- */
+function BatchUploadScreen({pushToast}) {
+  const [jobs, setJobs] = useState([
+    {id:'j1', name:'2024_10월_보고서_일괄.zip', status:'done', pct:100},
+    {id:'j2', name:'2024_11월_1주차.zip', status:'failed', pct:64, reason:'파일 손상 2건'},
+  ]);
+  const [drag, setDrag] = useState(false);
+
+  const addFiles = (names) => {
+    const newJobs = names.map((n,i)=>({id:`j${Date.now()}${i}`, name:n, status:'processing', pct:0}));
+    setJobs(prev=>[...newJobs, ...prev]);
+    newJobs.forEach(job=>{
+      let pct = 0;
+      const timer = setInterval(()=>{
+        pct += 18 + Math.random()*10;
+        if (pct >= 100) {
+          pct = 100;
+          clearInterval(timer);
+          setJobs(prev=>prev.map(j=>j.id===job.id ? {...j, pct:100, status:'done'} : j));
+          pushToast(`${job.name} 처리가 완료되었습니다`);
+        } else {
+          setJobs(prev=>prev.map(j=>j.id===job.id ? {...j, pct} : j));
+        }
+      }, 450);
+    });
+  };
+
+  const STATUS_META = {
+    processing:{label:'처리 중', color:'var(--iris)', bg:'var(--iris-dim)'},
+    done:{label:'완료', color:'var(--ok)', bg:'var(--ok-dim)'},
+    failed:{label:'실패', color:'var(--danger)', bg:'var(--danger-dim)'},
+  };
+
+  return (
+    <div style={{maxWidth:1280, margin:'0 auto', padding:'28px 28px 48px'}}>
+      <h1 style={{fontSize:40, fontWeight:800, letterSpacing:'-0.02em', margin:'0 0 6px'}}>배치 업로드</h1>
+      <p style={{fontSize:14, color:'var(--muted)', margin:'0 0 22px'}}>기존 발급 보고서를 대량 업로드하고 Bull Queue 기반으로 QR을 일괄 생성합니다.</p>
+
+      <div
+        onDragOver={e=>{e.preventDefault(); setDrag(true);}}
+        onDragLeave={()=>setDrag(false)}
+        onDrop={e=>{e.preventDefault(); setDrag(false); const files=[...e.dataTransfer.files].map(f=>f.name); addFiles(files.length?files:['보고서_일괄_업로드.zip']);}}
+        onClick={()=>addFiles(['보고서_묶음_11월2주차.zip'])}
+        style={{border:`2px dashed ${drag?'var(--iris)':'var(--border)'}`, borderRadius:20, padding:'40px 20px', textAlign:'center', cursor:'pointer', marginBottom:24, background: drag ? 'var(--iris-dim)' : 'var(--surface)'}}>
+        <Icon name="upload-simple" size={28} style={{color:'var(--iris)'}} />
+        <div style={{fontSize:14, fontWeight:700, marginTop:10}}>파일을 끌어다 놓거나 클릭하여 업로드</div>
+        <div style={{fontSize:12.5, color:'var(--muted)', marginTop:4}}>ZIP / PDF 다건 업로드 지원 · 최대 500건</div>
+      </div>
+
+      <div style={{display:'flex', flexDirection:'column', gap:10}}>
+        {jobs.map(j=>{
+          const meta = STATUS_META[j.status];
+          return (
+            <div key={j.id} className="card-hover" style={{border:'1px solid var(--border)', borderRadius:16, padding:'16px 20px', animation:'fadeInUp .2s ease'}}>
+              <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8}}>
+                <div style={{display:'flex', alignItems:'center', gap:8, fontSize:13.5, fontWeight:700}}><Icon name="file-zip" size={16} style={{color:'var(--muted)'}} /> {j.name}</div>
+                <span className="pill-tag" style={{color:meta.color, background:meta.bg}}>{meta.label}</span>
+              </div>
+              <div className="progress-track"><div className="progress-fill" style={{'--w':`${j.pct}%`, width:`${j.pct}%`, animation:'none'}}></div></div>
+              <div style={{display:'flex', justifyContent:'space-between', marginTop:6}}>
+                <span style={{fontSize:11.5, color:'var(--muted)'}}>{j.reason ? j.reason : `${Math.round(j.pct)}% 처리됨`}</span>
+                {j.status==='failed' && <button className="btn-ghost" style={{padding:'3px 12px', fontSize:11.5}} onClick={()=>{setJobs(prev=>prev.map(x=>x.id===j.id?{...x,status:'processing',pct:70}:x)); setTimeout(()=>{setJobs(prev=>prev.map(x=>x.id===j.id?{...x,status:'done',pct:100}:x)); pushToast('재처리가 완료되었습니다');},1200);}}>재처리</button>}
+                {j.status==='done' && <button className="btn-ghost" style={{padding:'3px 12px', fontSize:11.5}} onClick={()=>pushToast('생성된 QR 목록을 일괄 다운로드합니다')}><Icon name="download-simple" size={12} /> QR 일괄 다운로드</button>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 감사 로그 ---------- */
+function AuditLogScreen({pushToast}) {
+  const [q, setQ] = useState('');
+  const [onlyAnomaly, setOnlyAnomaly] = useState(false);
+  const [detail, setDetail] = useState(null);
+
+  const rows = AUDIT_LOG.filter(r=>{
+    if (onlyAnomaly && !r.anomaly) return false;
+    if (q && !(r.actor.includes(q) || r.target.includes(q))) return false;
+    return true;
+  });
+
+  return (
+    <div style={{maxWidth:1280, margin:'0 auto', padding:'28px 28px 48px'}}>
+      <h1 style={{fontSize:40, fontWeight:800, letterSpacing:'-0.02em', margin:'0 0 6px'}}>감사 로그</h1>
+      <p style={{fontSize:14, color:'var(--muted)', margin:'0 0 20px'}}>누가 언제 어떤 보고서·QR에 접근했는지 기록하고 이상 접근 패턴을 표시합니다.</p>
+
+      <div style={{display:'flex', gap:10, marginBottom:18, alignItems:'center'}}>
+        <div style={{position:'relative', width:260}}>
+          <Icon name="magnifying-glass" size={15} style={{position:'absolute', left:12, top:11, color:'var(--muted)'}} />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="접근자 또는 대상 검색" style={{width:'100%', padding:'9px 12px 9px 34px', border:'1px solid var(--border)', borderRadius:9999, fontSize:13}} />
+        </div>
+        <button className="btn-ghost" onClick={()=>setOnlyAnomaly(v=>!v)} style={{background: onlyAnomaly ? 'var(--danger-dim)' : 'transparent', color: onlyAnomaly ? 'var(--danger)' : 'var(--ink)', borderColor: onlyAnomaly ? 'var(--danger-dim)' : 'var(--border)'}}><Icon name="warning" size={14} /> 이상 패턴만</button>
+      </div>
+
+      <div style={{border:'1px solid var(--border)', borderRadius:20, overflow:'hidden'}}>
+        <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
+          <thead>
+            <tr style={{background:'var(--surface)', textAlign:'left'}}>
+              <th style={{padding:'12px 16px', fontWeight:700, color:'var(--muted)', fontSize:11.5}}>접근자</th>
+              <th style={{padding:'12px 16px', fontWeight:700, color:'var(--muted)', fontSize:11.5}}>대상</th>
+              <th style={{padding:'12px 16px', fontWeight:700, color:'var(--muted)', fontSize:11.5}}>유형</th>
+              <th style={{padding:'12px 16px', fontWeight:700, color:'var(--muted)', fontSize:11.5}}>시각</th>
+              <th style={{padding:'12px 16px', fontWeight:700, color:'var(--muted)', fontSize:11.5}}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r=>(
+              <tr key={r.id} onClick={()=>setDetail(r)} style={{borderTop:'1px solid var(--border)', cursor:'pointer'}}>
+                <td style={{padding:'12px 16px', fontWeight:600}}>{r.actor}</td>
+                <td style={{padding:'12px 16px', color:'var(--muted)'}}>{r.target}</td>
+                <td style={{padding:'12px 16px', color:'var(--muted)'}}>{r.type}</td>
+                <td style={{padding:'12px 16px', color:'var(--muted)'}}>{r.at}</td>
+                <td style={{padding:'12px 16px'}}>{r.anomaly && <span className="pill-tag" style={{color:'var(--danger)', background:'var(--danger-dim)'}}><Icon name="warning" size={11} /> 이상 패턴</span>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {detail && (
+        <Drawer onClose={()=>setDetail(null)} width={380}>
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16}}>
+            <h3 style={{fontSize:17, margin:0}}>접근 상세</h3>
+            <button onClick={()=>setDetail(null)} style={{background:'none', border:'none', color:'var(--muted)'}}><Icon name="x" size={20} /></button>
+          </div>
+          {[['접근자', detail.actor], ['IP', detail.ip], ['대상 리소스', detail.target], ['유형', detail.type], ['시각', detail.at]].map(([k,v])=>(
+            <div key={k} style={{display:'flex', justifyContent:'space-between', padding:'9px 0', borderBottom:'1px solid var(--border)', fontSize:13.5}}>
+              <span style={{color:'var(--muted)'}}>{k}</span><span style={{fontWeight:600}}>{v}</span>
+            </div>
+          ))}
+          {detail.anomaly && (
+            <div style={{marginTop:16, background:'var(--danger-dim)', borderRadius:14, padding:14}}>
+              <div style={{display:'flex', alignItems:'center', gap:6, color:'var(--danger)', fontWeight:700, fontSize:13, marginBottom:4}}><Icon name="warning" size={15} /> 이상 패턴 감지</div>
+              <div style={{fontSize:12.5, color:'var(--muted)'}}>{detail.reason}</div>
+            </div>
+          )}
+          <button className="btn-primary" style={{width:'100%', marginTop:20}} onClick={()=>{pushToast('전체 접근 이력을 조회합니다'); setDetail(null);}}>전체 이력 보기</button>
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
+/* ---------- 지점 계정 관리 ---------- */
+function MultiBranchScreen({pushToast}) {
+  const [branches, setBranches] = useState(BRANCHES);
+  const [openId, setOpenId] = useState('b1');
+  const [addOpen, setAddOpen] = useState(false);
+  const [newBranch, setNewBranch] = useState('');
+
+  const toggleStaff = (branchId, staffId) => {
+    setBranches(prev=>prev.map(b=>{
+      if (b.id!==branchId) return b;
+      return {...b, staff:b.staff.map(s=>s.id===staffId ? {...s, status: s.status==='active'?'revoked':'active'} : s)};
+    }));
+    pushToast('담당자 권한이 변경되었습니다');
+  };
+
+  const total = branches.reduce((s,b)=>s+b.reports,0);
+
+  return (
+    <div style={{maxWidth:1280, margin:'0 auto', padding:'28px 28px 48px'}}>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:20}}>
+        <div>
+          <h1 style={{fontSize:40, fontWeight:800, letterSpacing:'-0.02em', margin:'0 0 6px'}}>지점 계정 관리</h1>
+          <p style={{fontSize:14, color:'var(--muted)', margin:0}}>고객사의 상위 조직-지점-담당자 계층 구조와 위임형 권한을 관리합니다. 전체 롤업 발급 {total}건.</p>
+        </div>
+        <button className="btn-primary" onClick={()=>setAddOpen(true)}><Icon name="plus" size={15} /> 지점 추가</button>
+      </div>
+
+      <div style={{display:'flex', flexDirection:'column', gap:14}}>
+        {branches.map(b=>(
+          <div key={b.id} className="card-hover" style={{border:'1px solid var(--border)', borderRadius:20, overflow:'hidden'}}>
+            <div onClick={()=>setOpenId(openId===b.id?null:b.id)} style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 22px', cursor:'pointer'}}>
+              <div style={{display:'flex', alignItems:'center', gap:12}}>
+                <span style={{width:36, height:36, borderRadius:12, background:'var(--iris-dim)', display:'inline-flex', alignItems:'center', justifyContent:'center', color:'var(--iris)'}}><Icon name="buildings" size={18} /></span>
+                <div>
+                  <div style={{fontWeight:700, fontSize:14.5}}>{b.name}</div>
+                  <div style={{fontSize:12, color:'var(--muted)'}}>{b.org} · 담당자 {b.staff.length}명</div>
+                </div>
+              </div>
+              <div style={{display:'flex', alignItems:'center', gap:16}}>
+                <span style={{fontSize:13, fontWeight:700, color:'var(--iris)'}}>발급 {b.reports}건</span>
+                <Icon name={openId===b.id?'caret-up':'caret-down'} size={16} style={{color:'var(--muted)'}} />
+              </div>
+            </div>
+            {openId===b.id && (
+              <div style={{padding:'0 22px 20px', animation:'fadeInUp .18s ease'}}>
+                {b.staff.map(s=>(
+                  <div key={s.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 14px', background:'var(--surface)', borderRadius:14, marginBottom:8}}>
+                    <div style={{display:'flex', alignItems:'center', gap:10}}>
+                      <span style={{width:28, height:28, borderRadius:'50%', background:'linear-gradient(135deg,var(--iris),var(--ember))', color:'#fff', fontSize:11, fontWeight:700, display:'inline-flex', alignItems:'center', justifyContent:'center'}}>{s.name[0]}</span>
+                      <div>
+                        <div style={{fontSize:13, fontWeight:600}}>{s.name}</div>
+                        <div style={{fontSize:11.5, color:'var(--muted)'}}>{s.role}</div>
+                      </div>
+                    </div>
+                    <button className="btn-ghost" onClick={()=>toggleStaff(b.id, s.id)} style={{fontSize:11.5, padding:'5px 12px', color: s.status==='active' ? 'var(--danger)' : 'var(--ok)', borderColor: s.status==='active' ? 'var(--danger-dim)' : 'var(--ok-dim)'}}>
+                      {s.status==='active' ? '권한 회수' : '권한 위임'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {addOpen && (
+        <Modal onClose={()=>setAddOpen(false)} width={380}>
+          <div style={{padding:24}}>
+            <h3 style={{fontSize:16, margin:'0 0 14px'}}>지점 추가</h3>
+            <label style={{fontSize:12, color:'var(--muted)', fontWeight:700}}>지점명</label>
+            <input value={newBranch} onChange={e=>setNewBranch(e.target.value)} placeholder="예: 충청 지점" style={{width:'100%', padding:'10px 12px', border:'1px solid var(--border)', borderRadius:9999, fontSize:13, margin:'6px 0 18px'}} />
+            <button className="btn-primary" style={{width:'100%'}} onClick={()=>{
+              if(!newBranch) return;
+              setBranches(prev=>[...prev, {id:`b${Date.now()}`, name:newBranch, org:'임상보고서 스튜디오', reports:0, staff:[]}]);
+              setAddOpen(false); setNewBranch('');
+              pushToast('새 지점이 추가되었습니다');
+            }}>추가</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ---------- App ---------- */
+function App() {
+  const [tab, setTab] = useState('main');
+  const [toast, setToast] = useState(null);
+  const pushToast = (m) => setToast(m);
+
+  return (
+    <div data-archetype="topbar-analytics" style={{width:'100%', minHeight:'100vh', display:'flex', flexDirection:'column'}}>
+      <Header tab={tab} setTab={setTab} pushToast={pushToast} />
+      <main style={{flex:1, width:'100%', background:'var(--surface)'}}>
+        {tab==='main' && <OverviewScreen pushToast={pushToast} />}
+        {tab==='batch-upload' && <BatchUploadScreen pushToast={pushToast} />}
+        {tab==='audit-log' && <AuditLogScreen pushToast={pushToast} />}
+        {tab==='multi-branch' && <MultiBranchScreen pushToast={pushToast} />}
+      </main>
+      {toast && <Toast message={toast} onDone={()=>setToast(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
