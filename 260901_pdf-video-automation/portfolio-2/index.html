@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 콘텐츠 자동화 통합 관제 콘솔 — 구현 데모</title>
+<link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<style>
+:root{
+  --bg:#f2f0eb; --surface:#ffffff; --lilac:#d4c7ff; --gold:#f6bc1e;
+  --ink:#292827; --stone:#666666; --mist:#e3e3e2; --wine:#421d24; --lagoon:#0c4243;
+  --r-card:16px; --r-btn:16px; --r-pill:999px;
+}
+*{box-sizing:border-box;}
+html,body{width:100%;margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:'Pretendard',ui-sans-serif,system-ui,-apple-system,sans-serif;}
+#root{width:100%;min-height:100vh;}
+button{font-family:inherit;cursor:pointer;}
+input,select,textarea{font-family:inherit;}
+::-webkit-scrollbar{height:8px;width:8px;}
+::-webkit-scrollbar-thumb{background:var(--mist);border-radius:8px;}
+
+@keyframes fadeInUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
+@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+@keyframes countUp{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+@keyframes glowPulse{0%,100%{box-shadow:0 0 0 0 rgba(246,188,30,.35);}50%{box-shadow:0 0 0 8px rgba(246,188,30,0);}}
+@keyframes barGrow{from{transform:scaleY(0);}to{transform:scaleY(1);}}
+@keyframes toastIn{from{opacity:0;transform:translate(-50%,14px);}to{opacity:1;transform:translate(-50%,0);}}
+@keyframes drawIn{from{stroke-dashoffset:600;}to{stroke-dashoffset:0;}}
+
+.stat-card{transition:transform .16s ease,box-shadow .16s ease;}
+.stat-card:hover{transform:translateY(-3px);box-shadow:0 10px 28px rgba(41,40,39,.08);}
+.tab{transition:background .14s ease,color .14s ease;}
+.pill-btn{transition:opacity .14s ease,transform .1s ease;}
+.pill-btn:active{transform:scale(.97);}
+.pill-btn:hover{opacity:.88;}
+.row-hover:hover{background:#faf9f6;}
+.bar{transform-origin:bottom;animation:barGrow .5s ease both;}
+</style>
+</head>
+<body data-archetype="topbar-analytics">
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const {useState, useEffect} = React;
+
+function Icon({name, size=16, className='', style={}}){
+  return <i className={`ti ti-${name} ${className}`} style={{fontSize:size, lineHeight:1, ...style}}></i>;
+}
+
+/* ---------- mock data ---------- */
+const DAILY = [62,68,71,65,80,86,92,88,95,101,97,109,116,112];
+const STAGE_TIME = [
+  {label:'파싱', v:8}, {label:'분석', v:22}, {label:'대본', v:18}, {label:'에셋 생성', v:41}, {label:'렌더링', v:29},
+];
+const FAIL_TYPES = [
+  {type:'영상 AI 타임아웃', count:34, pct:38},
+  {type:'쿼터 초과', count:21, pct:23},
+  {type:'콘텐츠 정책 거부', count:16, pct:18},
+  {type:'TTS 생성 실패', count:11, pct:12},
+  {type:'PDF 파싱 오류', count:8, pct:9},
+];
+
+const HISTORY = [
+  {id:'h1', doc:'2026년 3분기 산업안전 보고서.pdf', status:'success', level:'General', date:'2026-08-31', retries:0},
+  {id:'h2', doc:'신규 설비 도입 제안서.pdf', status:'processing', level:'Expert', date:'2026-08-31', retries:0},
+  {id:'h3', doc:'ESG 지속가능경영 보고서.pdf', status:'failed', level:'General', date:'2026-08-30', retries:2},
+  {id:'h4', doc:'품질관리 프로세스 개정안.pdf', status:'success', level:'General', date:'2026-08-30', retries:1},
+  {id:'h5', doc:'분기별 매출 실적 브리핑.pdf', status:'failed', level:'Expert', date:'2026-08-29', retries:3},
+  {id:'h6', doc:'신제품 기술 백서.pdf', status:'success', level:'Expert', date:'2026-08-28', retries:0},
+  {id:'h7', doc:'조직 개편 안내 자료.pdf', status:'success', level:'General', date:'2026-08-27', retries:0},
+];
+
+const RULE_SETS = {
+  ko: [
+    {id:'r1', name:'대본 생성 — General', updated:'2026-08-29'},
+    {id:'r2', name:'대본 생성 — Expert', updated:'2026-08-24'},
+    {id:'r3', name:'스토리보드 씬 분할 규칙', updated:'2026-08-30'},
+  ],
+  en: [
+    {id:'r4', name:'Script Generation — General', updated:'2026-08-25'},
+    {id:'r5', name:'Scene Split Rule', updated:'2026-08-25'},
+  ],
+};
+
+const EXCEPTIONS = [
+  {id:'e1', reason:'영상 AI 타임아웃', doc:'ESG 지속가능경영 보고서.pdf', retries:3, escalated:true, at:'09:41'},
+  {id:'e2', reason:'쿼터 초과 (Runway)', doc:'분기별 매출 실적 브리핑.pdf', retries:3, escalated:true, at:'08:12'},
+  {id:'e3', reason:'콘텐츠 정책 거부', doc:'해외법인 감사 보고서.pdf', retries:1, escalated:false, at:'07:55'},
+  {id:'e4', reason:'TTS 생성 실패', doc:'채용 프로세스 가이드.pdf', retries:2, escalated:false, at:'07:20'},
+];
+
+/* ---------- shared ---------- */
+function Toast({msg, onDone}){
+  useEffect(()=>{ const t=setTimeout(onDone, 2600); return ()=>clearTimeout(t); },[]);
+  return (
+    <div style={{position:'fixed',bottom:28,left:'50%',background:'var(--ink)',color:'#fff',padding:'12px 22px',
+      borderRadius:'var(--r-pill)',fontSize:14,fontWeight:500,zIndex:200,animation:'toastIn .25s ease',boxShadow:'0 8px 24px rgba(0,0,0,.18)'}}>
+      {msg}
+    </div>
+  );
+}
+
+function Sparkline({data, color}){
+  const max = Math.max(...data), min = Math.min(...data);
+  const pts = data.map((v,i)=> `${(i/(data.length-1))*100},${30 - ((v-min)/(max-min||1))*28}`).join(' ');
+  return (
+    <svg className="sparkline" viewBox="0 0 100 30" style={{width:70,height:24,display:'block'}}>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
+        style={{strokeDasharray:600,strokeDashoffset:0,animation:'drawIn .8s ease'}}/>
+    </svg>
+  );
+}
+
+/* ---------- header ---------- */
+function AppHeader({screen, setScreen}){
+  const tabs = [
+    {id:'main', label:'생성 이력 및 파이프라인 분석 대시보드'},
+    {id:'history', label:'생성 이력 관리 및 재처리'},
+    {id:'rule-library', label:'프롬프트·규칙 라이브러리 및 다국어 확장'},
+    {id:'exceptions', label:'예외 처리 및 실패 사유 분류 대시보드'},
+  ];
+  return (
+    <React.Fragment>
+      <header className="app-header" style={{position:'sticky',top:0,zIndex:50,background:'rgba(242,240,235,.92)',
+        backdropFilter:'blur(12px)',borderBottom:'1px solid var(--mist)',padding:'14px 32px',display:'flex',alignItems:'center',
+        justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+        <div style={{display:'flex',alignItems:'center',gap:18}}>
+          <div className="brand" style={{display:'flex',alignItems:'center',gap:9,fontSize:16,fontWeight:700,letterSpacing:'-0.01em'}}>
+            <div style={{width:30,height:30,borderRadius:9,background:'var(--wine)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <Icon name="video" size={16} style={{color:'#fff'}}/>
+            </div>
+            콘텐츠오토 관제
+          </div>
+          <div className="project-switcher" style={{display:'flex',alignItems:'center',gap:6,fontSize:13,fontWeight:600,color:'var(--stone)',
+            border:'1px solid var(--mist)',borderRadius:'var(--r-pill)',padding:'6px 14px',cursor:'pointer'}}>
+            문서영상 자동화 <Icon name="chevron-down" size={13}/>
+          </div>
+          <nav className="global-nav" style={{display:'flex',gap:4}}>
+            <a className="nav-link active" style={{fontSize:13,fontWeight:600,padding:'6px 10px',color:'var(--ink)'}}>운영</a>
+            <a className="nav-link" style={{fontSize:13,fontWeight:600,padding:'6px 10px',color:'var(--stone)'}}>설정</a>
+            <a className="nav-link" style={{fontSize:13,fontWeight:600,padding:'6px 10px',color:'var(--stone)'}}>팀</a>
+          </nav>
+        </div>
+        <div className="header-actions" style={{display:'flex',alignItems:'center',gap:12}}>
+          <Icon name="search" size={17} style={{color:'var(--stone)'}}/>
+          <Icon name="bell" size={17} style={{color:'var(--stone)'}}/>
+          <div style={{width:30,height:30,borderRadius:'50%',background:'var(--lilac)',display:'flex',alignItems:'center',
+            justifyContent:'center',fontSize:12,fontWeight:700}}>운</div>
+        </div>
+      </header>
+      <nav className="tab-bar" style={{maxWidth:1280,margin:'0 auto',padding:'14px 32px 0',display:'flex',gap:6,overflowX:'auto'}}>
+        {tabs.map(t=>(
+          <button key={t.id} role="tab" className="tab" onClick={()=>setScreen(t.id)}
+            style={{background:'transparent',border:'none',borderBottom:'2px solid '+(screen===t.id?'var(--gold)':'transparent'),
+              color: screen===t.id?'var(--ink)':'var(--stone)', fontWeight: screen===t.id?700:500, fontSize:13,
+              padding:'8px 6px 12px', whiteSpace:'nowrap'}}>
+            {t.label}
+          </button>
+        ))}
+      </nav>
+    </React.Fragment>
+  );
+}
+
+/* ---------- main dashboard ---------- */
+function DashboardScreen(){
+  const maxDaily = Math.max(...DAILY);
+  const maxStage = Math.max(...STAGE_TIME.map(s=>s.v));
+  return (
+    <main className="content" style={{maxWidth:1280,margin:'0 auto',padding:'28px 32px 70px',animation:'fadeInUp .28s ease'}}>
+      <h1 style={{fontSize:32,fontWeight:700,letterSpacing:'-0.01em',margin:'0 0 6px'}}>생성 이력 및 파이프라인 분석 대시보드</h1>
+      <p style={{fontSize:14,color:'var(--stone)',margin:'0 0 24px'}}>전체 생성 요청의 성공·실패·재시도 현황과 단계별 처리 시간을 한눈에 확인합니다.</p>
+
+      <div className="gradient-banner dark-band" style={{position:'relative',overflow:'hidden',borderRadius:'var(--r-card)',padding:'34px 34px',
+        marginBottom:22,background:'radial-gradient(circle at 18% 25%, rgba(212,199,255,.4) 0%, transparent 48%),' +
+        'radial-gradient(circle at 88% 15%, rgba(246,188,30,.32) 0%, transparent 46%),' +
+        'linear-gradient(135deg, var(--lagoon) 0%, #16302f 55%, var(--wine) 130%)'}}>
+        <svg style={{position:'absolute',top:0,right:0,width:'46%',height:'100%',opacity:.5}} viewBox="0 0 300 200" preserveAspectRatio="none">
+          <polygon points="60,0 300,0 300,200 180,200" fill="rgba(212,199,255,.16)"/>
+          <polygon points="150,0 300,0 300,120" fill="rgba(246,188,30,.14)"/>
+          <circle cx="250" cy="60" r="70" fill="rgba(212,199,255,.10)"/>
+        </svg>
+        <div style={{position:'relative',zIndex:1,display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:14}}>
+          <div>
+            <div style={{fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--gold)',marginBottom:8}}>오늘의 운영 요약</div>
+            <div style={{fontSize:24,fontWeight:700,color:'#fff',letterSpacing:'-0.01em',maxWidth:420,lineHeight:1.35}}>어제 대비 생성 성공률 2.1%p 상승, 재처리 대기 12건을 자동 큐가 관리하고 있습니다</div>
+          </div>
+          <span style={{fontSize:12,fontWeight:700,background:'var(--lilac)',color:'var(--ink)',borderRadius:'var(--r-pill)',padding:'9px 18px'}}>실시간 동기화 중</span>
+        </div>
+      </div>
+
+      <section className="stat-row" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:16,marginBottom:22}}>
+        {[
+          {label:'이번 달 생성 요청', value:'1,116', unit:'건', color:'var(--gold)', data:DAILY},
+          {label:'생성 성공률', value:'91.4', unit:'%', color:'#2f7d4f', data:DAILY.map(v=>v*0.9)},
+          {label:'평균 총 처리 시간', value:'9.8', unit:'분', color:'var(--wine)', data:[12,11,10.4,9.9,9.8,9.5,9.8]},
+          {label:'재처리 대기 건', value:'12', unit:'건', color:'#9c3b2e', data:[3,5,4,7,6,9,12]},
+        ].map((s,i)=>(
+          <div key={i} className="stat-card" style={{background:'var(--surface)',border:'1px solid var(--mist)',borderRadius:'var(--r-card)',
+            padding:'18px 20px',animation:'countUp .3s ease both',animationDelay:(i*0.05)+'s'}}>
+            <div className="stat-label" style={{fontSize:12,fontWeight:600,color:'var(--stone)',marginBottom:8}}>{s.label}</div>
+            <div style={{display:'flex',alignItems:'flex-end',justifyContent:'space-between'}}>
+              <div className="stat-value" style={{fontSize:30,fontWeight:700,letterSpacing:'-0.02em'}}>{s.value}<span style={{fontSize:15,fontWeight:600,marginLeft:3}}>{s.unit}</span></div>
+              <Sparkline data={s.data} color={s.color}/>
+            </div>
+          </div>
+        ))}
+      </section>
+
+      <section className="chart-panel" style={{background:'var(--surface)',border:'1px solid var(--mist)',borderRadius:'var(--r-card)',
+        padding:'22px 24px',marginBottom:22}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+          <div style={{fontSize:14,fontWeight:700}}>최근 14일 생성 건수 추이</div>
+          <span style={{fontSize:12,fontWeight:600,color:'#2f7d4f',display:'flex',alignItems:'center',gap:4}}><Icon name="trending-up" size={14}/> 전주 대비 +18%</span>
+        </div>
+        <svg className="chart" viewBox="0 0 560 120" style={{width:'100%',height:120,display:'block'}}>
+          <polyline fill="none" stroke="var(--gold)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+            points={DAILY.map((v,i)=>`${(i/(DAILY.length-1))*560},${118-(v/maxDaily)*108}`).join(' ')}
+            style={{strokeDasharray:900,strokeDashoffset:0,animation:'drawIn 1s ease'}}/>
+          {DAILY.map((v,i)=>(
+            <circle key={i} cx={(i/(DAILY.length-1))*560} cy={118-(v/maxDaily)*108} r="3" fill="var(--wine)"/>
+          ))}
+        </svg>
+      </section>
+
+      <div style={{display:'grid',gridTemplateColumns:'1.1fr .9fr',gap:20}}>
+        <section style={{background:'var(--surface)',border:'1px solid var(--mist)',borderRadius:'var(--r-card)',padding:'22px 24px'}}>
+          <div style={{fontSize:14,fontWeight:700,marginBottom:16}}>단계별 평균 처리 시간</div>
+          <div style={{display:'flex',alignItems:'flex-end',gap:18,height:120}}>
+            {STAGE_TIME.map((s,i)=>(
+              <div key={i} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:8}}>
+                <div style={{fontSize:11,fontWeight:700,color:'var(--stone)'}}>{s.v}분</div>
+                <div className="bar" style={{width:'100%',maxWidth:36,height:(s.v/maxStage)*90,background:'var(--lilac)',borderRadius:'8px 8px 0 0',
+                  animationDelay:(i*0.06)+'s'}}></div>
+                <div style={{fontSize:11,fontWeight:600,color:'var(--stone)'}}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+        <section style={{background:'var(--surface)',border:'1px solid var(--mist)',borderRadius:'var(--r-card)',padding:'22px 24px'}}>
+          <div style={{fontSize:14,fontWeight:700,marginBottom:14}}>실패 사유 상위 5개 유형</div>
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            {FAIL_TYPES.map((f,i)=>(
+              <div key={i} className="row-hover" style={{display:'flex',alignItems:'center',gap:10,padding:'6px 8px',borderRadius:10,cursor:'pointer'}}>
+                <span style={{fontSize:11,fontWeight:800,color:'var(--stone)',width:14}}>{i+1}</span>
+                <span style={{flex:1,fontSize:12,fontWeight:600}}>{f.type}</span>
+                <div style={{width:70,height:6,background:'var(--mist)',borderRadius:4,overflow:'hidden'}}>
+                  <div style={{width:f.pct+'%',height:'100%',background:'var(--gold)'}}></div>
+                </div>
+                <span style={{fontSize:11,fontWeight:700,color:'var(--stone)',width:26,textAlign:'right'}}>{f.count}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+/* ---------- history screen ---------- */
+function HistoryScreen(){
+  const [items, setItems] = useState(HISTORY);
+  const [selected, setSelected] = useState([]);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [levelFilter, setLevelFilter] = useState('all');
+  const [toast, setToast] = useState(null);
+
+  const filtered = items.filter(h => (statusFilter==='all'||h.status===statusFilter) && (levelFilter==='all'||h.level===levelFilter));
+  const STATUS_LABEL = {success:'성공', processing:'처리 중', failed:'실패'};
+  const STATUS_COLOR = {success:'#2f7d4f', processing:'#b5790f', failed:'#9c3b2e'};
+
+  function toggle(id){ setSelected(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]); }
+
+  function bulkReprocess(){
+    if(selected.length===0){ setToast('재처리할 항목을 먼저 선택해주세요'); return; }
+    setItems(prev => prev.map(h => selected.includes(h.id) ? {...h, status:'processing', retries:h.retries+1} : h));
+    setToast(selected.length + '건이 재처리 큐에 등록되었습니다');
+    setSelected([]);
+  }
+
+  return (
+    <main className="content" style={{maxWidth:1280,margin:'0 auto',padding:'28px 32px 70px',animation:'fadeInUp .28s ease'}}>
+      <h1 style={{fontSize:32,fontWeight:700,letterSpacing:'-0.01em',margin:'0 0 6px'}}>생성 이력 관리 및 재처리</h1>
+      <p style={{fontSize:14,color:'var(--stone)',margin:'0 0 22px'}}>상태·기간·난이도로 이력을 필터링하고, 실패하거나 품질이 낮은 건을 선택해 일괄 재처리할 수 있습니다.</p>
+
+      <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap',alignItems:'center'}}>
+        {['all','success','processing','failed'].map(s=>(
+          <button key={s} onClick={()=>setStatusFilter(s)} className="tab" style={{
+            background: statusFilter===s?'var(--ink)':'var(--surface)', color: statusFilter===s?'#fff':'var(--ink)',
+            border:'1px solid '+(statusFilter===s?'var(--ink)':'var(--mist)'), borderRadius:'var(--r-pill)', padding:'7px 14px', fontSize:12,fontWeight:600}}>
+            {s==='all'?'전체 상태':STATUS_LABEL[s]}
+          </button>
+        ))}
+        <span style={{width:1,height:20,background:'var(--mist)',margin:'0 4px'}}></span>
+        {['all','General','Expert'].map(l=>(
+          <button key={l} onClick={()=>setLevelFilter(l)} className="tab" style={{
+            background: levelFilter===l?'var(--ink)':'var(--surface)', color: levelFilter===l?'#fff':'var(--ink)',
+            border:'1px solid '+(levelFilter===l?'var(--ink)':'var(--mist)'), borderRadius:'var(--r-pill)', padding:'7px 14px', fontSize:12,fontWeight:600}}>
+            {l==='all'?'전체 난이도':l}
+          </button>
+        ))}
+        <div style={{flex:1}}></div>
+        <button className="pill-btn" onClick={bulkReprocess} style={{background: selected.length? 'var(--gold)':'var(--mist)', color:'var(--ink)',
+          border:'none', borderRadius:'var(--r-pill)', padding:'9px 18px', fontSize:12,fontWeight:700, display:'flex',alignItems:'center',gap:6}}>
+          <Icon name="reload" size={14}/> 선택 항목 일괄 재처리 ({selected.length})
+        </button>
+      </div>
+
+      <div style={{background:'var(--surface)',border:'1px solid var(--mist)',borderRadius:'var(--r-card)',overflow:'hidden'}}>
+        <div style={{display:'grid',gridTemplateColumns:'32px 1fr 110px 100px 110px 90px',padding:'12px 18px',
+          fontSize:11,fontWeight:700,color:'var(--stone)',borderBottom:'1px solid var(--mist)'}}>
+          <span></span><span>문서명</span><span>상태</span><span>난이도</span><span>일시</span><span>재시도</span>
+        </div>
+        {filtered.map(h=>(
+          <div key={h.id} className="row-hover" style={{display:'grid',gridTemplateColumns:'32px 1fr 110px 100px 110px 90px',
+            padding:'13px 18px',fontSize:13,alignItems:'center',borderBottom:'1px solid var(--mist)'}}>
+            <input type="checkbox" checked={selected.includes(h.id)} onChange={()=>toggle(h.id)}/>
+            <span style={{fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',paddingRight:8}}>{h.doc}</span>
+            <span style={{fontWeight:700,fontSize:12,color:STATUS_COLOR[h.status]}}>● {STATUS_LABEL[h.status]}</span>
+            <span style={{color:'var(--stone)'}}>{h.level}</span>
+            <span style={{color:'var(--stone)'}}>{h.date}</span>
+            <span style={{color:'var(--stone)'}}>{h.retries}회</span>
+          </div>
+        ))}
+        {filtered.length===0 && <div style={{padding:'26px 18px',fontSize:13,color:'var(--stone)',textAlign:'center'}}>조건에 맞는 이력이 없습니다</div>}
+      </div>
+      {toast && <Toast msg={toast} onDone={()=>setToast(null)}/>}
+    </main>
+  );
+}
+
+/* ---------- rule library screen ---------- */
+function RuleLibraryScreen(){
+  const [lang, setLang] = useState('ko');
+  const [showDiff, setShowDiff] = useState(false);
+  const [sets, setSets] = useState(RULE_SETS);
+  const [toast, setToast] = useState(null);
+
+  function cloneToEnglish(){
+    if(sets.en.length >= 3) { setToast('영어 세트는 이미 최신 상태입니다'); return; }
+    setSets(prev => ({...prev, en:[...prev.en, {id:'r'+Date.now(), name:'복제된 규칙 세트', updated:'방금'}]}));
+    setToast('한국어 규칙을 복제해 영어 세트를 생성했습니다');
+  }
+
+  return (
+    <main className="content" style={{maxWidth:1280,margin:'0 auto',padding:'28px 32px 70px',animation:'fadeInUp .28s ease'}}>
+      <h1 style={{fontSize:32,fontWeight:700,letterSpacing:'-0.01em',margin:'0 0 6px'}}>프롬프트·규칙 라이브러리 및 다국어 확장</h1>
+      <p style={{fontSize:14,color:'var(--stone)',margin:'0 0 22px'}}>프로젝트별 프롬프트·규칙 세트를 언어별로 분리 관리하고, 기존 규칙을 복제해 새 언어를 빠르게 확장합니다.</p>
+
+      <div style={{display:'flex',gap:10,marginBottom:20,alignItems:'center',flexWrap:'wrap'}}>
+        {['ko','en'].map(l=>(
+          <button key={l} onClick={()=>setLang(l)} className="tab" style={{
+            background: lang===l?'var(--ink)':'var(--surface)', color: lang===l?'#fff':'var(--ink)',
+            border:'1px solid '+(lang===l?'var(--ink)':'var(--mist)'), borderRadius:'var(--r-pill)', padding:'8px 18px', fontSize:12,fontWeight:700}}>
+            {l==='ko'?'한국어 세트':'영어 세트'} ({sets[l].length})
+          </button>
+        ))}
+        <div style={{flex:1}}></div>
+        <button className="pill-btn" onClick={()=>setShowDiff(v=>!v)} style={{background:'var(--surface)',color:'var(--ink)',
+          border:'1px solid var(--mist)',borderRadius:'var(--r-pill)',padding:'8px 16px',fontSize:12,fontWeight:700,display:'flex',alignItems:'center',gap:6}}>
+          <Icon name="git-compare" size={14}/> 언어 간 Diff 비교
+        </button>
+        <button className="pill-btn" onClick={cloneToEnglish} style={{background:'var(--gold)',color:'var(--ink)',
+          border:'none',borderRadius:'var(--r-pill)',padding:'8px 16px',fontSize:12,fontWeight:700,display:'flex',alignItems:'center',gap:6}}>
+          <Icon name="copy" size={14}/> 규칙 복제로 신규 언어 생성
+        </button>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(240px,1fr))',gap:14,marginBottom: showDiff?22:0}}>
+        {sets[lang].map(r=>(
+          <div key={r.id} className="stat-card" style={{background:'var(--surface)',border:'1px solid var(--mist)',borderRadius:'var(--r-card)',padding:'18px 18px'}}>
+            <div style={{width:34,height:34,borderRadius:10,background:'var(--lilac)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:12}}>
+              <Icon name="file-text" size={16}/>
+            </div>
+            <div style={{fontSize:14,fontWeight:700,marginBottom:6}}>{r.name}</div>
+            <div style={{fontSize:12,color:'var(--stone)'}}>업데이트 {r.updated}</div>
+          </div>
+        ))}
+      </div>
+
+      {showDiff && (
+        <div style={{background:'var(--surface)',border:'1px solid var(--mist)',borderRadius:'var(--r-card)',padding:'20px 22px',animation:'fadeIn .2s ease'}}>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>ko ↔ en 규칙 차이</div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,fontSize:12,lineHeight:1.7}}>
+            <div style={{borderRight:'1px solid var(--mist)',paddingRight:16}}>
+              <div style={{fontWeight:700,marginBottom:6,color:'var(--stone)'}}>한국어 (ko)</div>
+              도입부 문장은 15초 내 주의를 끌 것. 존댓말 톤 유지. 원문 근거 없는 주장 금지.
+            </div>
+            <div style={{paddingLeft:2}}>
+              <div style={{fontWeight:700,marginBottom:6,color:'var(--stone)'}}>영어 (en)</div>
+              Hook viewers within the first 15 seconds. Maintain a neutral professional tone. No claims without source evidence.
+            </div>
+          </div>
+        </div>
+      )}
+      {toast && <Toast msg={toast} onDone={()=>setToast(null)}/>}
+    </main>
+  );
+}
+
+/* ---------- exceptions screen ---------- */
+function ExceptionsScreen(){
+  const [items, setItems] = useState(EXCEPTIONS);
+  const [toast, setToast] = useState(null);
+
+  function resolveItem(id){
+    setItems(prev => prev.map(e => e.id===id ? {...e, escalated:false} : e));
+    setToast('수동 검토가 완료되어 재시도 큐로 되돌립니다');
+  }
+
+  return (
+    <main className="content" style={{maxWidth:1280,margin:'0 auto',padding:'28px 32px 70px',animation:'fadeInUp .28s ease'}}>
+      <h1 style={{fontSize:32,fontWeight:700,letterSpacing:'-0.01em',margin:'0 0 6px'}}>예외 처리 및 실패 사유 분류 대시보드</h1>
+      <p style={{fontSize:14,color:'var(--stone)',margin:'0 0 22px'}}>API 호출·렌더링 단계의 예외를 사유별로 자동 분류하고, 재시도 임계값을 초과한 건은 수동 검토 큐로 분리합니다.</p>
+
+      <div style={{background:'var(--surface)',border:'1px solid var(--gold)',borderRadius:'var(--r-card)',padding:'16px 20px',
+        marginBottom:20,display:'flex',alignItems:'center',gap:12,animation:'glowPulse 2.4s infinite'}}>
+        <Icon name="alert-triangle" size={20} style={{color:'#b5790f'}}/>
+        <div style={{fontSize:13}}><strong>재시도 임계값(3회) 초과 2건</strong>이 수동 검토 큐로 자동 이동했습니다. 아래에서 처리 상태를 확인하세요.</div>
+      </div>
+
+      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+        {items.map(e=>(
+          <div key={e.id} style={{background:'var(--surface)',border:'1px solid '+(e.escalated?'var(--wine)':'var(--mist)'),
+            borderRadius:'var(--r-card)',padding:'16px 20px',display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
+            <div style={{width:38,height:38,borderRadius:10,background: e.escalated?'#f6e4e4':'var(--bg)',display:'flex',
+              alignItems:'center',justifyContent:'center',flexShrink:0}}>
+              <Icon name={e.escalated?'alert-octagon':'clock'} size={17} style={{color: e.escalated?'#9c3b2e':'var(--stone)'}}/>
+            </div>
+            <div style={{flex:1,minWidth:200}}>
+              <div style={{fontSize:13,fontWeight:700,marginBottom:3}}>{e.reason}</div>
+              <div style={{fontSize:12,color:'var(--stone)'}}>{e.doc} · 재시도 {e.retries}회 · {e.at}</div>
+            </div>
+            <span style={{fontSize:11,fontWeight:700,padding:'5px 12px',borderRadius:'var(--r-pill)',
+              background: e.escalated?'#f6e4e4':'var(--bg)', color: e.escalated?'#9c3b2e':'var(--stone)'}}>
+              {e.escalated?'수동 검토 필요':'자동 재시도 중'}
+            </span>
+            {e.escalated && (
+              <button className="pill-btn" onClick={()=>resolveItem(e.id)} style={{background:'var(--ink)',color:'#fff',border:'none',
+                borderRadius:'var(--r-pill)',padding:'8px 16px',fontSize:12,fontWeight:700}}>검토 완료 처리</button>
+            )}
+          </div>
+        ))}
+      </div>
+      {toast && <Toast msg={toast} onDone={()=>setToast(null)}/>}
+    </main>
+  );
+}
+
+/* ---------- app ---------- */
+function App(){
+  const [screen, setScreen] = useState('main');
+  return (
+    <div>
+      <AppHeader screen={screen} setScreen={setScreen}/>
+      {screen==='main' && <DashboardScreen/>}
+      {screen==='history' && <HistoryScreen/>}
+      {screen==='rule-library' && <RuleLibraryScreen/>}
+      {screen==='exceptions' && <ExceptionsScreen/>}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App/>);
+</script>
+</body>
+</html>
