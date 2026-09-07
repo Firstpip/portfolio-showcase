@@ -13,8 +13,10 @@
 //   T0.2 의 worker/.env.local 에 정의됨.
 
 import {
+  syncDirectory,
   writeFiles,
   type CommitResult,
+  type DirFile,
   GITHUB_OWNER,
   GITHUB_REPO,
 } from "./shared/github.ts";
@@ -94,6 +96,101 @@ export function pagesUrlFor(slug: string): string {
  */
 export function rawUrlFor(slug: string, branch: string = "main"): string {
   return `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${branch}/${slug}/${DEMO_SUBDIR}/index.html`;
+}
+
+// ---------------------------------------------------------------------------
+// T8.6: dist/ 멀티파일 배포.
+//
+// Phase 8 부터 데모는 단일 HTML 이 아니라 Vite 빌드 산출물(dist/) 이다.
+// deployDemoToGitHub 는 단일 파일 추가만 하므로, 파일명에 content hash 가
+// 박히는 dist 를 재배포하면 이전 빌드의 고아 asset 이 계속 쌓인다.
+// syncDirectory 로 "{slug}/portfolio-demo/ 의 최종 상태 = dist" 를 보장한다.
+
+export type DeployDistResult =
+  | {
+      ok: true;
+      commitSha: string;
+      pagesUrl: string;
+      /** 이번 커밋에 blob 을 새로 담은 파일 수 */
+      written: number;
+      /** 내용이 같아 기존 blob 을 그대로 둔 파일 수 */
+      reused: number;
+      /** 새 dist 에 없어 트리에서 제거한 기존 파일 (portfolio-demo/ 기준 상대) */
+      deleted: string[];
+      /** 변경분이 전혀 없어 커밋을 만들지 않음 */
+      noop: boolean;
+      file_count: number;
+      size_bytes: number;
+      duration_ms: number;
+    }
+  | {
+      ok: false;
+      reason: string;
+    };
+
+/**
+ * dist/ 트리 전체를 `{slug}/portfolio-demo/` 로 단일 커밋 푸시.
+ *
+ * @param files collectDist(T8.2) 산출물 — dist/ 기준 상대 경로 + Buffer 내용.
+ *
+ * 커밋 메시지: `deploy(demo): <slug> portfolio-demo (N files, MKB)`.
+ * 다른 portfolio-N 디렉터리는 base_tree 증분 패치라 영향 없음.
+ */
+export async function deployDemoDistToGitHub(
+  token: string,
+  slug: string,
+  files: DirFile[],
+): Promise<DeployDistResult> {
+  if (!token) return { ok: false, reason: "GITHUB_TOKEN 미설정" };
+  if (!slug) return { ok: false, reason: "slug 비어있음" };
+  if (slug.includes("/") || slug.includes("..")) {
+    return { ok: false, reason: `slug 포맷 비정상: ${slug}` };
+  }
+  if (!files || files.length === 0) {
+    return { ok: false, reason: "dist 파일 목록 비어있음" };
+  }
+  if (!files.some((f) => f.path === "index.html")) {
+    return { ok: false, reason: "dist 에 index.html 없음 (빌드 산출물 확인 필요)" };
+  }
+
+  const size_bytes = files.reduce((n, f) => n + f.content.length, 0);
+  const sizeKb = Math.max(1, Math.round(size_bytes / 1024));
+  const message =
+    `deploy(demo): ${slug} portfolio-demo (${files.length} files, ${sizeKb}KB)`;
+
+  const start = Date.now();
+  const result = await syncDirectory(
+    token,
+    `${slug}/${DEMO_SUBDIR}`,
+    files,
+    message,
+  );
+  const duration_ms = Date.now() - start;
+
+  if (!result.ok || !result.commitSha) {
+    return { ok: false, reason: result.reason ?? "푸시 실패 (이유 미상)" };
+  }
+
+  return {
+    ok: true,
+    commitSha: result.commitSha,
+    pagesUrl: pagesUrlFor(slug),
+    written: result.written ?? 0,
+    reused: result.reused ?? 0,
+    deleted: result.deleted ?? [],
+    noop: result.noop ?? false,
+    file_count: files.length,
+    size_bytes,
+    duration_ms,
+  };
+}
+
+/**
+ * dist 내 임의 파일의 SHA-pinned raw URL. Pages CDN 전파를 기다리지 않고
+ * 커밋 직후 내용을 검증할 때 사용 (테스트용).
+ */
+export function rawUrlAt(commitSha: string, slug: string, relPath: string): string {
+  return `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/${commitSha}/${slug}/${DEMO_SUBDIR}/${relPath}`;
 }
 
 // ---------------------------------------------------------------------------
