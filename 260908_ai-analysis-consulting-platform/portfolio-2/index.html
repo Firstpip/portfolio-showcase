@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 분석 파이프라인 통합 관제 플랫폼 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/react-is@18/umd/react-is.production.min.js"></script>
+<script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<style>
+/* ── 컬러 역할 토큰 P2 — 메인(무채색 앵커) · 서브 2(성공/경고, s2 제거) · 나머지 무채색 (gen-color-tokens.js 산출) ── */
+:root{
+  --m50:#f0f0f0; --m100:#f0f0f0; --m200:#f0f0f0; --m300:#e0e0e0; --m400:#c2c2c2;
+  --m500:#9c9c9c; --m600:#737373; --m700:#4b4b4b; --m800:#242424; --m900:#1e1e1e;
+  --n0:#f6f3f1; --n1:#cecac8; --n2:#f0efef; --n3:#e6e5e5; --n4:#d7d5d5;
+  --n5:#bab5b5; --n6:#989090; --n7:#797776; --n8:#5a5353; --n9:#3a3636; --n10:#242424;
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b;
+  --s3:#d48d11; --s3-bg:#f6f1ea; --s3-text:#8b6118;
+  /* 실패/오류는 s2가 제거되어(메인 hue 0°와 충돌 판정) 무채색 필로 표현 */
+  --fail-bg:#3a3636; --fail-text:#f6f3f1;
+
+  /* Monad design-ref 파생 토큰 — 타이포/여백/radius */
+  --text-caption:12px; --text-body:14px; --text-body-lg:16px; --text-label:15px;
+  --text-subheading:22px; --text-heading:32px; --text-display:40px;
+  --radius-pill:100px; --radius-card:24px; --radius-feature:40px; --radius-tag:9999px; --radius-input:14px;
+  --shadow-ambient:0 0 10px rgba(0,0,0,.08);
+  --sp-8:8px; --sp-16:16px; --sp-24:24px; --sp-32:32px; --sp-40:40px;
+}
+*{box-sizing:border-box;}
+html,body{width:100%;margin:0;padding:0;}
+body{
+  font-family:'Pretendard',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:var(--n0); color:var(--n10);
+  -webkit-font-smoothing:antialiased;
+}
+#app-root{width:100%;}
+button{font-family:inherit; cursor:pointer;}
+input,select{font-family:inherit;}
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-thumb{background:var(--n4);border-radius:8px;}
+::-webkit-scrollbar-track{background:transparent;}
+
+/* ── keyframes ── */
+@keyframes fadeUp{ from{opacity:0; transform:scale(.97);} to{opacity:1; transform:scale(1);} }
+@keyframes livePulse{ 0%,100%{box-shadow:0 0 0 0 rgba(31,137,75,.35);} 50%{box-shadow:0 0 0 6px rgba(31,137,75,0);} }
+@keyframes barGrow{ from{width:0;} to{width:var(--target-w);} }
+@keyframes spinRing{ from{transform:rotate(0deg);} to{transform:rotate(360deg);} }
+@keyframes toastRise{ from{opacity:0; transform:translateX(-50%) scale(.94);} to{opacity:1; transform:translateX(-50%) scale(1);} }
+@keyframes drawerIn{ from{opacity:0; transform:translateX(28px);} to{opacity:1; transform:translateX(0);} }
+
+/* ── sidebar ── */
+.sidebar{
+  width:240px; min-width:240px; background:var(--n0); border-right:1px solid var(--n3);
+  height:100vh; position:sticky; top:0; overflow-y:auto; flex-shrink:0; padding:20px 0;
+}
+.sidebar-brand{ display:flex; align-items:center; gap:10px; padding:0 20px 20px; border-bottom:1px solid var(--n3); margin-bottom:16px;}
+.brand-mark{ width:34px; height:34px; border-radius:10px; background:var(--n10); color:var(--n0); display:flex; align-items:center; justify-content:center; font-weight:600; font-size:13px; flex-shrink:0;}
+.brand-name{ font-size:14.5px; font-weight:600; letter-spacing:-0.2px; }
+.env-pill{
+  margin-left:auto; font-size:10.5px; font-weight:600; padding:3px 9px; border-radius:var(--radius-tag);
+  background:var(--s1-bg); color:var(--s1-text); display:flex; align-items:center; gap:4px;
+}
+.env-dot{ width:6px; height:6px; border-radius:50%; background:var(--s1); animation:livePulse 2s ease-in-out infinite; }
+.sidebar-section{ padding:0 12px; margin-bottom:18px; }
+.sidebar-section-title{ font-size:11px; font-weight:600; color:var(--n6); letter-spacing:.05em; padding:0 10px 8px; }
+.sidebar-link{
+  display:flex; align-items:center; gap:10px; padding:10px 10px; border-radius:12px; border:none; background:transparent;
+  width:100%; text-align:left; font-size:13.5px; color:var(--n8); font-weight:500; margin-bottom:2px; transition:background .15s ease, color .15s ease;
+}
+.sidebar-link i{ font-size:17px; color:var(--n6); }
+.sidebar-link:hover{ background:var(--n2); color:var(--n10); }
+.sidebar-link.active{ background:var(--n10); color:var(--n0); }
+.sidebar-link.active i{ color:var(--n0); }
+.sidebar-badge{ margin-left:auto; font-size:10.5px; font-weight:700; background:var(--fail-bg); color:var(--fail-text); border-radius:var(--radius-tag); padding:1px 7px;}
+
+/* ── main ── */
+.main{ flex:1; min-width:0; height:100vh; overflow-y:auto; }
+.page-header{ padding:24px 32px 0; position:relative; }
+.page-header-art{ position:absolute; top:14px; right:32px; opacity:.4; pointer-events:none; }
+.page-title-row{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;}
+.page-title{ font-size:40px; font-weight:400; letter-spacing:-0.7px; margin:0; }
+.page-actions{ display:flex; gap:10px; }
+.page-meta{ font-size:12.5px; color:var(--n6); margin-bottom:20px; }
+
+.btn-pill-primary{
+  background:var(--n10); color:var(--n0); border:none; border-radius:var(--radius-pill); padding:10px 22px;
+  font-size:13px; font-weight:600; display:inline-flex; align-items:center; gap:8px; letter-spacing:.02em; transition:opacity .15s ease;
+}
+.btn-pill-primary:hover{ opacity:.82; }
+.btn-pill-ghost{
+  background:transparent; color:var(--n9); border:1px solid var(--n4); border-radius:var(--radius-pill); padding:10px 22px;
+  font-size:13px; font-weight:600; display:inline-flex; align-items:center; gap:8px; letter-spacing:.02em; transition:all .15s ease;
+}
+.btn-pill-ghost:hover{ background:var(--n2); border-color:var(--n6); }
+
+/* ── 파이프라인 히어로 밴드 (dark ink surface — Monad "Announcement Bar/Ink" 레벨 4) ── */
+.pipeline-hero{
+  margin:20px 32px 24px; background:var(--n10); border-radius:var(--radius-feature); padding:28px 32px;
+  position:relative; overflow:hidden; color:var(--n0);
+}
+.pipeline-hero-art{ position:absolute; top:50%; right:28px; transform:translateY(-50%); opacity:.55; }
+.pipeline-hero-eyebrow{ font-size:12px; font-weight:600; letter-spacing:.08em; color:var(--n5); margin-bottom:8px; text-transform:uppercase; }
+.pipeline-hero h2{ font-size:26px; font-weight:400; letter-spacing:-0.4px; margin:0 0 8px; color:var(--n0); max-width:520px; }
+.pipeline-hero p{ font-size:13.5px; color:var(--n5); margin:0; max-width:480px; line-height:1.6; }
+
+/* status-strip (KPI 카드 = 슬림 라이브 상태바, 가로 1줄 스트립) */
+.stat-row{
+  display:flex; align-items:stretch; gap:0; padding:0 32px; margin-bottom:24px;
+  background:var(--n2); border:1px solid var(--n3); border-radius:var(--radius-card); overflow:hidden; margin-left:32px; margin-right:32px; padding:0;
+}
+.stat-card{
+  flex:1; padding:14px 20px; display:flex; align-items:center; gap:12px;
+  animation:fadeUp .35s ease both; transition:background .18s ease; border-right:1px solid var(--n3);
+}
+.stat-card:last-child{ border-right:none; }
+.stat-card:hover{ background:var(--n1); }
+.stat-card-main{ flex:1; min-width:0; }
+.stat-card .stat-label{ font-size:11px; font-weight:600; color:var(--n7); letter-spacing:.02em; margin-bottom:4px; display:flex; align-items:center; gap:6px;}
+.stat-card .stat-value{ font-size:28px; font-weight:400; letter-spacing:-0.6px; color:var(--n10); line-height:1; }
+.stat-card .stat-value.fail{ color:var(--fail-bg); }
+.stat-card .stat-delta{ font-size:11px; font-weight:600; margin-top:3px; }
+.stat-card .stat-delta.up{ color:var(--s1-text); }
+.stat-card .stat-delta.down{ color:var(--n7); }
+.stat-sparkline{ width:64px; height:24px; display:block; flex-shrink:0; }
+
+/* tab bar */
+.data-section{ padding:0 32px 32px; }
+.tab-bar{ display:flex; gap:4px; border-bottom:1px solid var(--n3); margin-bottom:16px;}
+.tab{
+  padding:10px 16px; border:none; background:transparent; font-size:13px; font-weight:600; color:var(--n6);
+  border-bottom:2px solid transparent; margin-bottom:-1px; transition:color .15s ease;
+}
+.tab.active{ color:var(--n10); border-bottom-color:var(--n10); }
+.tab:hover{ color:var(--n9); }
+
+.data-toolbar{ display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+.search-input{
+  display:flex; align-items:center; gap:8px; background:var(--n1); border:1px solid var(--n3); border-radius:var(--radius-input);
+  padding:8px 14px; min-width:220px;
+}
+.search-input input{ border:none; background:transparent; outline:none; font-size:13px; width:100%; color:var(--n9);}
+.filter-chip{
+  padding:7px 14px; border-radius:var(--radius-tag); border:1px solid var(--n4); background:transparent; font-size:12.5px;
+  font-weight:600; color:var(--n7); transition:all .15s ease;
+}
+.filter-chip.active{ background:var(--n10); color:var(--n0); border-color:var(--n10); }
+.filter-chip:hover:not(.active){ border-color:var(--n7); color:var(--n9); }
+.export-btn{ margin-left:auto; }
+
+.split-layout{ display:grid; grid-template-columns:1fr 320px; gap:20px; }
+
+.data-table-wrap{ background:var(--n2); border:1px solid var(--n3); border-radius:var(--radius-card); overflow:hidden; }
+table.data-table{ width:100%; border-collapse:collapse; font-size:13px; }
+table.data-table th{ text-align:left; padding:12px 16px; color:var(--n6); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--n3); background:var(--n0);}
+table.data-table td{ padding:13px 16px; border-bottom:1px solid var(--n3); color:var(--n9); }
+table.data-table tbody tr{ cursor:pointer; transition:background .12s ease; }
+table.data-table tbody tr:last-child td{ border-bottom:none; }
+table.data-table tbody tr:hover td{ background:var(--n1); }
+.progress-track{ width:100px; height:6px; background:var(--n3); border-radius:99px; overflow:hidden; display:inline-block; vertical-align:middle; margin-right:8px;}
+.progress-fill{ height:100%; background:var(--n9); border-radius:99px; animation:barGrow 1s ease both; }
+
+.badge{ display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:var(--radius-tag); font-size:11.5px; font-weight:600; background:var(--n3); color:var(--n8);}
+.badge.done{ background:var(--s1-bg); color:var(--s1-text); }
+.badge.warn{ background:var(--s3-bg); color:var(--s3-text); }
+.badge.fail{ background:var(--fail-bg); color:var(--fail-text); }
+
+/* priority rail */
+.priority-rail{ background:var(--n1); border:1px solid var(--n3); border-radius:var(--radius-card); padding:18px; align-self:start; }
+.priority-rail h3{ font-size:14.5px; font-weight:700; margin:0 0 4px; display:flex; align-items:center; gap:8px;}
+.priority-rail .rail-sub{ font-size:12px; color:var(--n7); margin-bottom:14px; }
+.priority-item{
+  display:flex; gap:10px; padding:12px; border-radius:var(--radius-input); background:var(--n0); border:1px solid var(--n3);
+  margin-bottom:10px; cursor:pointer; transition:border-color .15s ease, transform .15s ease;
+}
+.priority-item:hover{ border-color:var(--n7); transform:scale(1.015); }
+.priority-item .p-icon{ width:30px; height:30px; border-radius:9px; background:var(--fail-bg); color:var(--fail-text); display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:14px;}
+.priority-item .p-title{ font-size:12.5px; font-weight:600; color:var(--n9); }
+.priority-item .p-sub{ font-size:11px; color:var(--n6); margin-top:2px; }
+
+/* secondary widgets */
+.secondary-row{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:20px; }
+.widget-card{ background:var(--n2); border:1px solid var(--n3); border-radius:var(--radius-card); padding:20px; }
+.widget-card h4{ font-size:13px; font-weight:700; margin:0 0 14px; color:var(--n9);}
+
+/* highlight card (Periwinkle-style emphasis surface — n1) */
+.highlight-card{ background:var(--n1); border:1px solid var(--n4); border-radius:var(--radius-feature); padding:var(--sp-32); }
+
+/* members */
+.country-strip{ display:flex; gap:14px; padding:0 32px; margin-bottom:22px; }
+.country-pill{ flex:1; background:var(--n2); border:1px solid var(--n3); border-radius:var(--radius-card); padding:16px 18px; }
+.country-pill .c-name{ font-size:12px; color:var(--n7); font-weight:600; margin-bottom:6px; }
+.country-pill .c-value{ font-size:24px; font-weight:400; color:var(--n10); }
+.country-pill .c-bar{ height:5px; background:var(--n3); border-radius:99px; margin-top:10px; overflow:hidden;}
+.country-pill .c-bar-fill{ height:100%; background:var(--n9); border-radius:99px; }
+
+/* drawer */
+.drawer-overlay{ position:fixed; inset:0; background:rgba(36,32,32,.35); z-index:90; }
+.drawer{
+  position:fixed; top:0; right:0; bottom:0; width:400px; background:var(--n0); border-left:1px solid var(--n3);
+  z-index:91; padding:24px; overflow-y:auto; animation:drawerIn .22s ease both;
+}
+.drawer-header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;}
+.drawer-header h3{ font-size:18px; font-weight:600; margin:0;}
+.drawer-close{ width:32px; height:32px; border-radius:50%; border:1px solid var(--n3); background:var(--n1); display:flex; align-items:center; justify-content:center; color:var(--n7);}
+.drawer-tabs{ display:flex; gap:4px; border-bottom:1px solid var(--n3); margin-bottom:16px; }
+.drawer-field{ margin-bottom:14px; }
+.drawer-field .df-label{ font-size:11px; color:var(--n6); font-weight:600; margin-bottom:4px; text-transform:uppercase; letter-spacing:.03em;}
+.drawer-field .df-value{ font-size:14px; color:var(--n9); }
+
+/* role table */
+.role-table-wrap{ background:var(--n2); border:1px solid var(--n3); border-radius:var(--radius-card); padding:4px; margin-bottom:24px; overflow-x:auto;}
+table.role-table{ width:100%; border-collapse:collapse; font-size:13px; min-width:560px;}
+table.role-table th, table.role-table td{ padding:12px 16px; text-align:center; border-bottom:1px solid var(--n3); }
+table.role-table th:first-child, table.role-table td:first-child{ text-align:left; }
+table.role-table th{ font-size:11px; color:var(--n6); text-transform:uppercase; letter-spacing:.03em; font-weight:600;}
+table.role-table tbody tr:last-child td{ border-bottom:none; }
+
+/* modal */
+.modal-overlay{ position:fixed; inset:0; background:rgba(36,32,32,.4); display:flex; align-items:center; justify-content:center; z-index:100; }
+.modal-box{ background:var(--n0); border:1px solid var(--n3); border-radius:var(--radius-feature); padding:32px; width:400px; max-width:90vw; }
+.modal-box h3{ font-size:18px; font-weight:600; margin:0 0 10px;}
+.modal-box p{ font-size:13.5px; color:var(--n7); line-height:1.6; margin:0 0 22px;}
+.modal-actions{ display:flex; gap:10px; justify-content:flex-end;}
+
+.toast{
+  position:fixed; bottom:28px; left:50%; background:var(--n10); color:var(--n0); padding:12px 20px; border-radius:var(--radius-pill);
+  font-size:13.5px; font-weight:500; z-index:200; display:flex; align-items:center; gap:8px; animation:toastRise .25s ease both;
+}
+.spin-icon{ animation:spinRing 1s linear infinite; display:inline-flex; }
+</style>
+</head>
+<body>
+<div id="app-root"></div>
+<script type="text/babel">
+const { useState, useMemo } = React;
+const { LineChart, Line, PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, Tooltip } = Recharts;
+
+const JOBS = [
+  { id:'j1', model:'진로적합도 모델', req:'미국 대학원 진학 적합도 분석', status:'처리중', progress:64, started:'10:41', retries:0 },
+  { id:'j2', model:'학업역량 모델', req:'학업 성취도 심층 분석', status:'완료', progress:100, started:'10:12', retries:0 },
+  { id:'j3', model:'에세이임팩트 모델', req:'에세이 경쟁력 분석', status:'실패', progress:38, started:'09:58', retries:2 },
+  { id:'j4', model:'진로적합도 모델', req:'커리어 전환 역량 진단', status:'대기중', progress:0, started:'—', retries:0 },
+  { id:'j5', model:'학업역량 모델', req:'장학금 지원 적합도 분석', status:'완료', progress:100, started:'09:20', retries:0 },
+  { id:'j6', model:'에세이임팩트 모델', req:'어학 성적 기반 진학 전략', status:'실패', progress:52, started:'08:55', retries:3 },
+  { id:'j7', model:'진로적합도 모델', req:'활동 이력 포트폴리오 분석', status:'처리중', progress:29, started:'10:50', retries:0 },
+  { id:'j8', model:'학업역량 모델', req:'인턴십 준비도 분석', status:'대기중', progress:0, started:'—', retries:0 },
+  { id:'j9', model:'에세이임팩트 모델', req:'종합 진학 전략 리포트', status:'완료', progress:100, started:'08:10', retries:1 },
+];
+
+const MEMBERS = [
+  { id:'m1', name:'김민수', country:'대한민국', joined:'2026.07.02', requests:3, spend:'$447.00', status:'정상' },
+  { id:'m2', name:'Sarah Lee', country:'미국', joined:'2026.06.18', requests:5, spend:'$695.00', status:'정상' },
+  { id:'m3', name:'이지은', country:'대한민국', joined:'2026.08.11', requests:1, spend:'$149.00', status:'정상' },
+  { id:'m4', name:'Wei Zhang', country:'중국', joined:'2026.05.29', requests:2, spend:'$278.00', status:'주의' },
+  { id:'m5', name:'Priya Nair', country:'인도', joined:'2026.07.20', requests:4, spend:'$516.00', status:'정상' },
+  { id:'m6', name:'박서준', country:'대한민국', joined:'2026.08.02', requests:2, spend:'$248.00', status:'정상' },
+  { id:'m7', name:'David Kim', country:'미국', joined:'2026.04.14', requests:6, spend:'$834.00', status:'정상' },
+  { id:'m8', name:'최유나', country:'대한민국', joined:'2026.08.25', requests:1, spend:'$99.00', status:'정지' },
+];
+
+const COUNTRY_STATS = [
+  { name:'미국', pct:42 }, { name:'대한민국', pct:31 }, { name:'중국', pct:15 }, { name:'인도', pct:12 },
+];
+
+const PAYMENTS = [
+  { id:'pa1', member:'Sarah Lee', item:'미국 대학원 진학 적합도 분석', date:'2026.09.05', amount:'$149.00', status:'완료' },
+  { id:'pa2', member:'김민수', item:'학업 성취도 심층 분석', date:'2026.09.04', amount:'$99.00', status:'완료' },
+  { id:'pa3', member:'Wei Zhang', item:'장학금 지원 적합도 분석', date:'2026.09.02', amount:'$129.00', status:'대기' },
+  { id:'pa4', member:'Priya Nair', item:'어학 성적 기반 진학 전략', date:'2026.08.29', amount:'$99.00', status:'실패' },
+  { id:'pa5', member:'박서준', item:'활동 이력 포트폴리오 분석', date:'2026.08.24', amount:'$149.00', status:'환불' },
+  { id:'pa6', member:'David Kim', item:'인턴십 준비도 분석', date:'2026.08.20', amount:'$149.00', status:'완료' },
+];
+
+const AUDIT_LOG = [
+  { id:'a1', time:'09-08 11:42', actor:'관리자·정하늘', event:'조회', target:'회원 Wei Zhang 분석 결과 리포트 열람' },
+  { id:'a2', time:'09-08 10:58', actor:'관리자·이도윤', event:'수정', target:'신청 건 #a1092 분석 재실행 승인' },
+  { id:'a3', time:'09-08 10:20', actor:'관리자·정하늘', event:'조회', target:'회원 Sarah Lee 상담 채팅 기록 조회' },
+  { id:'a4', time:'09-08 09:47', actor:'시스템', event:'삭제', target:'만료된 첨부 문서(성적표·에세이) 세션 12건' },
+  { id:'a5', time:'09-07 18:12', actor:'관리자·이도윤', event:'수정', target:'분석 신청 환불 처리 #pa5' },
+  { id:'a6', time:'09-07 16:03', actor:'관리자·정하늘', event:'조회', target:'에세이임팩트 모델 결과 데이터 조회' },
+];
+
+const ROLES = [
+  { role:'총괄 관리자', member:true, payment:true, pii:true, log:true },
+  { role:'상담 관리자', member:true, payment:false, pii:false, log:false },
+  { role:'결제 관리자', member:false, payment:true, pii:false, log:false },
+];
+
+function sparkPath(seed) {
+  const pts = [3,5,4,7,6,9,8,11,9,13];
+  const shifted = pts.map((v, i) => (v + (seed % (i + 2))) % 14 + 2);
+  const w = 100, h = 26;
+  return shifted.map((v, i) => `${(i / (shifted.length - 1)) * w},${h - v}`).join(' ');
+}
+
+function StatCard({ label, value, fail, delta, seed, icon }) {
+  return (
+    <div className="stat-card">
+      <svg className="stat-sparkline" viewBox="0 0 100 26" preserveAspectRatio="none">
+        <polyline points={sparkPath(seed)} fill="none" stroke={fail ? 'var(--fail-bg)' : 'var(--n8)'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <div className="stat-card-main">
+        <div className="stat-label"><i className={'ph ph-' + icon}></i>{label}</div>
+        <div className={'stat-value' + (fail ? ' fail' : '')}>{value}</div>
+        <div className={'stat-delta ' + (delta >= 0 ? 'up' : 'down')}>{delta >= 0 ? '+' : ''}{delta}% 최근 1시간</div>
+      </div>
+    </div>
+  );
+}
+
+function Toast({ message, onDone }) {
+  React.useEffect(() => { const t = setTimeout(onDone, 2300); return () => clearTimeout(t); }, []);
+  return <div className="toast"><i className="ph ph-check-circle"></i>{message}</div>;
+}
+
+function ConfirmModal({ title, desc, onConfirm, onCancel }) {
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+        <h3>{title}</h3>
+        <p>{desc}</p>
+        <div className="modal-actions">
+          <button className="btn-pill-ghost" onClick={onCancel}>취소</button>
+          <button className="btn-pill-primary" onClick={onConfirm}>확인</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Sidebar({ active, onSelect, failCount }) {
+  const groups = [
+    { title:'관제', items:[{ id:'main', label:'분석 파이프라인 실시간 관제', icon:'radio' }] },
+    { title:'운영 관리', items:[
+      { id:'members', label:'회원 국가별 현황 관리', icon:'globe' },
+      { id:'payments', label:'결제 및 환불 관리', icon:'credit-card' },
+      { id:'security', label:'역할 기반 접근 제어 및 감사 로그', icon:'shield-check' },
+    ]},
+  ];
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-brand">
+        <div className="brand-mark">AI</div>
+        <span className="brand-name">관제 콘솔</span>
+        <span className="env-pill"><span className="env-dot"></span>Production</span>
+      </div>
+      {groups.map((g) => (
+        <div className="sidebar-section" key={g.title}>
+          <div className="sidebar-section-title">{g.title}</div>
+          {g.items.map((it) => (
+            <button
+              key={it.id}
+              className={'sidebar-link' + (active === it.id ? ' active' : '')}
+              title={it.label}
+              onClick={() => onSelect(it.id)}
+            >
+              <i className={'ph ph-' + it.icon}></i>
+              {it.label}
+              {it.id === 'main' && failCount > 0 && <span className="sidebar-badge">{failCount}</span>}
+            </button>
+          ))}
+        </div>
+      ))}
+    </aside>
+  );
+}
+
+function PageHeader({ title, meta, actions, art }) {
+  return (
+    <header className="page-header">
+      {art && (
+        <svg className="page-header-art" width="140" height="80" viewBox="0 0 140 80" fill="none">
+          <circle cx="16" cy="20" r="6" stroke="var(--n7)" strokeWidth="1.5" />
+          <circle cx="16" cy="60" r="6" stroke="var(--n7)" strokeWidth="1.5" />
+          <circle cx="70" cy="40" r="8" stroke="var(--n9)" strokeWidth="1.5" />
+          <circle cx="124" cy="20" r="6" stroke="var(--n7)" strokeWidth="1.5" />
+          <circle cx="124" cy="60" r="6" stroke="var(--n7)" strokeWidth="1.5" />
+          <path d="M22 20 Q46 20 64 36" stroke="var(--n5)" strokeWidth="1.2" fill="none" />
+          <path d="M22 60 Q46 60 64 44" stroke="var(--n5)" strokeWidth="1.2" fill="none" />
+          <path d="M78 36 Q100 20 118 20" stroke="var(--n5)" strokeWidth="1.2" fill="none" />
+          <path d="M78 44 Q100 60 118 60" stroke="var(--n5)" strokeWidth="1.2" fill="none" />
+        </svg>
+      )}
+      <div className="page-title-row">
+        <h1 className="page-title">{title}</h1>
+        <div className="page-actions">{actions}</div>
+      </div>
+      <div className="page-meta">{meta}</div>
+    </header>
+  );
+}
+
+function MainConsole({ jobs, onRetry, onOpenJob, onExport }) {
+  const [tab, setTab] = useState('전체');
+  const counts = {
+    대기중: jobs.filter((j) => j.status === '대기중').length,
+    처리중: jobs.filter((j) => j.status === '처리중').length,
+    완료: jobs.filter((j) => j.status === '완료').length,
+    실패: jobs.filter((j) => j.status === '실패').length,
+  };
+  const filtered = tab === '전체' ? jobs : jobs.filter((j) => j.status === tab);
+  const priority = jobs.filter((j) => j.retries >= 2).sort((a, b) => b.retries - a.retries);
+
+  return (
+    <div>
+      <PageHeader
+        title="분석 파이프라인 실시간 관제"
+        meta="마지막 갱신 3초 전 · Production 환경"
+        actions={<>
+          <button className="btn-pill-ghost" onClick={onExport}><i className="ph ph-download-simple"></i>내보내기</button>
+          <button className="btn-pill-primary" onClick={() => onRetry('bulk')}><i className="ph ph-arrow-clockwise"></i>실패 작업 재실행</button>
+        </>}
+      />
+
+      <div className="pipeline-hero">
+        <svg className="pipeline-hero-art" width="220" height="120" viewBox="0 0 220 120" fill="none">
+          <circle cx="20" cy="28" r="7" stroke="var(--n5)" strokeWidth="1.5" />
+          <circle cx="20" cy="60" r="7" stroke="var(--n5)" strokeWidth="1.5" />
+          <circle cx="20" cy="92" r="7" stroke="var(--n5)" strokeWidth="1.5" />
+          <circle cx="110" cy="60" r="11" stroke="var(--n0)" strokeWidth="1.5" />
+          <circle cx="110" cy="60" r="3" fill="var(--n0)" />
+          <circle cx="200" cy="28" r="7" stroke="var(--n5)" strokeWidth="1.5" />
+          <circle cx="200" cy="60" r="7" stroke="var(--n5)" strokeWidth="1.5" />
+          <circle cx="200" cy="92" r="7" stroke="var(--n5)" strokeWidth="1.5" />
+          <path d="M27 28 Q68 28 100 55" stroke="var(--n6)" strokeWidth="1.2" fill="none" />
+          <path d="M27 60 L99 60" stroke="var(--n6)" strokeWidth="1.2" fill="none" />
+          <path d="M27 92 Q68 92 100 65" stroke="var(--n6)" strokeWidth="1.2" fill="none" />
+          <path d="M121 55 Q160 28 193 28" stroke="var(--n6)" strokeWidth="1.2" fill="none" />
+          <path d="M121 60 L193 60" stroke="var(--n6)" strokeWidth="1.2" fill="none" />
+          <path d="M121 65 Q160 92 193 92" stroke="var(--n6)" strokeWidth="1.2" fill="none" />
+        </svg>
+        <div className="pipeline-hero-eyebrow">Model Pipeline Topology</div>
+        <h2>파이썬 분석 모델 3종을 하나의 실행 큐로 정규화합니다</h2>
+        <p>진로적합도 · 학업역량 · 에세이임팩트 모델을 대기열로 수신해 실행 상태를 정규화하고, 결과를 신청 건과 다시 연결하는 흐름을 관제합니다.</p>
+      </div>
+
+      <section className="stat-row" data-stat-row>
+        <StatCard label="대기 중" value={counts.대기중} delta={2} seed={3} icon="hourglass" />
+        <StatCard label="처리 중" value={counts.처리중} delta={-4} seed={5} icon="circle-notch" />
+        <StatCard label="완료" value={counts.완료} delta={9} seed={7} icon="check-circle" />
+        <StatCard label="실패" value={counts.실패} fail delta={1} seed={2} icon="warning" />
+      </section>
+
+      <section className="data-section">
+        <div className="split-layout">
+          <div>
+            <nav className="tab-bar" data-tabs>
+              {['전체', '대기중', '처리중', '완료', '실패'].map((t) => (
+                <button key={t} className={'tab' + (tab === t ? ' active' : '')} onClick={() => setTab(t)}>{t}</button>
+              ))}
+            </nav>
+            <div className="data-toolbar">
+              <div className="search-input"><i className="ph ph-magnifying-glass"></i><input placeholder="신청 항목 또는 모델명 검색…" /></div>
+              <span className="export-btn" style={{ fontSize:'12px', color:'var(--n6)' }}>{filtered.length}건 표시 중</span>
+            </div>
+            <div className="data-table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr><th>모델</th><th>신청 항목</th><th>진행률</th><th>시작 시각</th><th>상태</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {filtered.map((j) => (
+                    <tr key={j.id} onClick={() => onOpenJob(j)}>
+                      <td>{j.model}</td>
+                      <td>{j.req}</td>
+                      <td>
+                        <div className="progress-track"><div className="progress-fill" style={{ '--target-w':j.progress + '%', width:j.progress + '%' }}></div></div>
+                        {j.progress}%
+                      </td>
+                      <td>{j.started}</td>
+                      <td>
+                        <span className={'badge ' + (j.status === '완료' ? 'done' : j.status === '실패' ? 'fail' : j.status === '처리중' ? 'warn' : '')}>{j.status}</span>
+                      </td>
+                      <td>
+                        {j.status === '실패' && (
+                          <button className="btn-pill-ghost" style={{ padding:'6px 14px', fontSize:'11.5px' }} onClick={(e) => { e.stopPropagation(); onRetry(j.id); }}>재실행</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <aside className="priority-rail">
+            <h3><i className="ph ph-flag"></i>우선 대응 큐</h3>
+            <div className="rail-sub">재시도 2회 이상 실패 작업 {priority.length}건</div>
+            {priority.map((j) => (
+              <div className="priority-item" key={j.id} onClick={() => onOpenJob(j)}>
+                <div className="p-icon"><i className="ph ph-warning"></i></div>
+                <div>
+                  <div className="p-title">{j.req}</div>
+                  <div className="p-sub">{j.model} · 재시도 {j.retries}회</div>
+                </div>
+              </div>
+            ))}
+            {priority.length === 0 && <div style={{ fontSize:'12.5px', color:'var(--n6)' }}>현재 우선 대응이 필요한 작업이 없습니다.</div>}
+          </aside>
+        </div>
+
+        <div className="secondary-row">
+          <div className="widget-card">
+            <h4>모델 유형별 처리 분포</h4>
+            <div style={{ height:'160px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={[{ name:'진로적합도', value:34 }, { name:'학업역량', value:29 }, { name:'에세이임팩트', value:37 }]} dataKey="value" innerRadius={40} outerRadius={64} paddingAngle={3}>
+                    <Cell fill="var(--n9)" /><Cell fill="var(--n6)" /><Cell fill="var(--n4)" />
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          <div className="widget-card">
+            <h4>시간대별 처리 완료 추이</h4>
+            <div style={{ height:'160px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={[{ h:'08시', v:4 }, { h:'09시', v:7 }, { h:'10시', v:5 }, { h:'11시', v:9 }]}>
+                  <XAxis dataKey="h" tick={{ fontSize:11, fill:'#797776' }} axisLine={false} tickLine={false} />
+                  <Tooltip />
+                  <Bar dataKey="v" fill="#3a3636" radius={[6,6,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function MembersView({ members, onOpenMember, onExport }) {
+  const [statusFilter, setStatusFilter] = useState('전체');
+  const filtered = statusFilter === '전체' ? members : members.filter((m) => m.status === statusFilter);
+  return (
+    <div>
+      <PageHeader title="회원 국가별 현황 관리" meta={`전체 회원 ${members.length}명 · 해외 이용자 포함`} actions={
+        <button className="btn-pill-ghost" onClick={onExport}><i className="ph ph-download-simple"></i>목록 내보내기</button>
+      } />
+      <div className="country-strip">
+        {COUNTRY_STATS.map((c) => (
+          <div className="country-pill" key={c.name}>
+            <div className="c-name">{c.name}</div>
+            <div className="c-value">{c.pct}%</div>
+            <div className="c-bar"><div className="c-bar-fill" style={{ width:c.pct + '%' }}></div></div>
+          </div>
+        ))}
+      </div>
+      <section className="data-section" style={{ paddingTop:0 }}>
+        <div className="data-toolbar">
+          <div className="search-input"><i className="ph ph-magnifying-glass"></i><input placeholder="회원명 검색…" /></div>
+          {['전체', '정상', '주의', '정지'].map((f) => (
+            <button key={f} className={'filter-chip' + (statusFilter === f ? ' active' : '')} onClick={() => setStatusFilter(f)}>{f}</button>
+          ))}
+        </div>
+        <div className="data-table-wrap">
+          <table className="data-table">
+            <thead><tr><th>이름</th><th>국가</th><th>가입일</th><th>신청 건수</th><th>누적 결제액</th><th>상태</th></tr></thead>
+            <tbody>
+              {filtered.map((m) => (
+                <tr key={m.id} onClick={() => onOpenMember(m)}>
+                  <td>{m.name}</td><td>{m.country}</td><td>{m.joined}</td><td>{m.requests}건</td><td>{m.spend}</td>
+                  <td><span className={'badge ' + (m.status === '정지' ? 'fail' : m.status === '주의' ? 'warn' : 'done')}>{m.status}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function PaymentsView({ payments, onRefund, onResync }) {
+  const [filter, setFilter] = useState('전체');
+  const filtered = filter === '전체' ? payments : payments.filter((p) => p.status === filter);
+  return (
+    <div>
+      <PageHeader title="결제 및 환불 관리" meta="웹훅 로그 ↔ 내부 결제 기록 정합성 자동 대조" actions={
+        <button className="btn-pill-primary" onClick={onResync}><i className="ph ph-arrows-clockwise"></i>웹훅 재동기화</button>
+      } />
+      <section className="data-section" style={{ paddingTop:0 }}>
+        <div className="data-toolbar">
+          {['전체', '완료', '대기', '실패', '환불'].map((f) => (
+            <button key={f} className={'filter-chip' + (filter === f ? ' active' : '')} onClick={() => setFilter(f)}>{f}</button>
+          ))}
+          <span className="export-btn" style={{ fontSize:'12px', color:'var(--n6)' }}>{filtered.length}건</span>
+        </div>
+        <div className="data-table-wrap">
+          <table className="data-table">
+            <thead><tr><th>회원</th><th>신청 항목</th><th>결제일</th><th>금액</th><th>상태</th><th></th></tr></thead>
+            <tbody>
+              {filtered.map((p) => (
+                <tr key={p.id}>
+                  <td>{p.member}</td><td>{p.item}</td><td>{p.date}</td><td>{p.amount}</td>
+                  <td><span className={'badge ' + (p.status === '완료' ? 'done' : p.status === '실패' ? 'fail' : p.status === '환불' ? '' : 'warn')}>{p.status}</span></td>
+                  <td>
+                    {p.status === '완료' && (
+                      <button className="btn-pill-ghost" style={{ padding:'6px 14px', fontSize:'11.5px' }} onClick={() => onRefund(p)}>환불 처리</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SecurityView({ log }) {
+  const [evtFilter, setEvtFilter] = useState('전체');
+  const filtered = evtFilter === '전체' ? log : log.filter((l) => l.event === evtFilter);
+  return (
+    <div>
+      <PageHeader title="역할 기반 접근 제어 및 감사 로그" meta="개인정보 조회·변경 이력을 비동기로 적재해 추적 가능하도록 설계" actions={null} />
+      <section className="data-section" style={{ paddingTop:0 }}>
+        <div className="highlight-card" style={{ marginBottom:'24px', borderRadius:'40px' }}>
+          <h4 style={{ margin:'0 0 4px', fontSize:'15px', fontWeight:700 }}>역할별 권한 매핑</h4>
+          <p style={{ margin:'0 0 16px', fontSize:'12.5px', color:'var(--n7)' }}>권한이 없는 항목은 열람 시 즉시 차단됩니다.</p>
+          <div className="role-table-wrap">
+            <table className="role-table">
+              <thead><tr><th>역할</th><th>회원·신청 조회</th><th>결제 처리</th><th>성적·에세이 열람</th><th>감사 로그 조회</th></tr></thead>
+              <tbody>
+                {ROLES.map((r) => (
+                  <tr key={r.role}>
+                    <td>{r.role}</td>
+                    <td>{r.member ? <i className="ph ph-check" style={{ color:'var(--s1)' }}></i> : <i className="ph ph-x" style={{ color:'var(--n5)' }}></i>}</td>
+                    <td>{r.payment ? <i className="ph ph-check" style={{ color:'var(--s1)' }}></i> : <i className="ph ph-x" style={{ color:'var(--n5)' }}></i>}</td>
+                    <td>{r.pii ? <i className="ph ph-check" style={{ color:'var(--s1)' }}></i> : <i className="ph ph-x" style={{ color:'var(--n5)' }}></i>}</td>
+                    <td>{r.log ? <i className="ph ph-check" style={{ color:'var(--s1)' }}></i> : <i className="ph ph-x" style={{ color:'var(--n5)' }}></i>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="data-toolbar">
+          {['전체', '조회', '수정', '삭제'].map((f) => (
+            <button key={f} className={'filter-chip' + (evtFilter === f ? ' active' : '')} onClick={() => setEvtFilter(f)}>{f}</button>
+          ))}
+        </div>
+        <div className="data-table-wrap">
+          <table className="data-table">
+            <thead><tr><th>시각</th><th>수행자</th><th>이벤트</th><th>대상</th></tr></thead>
+            <tbody>
+              {filtered.map((l) => (
+                <tr key={l.id}>
+                  <td>{l.time}</td><td>{l.actor}</td>
+                  <td><span className={'badge ' + (l.event === '삭제' ? 'fail' : l.event === '수정' ? 'warn' : '')}>{l.event}</span></td>
+                  <td>{l.target}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function JobDrawer({ job, onClose, onRetry }) {
+  if (!job) return null;
+  return (
+    <React.Fragment>
+      <div className="drawer-overlay" onClick={onClose}></div>
+      <div className="drawer">
+        <div className="drawer-header">
+          <h3>작업 상세</h3>
+          <button className="drawer-close" onClick={onClose}><i className="ph ph-x"></i></button>
+        </div>
+        <div className="drawer-field"><div className="df-label">모델</div><div className="df-value">{job.model}</div></div>
+        <div className="drawer-field"><div className="df-label">신청 항목</div><div className="df-value">{job.req}</div></div>
+        <div className="drawer-field"><div className="df-label">상태</div><span className={'badge ' + (job.status === '완료' ? 'done' : job.status === '실패' ? 'fail' : job.status === '처리중' ? 'warn' : '')}>{job.status}</span></div>
+        <div className="drawer-field"><div className="df-label">시작 시각</div><div className="df-value">{job.started}</div></div>
+        <div className="drawer-field"><div className="df-label">재시도 횟수</div><div className="df-value">{job.retries}회</div></div>
+        <div className="drawer-field">
+          <div className="df-label">실행 로그</div>
+          <div style={{ fontSize:'12.5px', color:'var(--n7)', lineHeight:1.7, background:'var(--n2)', border:'1px solid var(--n3)', borderRadius:'12px', padding:'12px' }}>
+            [{job.started}] 대기열에서 작업 수신<br />
+            [{job.started}] 클라우드 샌드박스 모델 호출 시작<br />
+            {job.status === '실패' ? `[오류] 응답 시간 초과로 ${job.retries}회 재시도 처리됨` : `[진행] 현재 ${job.progress}% 처리됨`}
+          </div>
+        </div>
+        {job.status === '실패' && (
+          <button className="btn-pill-primary" style={{ width:'100%', justifyContent:'center' }} onClick={() => { onRetry(job.id); onClose(); }}>
+            <i className="ph ph-arrow-clockwise"></i>지금 재실행
+          </button>
+        )}
+      </div>
+    </React.Fragment>
+  );
+}
+
+function MemberDrawer({ member, onClose }) {
+  const [tab, setTab] = useState('신청 이력');
+  if (!member) return null;
+  return (
+    <React.Fragment>
+      <div className="drawer-overlay" onClick={onClose}></div>
+      <div className="drawer">
+        <div className="drawer-header">
+          <h3>{member.name}</h3>
+          <button className="drawer-close" onClick={onClose}><i className="ph ph-x"></i></button>
+        </div>
+        <div className="drawer-field"><div className="df-label">국가</div><div className="df-value">{member.country}</div></div>
+        <div className="drawer-field"><div className="df-label">가입일</div><div className="df-value">{member.joined}</div></div>
+        <div className="drawer-tabs">
+          {['신청 이력', '결제 이력', '상담 이력'].map((t) => (
+            <button key={t} className={'tab' + (tab === t ? ' active' : '')} onClick={() => setTab(t)}>{t}</button>
+          ))}
+        </div>
+        {tab === '신청 이력' && <div className="df-value" style={{ fontSize:'13px', lineHeight:1.9 }}>총 {member.requests}건의 분석 신청 기록이 있습니다.</div>}
+        {tab === '결제 이력' && <div className="df-value" style={{ fontSize:'13px', lineHeight:1.9 }}>누적 결제액 {member.spend}, 최근 결제는 2026.09.05입니다.</div>}
+        {tab === '상담 이력' && <div className="df-value" style={{ fontSize:'13px', lineHeight:1.9 }}>최근 상담 채팅 3건, 평균 응답 20시간 이내로 종료되었습니다.</div>}
+      </div>
+    </React.Fragment>
+  );
+}
+
+function App() {
+  const [nav, setNav] = useState('main');
+  const [jobs, setJobs] = useState(JOBS);
+  const [payments, setPayments] = useState(PAYMENTS);
+  const [openJob, setOpenJob] = useState(null);
+  const [openMember, setOpenMember] = useState(null);
+  const [refundTarget, setRefundTarget] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const failCount = jobs.filter((j) => j.status === '실패').length;
+
+  const handleRetry = (id) => {
+    if (id === 'bulk') {
+      setJobs((js) => js.map((j) => (j.status === '실패' ? { ...j, status:'대기중', retries:0, progress:0 } : j)));
+      setToast('실패 작업 전체를 재실행 대기열에 등록했습니다.');
+      return;
+    }
+    setJobs((js) => js.map((j) => (j.id === id ? { ...j, status:'대기중', retries:0, progress:0 } : j)));
+    setToast('작업이 재실행 대기열에 등록되었습니다.');
+  };
+
+  const handleRefund = () => {
+    setPayments((ps) => ps.map((p) => (p.id === refundTarget.id ? { ...p, status:'환불' } : p)));
+    setRefundTarget(null);
+    setToast('환불이 처리되어 신청 건 상태가 갱신되었습니다.');
+  };
+
+  const handleExport = () => setToast('목록 내보내기가 시작되었습니다.');
+  const handleResync = () => setToast('웹훅 로그와 내부 결제 기록 재동기화를 시작했습니다.');
+
+  return (
+    <div style={{ display:'flex', width:'100%', minHeight:'100vh' }} data-archetype="stripe-multipane">
+      <Sidebar active={nav} onSelect={setNav} failCount={failCount} />
+      <main className="main">
+        {nav === 'main' && <MainConsole jobs={jobs} onRetry={handleRetry} onOpenJob={setOpenJob} onExport={handleExport} />}
+        {nav === 'members' && <MembersView members={MEMBERS} onOpenMember={setOpenMember} onExport={handleExport} />}
+        {nav === 'payments' && <PaymentsView payments={payments} onRefund={setRefundTarget} onResync={handleResync} />}
+        {nav === 'security' && <SecurityView log={AUDIT_LOG} />}
+      </main>
+      <JobDrawer job={openJob} onClose={() => setOpenJob(null)} onRetry={handleRetry} />
+      <MemberDrawer member={openMember} onClose={() => setOpenMember(null)} />
+      {refundTarget && (
+        <ConfirmModal
+          title="환불을 처리할까요?"
+          desc={`${refundTarget.member}님의 "${refundTarget.item}" 결제 ${refundTarget.amount}를 환불 처리하며, 신청 건 상태가 함께 갱신됩니다.`}
+          onCancel={() => setRefundTarget(null)}
+          onConfirm={handleRefund}
+        />
+      )}
+      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('app-root')).render(<App />);
+</script>
+</body>
+</html>
