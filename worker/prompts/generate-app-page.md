@@ -24,6 +24,16 @@
 - entity 타입은 `@/types` 에서 import.
 - shadcn 컴포넌트 (`src/components/ui/*`) 는 **없다** — page 안에서 raw HTML + tailwind class 또는 직접 radix import.
 
+### ⚠️ 타입 계약 (위반 시 빌드 실패)
+
+입력의 `foundation_source` 는 **Pass 1 이 실제로 생성해 워크스페이스에 이미 존재하는 파일 원문**이다. 추측이 아니라 사실이다. 빌드는 `tsc` 를 거치므로 여기서 어긋나면 전체 데모가 실패한다.
+
+- `foundation_source["src/types.ts"]` 에 정의된 엔티티 타입을 **그대로** 쓴다. 필드 이름·타입(특히 `id` 가 `string` 인지 `number` 인지)을 임의로 바꾸거나 새로 가정하지 말 것.
+- 같은 이름의 타입을 page 안에서 **재정의하지 말 것**. 필요하면 `import type { X } from "@/types"`.
+- `foundation_source["src/lib/store.ts"]` 의 `useStore()` 반환 형태와 `setStore` 시그니처를 그대로 따른다.
+- page 전용 로컬 타입이 꼭 필요하면 이름을 겹치지 않게 짓고 (`FormDraft` 등) `@/types` 의 타입과 필드 타입을 일치시킨다.
+- 새 레코드를 만들 때 `id` 는 `types.ts` 의 타입에 맞춰 생성한다 — `string` 이면 `crypto.randomUUID()` 나 `` `${Date.now()}` ``, `number` 면 `Date.now()`. 문자열과 숫자를 섞지 말 것.
+
 ---
 
 ## 입력 (user 메시지)
@@ -36,7 +46,11 @@
   "tokens": { "primary": "#XXXXXX", ... },                                                          // Pass 1 과 동일
   "flow_id": "flow_3",                                                                              // 이번에 작성할 flow
   "page_path": "src/pages/Flow3.tsx",                                                               // 작성 대상 path (placeholder 가 있음)
-  "tier": 1                                                                                          // 1 | 2 | 3
+  "tier": 1,                                                                                         // 1 | 2 | 3
+  "foundation_source": {                                                                             // Pass 1 이 만든 실제 파일 원문
+    "src/types.ts": "export interface Job { id: string; ... }",
+    "src/lib/store.ts": "export function useStore() { ... }"
+  }
 }
 ```
 

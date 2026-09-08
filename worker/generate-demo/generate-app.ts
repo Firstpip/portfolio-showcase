@@ -113,6 +113,37 @@ function loadPagePrompt(): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Pass 1 → Pass 2 타입 계약
+
+/** Pass 2 가 반드시 따라야 하는 foundation 원문 (경로 → 내용). */
+export type FoundationContracts = Record<string, string>;
+
+/**
+ * Pass 2 에 실어 보낼 foundation 파일을 고른다.
+ *
+ * page 는 `@/types` 의 엔티티 타입과 `@/lib/store` 의 훅 시그니처를 그대로 써야
+ * 하는데, 프롬프트로 "존재한다" 고만 알려주면 각 page 호출이 필드 타입을 제각각
+ * 가정한다 (id: string vs number 등) → vite build 의 tsc 가 거부.
+ * 그래서 원문을 그대로 넘긴다. 크기가 크면 계약 파악에 필요한 앞부분만 자른다.
+ */
+export function pickFoundationContracts(
+  files: GeneratedFile[],
+  maxBytesPerFile = 12000,
+): FoundationContracts {
+  const WANTED = ["src/types.ts", "src/lib/store.ts", "src/lib/store.tsx"];
+  const out: FoundationContracts = {};
+  for (const want of WANTED) {
+    const hit = files.find((f) => f.path === want);
+    if (!hit) continue;
+    out[hit.path] =
+      hit.content.length > maxBytesPerFile
+        ? hit.content.slice(0, maxBytesPerFile) + "\n/* …(길어서 잘림) */"
+        : hit.content;
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 안전 헬퍼
 
 function stripJsonOuter(raw: string): string {
@@ -120,6 +151,64 @@ function stripJsonOuter(raw: string): string {
   const last = raw.lastIndexOf("}");
   if (first < 0 || last < 0 || last < first) return raw.trim();
   return raw.slice(first, last + 1);
+}
+
+/**
+ * Opus 가 JSON 문자열 리터럴 안에 raw 제어문자(대부분 코드 안의 개행)를 escape
+ * 없이 그대로 넣어 보내는 경우가 있다. JSON 스펙상 U+0000~U+001F 는 문자열
+ * 리터럴 안에서 반드시 escape 돼야 하므로 JSON.parse 가 "Bad control character"
+ * 로 죽는다 (T8.7 E2E 1차 실패: Pass 2 flow_5).
+ *
+ * 프롬프트를 더 조여도 장문 코드 응답에서는 재발 가능성이 남아, 파서 쪽에서
+ * 복구한다: 문자열 리터럴 내부의 제어문자만 escape 시퀀스로 바꿔 재시도.
+ * 리터럴 밖(구조 문자 사이)의 개행·들여쓰기는 JSON 이 원래 허용하므로 건드리지 않는다.
+ */
+function parseLenientJson(raw: string): unknown {
+  const sliced = stripJsonOuter(raw);
+  try {
+    return JSON.parse(sliced);
+  } catch (err) {
+    const repaired = escapeControlCharsInStrings(sliced);
+    if (repaired === sliced) throw err;
+    return JSON.parse(repaired);
+  }
+}
+
+function escapeControlCharsInStrings(s: string): string {
+  const MAP: Record<string, string> = {
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+    "\b": "\\b",
+    "\f": "\\f",
+  };
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (escaped) {
+      out += c;
+      escaped = false;
+      continue;
+    }
+    if (inString && c === "\\") {
+      out += c;
+      escaped = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      out += c;
+      continue;
+    }
+    if (inString && c.charCodeAt(0) < 0x20) {
+      out += MAP[c] ?? "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0");
+      continue;
+    }
+    out += c;
+  }
+  return out;
 }
 
 const SAFE_PATH_RE = /^[a-zA-Z0-9_./-]+$/;
@@ -194,7 +283,7 @@ async function runFoundationPass(input: GenerateAppInput): Promise<FoundationPas
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(stripJsonOuter(raw));
+    parsed = parseLenientJson(raw);
   } catch (err) {
     throw makeFail(
       "FOUNDATION_PARSE",
@@ -265,6 +354,7 @@ function pascalCase(id: string): string {
 async function runPagePass(
   input: GenerateAppInput,
   flow: { id: string; tier: number; title: string },
+  contracts: FoundationContracts,
 ): Promise<PagePassResult> {
   const pagePath = `src/pages/${pascalCase(flow.id)}.tsx`;
   const userPayload = {
@@ -273,6 +363,9 @@ async function runPagePass(
     flow_id: flow.id,
     page_path: pagePath,
     tier: flow.tier,
+    // T8.3b: Pass 1 이 실제로 생성한 타입·스토어 본문. 이게 없으면 page 마다
+    // 엔티티 필드 타입을 제각각 가정해 tsc 가 깨진다 (T8.7 E2E 간헐 실패 원인).
+    foundation_source: contracts,
   };
   const userMessage =
     JSON.stringify(userPayload) +
@@ -298,7 +391,7 @@ async function runPagePass(
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(stripJsonOuter(raw));
+    parsed = parseLenientJson(raw);
   } catch (err) {
     throw makeFail(
       "PAGE_PARSE",
@@ -438,7 +531,15 @@ export async function generateApp(input: GenerateAppInput): Promise<GenerateAppR
   }
 
   // ─── Pass 2: per-flow pages 병렬 ───
-  const pageResults = await Promise.allSettled(flows.map((f) => runPagePass(input, f)));
+  const contracts = pickFoundationContracts(foundation.files);
+  if (!contracts["src/types.ts"]) {
+    console.warn(
+      "[generate-app] foundation 에 src/types.ts 가 없음 — page 간 타입 불일치 위험",
+    );
+  }
+  const pageResults = await Promise.allSettled(
+    flows.map((f) => runPagePass(input, f, contracts)),
+  );
   const pageOks: PagePassResult[] = [];
   const pageUsages: PassUsage[] = [];
   for (const r of pageResults) {

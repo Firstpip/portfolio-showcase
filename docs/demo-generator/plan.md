@@ -883,8 +883,21 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
   - [x] portfolio_links 에 Demo 항목 1개만 (중복 없음)
 - **last_failure**: —
 
+#### T8.3b Pass 2 타입 계약 전달 (T8.7 E2E 에서 파생)
+- **상태**: `DONE`
+- **depends_on**: T8.3
+- **requires_test**: yes (T8.7 E2E 로 검증)
+- **파일**: `worker/generate-demo/generate-app.ts`, `worker/prompts/generate-app-page.md`
+- **해야 할 일**:
+  - Pass 2 user payload 에 Pass 1 이 실제로 생성한 `src/types.ts` / `src/lib/store.ts` 원문을 `foundation_source` 로 실어 보낸다 (파일당 12KB 상한)
+  - page 프롬프트에 "타입 계약" 절 추가 — 엔티티 타입 재정의 금지, `id` 타입(string/number) 준수, `useStore()`/`setStore` 시그니처 준수
+- **test_spec**:
+  - [x] 직전에 tsc 로 깨지던 동일 spec 으로 `vite build` 통과
+  - [x] 연속 2회 green (flaky 해소 확인)
+- **last_failure**: —
+
 #### T8.7 orchestrator 통합 — handleGenQueued 신규 파이프라인
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T8.5, T8.6
 - **requires_test**: yes
 - **파일**: `worker/generate-demo/orchestrator.ts` 수정, `worker/test-orchestrator-v2.ts` (신규)
@@ -894,10 +907,10 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
   - regenerate_scope='all' 동작 유지, 'flow:{id}' 부분 재생성은 일단 'all' 로 강제 (Vite 빌드는 부분 재생성 어려움 — 후속 task로 분리 가능)
   - tempfile + atomic 교체 패턴 유지 (실패 시 기존 dist 보존)
 - **test_spec**:
-  - [ ] 발달센터 재생성 → 새 dist 배포 + portfolio_links 갱신 + demo_artifacts JSONB에 build 메타 (스택, runtime, build duration, dist file count) 기록
-  - [ ] preflight 실패 시 기존 portfolio-demo/ 보존 + demo_status='gen_failed' (또는 build_failed)
-  - [ ] 'flow:{id}' regenerate_scope 가 'all' 로 처리되는지 (그리고 demo_generation_log 에 명시)
-- **last_failure**: —
+  - [x] 실제 공고 재생성 → 새 dist 배포 + portfolio_links 갱신 + demo_artifacts JSONB에 build 메타 (스택, runtime, build duration, dist file count) 기록 — 발달센터는 DB 행·portfolio-1 이 모두 삭제돼 픽스처 불가 → `260907_midcareer-job-matching` 공고로 동일 경로 검증
+  - [x] preflight 실패 시 기존 portfolio-demo/ 보존 + demo_status 실패 상태 (스키마에 gen_failed/build_failed 는 없음 → 기존 `failed` 사용)
+  - [x] 'flow:{id}' regenerate_scope 가 'all' 로 처리되는지 (그리고 demo_generation_log 에 명시)
+- **last_failure**: — (2026-09-08 해소. Pass 2 타입 계약 공백은 T8.3b 로 분리해 수정)
 
 #### T8.8 standard mode 1-click E2E 검증
 - **상태**: `TODO`
@@ -942,10 +955,10 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-09-07 (T8.6 DONE — syncDirectory 멀티파일 배포 + 22/22 검증. 다음 T8.7 orchestrator 통합)
-- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3, T8.4, T8.5, T8.6
+- **마지막 업데이트**: 2026-09-08 (T8.7 + T8.3b DONE — 신규 빌드 파이프라인 통합, E2E 31/31 × 2연속. 다음 T8.8 1-click E2E)
+- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3, T8.4, T8.5, T8.6, T8.3b, T8.7
 - **진행 중 task**: 없음
-- **다음에 착수 가능**: T8.7 (orchestrator 통합 — handleGenQueued 신규 파이프라인) — depends_on T8.5+T8.6 충족
+- **다음에 착수 가능**: T8.8 (1-click E2E — 대시보드 🎬 버튼 → ready 까지 무인 완주) — depends_on T8.7 충족
 - **블로킹 중**: T7.3 (Phase 8 완료 후 재개)
 - **Phase 8 첫 cut 범위**: T8.0~T8.8 (vite-react-ts runtime 1개 + standard demo_mode + 1-click E2E). 후속 T8.9~T8.11은 polish.
 - **Phase 7 배경**: T1.1/T2.3/T2.4의 다단계 UX(paste → 추출 → 편집 → 승인 → 생성)가 사용자 인지 부담 큼. T6.2/T6.3로 extract 정확도 강화 + T4.2 재생성 패널로 사후 교정 가능 → SpecModal/StructuredSpecEditor/ApprovalPanel 폐기, 트리거 1회로 단순화. 위시켓 URL 자동 fetch 통합으로 paste 자체 제거
@@ -997,6 +1010,7 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 | 2026-04-27 | T6.2 완료 | extract 프롬프트 N:M 자동 분해. `worker/prompts/extract-spec.md` 에 "N:M 관계 분해 규칙" 섹션 (감지 신호·금지 패턴·올바른 분해+예시) + 품질체크 항목 2개 추가. `worker/shared/validate-spec.ts` 에 `detectPluralRef` 헬퍼 — `_ids` 접미사 또는 's' 끝 ref 거부 (allowlist: address·status·process·class·series). `worker/test-extract-nm.ts` 신규 — 발달센터 회귀(spec_raw 복제) + 합성 3건(clinic_review_tag, study_member_group, ecom_product_category). 자동 검증 4/4 통과: (1) 발달센터 → review_tag {review_id, tag_id} 자동 등장, 보너스 center_therapy_type 분해 (T6.1 수동 패치 불필요화) (2) clinic → review_tag 분해 (3) study → group_member 분해 (study_group 도메인 prefix → group_id 참조) (4) ecom → product_category 분해. 복수형 ref 위반 0건, Sonnet 4회 호출 (cache_read 21K 재사용) |
 | 2026-04-27 | T6.3 완료 | extract 프롬프트 read-only flow tier 분류 개선. `worker/prompts/extract-spec.md` tier 1 정의에 "steps 안에 write step 적어도 하나 필수" 규칙 + read+persist 예외 단락(찜·북마크·별점·알림 등록은 read 처럼 보여도 tier 1 자격) + 절대 금지 패턴(steps 가 전부 검색·둘러보기·필터·조회 같은 읽기 동사로만 구성된 경우 tier 2 강제) + 4단계 결정 절차 + 품질 체크 2항목 추가. `worker/extract-spec.ts` `stripJsonFence` 를 outer-slice(첫 `{`~마지막 `}`) 무조건 적용으로 보강 — 종료 펜스 + trailing 텍스트 케이스 안전망. `worker/test-extract-tier.ts` 신규 — 발달센터 회귀 + 합성 3건(realestate_browse/event_calendar/recipe_browse). 각 케이스 (1) handleExtractQueued ok (2) tier_1 모든 flow write 동사 step ≥1 (3) read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개. 자동 검증 4/4 통과: T6.1 시점 발달센터 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결. 1회차 실패 — Sonnet 이 ```json 펜스 + trailing 텍스트로 응답해 종료 펜스 정규식 미매칭 (realestate) → stripJsonFence outer-slice 무조건 적용, 그리고 분류기 false positive (recipe 의 "재료 다중 입력" 의 `입력`, "작성자 프로필" 의 `작성`) → 단독 `입력` 제거 + `작성(?!자)` 부정선후행. 사용자 위임 승인 |
 | 2026-04-27 | T0.3 완료 | 디자인 토큰 추출 유틸 manual-review 통과 (사용자 승인). `worker/test-extract-tokens.ts` 로 5개 도메인 portfolio-1 (발달센터/핀테크/병원/임원 대시보드/커뮤니티) 검증. NO_LLM=1: 4/5 케이스 100% 일치 + 5번(하드코딩 케이스)은 휴리스틱 실패 → graceful fallback 안착 (throw 0). LLM ON: Sonnet 1회 호출(10s, 37 output 토큰)로 5번 케이스도 100% 매칭 → 전체 5/5 = 100%. 빈 HTML 입력에서도 `_source='fallback'` 으로 안전하게 떨어짐 확인. 데모 생성기 모든 task (T0.1~T6.3) 완료 |
+| 2026-09-08 | T8.7 + T8.3b 완료 | orchestrator 를 Phase 8 빌드 체인으로 교체. `runGenerationPipeline`(3-pass 단일 HTML)은 `_legacy/pipeline-v1.ts` 로 이동 후 이름만 재수출 (T4.2 회귀 테스트 호환). 신규 `runBuildPipeline` = tokens → prepareWorkspace → generateApp → runBuild → validateDist → collectDist, workspace 는 finally 에서 항상 정리. `onStage` 훅으로 build 진입 시 demo_status 'generating' → 'building' 전이. `replaceDemoDir` 는 `.new.<pid>` 완성 후 rename 2회 스왑 (실패 시 즉시 원복). `resolveScope` 가 'flow:{id}' 를 'all' 로 승격하고 로그에 requested_scope/scope_forced_to_all 명시 (vite 빌드는 부분 재생성이 무의미). demo_artifacts 는 LLM 산출물 캐시 대신 빌드 메타(stack/stack_decision/base_path/generate·build duration/dist file count·bytes/validation) 저장. 배포는 T8.6 `deployDemoDistToGitHub`. **T8.7 E2E 가 T8.3 의 설계 공백 2건을 드러냄** — (a) Opus 가 JSON 문자열 리터럴에 raw 개행을 넣어 PAGE_PARSE 실패 → `parseLenientJson` 이 문자열 리터럴 내부 제어문자만 escape 후 재시도 (b) Pass 2 가 Pass 1 의 `types.ts`/`store.ts` 본문을 못 봐 page 마다 id 타입(string↔number)을 제각각 가정 → tsc 간헐 실패(run#4 통과/run#6 실패). T8.3b 로 분리해 `foundation_source` 를 payload 에 실어 보내고 page 프롬프트에 타입 계약 절 추가. 자동 검증 31/31 × **2연속 green** (flaky 해소 확인): resolveScope 6 + preflight 보존 6 (status=failed, dist byte-identical, demo_artifacts·regenerate_scope 보존, 로그 scope 기록) + E2E 19 (ready 전이, 빌드 메타 완비, portfolio_links Demo 1개+P1 보존, scope 승격 로그, GitHub 트리 파일수=dist, 고아 asset 로컬·원격 제거, raw 200×2, base path 주입, 로컬 dist 교체). 실측 gen 152~162s + build 3.3~3.7s, src 19파일 → dist 3파일 280KB. 픽스처 주의: 발달센터는 DB 행·portfolio-1 이 모두 삭제돼 못 씀 → `260907_midcareer-job-matching` 공고 사용, spec 은 `.test-cache/t8.7-spec.json` 캐시(상류 extract 변동으로 오케스트레이터 검증이 흔들리지 않게, `--fresh` 로 재수집). test_spec 의 `demo_status='gen_failed'` 는 스키마에 없는 값이라(CHECK 는 13상태, 실패는 `failed` 하나) 상태 추가 없이 `failed` 로 검증. |
 | 2026-09-07 | T8.6 완료 | deploy-demo 멀티파일 배포 — `worker/shared/github.ts` 에 `gitBlobSha`/`listDirBlobs`/`syncDirectory` 추가, `worker/deploy-demo.ts` 에 `deployDemoDistToGitHub`/`rawUrlAt` wrapper. writeFiles 는 base_tree 위 "추가"만 하므로 content-hash 파일명이 바뀌는 Vite dist 를 재배포하면 고아 asset 이 쌓인다 → syncDirectory 가 "디렉터리 최종 상태 = dist" 를 단일 원자적 커밋으로 보장 (신규/변경은 base64 blob, 미변경은 base_tree 유지, 없어진 경로는 `sha: null` 삭제). blob SHA 를 로컬(`blob <len>\0` sha1)에서 먼저 계산해 동일하면 createBlob 호출 자체를 생략 — 재배포 API 왕복 절감 + 미변경 파일 SHA 자동 불변. 루트 recursive 트리 truncate 를 피하려고 경로 세그먼트를 따라 내려가 서브트리만 조회. `worker/test-deploy-multifile.ts` 신규 — 자동 검증 22/22 first try: (1) 5-파일 dist push → raw URL 5/5 200 + byte-identical (바이너리 PNG base64 왕복 포함), 다른 포트폴리오 디렉터리 38개 SHA 불변 (2) 재배포 written=2/reused=3/deleted=1, 미변경 3개 blob SHA 불변, gitBlobSha 로컬계산=GitHub SHA, 고아 js 트리 제거+raw 404, 최종 파일수=dist (2c) 동일 dist 재배포 → noop, 빈 커밋 미생성 (3) 재배포 2회 후에도 portfolio_links Demo 1개+P1 보존+count 일치. probe 커밋 3개(v1/v2/cleanup) 후 트리 잔존 0건. orchestrator 배선은 T8.7 로 분리 — 기존 `deployDemoToGitHub`(단일 HTML) 은 그대로 유지. |
 | 2026-04-28 | T8.5 완료 | validate-dist 모듈 — `validateDist(distRoot, basePath, options) → {ok, findings[]}` 5 항목 검증: dist_present(stat+index.html 존재) / base_path(`${basePath}assets/` prefix in index.html) / bundle_size(dist/assets/ 합계 < 2MB 기본) / external_urls(CDN 허용 목록 외 절대 URL, jsdelivr 화이트리스트) / console_errors(Playwright headless + Node http 정적 서버로 basePath URL 서빙 → goto + #root 마운트 + pageerror/console.error/requestfailed 수집). URL noise 패턴: w3.org namespace + reactjs.org error decoder hint(라이브러리 inline 표준 문자열, 호출 아님). 자동 검증 5/5 (보정 1사이클): 1) bare runtime build 2.9s + 4 검증 PASS (assets 145.5KB, Playwright 콘솔 에러 0) 2) main.tsx 의도 파괴 → BUILD_FAILED 1.06s + stderr 단서 ✓ 3) 합성 dist base 누락 → base_path FAIL 4) 합성 dist 외부 URL(evil/analytics) 삽입 → external_urls FAIL, jsdelivr 는 통과 5) 합성 dist 200KB JS + 100KB 한도 → bundle_size FAIL. 1차 fail 은 React 의 `https://reactjs.org/docs/error-decoder.html?invariant=` 가 inline 되어 false positive — noise 패턴에 추가해 fix. dist 가 self-contained 임을 자동 보장 (CDN Pretendard 만 허용). |
 | 2026-04-27 | T8.4 완료 | tokens-to-tailwind 결정론적 모듈 — `tokensToTailwindConfig(tokens) → string` 순수 함수 (JSON.stringify 안전 escape, fontStack uniqueness). generate-app.ts Pass 1 응답에서 tailwind.config.cjs 항목 무시 + 모듈이 직접 작성 (LLM 비결정성 제거 + ~500 bytes 출력 토큰 절약). foundation prompt 정리 — "tailwind.config.cjs 작성 금지" 명시 + class 이름 가이드 유지. 자동 검증 4/4 (보정 1사이클): A 매핑 정확 / B JSON escape 안전 (따옴표·백슬래시 입력) / C Pretendard 입력 시 fontStack 중복 0 / D vite build 2246ms + dist css 에 토큰 4 색 모두 포함. 1차 D 실패는 tailwind 3.x 가 hex 를 `rgb(R G B / opacity)` 공백 구분 (CSS Color L4) 으로 emit 하는데 매칭이 hex 만 검사해서 false negative — 매칭 패턴 추가로 fix. |
