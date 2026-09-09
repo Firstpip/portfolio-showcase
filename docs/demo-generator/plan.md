@@ -977,7 +977,7 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 - **해야 할 일**: 모바일 앱 공고 처리 — 375px frame 안에 SPA를 시뮬레이션하는 wrapper layout. generate-app 프롬프트에 mobile-web 모드 분기 추가.
 
 #### T8.10 후속 — vue/next runtime 추가
-- **상태**: `TEST_FAILED` (구현 완료, validate-dist 설계 판단 1건 대기)
+- **상태**: `DONE`
 - **depends_on**: T8.8
 - **requires_test**: yes
 - **해야 할 일**: `worker-runtimes/vite-vue/`, `worker-runtimes/next-static/` 추가 + 각 스택용 generate 프롬프트 분기. preferred / strict 케이스에서 chosen_runtime 매핑 활용.
@@ -988,17 +988,29 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
   - [x] vite-vue: 빌드 + base path 주입 + validate-dist 5항목 전부 통과
   - [x] next-static: 빌드·base path·bundle_size·console_errors·external_urls·.nojekyll·동적세그먼트 없음 전부 통과
   - [x] **external_urls 를 "실제 네트워크 요청" 기준으로 전환** (사용자 승인) — 번들 문자열 스캔은 프레임워크 벤더 청크의 죽은 상수(`http://n`, next/font 의 fonts.googleapis.com 등)에 계속 걸렸다. Playwright 패스에서 request URL 을 수집해 로컬 서버·CDN 허용 목록 밖이면 실패로 바꿨다. 회귀 확인: 외부 이미지를 실제로 부르는 dist 는 여전히 검출(리다이렉트 대상까지). skipBrowser 일 때만 기존 정적 스캔으로 폴백해 오프라인 커버리지 유지. T8.5 테스트 5/5·T8.8b 34/34 회귀 없음
-  - [ ] **LLM E2E** — next-static 2회 실패 (아래 last_failure), vite-vue 미실행
-- **last_failure**: 2026-09-09 — **런타임·매핑·프롬프트·자동검증은 전부 완료**(test-stacks.ts 통과). 남은 건 next-static 의 **LLM E2E** 다.
-  실제 공고(`260903_rag-chatbot-quality`, spec 이 frontend=`next` 를 요구)로 2회 돌렸는데 둘 다 `next build` 의 타입체크에서 같은 이유로 실패:
-  Pass 2 가 만든 page 가 `import { Layout } from "@/components/Layout"` 로 **named import** 를 하는데 foundation 은 default export 로 만들었다.
-  1차 실패 후 (a) 계약 파일 목록에 `components/Layout.tsx` 를 추가해 Pass 2 가 실제 export 형태를 보게 하고 (b) page 프롬프트에 "Layout 을 import 하지 마라 + foundation_source 의 실제 export 형태를 따르라" 를 명시했지만 2차에서도 동일 실패.
-  → T8.8b 와 **정확히 같은 교훈**: 프롬프트로 LLM 습관을 막는 건 확률 싸움이다. 사용자 결정 필요:
-  (a) **export 형태를 코드로 보정** (권장) — 생성 직후 sanitize 단계 옆에서, foundation 이 만든 공용 컴포넌트에 default export 만 있으면 동명 named export 별칭(`export { X as Layout }`)을 자동으로 덧붙인다. 두 import 스타일 모두 컴파일되므로 이 실패 유형이 사라진다. tokens-to-tailwind(T8.4)·sanitize-urls(T8.8b) 와 같은 패턴.
-  (b) Next foundation 에서 `components/Layout.tsx` 를 없애고 chrome 을 `app/layout.tsx` 안에 직접 둔다 — import 대상 자체를 없애지만, LLM 이 없는 모듈을 import 하면 "module not found" 로 여전히 깨질 수 있다.
-  (c) 빌드 실패 시 tsc 에러를 Opus 에 되먹이는 repair pass — 범용이지만 비용·시간이 늘고 근본 원인은 그대로.
-- **검증 상태 정리**: vite-vue 는 런타임 빌드·validate 5항목까지 통과했으나 **LLM E2E 는 아직 안 돌렸다**(next 가 먼저 막혀서). (a) 적용 후 vue 도 함께 E2E 필요.
-- **부수 확인**: 실패는 기존 배포물을 건드리지 않는다는 게 실증됐다 — 2회 실패 동안 `260903_rag-chatbot-quality` 의 직전 React 데모가 그대로 살아있었고(HTTP 200) portfolio_links 도 P1/P2/Demo 유지. 상태만 `ready` 로 원복해 뒀다.
+  - [x] **LLM E2E** — next-static·vite-vue 양쪽 실제 생성→빌드→배포 통과 (T8.10b 적용 후)
+- **last_failure**: — (2026-09-09 해소. Pass 2 의 export 형태 불일치는 T8.10b 로 분리해 코드로 보정)
+- **LLM E2E 실측 (2026-09-09)**: 두 스택 모두 통과.
+  - next-static — 실제 공고 `260903_rag-chatbot-quality`(spec 이 frontend=`next` 요구). 총 385s (gen 320s + build 14s), src → **dist 56파일 1.84MB**, `export 보정 1건 — components/Layout.tsx(named-alias)` 가 정확히 직전 2회 실패 원인을 제거했다. validate 5항목 통과.
+  - vite-vue — 캐시 spec 의 stack_decision 만 strict/vue 로 바꾼 probe. 총 249s (gen 233s + build 4.7s), dist 3파일 256KB, export 보정 0건, validate 5항목 통과. probe 는 DB·레포·로컬 모두 정리 완료.
+- **남은 운영 이슈**: 루트 `.nojekyll` 이 **아직 원격에 없어** 배포된 Next 데모의 `_next/` 자산이 Pages 에서 404 다 (파일은 트리에 56개 정상 존재, HTML 참조 경로도 정확). 커밋 `617c58b` 에 포함돼 있으므로 **푸시하면 해소**된다. Vite 계열 데모는 영향 없음.
+#### T8.10b 공용 컴포넌트 export 형태 보정 (T8.10 E2E 실패에서 파생)
+- **상태**: `DONE`
+- **depends_on**: T8.3
+- **requires_test**: yes
+- **파일**: `worker/generate-demo/normalize-exports.ts` (신규), `worker/generate-demo/orchestrator.ts`, `worker/test-normalize-exports.ts` (신규)
+- **해야 할 일**:
+  - 생성 직후(sanitize 단계) `components/` 아래 `.ts`/`.tsx` 의 export 형태를 **양쪽 다 되게 연다** — default 만 있으면 동명 named 별칭(`export { X as Layout }`), named 만 있으면 `export default`
+  - `.vue` SFC 는 언어 규약상 default 뿐이라 대상 제외
+  - `demo_artifacts.export_fix_count` 기록
+- **test_spec**:
+  - [x] default only → named 별칭 / named only → default 추가 / 이름≠파일명이면 별칭
+  - [x] 둘 다 있으면 무변경, 익명 default 는 손대지 않음, `export { X as Y }` 재수출도 named 로 인정
+  - [x] idempotent (문자열·워크스페이스 양쪽)
+  - [x] components/ 만 대상 — app/ page·node_modules·.vue 스킵
+  - [x] 보정 결과가 named + default import 동시 사용에서 tsc 통과 (실측)
+- **last_failure**: —
+
 #### T8.11 후속 — admin-dashboard / workflow-diagram 폴백
 - **상태**: `TODO`
 - **depends_on**: T8.8
@@ -1018,10 +1030,10 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-09-09 (T8.10 — 런타임 2종·매핑·프롬프트·자동검증 완료, next LLM E2E 가 export 형태 불일치로 2회 실패)
-- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3, T8.4, T8.5, T8.6, T8.3b, T8.7, T8.8a, T8.8b, T8.8
-- **진행 중 task**: T8.10 (TEST_FAILED — LLM E2E 만 미완, 사용자 결정 대기)
-- **다음에 착수 가능**: T8.9 (mobile-web 폴백). T8.10 은 결정 대기
+- **마지막 업데이트**: 2026-09-09 (T8.10 + T8.10b DONE — vue/next 런타임 양쪽 E2E 통과. 루트 .nojekyll 푸시 필요)
+- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3, T8.4, T8.5, T8.6, T8.3b, T8.7, T8.8a, T8.8b, T8.8, T8.10, T8.10b
+- **진행 중 task**: 없음
+- **다음에 착수 가능**: T8.9 (mobile-web 폴백), T8.11 (admin-dashboard/workflow-diagram 폴백 — 우선순위 하향 근거는 아래)
 - **보류 판단 (2026-09-09)**: `DEMO_GEN_ENABLED` 플래그 제거(prod 노출)는 **워커 상시화(launchd 등록) 이후**로 미룬다. 지금은 맥북 워커가 떠 있어야만 동작해서, 워커가 꺼진 상태로 대시보드 버튼을 누르면 행이 `autorun_queued` 에 영구히 멈춘다. 플래그 주석의 "T8.8 통과 후 제거" 는 워커 운영 방식을 정하기 전에 쓴 메모
 - **T8.11 우선순위 하향 근거**: strict 후보가 `demo_mode='admin-dashboard'` 로 분류됐는데 전용 분기 없이 standard React SPA 로 정상 빌드·동작했다 (콘솔 에러 0). 전용 템플릿의 실익 재평가 필요
 - **블로킹 중**: T7.3 (Phase 8 완료 후 재개)
@@ -1075,6 +1087,7 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 | 2026-04-27 | T6.2 완료 | extract 프롬프트 N:M 자동 분해. `worker/prompts/extract-spec.md` 에 "N:M 관계 분해 규칙" 섹션 (감지 신호·금지 패턴·올바른 분해+예시) + 품질체크 항목 2개 추가. `worker/shared/validate-spec.ts` 에 `detectPluralRef` 헬퍼 — `_ids` 접미사 또는 's' 끝 ref 거부 (allowlist: address·status·process·class·series). `worker/test-extract-nm.ts` 신규 — 발달센터 회귀(spec_raw 복제) + 합성 3건(clinic_review_tag, study_member_group, ecom_product_category). 자동 검증 4/4 통과: (1) 발달센터 → review_tag {review_id, tag_id} 자동 등장, 보너스 center_therapy_type 분해 (T6.1 수동 패치 불필요화) (2) clinic → review_tag 분해 (3) study → group_member 분해 (study_group 도메인 prefix → group_id 참조) (4) ecom → product_category 분해. 복수형 ref 위반 0건, Sonnet 4회 호출 (cache_read 21K 재사용) |
 | 2026-04-27 | T6.3 완료 | extract 프롬프트 read-only flow tier 분류 개선. `worker/prompts/extract-spec.md` tier 1 정의에 "steps 안에 write step 적어도 하나 필수" 규칙 + read+persist 예외 단락(찜·북마크·별점·알림 등록은 read 처럼 보여도 tier 1 자격) + 절대 금지 패턴(steps 가 전부 검색·둘러보기·필터·조회 같은 읽기 동사로만 구성된 경우 tier 2 강제) + 4단계 결정 절차 + 품질 체크 2항목 추가. `worker/extract-spec.ts` `stripJsonFence` 를 outer-slice(첫 `{`~마지막 `}`) 무조건 적용으로 보강 — 종료 펜스 + trailing 텍스트 케이스 안전망. `worker/test-extract-tier.ts` 신규 — 발달센터 회귀 + 합성 3건(realestate_browse/event_calendar/recipe_browse). 각 케이스 (1) handleExtractQueued ok (2) tier_1 모든 flow write 동사 step ≥1 (3) read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개. 자동 검증 4/4 통과: T6.1 시점 발달센터 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결. 1회차 실패 — Sonnet 이 ```json 펜스 + trailing 텍스트로 응답해 종료 펜스 정규식 미매칭 (realestate) → stripJsonFence outer-slice 무조건 적용, 그리고 분류기 false positive (recipe 의 "재료 다중 입력" 의 `입력`, "작성자 프로필" 의 `작성`) → 단독 `입력` 제거 + `작성(?!자)` 부정선후행. 사용자 위임 승인 |
 | 2026-04-27 | T0.3 완료 | 디자인 토큰 추출 유틸 manual-review 통과 (사용자 승인). `worker/test-extract-tokens.ts` 로 5개 도메인 portfolio-1 (발달센터/핀테크/병원/임원 대시보드/커뮤니티) 검증. NO_LLM=1: 4/5 케이스 100% 일치 + 5번(하드코딩 케이스)은 휴리스틱 실패 → graceful fallback 안착 (throw 0). LLM ON: Sonnet 1회 호출(10s, 37 output 토큰)로 5번 케이스도 100% 매칭 → 전체 5/5 = 100%. 빈 HTML 입력에서도 `_source='fallback'` 으로 안전하게 떨어짐 확인. 데모 생성기 모든 task (T0.1~T6.3) 완료 |
+| 2026-09-09 | T8.10 + T8.10b 완료 | vue/next 런타임 추가. `worker-runtimes/vite-vue`(Vue 3 + vue-router + pinia), `worker-runtimes/next-static`(Next 14 App Router + `output:"export"`). `deriveStack` 이 strict/preferred 일 때만 요구 스택을 따르고 free 는 기본값 — 자유인데 무거운 Next 로 갈 이유가 없다. 프론트로 만들 수 없는 요구(spring/flutter)는 기본값 폴백. 스택별로 프롬프트 4종·page 경로·계약 파일·자산 디렉토리(Vite `assets/` vs Next `_next/`)를 분기. Next 15 는 React 19 전제라 정적 export 시 `_error` prerender 가 터져 **14.2 로 고정**. **기존 결함 3건 발견·수정** (전부 React 경로에도 잠재): (a) prepareWorkspace 가 `.next` 빌드 캐시까지 복사 → 최상위 산출물만 제외(이름만 보고 트리 전체를 거르면 `node_modules/vue/dist` 가 날아간다) (b) `node_modules/.bin/next` 가 **원본을 가리키는 절대 심볼릭 링크**라 워크스페이스 코드가 원본 바이너리로 빌드되며 React 가 두 벌 로드돼 `useContext` null 로 죽음 → 복사 후 워크스페이스 안쪽 상대 링크로 재연결 (c) validate-dist 의 마운트 대기가 `#root` 고정이라 Next App Router 에서 타임아웃 → "화면에 내용이 그려졌는가" 로 일반화. **external_urls 를 실제 네트워크 요청 기준으로 전환**(사용자 승인) — 번들 문자열 스캔은 앱 코드엔 맞지만 프레임워크 벤더 청크엔 맞지 않는다(Next 의 `http://n` 더미 base, next/font 의 fonts.googleapis.com 등 죽은 상수). 폰트 호스트를 노이즈로 넣으면 진짜 외부 폰트를 못 잡으므로, Playwright 패스에서 request URL 을 수집해 직접 측정한다. 회귀 확인: 외부 이미지를 실제로 부르는 dist 는 여전히 검출(리다이렉트 대상까지). skipBrowser 는 정적 스캔 폴백 유지. GitHub Pages 용 **루트 `.nojekyll`** 추가 — Jekyll 이 `_` 로 시작하는 경로를 제외해 Next 의 `_next/` 가 404 난다(T5.1 과 같은 원인). **T8.10b**: next E2E 가 2회 연속 `import { Layout }`(named) vs default export 불일치로 실패했고, 계약 파일에 Layout 원문을 넣고 프롬프트에 명시해도 재발 → T8.8b 와 같은 결론으로 **코드로 열어준다** — default 만 있으면 named 별칭, named 만 있으면 default 를 덧붙여 어느 import 스타일이든 컴파일되게 한다. 자동 검증: test-stacks.ts 전체 + test-normalize-exports.ts 19/19, T8.5 5/5·T8.8b 34/34 회귀 없음. LLM E2E: next-static 385s(dist 56파일 1.84MB, export 보정 1건), vite-vue 249s(dist 3파일 256KB) 양쪽 validate 5항목 통과. |
 | 2026-09-09 | T8.8a·T8.8b·T8.8 완료 | **Phase 8 첫 cut(T8.0~T8.8) 종료.** T8.8 착수 직후 두 개의 블로커가 연달아 드러났고 둘 다 "프롬프트로 부탁하지 말고 코드로 강제" 로 해결했다. (1) **T8.8a 폴링 폴백** — 워커가 Realtime 구독 하나에만 의존했는데 Supabase Realtime 웹소켓이 엣지에서 500(`error code: 1101`)을 뱉어 SUBSCRIBED 에 도달하지 못했다 (publication·키·클라이언트 정상, REST 200, curl 원시 핸드셰이크로 키 없이 401 / 키 있으면 500 을 5회 재현). 대시보드가 `autorun_queued` 를 써도 픽업 주체가 없어 1-click 이 통째로 멈춤. `dispatch.ts` 로 상태→핸들러 라우팅을 모아 Realtime·폴링이 같은 경로를 쓰게 하고, `WORKER_POLL_MS`(기본 10s) 폴링 루프를 추가했다. 중복 실행은 핸들러 atomic claim(프로세스 간) + in-flight Set(프로세스 내) 2중 차단, `startPolling` 은 setInterval 이 아니라 setTimeout 재귀라 사이클이 길어져도 겹치지 않는다. 자동 검증 23/23. (2) **T8.8b URL sanitize** — 생성물이 시드 데이터 필드(`registrationUrl`/`thumbnailUrl`/`videoUrl`)에 절대 URL 을 넣어 validate-dist 의 external_urls 로 3연속 실패(6→8→15건). 프롬프트 보강 2회로도 재발해 `sanitize-urls.ts` + 파이프라인 `sanitize` 스테이지로 결정론적 치환 (이미지류 → placeholder SVG data URI / 영상 임베드 → `about:blank`(iframe 에 `#` 은 자기 페이지 재귀 로드) / 그 외 → `#`), 허용 유지는 jsdelivr·w3.org·React error-decoder. 스캔 정규식을 validate-dist 와 동일하게 맞춰 누락 제거. 자동 검증 34/34. **T8.8 실측**: free 후보 `260904_webinar-member-site`(free/standard) 256s·dist 3파일 291.6KB, strict 후보 `260903_rag-chatbot-quality`(strict/next/admin-dashboard) 300s·dist 3파일 301.0KB — 목표 15~25분 대비 크게 여유. 양쪽 validate 5항목 통과, 배포본 헤드리스 실측에서 HTTP 200·해시 라우트 5/5·LocalStorage reload 잔존·외부요청은 Pretendard 5건뿐·**콘솔 에러 0건**, portfolio-1 primary `#4F46E5` 가 dist CSS 에 반영. Realtime 이 죽은 채로 전 구간을 폴링이 픽업했다. strict 항목은 런타임이 1개뿐이라 폴백했고 근거가 `stack_decision.fallback_reason` 에 남는 것을 확인해 통과 판정(완전 일치는 T8.10). 함께: dashboard 라벨 맵에 `building` 이 없어 빌드 단계 동안 버튼이 "🎬 데모 생성" 으로 되돌아가 보이던 것 → `🔨 빌드 중` 추가. |
 | 2026-09-08 | T8.7 + T8.3b 완료 | orchestrator 를 Phase 8 빌드 체인으로 교체. `runGenerationPipeline`(3-pass 단일 HTML)은 `_legacy/pipeline-v1.ts` 로 이동 후 이름만 재수출 (T4.2 회귀 테스트 호환). 신규 `runBuildPipeline` = tokens → prepareWorkspace → generateApp → runBuild → validateDist → collectDist, workspace 는 finally 에서 항상 정리. `onStage` 훅으로 build 진입 시 demo_status 'generating' → 'building' 전이. `replaceDemoDir` 는 `.new.<pid>` 완성 후 rename 2회 스왑 (실패 시 즉시 원복). `resolveScope` 가 'flow:{id}' 를 'all' 로 승격하고 로그에 requested_scope/scope_forced_to_all 명시 (vite 빌드는 부분 재생성이 무의미). demo_artifacts 는 LLM 산출물 캐시 대신 빌드 메타(stack/stack_decision/base_path/generate·build duration/dist file count·bytes/validation) 저장. 배포는 T8.6 `deployDemoDistToGitHub`. **T8.7 E2E 가 T8.3 의 설계 공백 2건을 드러냄** — (a) Opus 가 JSON 문자열 리터럴에 raw 개행을 넣어 PAGE_PARSE 실패 → `parseLenientJson` 이 문자열 리터럴 내부 제어문자만 escape 후 재시도 (b) Pass 2 가 Pass 1 의 `types.ts`/`store.ts` 본문을 못 봐 page 마다 id 타입(string↔number)을 제각각 가정 → tsc 간헐 실패(run#4 통과/run#6 실패). T8.3b 로 분리해 `foundation_source` 를 payload 에 실어 보내고 page 프롬프트에 타입 계약 절 추가. 자동 검증 31/31 × **2연속 green** (flaky 해소 확인): resolveScope 6 + preflight 보존 6 (status=failed, dist byte-identical, demo_artifacts·regenerate_scope 보존, 로그 scope 기록) + E2E 19 (ready 전이, 빌드 메타 완비, portfolio_links Demo 1개+P1 보존, scope 승격 로그, GitHub 트리 파일수=dist, 고아 asset 로컬·원격 제거, raw 200×2, base path 주입, 로컬 dist 교체). 실측 gen 152~162s + build 3.3~3.7s, src 19파일 → dist 3파일 280KB. 픽스처 주의: 발달센터는 DB 행·portfolio-1 이 모두 삭제돼 못 씀 → `260907_midcareer-job-matching` 공고 사용, spec 은 `.test-cache/t8.7-spec.json` 캐시(상류 extract 변동으로 오케스트레이터 검증이 흔들리지 않게, `--fresh` 로 재수집). test_spec 의 `demo_status='gen_failed'` 는 스키마에 없는 값이라(CHECK 는 13상태, 실패는 `failed` 하나) 상태 추가 없이 `failed` 로 검증. |
 | 2026-09-07 | T8.6 완료 | deploy-demo 멀티파일 배포 — `worker/shared/github.ts` 에 `gitBlobSha`/`listDirBlobs`/`syncDirectory` 추가, `worker/deploy-demo.ts` 에 `deployDemoDistToGitHub`/`rawUrlAt` wrapper. writeFiles 는 base_tree 위 "추가"만 하므로 content-hash 파일명이 바뀌는 Vite dist 를 재배포하면 고아 asset 이 쌓인다 → syncDirectory 가 "디렉터리 최종 상태 = dist" 를 단일 원자적 커밋으로 보장 (신규/변경은 base64 blob, 미변경은 base_tree 유지, 없어진 경로는 `sha: null` 삭제). blob SHA 를 로컬(`blob <len>\0` sha1)에서 먼저 계산해 동일하면 createBlob 호출 자체를 생략 — 재배포 API 왕복 절감 + 미변경 파일 SHA 자동 불변. 루트 recursive 트리 truncate 를 피하려고 경로 세그먼트를 따라 내려가 서브트리만 조회. `worker/test-deploy-multifile.ts` 신규 — 자동 검증 22/22 first try: (1) 5-파일 dist push → raw URL 5/5 200 + byte-identical (바이너리 PNG base64 왕복 포함), 다른 포트폴리오 디렉터리 38개 SHA 불변 (2) 재배포 written=2/reused=3/deleted=1, 미변경 3개 blob SHA 불변, gitBlobSha 로컬계산=GitHub SHA, 고아 js 트리 제거+raw 404, 최종 파일수=dist (2c) 동일 dist 재배포 → noop, 빈 커밋 미생성 (3) 재배포 2회 후에도 portfolio_links Demo 1개+P1 보존+count 일치. probe 커밋 3개(v1/v2/cleanup) 후 트리 잔존 0건. orchestrator 배선은 T8.7 로 분리 — 기존 `deployDemoToGitHub`(단일 HTML) 은 그대로 유지. |

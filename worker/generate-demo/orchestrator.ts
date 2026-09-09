@@ -54,6 +54,11 @@ import {
   type Replacement,
 } from "./sanitize-urls.ts";
 import {
+  normalizeWorkspaceExports,
+  summarizeExportFixes,
+  type ExportFix,
+} from "./normalize-exports.ts";
+import {
   deployDemoDistToGitHub,
   upsertDemoLink,
   type PortfolioLink,
@@ -107,6 +112,8 @@ export type BuildMeta = {
   dist_bytes: number;
   /** T8.8b: 빌드 전에 결정론적으로 치환한 절대 URL 건수 (0 이 정상 기대값) */
   sanitized_url_count: number;
+  /** T8.10b: default↔named 를 양쪽 다 되게 열어준 공용 컴포넌트 수 */
+  export_fix_count: number;
   validation: ValidationFinding[];
   generated_at: string;
 };
@@ -223,13 +230,18 @@ export async function runBuildPipeline(
     //   프롬프트로 3회 연속 못 막은 항목이라 코드로 강제한다. 상세는 sanitize-urls.ts.
     await stage("sanitize");
     let sanitized: Replacement[] = [];
+    let exportFixes: ExportFix[] = [];
     try {
       sanitized = await sanitizeWorkspaceUrls(workspace.path);
       console.log(`[build:${inputs.slug}] sanitize — ${summarizeReplacements(sanitized)}`);
+      // T8.10b: Pass 2 가 공용 컴포넌트를 default/named 어느 쪽으로 import 하든
+      // 컴파일되도록 export 형태를 열어둔다.
+      exportFixes = await normalizeWorkspaceExports(workspace.path);
+      console.log(`[build:${inputs.slug}] ${summarizeExportFixes(exportFixes)}`);
     } catch (err) {
       return {
         ok: false,
-        reason: `URL sanitize 실패: ${(err as Error).message}`,
+        reason: `sanitize/export 보정 실패: ${(err as Error).message}`,
         stage: "sanitize",
       };
     }
@@ -281,6 +293,7 @@ export async function runBuildPipeline(
         dist_file_count: files.length,
         dist_bytes,
         sanitized_url_count: sanitized.length,
+        export_fix_count: exportFixes.length,
         validation: validation.findings,
         generated_at: new Date().toISOString(),
       },
@@ -611,6 +624,7 @@ export async function handleGenQueued(
       dist_file_count: result.meta.dist_file_count,
       dist_bytes: result.meta.dist_bytes,
       sanitized_url_count: result.meta.sanitized_url_count,
+      export_fix_count: result.meta.export_fix_count,
     },
     deploy: deployInfo,
   };
