@@ -930,28 +930,45 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
   - [x] 실전: Realtime 이 죽은 상태에서 autorun_queued → fetch → extract → gen → build 전 단계를 폴링이 픽업 (실측 3회)
 - **last_failure**: —
 
+#### T8.8b 생성물 절대 URL 결정론적 제거 (T8.8 실패에서 파생)
+- **상태**: `DONE`
+- **depends_on**: T8.7
+- **requires_test**: yes
+- **파일**: `worker/generate-demo/sanitize-urls.ts` (신규), `worker/generate-demo/orchestrator.ts`, `worker/test-sanitize-urls.ts` (신규), `worker/prompts/generate-app-{foundation,page}.md`
+- **해야 할 일**:
+  - generateApp 직후 · vite build 전에 워크스페이스 소스를 훑어 허용 목록 밖 절대 URL 을 안전한 값으로 치환 (파이프라인 `sanitize` 스테이지 신설)
+  - 치환 정책: 이미지류 → 회색 placeholder 인라인 SVG data URI / 영상 임베드 → `about:blank` (iframe 에 `#` 을 넣으면 자기 페이지를 재귀 로드) / 그 외 → `#`
+  - 허용 유지: cdn.jsdelivr.net(Pretendard), w3.org 네임스페이스, React error-decoder 문자열
+  - `demo_artifacts.sanitized_url_count` + demo_generation_log 에 건수 기록
+- **test_spec**:
+  - [x] 실측 실패 URL 10종이 종류별로 정확히 치환 (example.com/picsum/unsplash/placehold/vimeo/youtube/youtu.be/일반 API)
+  - [x] 허용 URL 3종 보존, 상대경로·내부라우트·data:·mailto·파일명 문자열 6종 미변경
+  - [x] idempotent (문자열·워크스페이스 양쪽 2회차 0건)
+  - [x] 치환 후 validate-dist 스캔식 재검사 위반 0건
+  - [x] 워크스페이스 재귀 순회 + node_modules/dist 스킵 + URL 없는 파일 재작성 안 함
+- **last_failure**: —
+
 #### T8.8 standard mode 1-click E2E 검증
-- **상태**: `TEST_FAILED`
+- **상태**: `NEEDS_TEST` (자체 검증 완료 — 사용자 승인 대기)
 - **depends_on**: T8.7
 - **requires_test**: manual-review
 - **해야 할 일**: 신규 후보 1건 (wishket_url 보유, spec_raw 비어있음, free 모드 기대) → dashboard "🎬 데모 생성" 1클릭 → 15~25분 이내 ready + Vite SPA 정상 서빙. 추가로 React strict 공고 1건 (예: "React 필수" 명시 공고)도 같은 방식으로 검증.
-- **last_failure**: 2026-09-09 — Realtime 블로커는 **T8.8a 폴링 폴백으로 해소**(실측 통과). 이후 1-click 체인이 3회 연속 `validate` 단계에서 동일 실패:
-  `validate-dist: external_urls` — 생성된 앱이 절대 URL 을 남긴다 (1회차 `example.com/register/*`·`picsum.photos`·youtube embed 6건 → 2회차 8건 → 3회차 `player.vimeo.com/video/*` 15건).
-  URL 은 JSX 가 아니라 **시드 데이터 필드 값**(`registrationUrl`/`thumbnailUrl`/`videoUrl`)에서 나온다.
-  프롬프트 보강 2회(① page·foundation 에 "외부 URL 절대 금지" 절 + 대체 수단 ② seed.ts 항목에 URL 필드 금지 + "시드·목업 데이터 문자열 값 포함" 명시) 모두 실패 —
-  **프롬프트만으로는 못 막는다**는 게 3회 실측으로 확인됨 (T8.3b 에서 얻은 교훈과 동일: 규칙을 말하는 것보다 코드로 강제하는 쪽이 맞다).
-  → 사용자 결정 필요:
-  (a) **생성 직후 결정론적 sanitize 단계 추가** (권장) — generateApp 산출물의 절대 URL 을 빌드 전에 코드로 치환(`#`/내부경로/파일명). tokens-to-tailwind(T8.4)가 LLM 비결정성을 코드로 걷어낸 것과 같은 패턴. 신규 task 로 등록.
-  (b) validate-dist 의 external_urls 를 "가져오기 가능한 위치(src/href/fetch)에 있는 URL" 로 한정 — 데모가 외부 리소스에 의존하게 되어 §0 self-contained 원칙과 충돌.
-  (c) 허용 목록에 placeholder 호스트 추가 — 고객 시연 중 외부 차단·지연에 그대로 노출됨. 비추천.
-  실행 실측 (참고): 1-click 1회 ≈ **4~4.5분** (fetch 19s + extract 34~50s + generate ~170s + build ~4s) — 목표 15~25분 대비 크게 여유.
-  테스트로 바뀐 실제 행(id 558)은 `demo_status=null` 로 원복했고, 배포는 한 번도 일어나지 않아 레포·portfolio_links 영향 0.
-- **review_checklist**:
-  - [ ] free 후보 ready 도달 — 실제 소요시간(분), build 단계 라벨 표시 자연스러움?
-  - [ ] strict 후보 — chosen_runtime이 spec에 기록된 값과 일치
-  - [ ] 배포된 데모 SPA 정상 동작 (라우팅, LocalStorage, 토큰 색상 반영)
-  - [ ] dist/ 번들 크기, 콘솔 에러 0
-  - [ ] portfolio_links 갱신 + 클릭 시 정상 페이지
+- **last_failure**: — (2026-09-09 해소. Realtime 블로커 → T8.8a 폴링 폴백, external_urls 3연속 실패 → T8.8b 결정론적 sanitize)
+- **실행 실측 (2026-09-09)**: 후보 2건 모두 1-click 으로 `ready` 도달.
+  - free 후보 `260904_webinar-member-site` — 총 **256s(4.3분)** (fetch 14s + extract 42s + generate 166s + build 3.4s + deploy 6.5s), src 17파일 → dist 3파일 291.6KB, spec `free`/`standard`
+  - strict 후보 `260903_rag-chatbot-quality` — 총 **300s(5.0분)** (fetch 15s + extract 63s + generate 191s + build 3.7s + deploy 5.6s), dist 3파일 301.0KB, spec `strict`/frontend=`next`/backend=`node`/demo_mode=`admin-dashboard`
+  - 두 건 모두 validate-dist 5항목 전부 통과, sanitize 치환 0건, portfolio_links `[P1, P2, Demo]` count=3
+  - 배포본 헤드리스 실측(양쪽 동일): HTTP 200, #root 마운트, 해시 라우트 5/5 렌더, `demo-store-v1` LocalStorage reload 후 잔존, 외부 요청 5건 전부 jsdelivr(Pretendard), **콘솔·페이지 에러 0건**
+  - 토큰 반영: portfolio-1 에서 뽑은 primary `#4F46E5` 가 dist CSS 에 그대로 존재 (22.7KB CSS)
+  - Realtime 은 여전히 500 이라 **전 구간을 폴링 폴백이 픽업**했다 (T8.8a 실전 검증)
+- **함께 고친 것**: dashboard 의 데모 상태 라벨 맵에 `building` 이 없어 T8.7 이 분리한 빌드 단계(수 초) 동안 버튼이 "🎬 데모 생성" 으로 되돌아가 보였다 → `building: '🔨 빌드 중'` 추가 + 번들 재빌드
+- **review_checklist** (자체 평가, 사용자 승인 대기):
+  - [x] free 후보 ready 도달 — **4.3분** (목표 15~25분 대비 여유). build 단계 라벨은 누락돼 있던 걸 이번에 `🔨 빌드 중` 으로 추가 (승인 시 시각 확인 필요)
+  - [ ] **strict 후보 — chosen_runtime 불일치**. spec 은 frontend=`next` 를 정확히 뽑았지만 런타임이 `vite-react-ts` 하나뿐이라 폴백했다. 근거는 `demo_artifacts.stack_decision` 에 그대로 기록됨(`fallback_reason` 포함). 완전 충족은 **T8.10(next runtime) 이후**. 지금 판단할 것: 이 폴백을 T8.8 통과로 볼지, T8.10 까지 열어둘지
+  - [x] 배포 데모 SPA 정상 — 라우팅 5/5, LocalStorage reload 잔존, portfolio-1 primary 색 dist CSS 반영
+  - [x] dist 번들 291.6KB / 301.0KB (한도 2MB), 콘솔 에러 **0건**, 외부 요청은 허용 CDN(Pretendard) 5건뿐
+  - [x] portfolio_links 에 Demo 추가(P1·P2 보존, count=3) + 링크 클릭 시 HTTP 200 정상 페이지
+  - 참고: strict 후보의 `demo_mode` 는 `admin-dashboard`(T8.11 폴백 대상)로 나왔지만 전용 분기 없이 standard React SPA 로 잘 빌드됐다. T8.11 이 얼마나 급한지 재평가 여지 있음
 
 #### T8.9 후속 — demo_mode='mobile-web' 폴백
 - **상태**: `TODO`
@@ -984,15 +1001,15 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-09-08 (T8.7 + T8.3b DONE — 신규 빌드 파이프라인 통합, E2E 31/31 × 2연속. 다음 T8.8 1-click E2E)
-- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3, T8.4, T8.5, T8.6, T8.3b, T8.7, T8.8a
-- **진행 중 task**: T8.8 (TEST_FAILED — external_urls 3연속 실패, 사용자 결정 대기)
-- **다음에 착수 가능**: 없음 (T8.8 결정 대기)
+- **마지막 업데이트**: 2026-09-09 (T8.8a·T8.8b DONE, T8.8 NEEDS_TEST — 1-click 2건 ready 도달, 사용자 승인 대기)
+- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3, T8.4, T8.5, T8.6, T8.3b, T8.7, T8.8a, T8.8b
+- **진행 중 task**: T8.8 (NEEDS_TEST — 자체 검증 완료, 사용자 승인 대기)
+- **다음에 착수 가능**: T8.8 승인 시 T8.9/T8.10/T8.11 (후속 demo_mode·runtime 확장)
 - **블로킹 중**: T7.3 (Phase 8 완료 후 재개)
 - **Phase 8 첫 cut 범위**: T8.0~T8.8 (vite-react-ts runtime 1개 + standard demo_mode + 1-click E2E). 후속 T8.9~T8.11은 polish.
 - **Phase 7 배경**: T1.1/T2.3/T2.4의 다단계 UX(paste → 추출 → 편집 → 승인 → 생성)가 사용자 인지 부담 큼. T6.2/T6.3로 extract 정확도 강화 + T4.2 재생성 패널로 사후 교정 가능 → SpecModal/StructuredSpecEditor/ApprovalPanel 폐기, 트리거 1회로 단순화. 위시켓 URL 자동 fetch 통합으로 paste 자체 제거
 - **별도 follow-up (commit 단위)**: dashboard `DEMO_GEN_ENABLED` flag 제거 — 데모 생성기 핵심 파이프라인이 T5.2 + T6.1 로 검증됐으므로 prod 노출 안전
-- **블로커**: (1) 생성물의 절대 URL → validate-dist 실패 (T8.8 last_failure 참조). (2) Supabase Realtime 웹소켓 500(`error code: 1101`) 은 여전하지만 T8.8a 폴링 폴백으로 우회됨 — 언젠가 Supabase 쪽 확인 필요
+- **블로커**: 없음. (Supabase Realtime 웹소켓 500(`error code: 1101`) 은 여전하지만 T8.8a 폴링 폴백으로 우회됨 — 워크룸 대시보드 실시간 갱신에도 영향이 있으니 Supabase 쪽 확인 권장)
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
   - LLM 호출 전부(extract/generate) + 배포(deploy)도 워커에서 수행; Edge Function은 `delete-portfolios`만 유지

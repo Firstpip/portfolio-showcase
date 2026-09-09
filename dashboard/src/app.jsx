@@ -3267,6 +3267,7 @@ function DemoTriggerButton({ project, onStartAutorun, onOpenRegenerate, saving }
     extract_ready:  '⏳ 생성 대기',
     gen_queued:     '⏳ 생성 대기',
     generating:     '🎨 생성 중',
+    building:       '🔨 빌드 중',
   };
   if (inProgress[status]) {
     return (

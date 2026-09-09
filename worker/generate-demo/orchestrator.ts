@@ -48,6 +48,11 @@ import {
 import { generateApp, type GenerateAppInput } from "./generate-app.ts";
 import { validateDist, type ValidationFinding } from "./validate-dist.ts";
 import {
+  sanitizeWorkspaceUrls,
+  summarizeReplacements,
+  type Replacement,
+} from "./sanitize-urls.ts";
+import {
   deployDemoDistToGitHub,
   upsertDemoLink,
   type PortfolioLink,
@@ -75,6 +80,7 @@ export type BuildStage =
   | "tokens"
   | "workspace"
   | "generate"
+  | "sanitize"
   | "build"
   | "validate"
   | "collect";
@@ -98,6 +104,8 @@ export type BuildMeta = {
   build_duration_ms: number;
   dist_file_count: number;
   dist_bytes: number;
+  /** T8.8b: 빌드 전에 결정론적으로 치환한 절대 URL 건수 (0 이 정상 기대값) */
+  sanitized_url_count: number;
   validation: ValidationFinding[];
   generated_at: string;
 };
@@ -209,6 +217,21 @@ export async function runBuildPipeline(
       };
     }
 
+    // ---- 3.5) 절대 URL 결정론적 제거 (T8.8b) ----
+    //   프롬프트로 3회 연속 못 막은 항목이라 코드로 강제한다. 상세는 sanitize-urls.ts.
+    await stage("sanitize");
+    let sanitized: Replacement[] = [];
+    try {
+      sanitized = await sanitizeWorkspaceUrls(workspace.path);
+      console.log(`[build:${inputs.slug}] sanitize — ${summarizeReplacements(sanitized)}`);
+    } catch (err) {
+      return {
+        ok: false,
+        reason: `URL sanitize 실패: ${(err as Error).message}`,
+        stage: "sanitize",
+      };
+    }
+
     // ---- 4) vite build ----
     await stage("build");
     const build = await runBuild(workspace, basePath);
@@ -253,6 +276,7 @@ export async function runBuildPipeline(
         build_duration_ms: build.durationMs,
         dist_file_count: files.length,
         dist_bytes,
+        sanitized_url_count: sanitized.length,
         validation: validation.findings,
         generated_at: new Date().toISOString(),
       },
@@ -562,6 +586,7 @@ export async function handleGenQueued(
       build_duration_ms: result.meta.build_duration_ms,
       dist_file_count: result.meta.dist_file_count,
       dist_bytes: result.meta.dist_bytes,
+      sanitized_url_count: result.meta.sanitized_url_count,
     },
     deploy: deployInfo,
   };
