@@ -3232,10 +3232,50 @@ function RegenerationModal({ project, onClose, onRegenerate, saving }) {
 //   gen_queued/generating      → "🎨 생성 중"   비활성
 //   ready                      → "🌐 데모 보기" + ↻ 재생성 모달 트리거
 //   *_failed                   → "❌ 다시 시도" → onStartAutorun (재시도)
+// T8.12: 데모 생성 워커 생존 확인.
+// 데모 파이프라인은 맥북 로컬 워커가 처리한다. 워커가 꺼져 있거나 맥북이 잠들면
+// 버튼을 눌러도 행이 autorun_queued 에 영원히 멈추고 사용자는 이유를 알 수 없다.
+// 그래서 트리거를 열기 전에 마지막 신호가 신선한지부터 본다.
+const WORKER_STALE_AFTER_MS = 90 * 1000;
+
+function useWorkerAlive() {
+  const [hb, setHb] = useState(undefined); // undefined=조회 전, null=조회 실패/행 없음
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      const { data } = await supabase
+        .from('demo_worker_heartbeat')
+        .select('last_seen_at, hostname, status, in_flight')
+        .eq('id', 'demo-worker')
+        .maybeSingle();
+      if (alive) setHb(data ?? null);
+    };
+    load();
+    // 워커가 죽고 살아나는 걸 화면에서 바로 반영. 30s 갱신 주기의 절반.
+    const t = setInterval(load, 15000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  if (hb === undefined) return { loading: true, alive: true, hb: null };
+  const ts = hb?.last_seen_at ? Date.parse(hb.last_seen_at) : NaN;
+  const alive = Number.isFinite(ts) && Date.now() - ts <= WORKER_STALE_AFTER_MS;
+  return { loading: false, alive, hb };
+}
+
+function workerOfflineTitle(hb) {
+  if (!hb?.last_seen_at || Date.parse(hb.last_seen_at) <= 0) {
+    return '데모 생성 워커가 한 번도 실행된 적이 없습니다.\n맥에서 scripts/install-launchd.sh install 로 등록하세요.';
+  }
+  const mins = Math.round((Date.now() - Date.parse(hb.last_seen_at)) / 60000);
+  return `데모 생성 워커가 응답하지 않습니다 (마지막 신호 ${mins}분 전${hb.hostname ? `, ${hb.hostname}` : ''}).\n` +
+    '맥이 켜져 있고 워커가 실행 중인지 확인하세요.';
+}
+
 function DemoTriggerButton({ project, onStartAutorun, onOpenRegenerate, saving }) {
   const status = project?.demo_status || 'none';
   const hasUrl = !!project?.wishket_url;
   const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
+  const { alive: workerAlive, hb } = useWorkerAlive();
 
   const btnBase = {
     padding:'0.1rem 0.5rem', borderRadius:5, fontSize:'0.7rem', fontWeight:600,
@@ -3278,6 +3318,14 @@ function DemoTriggerButton({ project, onStartAutorun, onOpenRegenerate, saving }
   }
 
   if (status === 'fetch_failed' || status === 'extract_failed' || status === 'failed') {
+    if (!workerAlive) {
+      return (
+        <button disabled title={workerOfflineTitle(hb)}
+          style={{ ...btnBase, cursor:'not-allowed', opacity:0.55, color:'#e74c3c' }}>
+          💤 워커 꺼짐
+        </button>
+      );
+    }
     return (
       <button onClick={stop(() => onStartAutorun(project))} disabled={saving} title="다시 시도 (워커가 fetch 부터 재실행)"
         style={{ ...btnBase, color:'#e74c3c', borderColor:'var(--surface-danger-strong)', background:'var(--surface-danger-soft)', cursor:saving?'not-allowed':'pointer', opacity:saving?0.5:1 }}>
@@ -3291,6 +3339,15 @@ function DemoTriggerButton({ project, onStartAutorun, onOpenRegenerate, saving }
       <button disabled title="위시켓 URL 을 먼저 입력하세요"
         style={{ ...btnBase, cursor:'not-allowed', opacity:0.5 }}>
         🎬 데모 생성
+      </button>
+    );
+  }
+  if (!workerAlive) {
+    // 큐에 넣어봐야 처리할 주체가 없다 — 누르기 전에 막고 이유를 말해준다.
+    return (
+      <button disabled title={workerOfflineTitle(hb)}
+        style={{ ...btnBase, cursor:'not-allowed', opacity:0.55 }}>
+        💤 워커 꺼짐
       </button>
     );
   }

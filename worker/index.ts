@@ -3,6 +3,10 @@
 // 역할: `wishket_projects.demo_status` 변경을 감지해 상태에 따라
 // fetch / extract / generate+build+deploy 핸들러를 분기 호출한다.
 //
+// 생존 신호(T8.12): 30초마다 demo_worker_heartbeat 를 갱신한다. 대시보드는 그
+// 신선도를 보고 워커가 죽어 있으면 데모 생성 버튼을 막는다 — 맥북이 잠들면
+// 큐에 넣어봐야 아무도 처리하지 않기 때문이다.
+//
 // 감지 경로 2개 (T8.8a):
 //   - Realtime 구독: 정상일 때 지연 ~0
 //   - 폴링 루프: WORKER_POLL_MS(기본 10s) 마다 대기 상태를 SELECT
@@ -26,6 +30,7 @@ import {
   dispatch,
   startPolling,
 } from "./dispatch.ts";
+import { startHeartbeat, writeHeartbeat } from "./shared/heartbeat.ts";
 
 async function main() {
   console.log("[worker] 시작 — 전제 조건 확인 중...");
@@ -51,6 +56,14 @@ async function main() {
 
   const inflight = new InFlight();
   const pollMs = Number(process.env.WORKER_POLL_MS) || DEFAULT_POLL_MS;
+
+  // 2.5) 생존 신호 시작 (T8.12). 대시보드가 이 신선도를 보고 트리거 버튼을
+  //      활성화할지 판단한다. 기록 실패는 무시 — 워커를 죽이면 안 된다.
+  await writeHeartbeat(supabase, "starting", 0);
+  const stopHeartbeat = startHeartbeat(supabase, () => ({
+    status: inflight.size > 0 ? "working" : "idle",
+    inFlight: inflight.size,
+  }));
 
   // 3) Realtime 구독 — 정상일 때의 빠른 경로.
   //    T7.1 자동 chain: autorun_queued → fetching → extract_queued → extracting
@@ -99,6 +112,7 @@ async function main() {
   // 4) 폴링 폴백 — Realtime 상태와 무관하게 항상 돈다.
   const stopPolling = startPolling(supabase, inflight, pollMs);
   console.log(`[worker] 폴링 폴백 가동 (${pollMs / 1000}s 간격)`);
+  console.log("[worker] heartbeat 가동 (30s 간격)");
 
   console.log("[worker] 대기 중. Ctrl+C로 종료.");
 
@@ -106,6 +120,9 @@ async function main() {
   const shutdown = async (sig: string) => {
     console.log(`[worker] ${sig} 수신 — 정리 중...`);
     stopPolling();
+    stopHeartbeat();
+    // 정상 종료는 즉시 표시해 준다 (SIGKILL 이면 못 남기므로 판정은 신선도 기준).
+    await writeHeartbeat(supabase, "stopping", 0);
     await channel.unsubscribe();
     process.exit(0);
   };

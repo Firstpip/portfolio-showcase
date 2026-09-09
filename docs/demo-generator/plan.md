@@ -970,6 +970,28 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
   - [x] portfolio_links 에 Demo 추가(P1·P2 보존, count=3) + 링크 클릭 시 HTTP 200 정상 페이지
   - 참고: strict 후보의 `demo_mode` 는 `admin-dashboard`(T8.11 폴백 대상)로 나왔지만 전용 분기 없이 standard React SPA 로 잘 빌드됐다. T8.11 이 얼마나 급한지 재평가 여지 있음
 
+#### T8.12 운영 — 워커 상시화 + heartbeat
+- **상태**: `NEEDS_TEST` (자동 25/25 통과 — 대시보드 시각 확인만 사용자 몫)
+- **depends_on**: T8.8
+- **requires_test**: yes
+- **파일**: `supabase/migrations/20260909030000_demo_worker_heartbeat.sql`, `worker/shared/heartbeat.ts`, `worker/index.ts`, `scripts/co.firstpip.demo-worker.plist.template`, `scripts/install-launchd.sh`, `dashboard/src/app.jsx`, `worker/test-heartbeat.ts`
+- **해야 할 일**:
+  - 워커가 살아있음을 주기적으로 기록하는 단일 행 테이블 + 갱신 함수
+  - 워커 부팅·폴링 사이클마다 heartbeat 갱신, 종료 시 상태 표시
+  - launchd 등록 스크립트 (로그인 시 자동 시작, 죽으면 재시작, 로그 파일 지정)
+  - 대시보드가 heartbeat 를 읽어 워커가 죽어 있으면 "🎬 데모 생성" 을 비활성화하고 이유 표시
+    (§8 미결정 사항이던 "워커 오프라인 시 대시보드 UX" 를 여기서 확정)
+- **test_spec**:
+  - [x] 마이그레이션 적용 후 heartbeat 갱신·조회가 동작 (service_role 쓰기 / authenticated 읽기 정책). 여러 번 갱신해도 행은 1개 유지
+  - [x] 워커 부팅 시 heartbeat 기록 + 30s 주기 갱신, in-flight 반영, stop() 후 정지 (실측)
+  - [x] staleness 판정 8케이스 — 임계 정확히 90s=살아있음 / +1ms=죽음 / epoch·null·파싱불가=죽음
+  - [x] plist `plutil -lint` 통과, 자리표시자 전부 치환, 비밀값 미포함, dry-run·status 동작. **실제 install 까지 완료** — 워커가 자동 기동해 heartbeat 살아있음 확인
+  - [~] 대시보드: 워커 오프라인이면 `💤 워커 꺼짐` 비활성 버튼 + title 에 사유(마지막 신호 N분 전, 호스트명). 번들 반영 확인, **시각 확인은 사용자 몫**
+- **last_failure**: —
+- **설계 메모**: 살아있음 판정은 `status` 문자열이 아니라 **`last_seen_at` 신선도**(90s)로 한다 — SIGKILL 로 죽으면 'stopping' 을 남길 기회조차 없다. heartbeat 기록 실패는 throw 하지 않고 false 만 반환한다(heartbeat 때문에 워커가 죽으면 본말전도). 단일 행 upsert 라 테이블이 자라지 않는다.
+- **미완 조치**: `worker/.env.local` 에 `GITHUB_TOKEN` 이 없다. 생성까지는 되지만 **배포 단계에서 실패**하므로 launchd 워커를 실운영하려면 넣어야 한다 (install 스크립트가 경고로 알려준다).
+- **한계**: 맥북이 잠들면 워커도 멈춘다. launchd 는 죽은 프로세스를 되살릴 뿐 절전을 이기지 못한다. 완전 무인 운영은 상시 서버가 필요하며, 지금은 heartbeat 로 "살아있는지" 를 정직하게 보여주는 쪽을 택했다.
+
 #### T8.9 후속 — demo_mode='mobile-web' 폴백
 - **상태**: `TODO`
 - **depends_on**: T8.8
@@ -1030,9 +1052,9 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-09-09 (T8.10 + T8.10b DONE — vue/next 런타임 양쪽 E2E 통과. 루트 .nojekyll 푸시 필요)
+- **마지막 업데이트**: 2026-09-09 (T8.12 NEEDS_TEST — launchd 등록·heartbeat 실측 완료, 대시보드 시각 확인 대기)
 - **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3, T8.4, T8.5, T8.6, T8.3b, T8.7, T8.8a, T8.8b, T8.8, T8.10, T8.10b
-- **진행 중 task**: 없음
+- **진행 중 task**: T8.12 (NEEDS_TEST — 대시보드 시각 확인 대기)
 - **다음에 착수 가능**: T8.9 (mobile-web 폴백), T8.11 (admin-dashboard/workflow-diagram 폴백 — 우선순위 하향 근거는 아래)
 - **보류 판단 (2026-09-09)**: `DEMO_GEN_ENABLED` 플래그 제거(prod 노출)는 **워커 상시화(launchd 등록) 이후**로 미룬다. 지금은 맥북 워커가 떠 있어야만 동작해서, 워커가 꺼진 상태로 대시보드 버튼을 누르면 행이 `autorun_queued` 에 영구히 멈춘다. 플래그 주석의 "T8.8 통과 후 제거" 는 워커 운영 방식을 정하기 전에 쓴 메모
 - **T8.11 우선순위 하향 근거**: strict 후보가 `demo_mode='admin-dashboard'` 로 분류됐는데 전용 분기 없이 standard React SPA 로 정상 빌드·동작했다 (콘솔 에러 0). 전용 템플릿의 실익 재평가 필요
