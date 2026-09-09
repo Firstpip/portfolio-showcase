@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { runClaude, OPUS, type RunResult } from "../shared/claude.ts";
 import type { StackName, Workspace } from "./build-runtime.ts";
+import type { DemoMode } from "./mobile-frame.ts";
 import { tokensToTailwindConfig } from "./tokens-to-tailwind.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -45,6 +46,8 @@ export interface GenerateAppInput {
   workspace: Workspace;
   /** T8.10: 런타임 스택. 프롬프트 분기에 쓴다 (workspace.stack 과 항상 동일). */
   stack: StackName;
+  /** T8.9: demo_mode. standard 가 아니면 모드별 프롬프트 조각이 덧붙는다. */
+  demo_mode?: DemoMode;
 }
 
 export interface GeneratedFile {
@@ -147,14 +150,34 @@ function repoPromptPath(name: string): string {
   return path.resolve(path.dirname(here), "..", "prompts", name);
 }
 
-function loadPrompt(kind: "foundation" | "page", stack: StackName): string {
-  const key = `${kind}${PROMPT_SUFFIX[stack]}`;
+/**
+ * 스택별 프롬프트 + (필요 시) demo_mode 조각을 합쳐 돌려준다.
+ *
+ * 모드 조각은 스택과 직교하므로 프롬프트 파일을 모드×스택으로 복제하지 않고
+ * 뒤에 덧붙인다 (T8.9). standard 는 조각이 없어 기존 프롬프트와 완전히 동일하다.
+ */
+function loadPrompt(
+  kind: "foundation" | "page",
+  stack: StackName,
+  demoMode: DemoMode = "standard",
+): string {
+  const key = `${kind}${PROMPT_SUFFIX[stack]}|${demoMode}`;
   const hit = promptCache.get(key);
   if (hit !== undefined) return hit;
-  const text = readFileSync(
+
+  let text = readFileSync(
     repoPromptPath(`generate-app-${kind}${PROMPT_SUFFIX[stack]}.md`),
     "utf8",
   );
+  if (demoMode !== "standard") {
+    try {
+      text += readFileSync(repoPromptPath(`modes/${demoMode}.md`), "utf8");
+    } catch {
+      // 전용 조각이 없는 모드는 standard 와 동일하게 취급한다 (T8.11 이전의
+      // admin-dashboard/workflow-diagram 이 여기 해당) — 파이프라인을 멈추지 않는다.
+      console.warn(`[generate-app] demo_mode='${demoMode}' 전용 프롬프트 조각 없음 — standard 로 진행`);
+    }
+  }
   promptCache.set(key, text);
   return text;
 }
@@ -315,7 +338,7 @@ async function runFoundationPass(input: GenerateAppInput): Promise<FoundationPas
     `\n\n위 입력으로 foundation 파일들을 단일 JSON {"files": [...]} 으로 즉시 출력하라. 분석 멘트·인트로·설명 일체 금지. 첫 바이트 \`{\` 마지막 \`}\`.`;
   const runResult = await runClaude(userMessage, {
     model: OPUS,
-    systemPrompt: loadPrompt("foundation", input.stack),
+    systemPrompt: loadPrompt("foundation", input.stack, input.demo_mode),
     allowedTools: [],
     // maxTurns=2 — Opus 가 가끔 첫 turn 에 인트로 내고 두 번째 turn 에 JSON 내는 경우 대비.
     // result 메시지는 마지막 turn 응답이라 두 번째 turn 의 JSON 이 잡힘.
@@ -419,7 +442,7 @@ async function runPagePass(
     `\n\n위 flow ${flow.id} (tier ${flow.tier}) page 를 단일 JSON {"path": "${pagePath}", "content": "..."} 으로 즉시 출력하라. 분석 멘트·인트로 일체 금지. 첫 바이트 \`{\` 마지막 \`}\`.`;
   const runResult = await runClaude(userMessage, {
     model: OPUS,
-    systemPrompt: loadPrompt("page", input.stack),
+    systemPrompt: loadPrompt("page", input.stack, input.demo_mode),
     allowedTools: [],
     maxTurns: 2,
     // 한 페이지 ~3~5K output. 32K 한도 매우 여유.

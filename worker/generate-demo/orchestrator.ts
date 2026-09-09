@@ -59,6 +59,12 @@ import {
   type ExportFix,
 } from "./normalize-exports.ts";
 import {
+  applyMobileFrame,
+  deriveDemoMode,
+  type DemoMode,
+  type MobileFrameResult,
+} from "./mobile-frame.ts";
+import {
   deployDemoDistToGitHub,
   upsertDemoLink,
   type PortfolioLink,
@@ -114,6 +120,10 @@ export type BuildMeta = {
   sanitized_url_count: number;
   /** T8.10b: default↔named 를 양쪽 다 되게 열어준 공용 컴포넌트 수 */
   export_fix_count: number;
+  /** T8.9: spec 이 지정한 데모 모드 */
+  demo_mode: DemoMode;
+  /** T8.9: mobile-web 프레임 CSS 주입 여부 (standard 면 false) */
+  mobile_frame_applied: boolean;
   validation: ValidationFinding[];
   generated_at: string;
 };
@@ -168,6 +178,7 @@ export async function runBuildPipeline(
 
   const basePath = basePathFor(inputs.slug);
   const stack = deriveStack(inputs.spec);
+  const demoMode = deriveDemoMode(inputs.spec);
 
   // ---- 1) 디자인 토큰 ----
   await stage("tokens");
@@ -217,6 +228,7 @@ export async function runBuildPipeline(
       base_path: basePath,
       workspace,
       stack,
+      demo_mode: demoMode,
     });
     if (!gen.ok) {
       return {
@@ -231,6 +243,7 @@ export async function runBuildPipeline(
     await stage("sanitize");
     let sanitized: Replacement[] = [];
     let exportFixes: ExportFix[] = [];
+    let mobileFrame: MobileFrameResult | null = null;
     try {
       sanitized = await sanitizeWorkspaceUrls(workspace.path);
       console.log(`[build:${inputs.slug}] sanitize — ${summarizeReplacements(sanitized)}`);
@@ -238,6 +251,21 @@ export async function runBuildPipeline(
       // 컴파일되도록 export 형태를 열어둔다.
       exportFixes = await normalizeWorkspaceExports(workspace.path);
       console.log(`[build:${inputs.slug}] ${summarizeExportFixes(exportFixes)}`);
+      // T8.9: 모바일 앱 공고는 폰 폭 프레임 안에 가둔다. 프레임은 결정론적 CSS 라
+      // LLM 이 빠뜨릴 여지를 없앤다 (프롬프트 조각은 "안에 들어갈 내용" 만 담당).
+      if (demoMode === "mobile-web") {
+        mobileFrame = await applyMobileFrame(workspace.path, stack);
+        console.log(
+          `[build:${inputs.slug}] mobile-web 프레임 ${mobileFrame.applied ? `주입 → ${mobileFrame.file}` : `미적용 (${mobileFrame.reason})`}`,
+        );
+        if (!mobileFrame.applied && !mobileFrame.file) {
+          return {
+            ok: false,
+            reason: `mobile-web 프레임 주입 실패: ${mobileFrame.reason}`,
+            stage: "sanitize",
+          };
+        }
+      }
     } catch (err) {
       return {
         ok: false,
@@ -294,6 +322,8 @@ export async function runBuildPipeline(
         dist_bytes,
         sanitized_url_count: sanitized.length,
         export_fix_count: exportFixes.length,
+        demo_mode: demoMode,
+        mobile_frame_applied: mobileFrame?.applied ?? false,
         validation: validation.findings,
         generated_at: new Date().toISOString(),
       },
@@ -625,6 +655,8 @@ export async function handleGenQueued(
       dist_bytes: result.meta.dist_bytes,
       sanitized_url_count: result.meta.sanitized_url_count,
       export_fix_count: result.meta.export_fix_count,
+      demo_mode: result.meta.demo_mode,
+      mobile_frame_applied: result.meta.mobile_frame_applied,
     },
     deploy: deployInfo,
   };
