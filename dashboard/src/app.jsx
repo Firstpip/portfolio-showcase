@@ -12,21 +12,6 @@ const TABLE = 'wishket_projects';
 const TEAM_TABLE = 'team_members';
 const MILESTONES_TABLE = 'project_milestones';
 
-// Feature flag — Phase 8(T8.x) 빌드 파이프라인 재작업 중이라 GitHub Pages prod 노출을 막는다.
-// 로컬(file:/localhost)에서는 자동 enable, prod 에서는 `?demoGen=1` 쿼리스트링이나
-// `localStorage.setItem('demoGen','1')` 로 수동 enable.
-// T8.8(1-click E2E) 통과 후 이 const 와 아래 DEMO_GEN_ENABLED 체크들을 함께 제거.
-const DEMO_GEN_ENABLED = (() => {
-  try {
-    if (typeof window === 'undefined') return false;
-    const loc = window.location;
-    const isLocal = loc.protocol === 'file:' || loc.hostname === 'localhost' || loc.hostname === '127.0.0.1';
-    if (isLocal) return true;
-    if (new URLSearchParams(loc.search).get('demoGen') === '1') return true;
-    return window.localStorage?.getItem('demoGen') === '1';
-  } catch { return false; }
-})();
-
 // ─── Constants ───
 const STATUS_META = {
   generated:    { label: '생성 완료',    emoji: '📥', color: '#636e72' },
@@ -4585,7 +4570,7 @@ function App({ session }) {
           onBackfillAssignees={handleBackfillAssignees}
         />
       )}
-      {DEMO_GEN_ENABLED && regenerateProject && (
+      {regenerateProject && (
         <RegenerationModal
           key={'regen-'+regenerateProject.slug}
           project={regenerateProject}
@@ -4815,8 +4800,8 @@ function App({ session }) {
           milestonesSetupNeeded={milestonesSetupNeeded}
           onQuickApplyTemplate={handleCreateMilestonesFromTemplate}
           onOpenProject={(slug) => navigate({ name:'project', slug })}
-          onStartAutorun={DEMO_GEN_ENABLED ? handleStartAutorun : null}
-          onOpenRegenerate={DEMO_GEN_ENABLED ? handleOpenRegenerate : null}
+          onStartAutorun={handleStartAutorun}
+          onOpenRegenerate={handleOpenRegenerate}
           demoSaving={saving}
           onAddNew={() => setShowQuickAdd(true)}
           onResetFilters={() => { setFilter('all'); setSearch(''); setDateRange('all'); setMemberFilter(''); }}
