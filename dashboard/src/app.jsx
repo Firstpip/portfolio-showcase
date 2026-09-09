@@ -3069,281 +3069,6 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
 }
 
 
-// T4.2 재생성 패널.
-// demo_status='ready' 또는 'failed' 상태에서 노출. "전체 재생성" + 각 core_flow 개별 재생성 버튼.
-// scope='all' → 전체 3-pass 재실행. scope='flow:<id>' → 해당 플로우만 Pass B 재호출 (캐시 활용).
-// Max 구독 5시간 롤링 리밋 도달 가능성 안내 포함.
-function RegenerationPanel({ project, structuredChanged, onRegenerate, saving, failed }) {
-  const [confirming, setConfirming] = useState(null); // null | 'all' | 'flow:<id>'
-  const flows = (project?.spec_structured?.core_flows) || [];
-  const generatedAt = project?.demo_generated_at;
-  const lastScope = project?.regenerate_scope; // 가장 최근 시도된 scope (실패 시 보존됨)
-  const disabled = saving || structuredChanged;
-
-  const trigger = (scope) => {
-    if (disabled) return;
-    setConfirming(scope);
-  };
-  const confirm = async () => {
-    if (!confirming) return;
-    try { await onRegenerate(project, confirming); }
-    finally { setConfirming(null); }
-  };
-  const cancel = () => setConfirming(null);
-
-  const headerStyle = failed
-    ? { borderColor:'var(--surface-danger-strong)', bg:'var(--surface-danger-soft)', accent:'#e74c3c', icon:'❌' }
-    : { borderColor:'var(--surface-success-strong)', bg:'var(--surface-success-soft)', accent:'var(--green)', icon:'✅' };
-
-  return (
-    <div style={{ marginTop:14, padding:'0.85rem 0.95rem', borderRadius:10, border:`1px solid ${headerStyle.borderColor}`, background:headerStyle.bg }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-        <div style={{ fontSize:'0.8rem', fontWeight:700, color:headerStyle.accent }}>
-          {headerStyle.icon} {failed ? '데모 생성 실패 — 이전 산출물은 보존됨' : '데모 생성 완료'}
-        </div>
-        {generatedAt && (
-          <div style={{ fontSize:'0.72rem', color:'var(--text2)' }}>
-            마지막 생성: {new Date(generatedAt).toLocaleString('ko-KR', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' })}
-          </div>
-        )}
-      </div>
-      {failed && lastScope && (
-        <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:8 }}>
-          마지막 시도: <code style={{ background:'var(--surface2)', padding:'1px 4px', borderRadius:3 }}>{lastScope}</code>
-        </div>
-      )}
-      {structuredChanged && (
-        <div style={{ fontSize:'0.72rem', color:'var(--yellow)', marginBottom:8 }}>
-          ⚠ 저장되지 않은 spec 변경사항이 있습니다. 저장·재승인 후 재생성하세요.
-        </div>
-      )}
-
-      {confirming ? (
-        <div style={{ padding:'0.6rem 0.7rem', borderRadius:6, background:'var(--surface2)', border:'1px dashed var(--border)' }}>
-          <div style={{ fontSize:'0.78rem', color:'var(--text)', marginBottom:8 }}>
-            {confirming === 'all'
-              ? '전체 3-pass를 재실행합니다 (~2~3분, Opus 호출 5회 이상). Max 구독 5시간 리밋 잔량을 확인하세요.'
-              : `'${flows.find(f=>('flow:'+f.id)===confirming)?.title || confirming}' 플로우만 Pass B 재실행합니다 (~30~60초). 다른 플로우 코드는 변경되지 않습니다.`}
-          </div>
-          <div style={{ display:'flex', gap:6, justifyContent:'flex-end' }}>
-            <button onClick={cancel} disabled={saving} style={{ padding:'0.4rem 0.7rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:saving?'default':'pointer', fontSize:'0.78rem' }}>취소</button>
-            <button onClick={confirm} disabled={saving} style={{ padding:'0.4rem 0.7rem', borderRadius:6, border:'none', background:'var(--accent)', color:'#fff', cursor:saving?'default':'pointer', fontSize:'0.78rem', fontWeight:600, opacity:saving?0.7:1 }}>{saving?'등록 중...':'재생성 시작'}</button>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:8 }}>
-            <button onClick={() => trigger('all')} disabled={disabled} style={{
-              padding:'0.45rem 0.75rem', borderRadius:6, border:'1px solid var(--accent)55',
-              background:'var(--accent)15', color:'var(--accent)',
-              cursor:disabled?'not-allowed':'pointer', fontSize:'0.78rem', fontWeight:600,
-              opacity:disabled?0.5:1,
-            }}>🔁 전체 재생성</button>
-          </div>
-          {flows.length > 0 && (
-            <div>
-              <div style={{ fontSize:'0.7rem', color:'var(--text2)', marginBottom:6 }}>특정 플로우만 재생성:</div>
-              <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-                {flows.map(f => (
-                  <button key={f.id} onClick={() => trigger('flow:'+f.id)} disabled={disabled} title={`Pass B를 ${f.id}만 재호출 (다른 플로우 불변)`} style={{
-                    padding:'0.35rem 0.65rem', borderRadius:6, border:'1px solid var(--border)',
-                    background:'var(--surface2)', color:'var(--text)',
-                    cursor:disabled?'not-allowed':'pointer', fontSize:'0.74rem',
-                    opacity:disabled?0.5:1,
-                  }}>
-                    <span style={{ marginRight:4, color: f.tier===1?'var(--green)':f.tier===2?'var(--yellow)':'var(--text2)' }}>T{f.tier}</span>
-                    {f.title || f.id}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          <div style={{ marginTop:10, fontSize:'0.7rem', color:'var(--text2)', borderTop:'1px dashed var(--border)', paddingTop:8 }}>
-            💡 Claude Max 구독은 5시간 롤링 사용량 리밋이 있습니다. 리밋 도달 시 워커가 자동 대기 후 재시도합니다.
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-
-
-// ─── RegenerationModal (T7.2) ───
-// demo_status='ready' 또는 '*_failed' 상태에서 노출. RegenerationPanel 을 모달로 감싼 얇은 래퍼.
-// T7.1 이전의 SpecModal/StructuredSpecEditor/ApprovalPanel 흐름은 폐기됨 (1-click 자동화).
-function RegenerationModal({ project, onClose, onRegenerate, saving }) {
-  const trapRef = useFocusTrap();
-  useEffect(() => {
-    const handler = e => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
-  if (!project) return null;
-  const status = project.demo_status || 'none';
-  const failed = status === 'failed' || status === 'fetch_failed' || status === 'extract_failed';
-
-  return (
-    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
-      <div ref={trapRef} role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
-        background:'var(--surface)', borderRadius:16, width:'100%', maxWidth:560,
-        border:'1px solid var(--border)', animation:'slideUp 0.25s ease-out',
-        boxShadow:'0 20px 60px var(--shadow)',
-      }}>
-        <div style={{ padding:'1.15rem 1.5rem 0.75rem', borderBottom:'1px solid var(--border)' }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12 }}>
-            <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ fontSize:'0.72rem', color:'var(--text2)', marginBottom:2 }}>데모 재생성</div>
-              <div style={{ fontWeight:600, fontSize:'1rem', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{project.title||project.slug}</div>
-              <div style={{ fontSize:'0.78rem', color:'var(--text2)', fontFamily:'monospace', marginTop:2 }}>{project.slug}</div>
-            </div>
-            <button onClick={onClose} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem', padding:'2px 4px', flexShrink:0 }}>&#x2715;</button>
-          </div>
-        </div>
-        <div style={{ padding:'1rem 1.5rem' }}>
-          <RegenerationPanel project={project} structuredChanged={false} onRegenerate={onRegenerate} saving={saving} failed={failed} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── DemoTriggerButton (T7.2) ───
-// 프로젝트 행에 노출되는 단일 데모 버튼. demo_status 기반 라벨/활성/색상 분기.
-//   none + wishket_url        → "🎬 데모 생성" 활성 → onStartAutorun
-//   none, wishket_url 없음     → 비활성 + tooltip
-//   autorun_queued/fetching    → "📥 가져오는 중" 비활성
-//   extract_queued/extracting  → "🧠 분석 중"   비활성
-//   gen_queued/generating      → "🎨 생성 중"   비활성
-//   ready                      → "🌐 데모 보기" + ↻ 재생성 모달 트리거
-//   *_failed                   → "❌ 다시 시도" → onStartAutorun (재시도)
-// T8.12: 데모 생성 워커 생존 확인.
-// 데모 파이프라인은 맥북 로컬 워커가 처리한다. 워커가 꺼져 있거나 맥북이 잠들면
-// 버튼을 눌러도 행이 autorun_queued 에 영원히 멈추고 사용자는 이유를 알 수 없다.
-// 그래서 트리거를 열기 전에 마지막 신호가 신선한지부터 본다.
-const WORKER_STALE_AFTER_MS = 90 * 1000;
-
-function useWorkerAlive() {
-  const [hb, setHb] = useState(undefined); // undefined=조회 전, null=조회 실패/행 없음
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      const { data } = await supabase
-        .from('demo_worker_heartbeat')
-        .select('last_seen_at, hostname, status, in_flight')
-        .eq('id', 'demo-worker')
-        .maybeSingle();
-      if (alive) setHb(data ?? null);
-    };
-    load();
-    // 워커가 죽고 살아나는 걸 화면에서 바로 반영. 30s 갱신 주기의 절반.
-    const t = setInterval(load, 15000);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
-
-  if (hb === undefined) return { loading: true, alive: true, hb: null };
-  const ts = hb?.last_seen_at ? Date.parse(hb.last_seen_at) : NaN;
-  const alive = Number.isFinite(ts) && Date.now() - ts <= WORKER_STALE_AFTER_MS;
-  return { loading: false, alive, hb };
-}
-
-function workerOfflineTitle(hb) {
-  if (!hb?.last_seen_at || Date.parse(hb.last_seen_at) <= 0) {
-    return '데모 생성 워커가 한 번도 실행된 적이 없습니다.\n맥에서 scripts/install-launchd.sh install 로 등록하세요.';
-  }
-  const mins = Math.round((Date.now() - Date.parse(hb.last_seen_at)) / 60000);
-  return `데모 생성 워커가 응답하지 않습니다 (마지막 신호 ${mins}분 전${hb.hostname ? `, ${hb.hostname}` : ''}).\n` +
-    '맥이 켜져 있고 워커가 실행 중인지 확인하세요.';
-}
-
-function DemoTriggerButton({ project, onStartAutorun, onOpenRegenerate, saving }) {
-  const status = project?.demo_status || 'none';
-  const hasUrl = !!project?.wishket_url;
-  const stop = (fn) => (e) => { e.stopPropagation(); fn(); };
-  const { alive: workerAlive, hb } = useWorkerAlive();
-
-  const btnBase = {
-    padding:'0.1rem 0.5rem', borderRadius:5, fontSize:'0.7rem', fontWeight:600,
-    lineHeight:1.3, border:'1px solid var(--border)',
-    background:'transparent', color:'var(--text2)',
-  };
-
-  if (status === 'ready') {
-    const demoLink = (project.portfolio_links || []).find(l => l && l.label === 'Demo');
-    return (
-      <span style={{ display:'inline-flex', gap:4, alignItems:'center' }}>
-        {demoLink && (
-          <a href={demoLink.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
-            style={{ ...btnBase, textDecoration:'none', color:'var(--green)', borderColor:'var(--surface-success-strong)', background:'var(--surface-success-soft)', cursor:'pointer' }}>
-            🌐 데모 보기
-          </a>
-        )}
-        <button onClick={stop(() => onOpenRegenerate(project))} disabled={saving} title="데모 재생성 (전체 또는 특정 플로우)"
-          style={{ ...btnBase, cursor:saving?'not-allowed':'pointer', opacity:saving?0.5:1 }}>🔁 재생성</button>
-      </span>
-    );
-  }
-
-  const inProgress = {
-    autorun_queued: '⏳ 대기 중',
-    fetching:       '📥 가져오는 중',
-    extract_queued: '⏳ 분석 대기',
-    extracting:     '🧠 분석 중',
-    extract_ready:  '⏳ 생성 대기',
-    gen_queued:     '⏳ 생성 대기',
-    generating:     '🎨 생성 중',
-    building:       '🔨 빌드 중',
-  };
-  if (inProgress[status]) {
-    return (
-      <button disabled style={{ ...btnBase, cursor:'default', color:'var(--accent)', borderColor:'var(--accent)44', background:'var(--accent)12' }}>
-        {inProgress[status]}
-      </button>
-    );
-  }
-
-  if (status === 'fetch_failed' || status === 'extract_failed' || status === 'failed') {
-    if (!workerAlive) {
-      return (
-        <button disabled title={workerOfflineTitle(hb)}
-          style={{ ...btnBase, cursor:'not-allowed', opacity:0.55, color:'#e74c3c' }}>
-          💤 워커 꺼짐
-        </button>
-      );
-    }
-    return (
-      <button onClick={stop(() => onStartAutorun(project))} disabled={saving} title="다시 시도 (워커가 fetch 부터 재실행)"
-        style={{ ...btnBase, color:'#e74c3c', borderColor:'var(--surface-danger-strong)', background:'var(--surface-danger-soft)', cursor:saving?'not-allowed':'pointer', opacity:saving?0.5:1 }}>
-        ❌ 다시 시도
-      </button>
-    );
-  }
-
-  if (!hasUrl) {
-    return (
-      <button disabled title="위시켓 URL 을 먼저 입력하세요"
-        style={{ ...btnBase, cursor:'not-allowed', opacity:0.5 }}>
-        🎬 데모 생성
-      </button>
-    );
-  }
-  if (!workerAlive) {
-    // 큐에 넣어봐야 처리할 주체가 없다 — 누르기 전에 막고 이유를 말해준다.
-    return (
-      <button disabled title={workerOfflineTitle(hb)}
-        style={{ ...btnBase, cursor:'not-allowed', opacity:0.55 }}>
-        💤 워커 꺼짐
-      </button>
-    );
-  }
-  return (
-    <button onClick={stop(() => onStartAutorun(project))} disabled={saving} title="공고 자동 수집 → 분석 → 데모 생성"
-      style={{ ...btnBase, color:'var(--accent)', borderColor:'var(--accent)55', background:'var(--accent)15', cursor:saving?'not-allowed':'pointer', opacity:saving?0.5:1 }}>
-      🎬 데모 생성
-    </button>
-  );
-}
-
 // ─── EmptyState ───
 // 데이터 0건/필터 0건 등을 시각적으로 안내. 토큰(P4-A) 기반.
 function EmptyState({ icon, title, hint, primary, secondary }) {
@@ -3373,7 +3098,7 @@ function EmptyState({ icon, title, hint, primary, secondary }) {
 
 // ─── ProjectTable ───
 const PAGE_SIZE = 30;
-function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, sortOrder, onSort, onBatchDelete, onMemoSave, memberFilter, teamMembers, milestones, milestonesSetupNeeded, onQuickApplyTemplate, onOpenProject, onStartAutorun, onOpenRegenerate, demoSaving, onAddNew, onResetFilters }) {
+function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, sortOrder, onSort, onBatchDelete, onMemoSave, memberFilter, teamMembers, milestones, milestonesSetupNeeded, onQuickApplyTemplate, onOpenProject, onAddNew, onResetFilters }) {
   const [selected, setSelected] = useState(new Set());
   const [page, setPage] = useState(1);
   const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s=new Set(prev); s.has(slug)?s.delete(slug):s.add(slug); return s; }); };
@@ -3535,9 +3260,6 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                     <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                       <span style={{ fontSize:'0.8rem', color:'var(--text2)', fontFamily:'monospace' }}>{r.slug}</span>
                       {(r.portfolio_links||[]).length > 0 && <span style={{ fontSize:'0.7rem', color:'var(--green)', fontWeight:500 }} title={`포트폴리오 링크 ${r.portfolio_links.length}개`}>🔗{r.portfolio_links.length}</span>}
-                      {onStartAutorun && (
-                        <DemoTriggerButton project={r} onStartAutorun={onStartAutorun} onOpenRegenerate={onOpenRegenerate} saving={demoSaving} />
-                      )}
                     </div>
                     {HAS_MILESTONES.includes(r.current_status) && !milestonesSetupNeeded && (
                       <div style={{ marginTop:6 }}>
@@ -3696,7 +3418,6 @@ function App({ session }) {
   const [filter, setFilter]               = useState('all');
   const [search, setSearch]               = useState('');
   const [selectedProject, setSelectedProject] = useState(null);
-  const [regenerateProject, setRegenerateProject] = useState(null);
   const [saving, setSaving]               = useState(false);
   const [connected, setConnected]         = useState(false);
   const [sortKey, setSortKey]             = useState('created_at');
@@ -4224,7 +3945,6 @@ function App({ session }) {
   }, [toast, milestones, data]);
 
   const handleRowClick    = useCallback((p)  => setSelectedProject(p), []);
-  const handleOpenRegenerate  = useCallback((p)  => setRegenerateProject(p), []);
   const handleCloseRegenerate = useCallback(()   => setRegenerateProject(null), []);
 
   const handleFieldSave = useCallback(async (project, fields) => {
@@ -4244,74 +3964,6 @@ function App({ session }) {
       setData(prev => prev.map(d => d.slug===project.slug ? {...d, ...rollback} : d));
       setSelectedProject(prev => prev && prev.slug===project.slug ? {...prev, ...rollback} : prev);
       toast('저장 실패: '+friendlyError(err),'error');
-    } finally { setSaving(false); }
-  }, [toast]);
-
-  // T7.2 1-click 트리거: demo_status='autorun_queued' + regenerate_scope=null.
-  // 워커가 atomic 선점해 fetch → extract → auto-approve → gen → ready 전 단계 자동 실행.
-  // 실패 행에서 "다시 시도" 클릭 시에도 같은 핸들러 (autorun_queued 로 다시 진입).
-  // confirm 단계 필수 — 실제 LLM 호출 + 5~10분 + Max 구독 사용량 차감 + GitHub Pages 푸시.
-  const handleStartAutorun = useCallback((project) => {
-    const isFailed = ['fetch_failed','extract_failed','failed'].includes(project?.demo_status);
-    const projLabel = project.title || project.slug;
-    const message = isFailed
-      ? `「${projLabel}」 데모 생성을 다시 시도합니다.\n\n워커가 공고 수집부터 다시 실행 (~5~10분, Max 구독 사용량 차감).\n계속할까요?`
-      : `「${projLabel}」 의 위시켓 공고를 자동 수집해 데모를 생성합니다.\n\n` +
-        `· 공고 수집 (puppeteer + 위시켓 로그인, ~30초)\n` +
-        `· 추출 분석 (Sonnet, ~30초)\n` +
-        `· 데모 생성 (Opus, ~3~5분 — Max 구독 사용량 차감)\n` +
-        `· GitHub Pages 배포 (~30~60초)\n\n` +
-        `총 5~10분 소요. 워커가 실행 중이어야 동작합니다.\n시작할까요?`;
-    const proceed = async () => {
-      setSaving(true);
-      try {
-        const today = new Date().toISOString().split('T')[0];
-        const { data:updated, error } = await supabase
-          .from(TABLE)
-          .update({ demo_status: 'autorun_queued', regenerate_scope: null, updated_at: today })
-          .eq('slug', project.slug)
-          .select('slug, demo_status, regenerate_scope, updated_at');
-        if (error) throw error;
-        if (!updated || updated.length === 0) throw new Error(`프로젝트를 찾을 수 없습니다: ${project.slug}`);
-        const row = updated[0];
-        const merge = { demo_status: row.demo_status, regenerate_scope: row.regenerate_scope, updated_at: row.updated_at };
-        setData(prev => prev.map(d => d.slug===project.slug?{...d,...merge}:d));
-        setSelectedProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
-        toast('데모 생성 큐에 등록됨 — 워커가 픽업하면 진행','success');
-      } catch(err) {
-        toast('데모 생성 시작 실패: '+err.message,'error');
-      } finally { setSaving(false); }
-    };
-    setConfirmState({
-      title: isFailed ? '데모 다시 생성' : '데모 자동 생성 시작',
-      message,
-      confirmLabel: isFailed ? '다시 시도' : '🎬 시작',
-      onConfirm: () => { void proceed(); },
-    });
-  }, [toast]);
-
-  // T4.2 데모 재생성 (전체/특정 플로우). scope = 'all' | 'flow:<flow_id>'.
-  // demo_status='gen_queued' + regenerate_scope 세팅 → 워커가 동일 핸들러로 처리.
-  const handleRegenerate = useCallback(async (project, scope) => {
-    setSaving(true);
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const { data:updated, error } = await supabase
-        .from(TABLE)
-        .update({ demo_status: 'gen_queued', regenerate_scope: scope, updated_at: today })
-        .eq('slug', project.slug)
-        .select('slug, demo_status, regenerate_scope, updated_at');
-      if (error) throw error;
-      if (!updated || updated.length === 0) throw new Error(`프로젝트를 찾을 수 없습니다: ${project.slug}`);
-      const row = updated[0];
-      const merge = { demo_status: row.demo_status, regenerate_scope: row.regenerate_scope, updated_at: row.updated_at };
-      setData(prev => prev.map(d => d.slug===project.slug?{...d,...merge}:d));
-      setSelectedProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
-      setRegenerateProject(prev => prev && prev.slug===project.slug?{...prev,...merge}:prev);
-      toast(scope==='all' ? '전체 재생성 큐 등록' : `재생성 큐 등록 (${scope})`,'success');
-    } catch(err) {
-      toast('재생성 등록 실패: '+err.message,'error');
-      throw err;
     } finally { setSaving(false); }
   }, [toast]);
 
@@ -4570,15 +4222,6 @@ function App({ session }) {
           onBackfillAssignees={handleBackfillAssignees}
         />
       )}
-      {regenerateProject && (
-        <RegenerationModal
-          key={'regen-'+regenerateProject.slug}
-          project={regenerateProject}
-          onClose={handleCloseRegenerate}
-          onRegenerate={handleRegenerate}
-          saving={saving}
-        />
-      )}
       {showQuickAdd && (
         <QuickAddModal
           onClose={() => setShowQuickAdd(false)}
@@ -4800,9 +4443,6 @@ function App({ session }) {
           milestonesSetupNeeded={milestonesSetupNeeded}
           onQuickApplyTemplate={handleCreateMilestonesFromTemplate}
           onOpenProject={(slug) => navigate({ name:'project', slug })}
-          onStartAutorun={handleStartAutorun}
-          onOpenRegenerate={handleOpenRegenerate}
-          demoSaving={saving}
           onAddNew={() => setShowQuickAdd(true)}
           onResetFilters={() => { setFilter('all'); setSearch(''); setDateRange('all'); setMemberFilter(''); }}
         />
