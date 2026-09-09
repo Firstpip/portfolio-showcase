@@ -120,6 +120,8 @@
 5. **`src/types.ts`** — `data_entities` 의 모든 entity 를 TypeScript interface 로. 필드 매핑: string→string, number→number, date/datetime→string (ISO), boolean→boolean, text→string, enum→string, ref→string.
 6. **`src/lib/store.tsx`** (확장자 `.tsx` — JSX 사용하므로 `.ts` 가 아닌 `.tsx`) — LocalStorage 기반 store + `useStore()` hook + `StoreProvider` 컴포넌트 + `INITIAL_STORE` 상수. 다른 파일에서는 `import { useStore, StoreProvider } from "@/lib/store"` (vite alias 가 .tsx 자동 resolve).
 7. **`src/lib/seed.ts`** — 작은 hard-coded 시드 데이터 (entity 별 3~5 개) `INITIAL_SEED` export. store.ts 가 LocalStorage 비어있을 때 이걸로 초기화.
+   - **시드 레코드의 어떤 필드에도 절대 URL 을 넣지 마라.** `thumbnailUrl`, `registrationUrl`, `fileUrl`, `videoUrl`, `imageUrl`, `link` 같은 필드가 필요하면 값은 `"#"` 또는 내부 경로(`"/sessions/s1"`) 또는 파일명 문자열(`"2026_세미나_자료.pdf"`)로 채운다. `https://example.com/...`, `https://picsum.photos/...` 같은 값은 빌드 산출물에 그대로 박혀 validate-dist 가 데모를 실패시킨다.
+   - 아예 URL 필드를 만들지 않는 쪽이 더 낫다 — 썸네일은 `thumbnailColor: "#2f6fed"` 나 `thumbnailInitial: "웨"` 같은 필드로 대체하고 화면에서 CSS 로 그린다.
 8. **`src/pages/{Pascal(flowId)}.tsx`** — `spec.core_flows[]` 의 **모든** flow 마다 정확히 1 개 (N개면 정확히 N개), **placeholder 만** (5~10 LOC). 하나도 빠뜨리지 마라 — Pass 2 가 각 placeholder 를 정식 본문으로 덮어쓰기 때문에 placeholder 가 없으면 page 자체가 만들어지지 않는다. 예시:
    ```tsx
    // tier: 1 (또는 2/3) — Pass 2 가 본문 덮어씀
@@ -271,6 +273,21 @@ export function useStore(): StoreContextValue {
 
 ---
 
+### 🚫 외부 URL 절대 금지 (dist 는 self-contained 여야 함)
+
+빌드 산출물에 `http://` / `https://` 로 시작하는 **절대 URL 을 한 개도 남기지 마라**. JSX 의 `src`/`href` 뿐 아니라 **시드·목업 데이터의 문자열 값, 주석, 상수 배열까지 전부 포함**이다 — 번들에 문자열로 박히기만 해도 검증에 걸린다. 배포 후 자동 검증(validate-dist)이 CDN 허용 목록(Pretendard) 외 절대 URL 을 발견하면 그 데모는 통째로 실패 처리된다. 고객 앞에서 여는 데모라 외부 의존은 깨질 위험 그 자체다.
+
+금지 예: `https://example.com/...`, `https://picsum.photos/...`, `https://placehold.co/...`, `https://www.youtube.com/embed/...`, `https://images.unsplash.com/...`, 외부 API endpoint, 외부 폰트/아이콘 URL.
+
+대체 수단:
+- **이미지·아바타** → 인라인 SVG, CSS gradient (`bg-gradient-to-br`), 또는 이니셜 글자 원형 배지. `<img src="http...">` 금지.
+- **영상 임베드** → 재생 아이콘이 들어간 `aspect-video` 회색 박스 + 제목 캡션 (실제 embed 금지).
+- **외부 링크** → `<a href="#" onClick={(e)=>{e.preventDefault(); toast.info("데모에서는 생략된 흐름입니다");}}>` 또는 내부 라우트(`react-router` `Link`).
+- **첨부/다운로드** → 클릭 시 toast 만.
+- **외부 API 호출** → 금지. 모든 데이터는 `useStore()` + seed 에서.
+
+---
+
 ## tier 별 동작 규칙 (placeholder 에는 적용 X — Pass 2 가 처리)
 
 이번 Pass 에서 page 본문은 **placeholder** 만. tier 별 동작은 Pass 2 가 작성. 단지 첫 줄 주석 `// tier: N` 만 정확히 표기.
@@ -347,6 +364,7 @@ JSON 작성 직전 다음을 모두 통과시켜라:
 - [ ] `src/types.ts` 가 `data_entities[].name` 모두 TypeScript interface 로 정의.
 - [ ] `src/lib/store.tsx` 의 `DemoStore` 가 모든 entity 를 배열 필드로 가짐 + `useStore` + `StoreProvider` export.
 - [ ] `src/main.tsx` 가 `<StoreProvider>` 로 `<App />` 감쌈.
+- [ ] 코드 안에 `http://` / `https://` 로 시작하는 절대 URL 0건.
 - [ ] 모든 import 경로가 `@/` 또는 외부 패키지 (상대경로 `./` 사용 시 같은 디렉토리만).
 - [ ] `any`, `// @ts-ignore`, `// @ts-expect-error` 0 건.
 - [ ] JSON 이 단일 객체이고 `{` 로 시작 `}` 로 끝남, 코드펜스/설명문 없음.

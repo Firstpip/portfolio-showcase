@@ -1,10 +1,14 @@
 // 로컬 워커 엔트리포인트.
 //
-// 역할: `wishket_projects.demo_status` 변경을 Supabase Realtime으로 구독해
-// 상태에 따라 extract / generate / deploy 모듈을 분기 호출한다.
+// 역할: `wishket_projects.demo_status` 변경을 감지해 상태에 따라
+// fetch / extract / generate+build+deploy 핸들러를 분기 호출한다.
 //
-// T0.2 시점의 이 파일은 스캐폴드 상태 — Realtime 연결 성립과 이벤트 수신
-// 로깅만 수행한다. 실제 라우팅 로직은 T2.1 / T3.x에서 추가.
+// 감지 경로 2개 (T8.8a):
+//   - Realtime 구독: 정상일 때 지연 ~0
+//   - 폴링 루프: WORKER_POLL_MS(기본 10s) 마다 대기 상태를 SELECT
+// Realtime 이 죽어도 폴링이 받아내므로 1-click 체인이 멈추지 않는다.
+// 중복 실행은 핸들러의 atomic claim + 프로세스 내 in-flight Set 으로 막는다
+// (자세한 내용은 dispatch.ts 헤더).
 //
 // 실행 전제:
 //   1) Claude Code CLI 설치 + `claude login` (Max 구독)
@@ -16,9 +20,12 @@
 import "./shared/env.ts";
 import { supabaseClient } from "./shared/supabase.ts";
 import { verifyAuth } from "./shared/claude.ts";
-import { handleAutorunQueued } from "./fetch-spec.ts";
-import { handleExtractQueued } from "./extract-spec.ts";
-import { handleGenQueued } from "./generate-demo/orchestrator.ts";
+import {
+  DEFAULT_POLL_MS,
+  InFlight,
+  dispatch,
+  startPolling,
+} from "./dispatch.ts";
 
 async function main() {
   console.log("[worker] 시작 — 전제 조건 확인 중...");
@@ -42,7 +49,13 @@ async function main() {
   }
   console.log(`[worker] Supabase 연결 OK (wishket_projects: ${count}건)`);
 
-  // 3) Realtime 구독 — demo_status 변경 이벤트 수신 로깅 (라우팅은 차후 task)
+  const inflight = new InFlight();
+  const pollMs = Number(process.env.WORKER_POLL_MS) || DEFAULT_POLL_MS;
+
+  // 3) Realtime 구독 — 정상일 때의 빠른 경로.
+  //    T7.1 자동 chain: autorun_queued → fetching → extract_queued → extracting
+    //   → gen_queued (auto-approve) → generating → building → ready.
+  //    각 단계가 다음 상태를 세팅하면 Realtime(또는 폴링)이 다시 깨운다.
   const channel = supabase
     .channel("demo-status-watch")
     .on(
@@ -53,7 +66,11 @@ async function main() {
         table: "wishket_projects",
       },
       (payload) => {
-        const newRow = payload.new as { id?: string; slug?: string; demo_status?: string } | null;
+        const newRow = payload.new as {
+          id?: string;
+          slug?: string;
+          demo_status?: string;
+        } | null;
         const oldRow = payload.old as { demo_status?: string } | null;
         if (!newRow || newRow.demo_status === oldRow?.demo_status) return;
         console.log(
@@ -61,31 +78,34 @@ async function main() {
             `${oldRow?.demo_status ?? "?"} → ${newRow.demo_status}`,
         );
         if (!newRow.id) return;
-        // 상태별 핸들러 라우팅. 핸들러는 자체적으로 예외를 catch (워커 안정성 우선).
-        // T7.1 자동 chain: autorun_queued → fetching → extract_queued → extracting
-        //   → gen_queued (auto-approve) → generating → ready. 각 단계는 다음 상태를
-        //   세팅해 Realtime 이 다시 깨워 다음 핸들러를 호출하는 구조.
-        if (newRow.demo_status === "autorun_queued") {
-          void handleAutorunQueued(supabase, newRow.id);
-        }
-        if (newRow.demo_status === "extract_queued") {
-          void handleExtractQueued(supabase, newRow.id);
-        }
-        if (newRow.demo_status === "gen_queued") {
-          // T4.2: 최초 생성(regenerate_scope=NULL) + 재생성(scope='all'|'flow:<id>') 통합 처리.
-          void handleGenQueued(supabase, newRow.id);
-        }
+        dispatch(
+          supabase,
+          { id: newRow.id, slug: newRow.slug, demo_status: newRow.demo_status },
+          inflight,
+          "realtime",
+        );
       },
     )
     .subscribe((status) => {
       console.log(`[worker] Realtime 채널 상태: ${status}`);
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        console.warn(
+          `[worker] Realtime 사용 불가(${status}) — 폴링 폴백으로 계속 진행합니다. ` +
+            `지연은 최대 ${pollMs / 1000}s.`,
+        );
+      }
     });
+
+  // 4) 폴링 폴백 — Realtime 상태와 무관하게 항상 돈다.
+  const stopPolling = startPolling(supabase, inflight, pollMs);
+  console.log(`[worker] 폴링 폴백 가동 (${pollMs / 1000}s 간격)`);
 
   console.log("[worker] 대기 중. Ctrl+C로 종료.");
 
   // 종료 시그널 처리
   const shutdown = async (sig: string) => {
-    console.log(`[worker] ${sig} 수신 — 채널 정리 중...`);
+    console.log(`[worker] ${sig} 수신 — 정리 중...`);
+    stopPolling();
     await channel.unsubscribe();
     process.exit(0);
   };

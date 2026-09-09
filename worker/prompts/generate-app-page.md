@@ -77,6 +77,21 @@
 
 ---
 
+### 🚫 외부 URL 절대 금지 (dist 는 self-contained 여야 함)
+
+빌드 산출물에 `http://` / `https://` 로 시작하는 **절대 URL 을 한 개도 남기지 마라**. JSX 의 `src`/`href` 뿐 아니라 **시드·목업 데이터의 문자열 값, 주석, 상수 배열까지 전부 포함**이다 — 번들에 문자열로 박히기만 해도 검증에 걸린다. 배포 후 자동 검증(validate-dist)이 CDN 허용 목록(Pretendard) 외 절대 URL 을 발견하면 그 데모는 통째로 실패 처리된다. 고객 앞에서 여는 데모라 외부 의존은 깨질 위험 그 자체다.
+
+금지 예: `https://example.com/...`, `https://picsum.photos/...`, `https://placehold.co/...`, `https://www.youtube.com/embed/...`, `https://images.unsplash.com/...`, 외부 API endpoint, 외부 폰트/아이콘 URL.
+
+대체 수단:
+- **이미지·아바타** → 인라인 SVG, CSS gradient (`bg-gradient-to-br`), 또는 이니셜 글자 원형 배지. `<img src="http...">` 금지.
+- **영상 임베드** → 재생 아이콘이 들어간 `aspect-video` 회색 박스 + 제목 캡션 (실제 embed 금지).
+- **외부 링크** → `<a href="#" onClick={(e)=>{e.preventDefault(); toast.info("데모에서는 생략된 흐름입니다");}}>` 또는 내부 라우트(`react-router` `Link`).
+- **첨부/다운로드** → 클릭 시 toast 만.
+- **외부 API 호출** → 금지. 모든 데이터는 `useStore()` + seed 에서.
+
+---
+
 ## tier 별 동작 규칙 (엄격)
 
 ### tier 1 — 실제 CRUD
@@ -294,6 +309,7 @@ export default function Flow8Page() {
 - [ ] tier 2 → `setStore` 호출 0 곳, `toast.*` 1+ 곳, 가능하면 폼 또는 입력 1 곳.
 - [ ] tier 3 → form/input/onClick 0 곳, "본 계약 시 구현" 뱃지/문구.
 - [ ] `any`, `@ts-ignore` 0 건.
+- [ ] 코드 안에 `http://` / `https://` 로 시작하는 절대 URL 0건.
 - [ ] import 경로가 `@/lib/store`, `@/types`, `@/lib/utils`, 또는 외부 패키지 (`react`, `sonner`, `lucide-react`, `recharts`, `@radix-ui/...`).
 - [ ] component default export.
 - [ ] JSON 단일 객체 (`{"path":..., "content":...}`), 코드펜스/설명문 없음.

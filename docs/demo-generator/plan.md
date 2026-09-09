@@ -912,11 +912,40 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
   - [x] 'flow:{id}' regenerate_scope 가 'all' 로 처리되는지 (그리고 demo_generation_log 에 명시)
 - **last_failure**: — (2026-09-08 해소. Pass 2 타입 계약 공백은 T8.3b 로 분리해 수정)
 
+#### T8.8a 워커 폴링 폴백 (T8.8 블로커에서 파생)
+- **상태**: `DONE`
+- **depends_on**: T8.7
+- **requires_test**: yes
+- **파일**: `worker/dispatch.ts` (신규), `worker/index.ts`, `worker/test-dispatch.ts` (신규)
+- **해야 할 일**:
+  - 상태 → 핸들러 라우팅을 `dispatch.ts` 로 분리해 Realtime·폴링이 같은 경로를 쓰게 한다
+  - `WORKER_POLL_MS`(기본 10s) 간격으로 대기 상태(autorun_queued/extract_queued/gen_queued) SELECT → 디스패치
+  - 중복 실행 방지 2중: 핸들러의 atomic claim + 프로세스 내 in-flight Set
+  - Realtime 이 CHANNEL_ERROR/TIMED_OUT 이면 경고 로그를 남기고 폴링으로 계속 진행
+- **test_spec**:
+  - [x] 대기 상태만 픽업, 진행/완료 상태 무시 (isActionable 13케이스 + 실제 DB probe 3건 중 1건만)
+  - [x] Realtime·폴링 동시 픽업 시 핸들러 1회만 실행, 종료 후 in-flight 해제되어 재픽업 가능
+  - [x] 핸들러 예외가 unhandledRejection 없이 삼켜지고 in-flight 누수 없음
+  - [x] startPolling 주기 동작 + stop() 후 정지
+  - [x] 실전: Realtime 이 죽은 상태에서 autorun_queued → fetch → extract → gen → build 전 단계를 폴링이 픽업 (실측 3회)
+- **last_failure**: —
+
 #### T8.8 standard mode 1-click E2E 검증
-- **상태**: `TODO`
+- **상태**: `TEST_FAILED`
 - **depends_on**: T8.7
 - **requires_test**: manual-review
 - **해야 할 일**: 신규 후보 1건 (wishket_url 보유, spec_raw 비어있음, free 모드 기대) → dashboard "🎬 데모 생성" 1클릭 → 15~25분 이내 ready + Vite SPA 정상 서빙. 추가로 React strict 공고 1건 (예: "React 필수" 명시 공고)도 같은 방식으로 검증.
+- **last_failure**: 2026-09-09 — Realtime 블로커는 **T8.8a 폴링 폴백으로 해소**(실측 통과). 이후 1-click 체인이 3회 연속 `validate` 단계에서 동일 실패:
+  `validate-dist: external_urls` — 생성된 앱이 절대 URL 을 남긴다 (1회차 `example.com/register/*`·`picsum.photos`·youtube embed 6건 → 2회차 8건 → 3회차 `player.vimeo.com/video/*` 15건).
+  URL 은 JSX 가 아니라 **시드 데이터 필드 값**(`registrationUrl`/`thumbnailUrl`/`videoUrl`)에서 나온다.
+  프롬프트 보강 2회(① page·foundation 에 "외부 URL 절대 금지" 절 + 대체 수단 ② seed.ts 항목에 URL 필드 금지 + "시드·목업 데이터 문자열 값 포함" 명시) 모두 실패 —
+  **프롬프트만으로는 못 막는다**는 게 3회 실측으로 확인됨 (T8.3b 에서 얻은 교훈과 동일: 규칙을 말하는 것보다 코드로 강제하는 쪽이 맞다).
+  → 사용자 결정 필요:
+  (a) **생성 직후 결정론적 sanitize 단계 추가** (권장) — generateApp 산출물의 절대 URL 을 빌드 전에 코드로 치환(`#`/내부경로/파일명). tokens-to-tailwind(T8.4)가 LLM 비결정성을 코드로 걷어낸 것과 같은 패턴. 신규 task 로 등록.
+  (b) validate-dist 의 external_urls 를 "가져오기 가능한 위치(src/href/fetch)에 있는 URL" 로 한정 — 데모가 외부 리소스에 의존하게 되어 §0 self-contained 원칙과 충돌.
+  (c) 허용 목록에 placeholder 호스트 추가 — 고객 시연 중 외부 차단·지연에 그대로 노출됨. 비추천.
+  실행 실측 (참고): 1-click 1회 ≈ **4~4.5분** (fetch 19s + extract 34~50s + generate ~170s + build ~4s) — 목표 15~25분 대비 크게 여유.
+  테스트로 바뀐 실제 행(id 558)은 `demo_status=null` 로 원복했고, 배포는 한 번도 일어나지 않아 레포·portfolio_links 영향 0.
 - **review_checklist**:
   - [ ] free 후보 ready 도달 — 실제 소요시간(분), build 단계 라벨 표시 자연스러움?
   - [ ] strict 후보 — chosen_runtime이 spec에 기록된 값과 일치
@@ -956,14 +985,14 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 ## 8. 현재 상태 스냅샷
 
 - **마지막 업데이트**: 2026-09-08 (T8.7 + T8.3b DONE — 신규 빌드 파이프라인 통합, E2E 31/31 × 2연속. 다음 T8.8 1-click E2E)
-- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3, T8.4, T8.5, T8.6, T8.3b, T8.7
-- **진행 중 task**: 없음
-- **다음에 착수 가능**: T8.8 (1-click E2E — 대시보드 🎬 버튼 → ready 까지 무인 완주) — depends_on T8.7 충족
+- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3, T8.4, T8.5, T8.6, T8.3b, T8.7, T8.8a
+- **진행 중 task**: T8.8 (TEST_FAILED — external_urls 3연속 실패, 사용자 결정 대기)
+- **다음에 착수 가능**: 없음 (T8.8 결정 대기)
 - **블로킹 중**: T7.3 (Phase 8 완료 후 재개)
 - **Phase 8 첫 cut 범위**: T8.0~T8.8 (vite-react-ts runtime 1개 + standard demo_mode + 1-click E2E). 후속 T8.9~T8.11은 polish.
 - **Phase 7 배경**: T1.1/T2.3/T2.4의 다단계 UX(paste → 추출 → 편집 → 승인 → 생성)가 사용자 인지 부담 큼. T6.2/T6.3로 extract 정확도 강화 + T4.2 재생성 패널로 사후 교정 가능 → SpecModal/StructuredSpecEditor/ApprovalPanel 폐기, 트리거 1회로 단순화. 위시켓 URL 자동 fetch 통합으로 paste 자체 제거
 - **별도 follow-up (commit 단위)**: dashboard `DEMO_GEN_ENABLED` flag 제거 — 데모 생성기 핵심 파이프라인이 T5.2 + T6.1 로 검증됐으므로 prod 노출 안전
-- **블로커**: 없음
+- **블로커**: (1) 생성물의 절대 URL → validate-dist 실패 (T8.8 last_failure 참조). (2) Supabase Realtime 웹소켓 500(`error code: 1101`) 은 여전하지만 T8.8a 폴링 폴백으로 우회됨 — 언젠가 Supabase 쪽 확인 필요
 - **결정된 사항 (2026-04-24)**:
   - 아키텍처를 Edge Function → 로컬 Node 워커 + Claude Agent SDK (Max 구독 OAuth)로 전환
   - LLM 호출 전부(extract/generate) + 배포(deploy)도 워커에서 수행; Edge Function은 `delete-portfolios`만 유지
