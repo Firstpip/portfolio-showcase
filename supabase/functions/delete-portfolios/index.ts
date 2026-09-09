@@ -153,6 +153,58 @@ async function getStatus(slug: string): Promise<StatusProbe> {
   }
 }
 
+// ─── 공유 쇼케이스 참조 가드 (2026-09-09) ────────────────────────────────
+// 공고가 과업범위 변경으로 삭제·재등록되면 새 슬러그로 재지원하면서 **이미 등록된
+// 포트폴리오를 그대로 재사용**한다(CLAUDE.md "공유 포트폴리오 삭제 보호", 2026-09-04).
+// 이때 새 프로젝트의 portfolio_links 는 **원본 슬러그의 쇼케이스 URL**을 가리킨다:
+//   260904_container-storage-erp(#158215) → .../260902_container-storage-erp/portfolio-1/
+// 원본 row 를 지우면 여기서 그 폴더를 통째로 삭제해 **살아있는 지원의 링크가 404** 가 된다.
+// (2026-09-09 실사고 — applied·4,700만원 건의 포트폴리오 링크 2개가 동시에 죽어 있었다.
+//  커밋 56a36b6 "chore: delete project 260902_container-storage-erp" 가 원인)
+// 위시켓 갤러리·firstpip 카드는 lib/portfolio-refs.js 가 보호하는데 **쇼케이스만 보호가 없었다**.
+// → 다른 프로젝트가 참조 중이면 **파일 삭제만 건너뛴다**(row 삭제·캐스케이드는 그대로 진행).
+// ⚠️ 조회 실패는 "참조 없음"이 아니다 — 검증 불가는 통과가 아니므로 보수적으로 보존한다.
+//    과잉 보존 > 과잉 삭제: 남은 폴더는 사람이 지우면 되지만, 살아있는 지원의 링크는 되돌릴 수 없다.
+async function showcaseReferrers(slug: string, sub?: string): Promise<
+  { kind: "ok"; refs: string[] } | { kind: "error"; reason: string }
+> {
+  if (!SB_URL || !SB_SR) return { kind: "error", reason: "SUPABASE service_role 미설정" };
+  try {
+    const res = await fetch(
+      `${SB_URL}/rest/v1/${TABLE}?select=slug,portfolio_links`,
+      { headers: { apikey: SB_SR, Authorization: `Bearer ${SB_SR}` } },
+    );
+    if (!res.ok) return { kind: "error", reason: `참조 조회 실패 ${res.status}` };
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return { kind: "error", reason: "참조 조회 응답 형식 오류" };
+    const needle = sub ? `/${slug}/${sub}/` : `/${slug}/`;
+    const refs: string[] = [];
+    for (const r of rows) {
+      if (!r || !r.slug || r.slug === slug) continue;          // 자기 자신은 참조가 아니다
+      const links = Array.isArray(r.portfolio_links) ? r.portfolio_links : [];
+      const hit = links.some((l: unknown) => {
+        const u = (l as { url?: unknown } | null)?.url;
+        return typeof u === "string" && u.toLowerCase().includes(needle.toLowerCase());
+      });
+      if (hit) refs.push(r.slug);
+    }
+    return { kind: "ok", refs: [...new Set(refs)] };
+  } catch (err) {
+    return { kind: "error", reason: `참조 조회 예외 ${String(err)}` };
+  }
+}
+
+/** 참조 조회 결과 → 쇼케이스 파일을 보존해야 하는가 (조회 실패도 보존) */
+function keepShowcaseDecision(
+  probe: { kind: "ok"; refs: string[] } | { kind: "error"; reason: string },
+): { keep: boolean; refs: string[]; note: string | null } {
+  if (probe.kind === "error") {
+    return { keep: true, refs: [], note: `참조 확인 실패로 쇼케이스 보존(${probe.reason})` };
+  }
+  if (probe.refs.length === 0) return { keep: false, refs: [], note: null };
+  return { keep: true, refs: probe.refs, note: `다른 프로젝트가 참조 중이라 쇼케이스 보존: ${probe.refs.join(", ")}` };
+}
+
 // 풀 삭제(row+showcase+project-scope 캐스케이드)를 막아야 하는가?
 // force=true면 우회(대시보드가 명시적 확인 후 전달). row 없음(absent)은 허용(멱등).
 function blockDecision(probe: StatusProbe, force: boolean): { block: boolean; reason?: string } {
@@ -359,12 +411,17 @@ Deno.serve(async (req) => {
       // (능동 프로젝트의 row 삭제만 보호 대상이고, 그건 풀 삭제 경로 + DB 트리거가 막는다.)
       // 삭제 전에 이 portfolio-N의 조인키 수집(파일 삭제 후엔 row가 남아도 의미는 동일).
       const targets = (await collectTargets(slug)).filter(t => t.portfolio_path === path.toLowerCase());
-      const fileResult = await deleteSubpath(token, slug, path);
+      // 다른 프로젝트가 이 portfolio-N 을 재사용 중이면 파일은 남긴다(위 공유 참조 가드).
+      const subKeep = keepShowcaseDecision(await showcaseReferrers(slug, path.toLowerCase()));
+      const fileResult = subKeep.keep
+        ? { ok: true, reason: subKeep.note ?? undefined }
+        : await deleteSubpath(token, slug, path);
+      if (subKeep.keep) console.warn(`[${reqId}] subpath showcase kept`, { slug, path, refs: subKeep.refs, note: subKeep.note });
       console.log(`[${reqId}] subpath delete`, { slug, path, ok: fileResult.ok, reason: fileResult.reason });
       const cascade_enqueued = fileResult.ok
         ? await enqueueCascade(slug, "portfolio", path.toLowerCase(), targets, userJwt, reqId)
         : false;
-      return new Response(JSON.stringify({ slug, path, deleted: fileResult.ok, db_updated: false, cascade_enqueued, reason: fileResult.reason, reqId }), { headers });
+      return new Response(JSON.stringify({ slug, path, deleted: fileResult.ok, showcase_kept: subKeep.keep, showcase_refs: subKeep.refs, db_updated: false, cascade_enqueued, reason: fileResult.reason, reqId }), { headers });
     } catch (err) {
       console.error(`[${reqId}] subpath unhandled exception`, err);
       return new Response(JSON.stringify({ error: String(err), reqId }), { status: 500, headers });
@@ -384,7 +441,12 @@ Deno.serve(async (req) => {
     }
     // 조인키는 row 삭제 전에 수집해야 함(deleteRow가 portfolio_links를 지움).
     const targets = await collectTargets(slug);
-    const fileResult = await deleteSlug(token, slug);
+    // 다른 프로젝트가 이 쇼케이스를 참조 중이면 파일은 남기고 row·캐스케이드만 진행한다.
+    const keep = keepShowcaseDecision(await showcaseReferrers(slug));
+    if (keep.keep) console.warn(`[${reqId}] showcase kept (shared)`, { slug, refs: keep.refs, note: keep.note });
+    const fileResult = keep.keep
+      ? { ok: true, reason: keep.note ?? undefined }
+      : await deleteSlug(token, slug);
     if (!fileResult.ok) {
       console.error(`[${reqId}] delete fail`, { slug, reason: fileResult.reason });
       return new Response(JSON.stringify({ slug, deleted: false, db_updated: false, reason: fileResult.reason, reqId }), { headers });
@@ -392,7 +454,7 @@ Deno.serve(async (req) => {
     const dbResult = skip_db ? { ok: true } : await deleteRow(slug, userJwt, force);
     const cascade_enqueued = await enqueueCascade(slug, "project", null, targets, userJwt, reqId);
     console.log(`[${reqId}] delete ok`, { slug, db_updated: dbResult.ok, cascade_enqueued });
-    return new Response(JSON.stringify({ slug, deleted: true, db_updated: dbResult.ok, cascade_enqueued, reason: dbResult.reason, reqId }), { headers });
+    return new Response(JSON.stringify({ slug, deleted: true, showcase_kept: keep.keep, showcase_refs: keep.refs, db_updated: dbResult.ok, cascade_enqueued, reason: keep.note ?? dbResult.reason, reqId }), { headers });
   } catch (err) {
     console.error(`[${reqId}] unhandled exception`, err);
     return new Response(JSON.stringify({ error: String(err), reqId }), { status: 500, headers });
