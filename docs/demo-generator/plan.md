@@ -977,11 +977,28 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 - **해야 할 일**: 모바일 앱 공고 처리 — 375px frame 안에 SPA를 시뮬레이션하는 wrapper layout. generate-app 프롬프트에 mobile-web 모드 분기 추가.
 
 #### T8.10 후속 — vue/next runtime 추가
-- **상태**: `TODO`
+- **상태**: `TEST_FAILED` (구현 완료, validate-dist 설계 판단 1건 대기)
 - **depends_on**: T8.8
 - **requires_test**: yes
 - **해야 할 일**: `worker-runtimes/vite-vue/`, `worker-runtimes/next-static/` 추가 + 각 스택용 generate 프롬프트 분기. preferred / strict 케이스에서 chosen_runtime 매핑 활용.
-
+- **test_spec** (plan 에 비어 있어 T8.10 착수 시 정의):
+  - [x] deriveStack 매핑 — strict/preferred 의 frontend 요구를 런타임으로 변환, free 는 기본값, 미지원 스택(spring/flutter)은 폴백 (14케이스)
+  - [x] 스택별 프롬프트 파일 존재 + 로더 분기, page 경로·계약 파일 레이아웃 (15케이스)
+  - [x] 사이트 루트 `.nojekyll` — Next 의 `_next/` 가 Jekyll 에 제외되지 않도록
+  - [x] vite-vue: 빌드 + base path 주입 + validate-dist 5항목 전부 통과
+  - [x] next-static: 빌드·base path·bundle_size·console_errors·external_urls·.nojekyll·동적세그먼트 없음 전부 통과
+  - [x] **external_urls 를 "실제 네트워크 요청" 기준으로 전환** (사용자 승인) — 번들 문자열 스캔은 프레임워크 벤더 청크의 죽은 상수(`http://n`, next/font 의 fonts.googleapis.com 등)에 계속 걸렸다. Playwright 패스에서 request URL 을 수집해 로컬 서버·CDN 허용 목록 밖이면 실패로 바꿨다. 회귀 확인: 외부 이미지를 실제로 부르는 dist 는 여전히 검출(리다이렉트 대상까지). skipBrowser 일 때만 기존 정적 스캔으로 폴백해 오프라인 커버리지 유지. T8.5 테스트 5/5·T8.8b 34/34 회귀 없음
+  - [ ] **LLM E2E** — next-static 2회 실패 (아래 last_failure), vite-vue 미실행
+- **last_failure**: 2026-09-09 — **런타임·매핑·프롬프트·자동검증은 전부 완료**(test-stacks.ts 통과). 남은 건 next-static 의 **LLM E2E** 다.
+  실제 공고(`260903_rag-chatbot-quality`, spec 이 frontend=`next` 를 요구)로 2회 돌렸는데 둘 다 `next build` 의 타입체크에서 같은 이유로 실패:
+  Pass 2 가 만든 page 가 `import { Layout } from "@/components/Layout"` 로 **named import** 를 하는데 foundation 은 default export 로 만들었다.
+  1차 실패 후 (a) 계약 파일 목록에 `components/Layout.tsx` 를 추가해 Pass 2 가 실제 export 형태를 보게 하고 (b) page 프롬프트에 "Layout 을 import 하지 마라 + foundation_source 의 실제 export 형태를 따르라" 를 명시했지만 2차에서도 동일 실패.
+  → T8.8b 와 **정확히 같은 교훈**: 프롬프트로 LLM 습관을 막는 건 확률 싸움이다. 사용자 결정 필요:
+  (a) **export 형태를 코드로 보정** (권장) — 생성 직후 sanitize 단계 옆에서, foundation 이 만든 공용 컴포넌트에 default export 만 있으면 동명 named export 별칭(`export { X as Layout }`)을 자동으로 덧붙인다. 두 import 스타일 모두 컴파일되므로 이 실패 유형이 사라진다. tokens-to-tailwind(T8.4)·sanitize-urls(T8.8b) 와 같은 패턴.
+  (b) Next foundation 에서 `components/Layout.tsx` 를 없애고 chrome 을 `app/layout.tsx` 안에 직접 둔다 — import 대상 자체를 없애지만, LLM 이 없는 모듈을 import 하면 "module not found" 로 여전히 깨질 수 있다.
+  (c) 빌드 실패 시 tsc 에러를 Opus 에 되먹이는 repair pass — 범용이지만 비용·시간이 늘고 근본 원인은 그대로.
+- **검증 상태 정리**: vite-vue 는 런타임 빌드·validate 5항목까지 통과했으나 **LLM E2E 는 아직 안 돌렸다**(next 가 먼저 막혀서). (a) 적용 후 vue 도 함께 E2E 필요.
+- **부수 확인**: 실패는 기존 배포물을 건드리지 않는다는 게 실증됐다 — 2회 실패 동안 `260903_rag-chatbot-quality` 의 직전 React 데모가 그대로 살아있었고(HTTP 200) portfolio_links 도 P1/P2/Demo 유지. 상태만 `ready` 로 원복해 뒀다.
 #### T8.11 후속 — admin-dashboard / workflow-diagram 폴백
 - **상태**: `TODO`
 - **depends_on**: T8.8
@@ -1001,10 +1018,10 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-09-09 (T8.8 DONE 승인 — Phase 8 첫 cut T8.0~T8.8 완료. 다음 T8.10)
+- **마지막 업데이트**: 2026-09-09 (T8.10 — 런타임 2종·매핑·프롬프트·자동검증 완료, next LLM E2E 가 export 형태 불일치로 2회 실패)
 - **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3, T8.4, T8.5, T8.6, T8.3b, T8.7, T8.8a, T8.8b, T8.8
-- **진행 중 task**: 없음
-- **다음에 착수 가능**: T8.10 (vue/next runtime 추가) — 실제 공고에서 strict `frontend: next` 요구가 확인돼 근거 확실. T8.9(mobile-web)도 착수 가능
+- **진행 중 task**: T8.10 (TEST_FAILED — LLM E2E 만 미완, 사용자 결정 대기)
+- **다음에 착수 가능**: T8.9 (mobile-web 폴백). T8.10 은 결정 대기
 - **보류 판단 (2026-09-09)**: `DEMO_GEN_ENABLED` 플래그 제거(prod 노출)는 **워커 상시화(launchd 등록) 이후**로 미룬다. 지금은 맥북 워커가 떠 있어야만 동작해서, 워커가 꺼진 상태로 대시보드 버튼을 누르면 행이 `autorun_queued` 에 영구히 멈춘다. 플래그 주석의 "T8.8 통과 후 제거" 는 워커 운영 방식을 정하기 전에 쓴 메모
 - **T8.11 우선순위 하향 근거**: strict 후보가 `demo_mode='admin-dashboard'` 로 분류됐는데 전용 분기 없이 standard React SPA 로 정상 빌드·동작했다 (콘솔 에러 0). 전용 템플릿의 실익 재평가 필요
 - **블로킹 중**: T7.3 (Phase 8 완료 후 재개)

@@ -299,6 +299,7 @@ async function main() {
       portfolio_reference_html: portfolioHtml.slice(0, 14000), // 상위 14KB만 (T3.2 패턴)
       base_path: "/portfolio-showcase/__t8-3-probe/portfolio-demo/",
       workspace: ws,
+      stack: "vite-react-ts",
     });
     if (!result.ok) {
       console.error(`    ✗ generate-app 실패 (${result.code} pass=${result.pass ?? "-"} flow=${result.flow_id ?? "-"}): ${result.message}`);

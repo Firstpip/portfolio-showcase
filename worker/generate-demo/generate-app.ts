@@ -23,7 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runClaude, OPUS, type RunResult } from "../shared/claude.ts";
-import type { Workspace } from "./build-runtime.ts";
+import type { StackName, Workspace } from "./build-runtime.ts";
 import { tokensToTailwindConfig } from "./tokens-to-tailwind.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,6 +43,8 @@ export interface GenerateAppInput {
   portfolio_reference_html: string;
   base_path: string;
   workspace: Workspace;
+  /** T8.10: 런타임 스택. 프롬프트 분기에 쓴다 (workspace.stack 과 항상 동일). */
+  stack: StackName;
 }
 
 export interface GeneratedFile {
@@ -93,23 +95,68 @@ interface PassUsage {
 // ─────────────────────────────────────────────────────────────────────────────
 // 프롬프트 로드 (한 번 + 캐시)
 
-let cachedFoundationPrompt: string | null = null;
-let cachedPagePrompt: string | null = null;
+/**
+ * 스택별 파일 레이아웃 (T8.10).
+ *
+ * page 경로와 "Pass 2 가 반드시 따라야 할 계약 파일" 이 프레임워크마다 다르다.
+ * Vite 계열은 src/ 아래 라우터 페이지, Next App Router 는 app/<flow>/page.tsx.
+ */
+export const STACK_LAYOUT: Record<
+  StackName,
+  { pagePath: (flowId: string) => string; contractFiles: string[] }
+> = {
+  "vite-react-ts": {
+    pagePath: (id) => `src/pages/${pascalCase(id)}.tsx`,
+    contractFiles: [
+      "src/types.ts",
+      "src/lib/store.ts",
+      "src/lib/store.tsx",
+      "src/components/Layout.tsx",
+    ],
+  },
+  "vite-vue": {
+    pagePath: (id) => `src/pages/${pascalCase(id)}.vue`,
+    contractFiles: ["src/types.ts", "src/lib/store.ts", "src/components/Layout.vue"],
+  },
+  "next-static": {
+    pagePath: (id) => `app/${id}/page.tsx`,
+    contractFiles: [
+      "types.ts",
+      "lib/store.tsx",
+      "lib/store.ts",
+      "components/Layout.tsx",
+    ],
+  },
+};
+
+const promptCache = new Map<string, string>();
+
+/**
+ * 스택별 프롬프트 파일 접미사 (T8.10).
+ *
+ * React 는 기존 파일명을 그대로 둔다 — 이미 검증된 경로를 건드리지 않기 위해서.
+ */
+const PROMPT_SUFFIX: Record<StackName, string> = {
+  "vite-react-ts": "",
+  "vite-vue": "-vue",
+  "next-static": "-next",
+};
 
 function repoPromptPath(name: string): string {
   const here = fileURLToPath(import.meta.url);
   return path.resolve(path.dirname(here), "..", "prompts", name);
 }
 
-function loadFoundationPrompt(): string {
-  if (cachedFoundationPrompt !== null) return cachedFoundationPrompt;
-  cachedFoundationPrompt = readFileSync(repoPromptPath("generate-app-foundation.md"), "utf8");
-  return cachedFoundationPrompt;
-}
-function loadPagePrompt(): string {
-  if (cachedPagePrompt !== null) return cachedPagePrompt;
-  cachedPagePrompt = readFileSync(repoPromptPath("generate-app-page.md"), "utf8");
-  return cachedPagePrompt;
+function loadPrompt(kind: "foundation" | "page", stack: StackName): string {
+  const key = `${kind}${PROMPT_SUFFIX[stack]}`;
+  const hit = promptCache.get(key);
+  if (hit !== undefined) return hit;
+  const text = readFileSync(
+    repoPromptPath(`generate-app-${kind}${PROMPT_SUFFIX[stack]}.md`),
+    "utf8",
+  );
+  promptCache.set(key, text);
+  return text;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,11 +175,11 @@ export type FoundationContracts = Record<string, string>;
  */
 export function pickFoundationContracts(
   files: GeneratedFile[],
+  wanted: string[] = STACK_LAYOUT["vite-react-ts"].contractFiles,
   maxBytesPerFile = 12000,
 ): FoundationContracts {
-  const WANTED = ["src/types.ts", "src/lib/store.ts", "src/lib/store.tsx"];
   const out: FoundationContracts = {};
-  for (const want of WANTED) {
+  for (const want of wanted) {
     const hit = files.find((f) => f.path === want);
     if (!hit) continue;
     out[hit.path] =
@@ -268,7 +315,7 @@ async function runFoundationPass(input: GenerateAppInput): Promise<FoundationPas
     `\n\n위 입력으로 foundation 파일들을 단일 JSON {"files": [...]} 으로 즉시 출력하라. 분석 멘트·인트로·설명 일체 금지. 첫 바이트 \`{\` 마지막 \`}\`.`;
   const runResult = await runClaude(userMessage, {
     model: OPUS,
-    systemPrompt: loadFoundationPrompt(),
+    systemPrompt: loadPrompt("foundation", input.stack),
     allowedTools: [],
     // maxTurns=2 — Opus 가 가끔 첫 turn 에 인트로 내고 두 번째 turn 에 JSON 내는 경우 대비.
     // result 메시지는 마지막 turn 응답이라 두 번째 turn 의 JSON 이 잡힘.
@@ -356,7 +403,7 @@ async function runPagePass(
   flow: { id: string; tier: number; title: string },
   contracts: FoundationContracts,
 ): Promise<PagePassResult> {
-  const pagePath = `src/pages/${pascalCase(flow.id)}.tsx`;
+  const pagePath = STACK_LAYOUT[input.stack].pagePath(flow.id);
   const userPayload = {
     spec: input.spec,
     tokens: input.tokens,
@@ -372,7 +419,7 @@ async function runPagePass(
     `\n\n위 flow ${flow.id} (tier ${flow.tier}) page 를 단일 JSON {"path": "${pagePath}", "content": "..."} 으로 즉시 출력하라. 분석 멘트·인트로 일체 금지. 첫 바이트 \`{\` 마지막 \`}\`.`;
   const runResult = await runClaude(userMessage, {
     model: OPUS,
-    systemPrompt: loadPagePrompt(),
+    systemPrompt: loadPrompt("page", input.stack),
     allowedTools: [],
     maxTurns: 2,
     // 한 페이지 ~3~5K output. 32K 한도 매우 여유.
@@ -531,10 +578,14 @@ export async function generateApp(input: GenerateAppInput): Promise<GenerateAppR
   }
 
   // ─── Pass 2: per-flow pages 병렬 ───
-  const contracts = pickFoundationContracts(foundation.files);
-  if (!contracts["src/types.ts"]) {
+  const contracts = pickFoundationContracts(
+    foundation.files,
+    STACK_LAYOUT[input.stack].contractFiles,
+  );
+  const typesKey = STACK_LAYOUT[input.stack].contractFiles[0];
+  if (!contracts[typesKey]) {
     console.warn(
-      "[generate-app] foundation 에 src/types.ts 가 없음 — page 간 타입 불일치 위험",
+      `[generate-app] foundation 에 ${typesKey} 가 없음 — page 간 타입 불일치 위험`,
     );
   }
   const pageResults = await Promise.allSettled(

@@ -21,7 +21,17 @@ import { fileURLToPath } from "node:url";
 // ─────────────────────────────────────────────────────────────────────────────
 // 타입
 
-export type StackName = "vite-react-ts";
+export type StackName = "vite-react-ts" | "vite-vue" | "next-static";
+
+/**
+ * 스택별 정적 자산 디렉토리 (dist 기준 상대). validate-dist 가 번들 크기·base path
+ * 를 볼 때 쓴다. Vite 계열은 `assets/`, Next static export 는 `_next/`.
+ */
+export const ASSET_DIR: Record<StackName, string> = {
+  "vite-react-ts": "assets",
+  "vite-vue": "assets",
+  "next-static": "_next",
+};
 
 export interface Workspace {
   stack: StackName;
@@ -56,7 +66,26 @@ export type BuildResult = BuildOk | BuildErr;
 // ─────────────────────────────────────────────────────────────────────────────
 // 경로
 
-const ALLOWED_STACKS = new Set<StackName>(["vite-react-ts"]);
+/**
+ * 워크스페이스 복사에서 제외할 빌드 산출물·캐시 (런타임 **최상위**에 있는 것만).
+ *
+ * 이름만 보고 트리 전체에서 걸러내면 `node_modules/vue/dist` 같은 정상 패키지
+ * 디렉토리까지 날아가 빌드가 깨진다. 반드시 첫 세그먼트로만 판단한다.
+ */
+const BUILD_ARTIFACT_DIRS = new Set([".next", "dist", "out", ".vite", ".turbo"]);
+
+function isBuildArtifact(runtimeRoot: string, source: string): boolean {
+  const rel = path.relative(runtimeRoot, source);
+  if (!rel || rel.startsWith("..")) return false;
+  const [first] = rel.split(path.sep);
+  return BUILD_ARTIFACT_DIRS.has(first);
+}
+
+const ALLOWED_STACKS = new Set<StackName>([
+  "vite-react-ts",
+  "vite-vue",
+  "next-static",
+]);
 
 function repoRoot(): string {
   // 이 파일은 worker/generate-demo/build-runtime.ts. repo root 는 ../../.
@@ -104,9 +133,60 @@ export async function prepareWorkspace(
   // fs.cp recursive 는 Node 16.7+ 지원. node_modules 의 심볼릭 링크 처리를
   // 위해 dereference: false (기본). 큰 트리라 spawn cp -R 도 옵션이지만
   // fs.cp 가 cross-platform + 깔끔.
-  await fs.cp(src, dest, { recursive: true, force: true });
+  //
+  // 빌드 산출물·캐시는 복사에서 제외한다. 런타임 디렉토리에서 한 번이라도
+  // 직접 빌드한 적이 있으면 `.next/` 같은 캐시가 남는데, 그게 새 워크스페이스로
+  //따라 들어가면 원래 경로를 참조해 빌드가 깨진다 (T8.10 에서 next-static 이
+  // 직접 빌드는 되는데 워크스페이스 빌드만 실패하던 원인). 캐시는 어차피
+  // 워크스페이스마다 새로 만들어야 맞다.
+  await fs.cp(src, dest, {
+    recursive: true,
+    force: true,
+    filter: (source) => !isBuildArtifact(src, source),
+  });
+
+  await relinkBinaries(src, dest);
 
   return { stack, slug, path: dest };
+}
+
+/**
+ * 복사된 워크스페이스의 `node_modules/.bin/*` 심볼릭 링크를 워크스페이스 안쪽으로 다시 건다.
+ *
+ * npm 이 만드는 .bin 링크는 절대 경로인 경우가 있다. 그대로 복사하면 워크스페이스에서
+ * `npm run build` 를 돌려도 **원본 런타임의 바이너리**가 실행되고, 그 바이너리는 자기
+ * 옆의 node_modules 에서 의존성을 찾는다. 앱 코드는 워크스페이스, 프레임워크는 원본이
+ * 되면서 React 가 두 벌 로드돼 `Cannot read properties of null (reading 'useContext')`
+ * 로 죽는다 (T8.10 에서 next-static 이 직접 빌드는 되는데 워크스페이스 빌드만
+ * 실패하던 진짜 원인). Vite 계열은 우연히 증상이 없었지만 같은 위험을 안고 있었다.
+ */
+async function relinkBinaries(src: string, dest: string): Promise<void> {
+  const binDir = path.join(dest, "node_modules", ".bin");
+  let entries: string[];
+  try {
+    entries = await fs.readdir(binDir);
+  } catch {
+    return; // .bin 이 없는 런타임도 있다
+  }
+  const srcReal = await fs.realpath(src);
+  for (const name of entries) {
+    const linkPath = path.join(binDir, name);
+    let target: string;
+    try {
+      const st = await fs.lstat(linkPath);
+      if (!st.isSymbolicLink()) continue;
+      target = await fs.readlink(linkPath);
+    } catch {
+      continue;
+    }
+    const resolved = path.resolve(binDir, target);
+    const rel = path.relative(srcReal, resolved);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) continue; // 원본 밖을 가리키면 그대로 둔다
+    const inWorkspace = path.join(dest, rel);
+    await fs.rm(linkPath, { force: true });
+    // 상대 링크로 걸어 워크스페이스를 옮겨도 깨지지 않게 한다.
+    await fs.symlink(path.relative(binDir, inWorkspace), linkPath);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

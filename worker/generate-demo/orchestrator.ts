@@ -37,6 +37,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { extractDesignTokens } from "../shared/extract-tokens.ts";
 import {
+  ASSET_DIR,
   cleanup as cleanupWorkspace,
   collectDist,
   prepareWorkspace,
@@ -208,6 +209,7 @@ export async function runBuildPipeline(
       portfolio_reference_html: inputs.portfolio1Html,
       base_path: basePath,
       workspace,
+      stack,
     });
     if (!gen.ok) {
       return {
@@ -247,7 +249,9 @@ export async function runBuildPipeline(
     // ---- 5) dist 검증 ----
     await stage("validate");
     const distRoot = join(workspace.path, "dist");
-    const validation = await validateDist(distRoot, basePath);
+    const validation = await validateDist(distRoot, basePath, {
+      assetDir: ASSET_DIR[stack],
+    });
     if (!validation.ok) {
       const failed = validation.findings
         .filter((f) => !f.ok)
@@ -295,15 +299,35 @@ export async function runBuildPipeline(
 }
 
 /**
- * spec.stack_decision 으로부터 runtime 스택 결정.
+ * spec.stack_decision 으로부터 runtime 스택 결정 (T8.10).
  *
- * Phase 8 첫 cut 은 vite-react-ts 런타임 하나뿐이다. demo_mode 가
- * mobile-web/admin-dashboard/workflow-diagram 이어도 결국 React SPA 로 만들며
- * (모바일은 375px 프레임 등 프롬프트 레벨 차이), 전용 런타임 분기는 T8.9~T8.11.
- * 따라서 지금은 항상 vite-react-ts 를 쓰되, 근거는 meta.stack_decision 에 남긴다.
+ * extract 단계는 `client_required.frontend` 를 뽑기만 하고 실제 런타임은 코드가
+ * 정한다 (T8.1 결정). freedom_level 이 strict/preferred 일 때만 요구 스택을 따르고,
+ * free 면 기본값(vite-react-ts)을 쓴다 — 자유인데 굳이 무거운 Next 로 갈 이유가 없다.
+ *
+ * 매핑에 없는 요구 스택(spring/flutter/django 등)은 프론트 런타임으로 만들 수
+ * 없으므로 기본값으로 폴백한다. 그 사실은 meta.stack_decision 에 남아 추적 가능하다.
  */
-export function deriveStack(_spec: Record<string, unknown>): StackName {
-  return "vite-react-ts";
+const FRONTEND_TO_STACK: Record<string, StackName> = {
+  react: "vite-react-ts",
+  vite: "vite-react-ts",
+  vue: "vite-vue",
+  nuxt: "vite-vue", // Nuxt 전용 런타임은 없다 — Vue 3 SPA 로 시연
+  next: "next-static",
+  nextjs: "next-static",
+};
+
+export const DEFAULT_STACK: StackName = "vite-react-ts";
+
+export function deriveStack(spec: Record<string, unknown>): StackName {
+  const sd = isPlainObject(spec.stack_decision) ? spec.stack_decision : {};
+  const freedom = typeof sd.freedom_level === "string" ? sd.freedom_level : "free";
+  if (freedom !== "strict" && freedom !== "preferred") return DEFAULT_STACK;
+
+  const required = isPlainObject(sd.client_required) ? sd.client_required : {};
+  const frontend =
+    typeof required.frontend === "string" ? required.frontend.toLowerCase().trim() : "";
+  return FRONTEND_TO_STACK[frontend] ?? DEFAULT_STACK;
 }
 
 function summarizeStackDecision(

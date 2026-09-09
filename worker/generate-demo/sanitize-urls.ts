@@ -33,6 +33,10 @@ const NOISE_PREFIXES = [
   "http://www.w3.org/",
   "https://www.w3.org/",
   "https://reactjs.org/docs/error-decoder.html",
+  "https://react.dev/errors",
+  // Vue 3 / Next.js 가 런타임·빌드 경고에 inline 하는 문서 링크 (호출 아님).
+  "https://vuejs.org/error-reference",
+  "https://nextjs.org/docs",
 ];
 
 const IMAGE_HOSTS = [

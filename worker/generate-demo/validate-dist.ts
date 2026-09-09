@@ -2,7 +2,7 @@
 //
 // 빌드된 dist/ 디렉토리를 4가지 항목으로 검증한다:
 //   A. index.html 에 expected base path 가 정확히 prefix 됐는지
-//   B. dist/assets/ JS+CSS 번들 합계 크기 < 2MB (영업 데모 한도)
+//   B. dist 자산 디렉토리(Vite: assets/, Next: _next/) JS+CSS 합계 < 2MB (영업 데모 한도)
 //   C. dist 안에 외부 절대 URL 이 CDN 허용 목록 외 0건
 //   D. Playwright headless 로 dist/index.html 을 띄워 콘솔 에러 0건
 //
@@ -33,6 +33,17 @@ const URL_NOISE_PATTERNS: RegExp[] = [
   /^https?:\/\/(?:www\.)?w3\.org\//,
   // React 의 minified 에러 디코더 URL — 콘솔에 hint 로 찍히는 문자열, 호출 아님.
   /^https?:\/\/(?:react\.dev|reactjs\.org|legacy\.reactjs\.org)\//,
+  // Vue 3 의 런타임 에러 레퍼런스 URL — React 와 같은 성격 (T8.10 에서 확인).
+  /^https?:\/\/(?:www\.)?vuejs\.org\//,
+  // Next.js 가 빌드/런타임 경고에 넣는 문서 링크 문자열.
+  /^https?:\/\/nextjs\.org\//,
+  // Next 내부 상수 (T8.10 실측). 전부 vendor chunk 안의 문자열이고 호출이 아니다:
+  //   - `http://n` : 상대 URL 을 파싱할 때 쓰는 더미 base
+  //   - use.typekit.net : next/font 의 Adobe 폰트 경로 상수 (해당 API 미사용 시 죽은 코드)
+  //   - `https://тест`, `https://x` : URL/IDN 파서의 테스트 상수
+  /^https?:\/\/n$/,
+  /^https?:\/\/use\.typekit\.net/,
+  /^https?:\/\/(?:тест|x)$/,
   // 데이터 URI 와 blob 은 정규식이 https?:// 만 잡아 자연 제외.
 ];
 
@@ -41,6 +52,11 @@ const TEXT_ASSET_EXTS = new Set([".html", ".css", ".js", ".mjs", ".cjs", ".json"
 const URL_REGEX = /\bhttps?:\/\/[^\s"'`<>)]+/g;
 
 export interface ValidateDistOptions {
+  /**
+   * dist 기준 정적 자산 디렉토리. Vite 계열은 "assets", Next static export 는 "_next".
+   * build-runtime 의 ASSET_DIR 에서 스택별 값을 받아 넘긴다. 기본값은 Vite 계열.
+   */
+  assetDir?: string;
   maxBundleBytes?: number;
   /** 외부 URL 허용 prefix 목록. 기본: cdn.jsdelivr.net (Pretendard). */
   cdnAllowlist?: string[];
@@ -78,29 +94,34 @@ export async function validateDist(
     return { ok: false, findings };
   }
 
+  const assetDir = options.assetDir ?? "assets";
+
   // 1. base path 검증 (index.html 에 prefix 주입 확인).
-  findings.push(await checkBasePath(distRoot, basePath));
+  findings.push(await checkBasePath(distRoot, basePath, assetDir));
 
   // 2. 번들 크기.
-  findings.push(await checkBundleSize(distRoot, options.maxBundleBytes ?? DEFAULT_MAX_BUNDLE_BYTES));
-
-  // 3. 외부 절대 URL.
   findings.push(
-    await checkExternalUrls(distRoot, options.cdnAllowlist ?? DEFAULT_CDN_ALLOWLIST),
+    await checkBundleSize(distRoot, options.maxBundleBytes ?? DEFAULT_MAX_BUNDLE_BYTES, assetDir),
   );
 
-  // 4. 콘솔 에러 (Playwright). 정적 검증이 모두 통과해야 의미 있음 — 그래도 항상 시도.
+  const allowlist = options.cdnAllowlist ?? DEFAULT_CDN_ALLOWLIST;
+
+  // 3+4. 콘솔 에러 + 외부 리소스 요청 (Playwright 한 번에).
+  //   external_urls 는 "번들에 URL 문자열이 있는가" 가 아니라 "실제로 외부를 가져오는가" 로
+  //   본다 (T8.10). 오프라인/CI 로 브라우저를 못 띄우는 경우에만 정적 스캔으로 폴백한다.
   if (options.skipBrowser) {
     findings.push({
       key: "console_errors",
       ok: true,
       detail: "skipBrowser=true — Playwright 검사 건너뜀",
     });
+    findings.push(await checkExternalUrls(distRoot, allowlist));
   } else {
     findings.push(
-      await checkConsoleErrorsHeadless(distRoot, basePath, {
+      ...(await checkHeadless(distRoot, basePath, {
         mountTimeoutMs: options.mountTimeoutMs ?? 8000,
-      }),
+        cdnAllowlist: allowlist,
+      })),
     );
   }
 
@@ -142,13 +163,17 @@ async function checkDistPresent(distRoot: string): Promise<ValidationFinding> {
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. base path
 
-async function checkBasePath(distRoot: string, basePath: string): Promise<ValidationFinding> {
+async function checkBasePath(
+  distRoot: string,
+  basePath: string,
+  assetDir: string,
+): Promise<ValidationFinding> {
   const indexHtml = await fs.readFile(path.join(distRoot, "index.html"), "utf8");
   // basePath 는 슬래시로 시작하고 끝나는 형식: "/portfolio-showcase/{slug}/portfolio-demo/".
   // vite 가 script src/CSS link 에 그대로 prefix 한다.
   // assets/ 까지 붙은 형태로 등장해야 진짜 prefix 가 된 것 — base 가 "/" 일 때도 동일하게
   // "/assets/" 로 등장하므로 정확한 매칭에는 ${base}assets/ 를 본다.
-  const expectedAssetsPrefix = `${basePath}assets/`;
+  const expectedAssetsPrefix = `${basePath}${assetDir}/`;
   if (!indexHtml.includes(expectedAssetsPrefix)) {
     return {
       key: "base_path",
@@ -168,8 +193,12 @@ async function checkBasePath(distRoot: string, basePath: string): Promise<Valida
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. 번들 크기
 
-async function checkBundleSize(distRoot: string, maxBytes: number): Promise<ValidationFinding> {
-  const assetsDir = path.join(distRoot, "assets");
+async function checkBundleSize(
+  distRoot: string,
+  maxBytes: number,
+  assetDir: string,
+): Promise<ValidationFinding> {
+  const assetsDir = path.join(distRoot, assetDir);
   let total = 0;
   let jsBytes = 0;
   let cssBytes = 0;
@@ -185,7 +214,7 @@ async function checkBundleSize(distRoot: string, maxBytes: number): Promise<Vali
     return {
       key: "bundle_size",
       ok: false,
-      detail: `dist/assets/ 접근 실패: ${(err as Error).message}`,
+      detail: `dist/${assetDir}/ 접근 실패: ${(err as Error).message}`,
     };
   }
   const totalKb = (total / 1024).toFixed(1);
@@ -196,7 +225,7 @@ async function checkBundleSize(distRoot: string, maxBytes: number): Promise<Vali
       key: "bundle_size",
       ok: false,
       detail:
-        `dist/assets 합계 ${totalKb}KB (JS ${jsKb}KB + CSS ${cssKb}KB, 파일 ${count}개) ` +
+        `dist/${assetDir} 합계 ${totalKb}KB (JS ${jsKb}KB + CSS ${cssKb}KB, 파일 ${count}개) ` +
         `> 한도 ${(maxBytes / 1024).toFixed(0)}KB`,
     };
   }
@@ -204,7 +233,7 @@ async function checkBundleSize(distRoot: string, maxBytes: number): Promise<Vali
     key: "bundle_size",
     ok: true,
     detail:
-      `dist/assets ${totalKb}KB (JS ${jsKb}KB + CSS ${cssKb}KB, 파일 ${count}개) ≤ ` +
+      `dist/${assetDir} ${totalKb}KB (JS ${jsKb}KB + CSS ${cssKb}KB, 파일 ${count}개) ≤ ` +
       `한도 ${(maxBytes / 1024).toFixed(0)}KB`,
   };
 }
@@ -295,27 +324,75 @@ async function walkText(
 
 interface ConsoleCheckOpts {
   mountTimeoutMs: number;
+  /** 로컬 서버 외에 허용할 외부 출처 prefix (Pretendard CDN 등). */
+  cdnAllowlist: string[];
 }
 
-async function checkConsoleErrorsHeadless(
+/**
+ * 페이지가 실제로 보낸 요청만으로 self-contained 여부를 판정한다 (T8.10).
+ *
+ * 원래는 dist 텍스트를 스캔해 절대 URL 문자열을 찾았는데, 프레임워크 벤더 청크에는
+ * 호출되지 않는 URL 상수가 잔뜩 들어있다 (Next 의 `http://n` 더미 base, next/font 의
+ * fonts.googleapis.com·use.typekit.net, URL 파서 테스트 문자열 등). 그걸 노이즈 목록으로
+ * 걸러내려 하면 "진짜로 외부 폰트를 쓰는 경우" 까지 못 잡게 된다.
+ *
+ * 우리가 보장하려는 성질은 "런타임에 외부 리소스를 가져오지 않는다" 이므로 그걸 직접
+ * 측정한다. 앱 소스 단계의 정적 방어는 sanitize-urls(T8.8b)가 이미 맡고 있어 이중이다.
+ */
+function buildExternalRequestFinding(
+  requested: string[],
+  origin: string,
+  allowlist: string[],
+): ValidationFinding {
+  const external = [...new Set(requested)].filter((u) => {
+    if (u.startsWith(origin)) return false;
+    if (u.startsWith("data:") || u.startsWith("blob:") || u.startsWith("about:")) return false;
+    return !allowlist.some((prefix) => u.startsWith(prefix));
+  });
+  if (external.length > 0) {
+    return {
+      key: "external_urls",
+      ok: false,
+      detail:
+        `외부 리소스 요청 ${external.length}건 (허용: ${allowlist.join(", ")}):\n  ` +
+        external.slice(0, 8).join("\n  ") +
+        (external.length > 8 ? `\n  ... +${external.length - 8}건` : ""),
+    };
+  }
+  const allowed = [...new Set(requested)].filter((u) => !u.startsWith(origin)).length;
+  return {
+    key: "external_urls",
+    ok: true,
+    detail:
+      `실제 네트워크 요청 ${new Set(requested).size}건 중 외부 위반 0건 ` +
+      `(허용 CDN ${allowed}건: ${allowlist.join(", ")})`,
+  };
+}
+
+async function checkHeadless(
   distRoot: string,
   basePath: string,
   opts: ConsoleCheckOpts,
-): Promise<ValidationFinding> {
+): Promise<ValidationFinding[]> {
   // 1. 작은 정적 HTTP 서버 띄우기 — basePath 가 "/portfolio-showcase/.../portfolio-demo/" 라
   //    file:// 로는 asset 해상이 안 됨. 임의 포트로 listen.
   let server: http.Server | null = null;
   let browser: Browser | null = null;
+  const out: ValidationFinding[] = [];
+  const requested: string[] = [];
+  const allowlist = opts.cdnAllowlist;
   try {
     server = await startStaticServer(distRoot, basePath);
     const port = (server.address() as AddressInfo).port;
-    const url = `http://127.0.0.1:${port}${basePath}index.html`;
+    const origin = `http://127.0.0.1:${port}`;
+    const url = `${origin}${basePath}index.html`;
 
     browser = await chromium.launch({ headless: true });
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
 
     const errors: string[] = [];
+    page.on("request", (req) => requested.push(req.url()));
     page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
     page.on("console", (msg) => {
       if (msg.type() === "error") errors.push(`console.error: ${msg.text()}`);
@@ -330,11 +407,16 @@ async function checkConsoleErrorsHeadless(
     });
 
     await page.goto(url, { waitUntil: "load", timeout: opts.mountTimeoutMs });
-    // React 마운트 대기.
+    // 앱 마운트 대기. Vite 런타임은 #root 에 마운트하지만 Next App Router 는
+    // body 에 직접 렌더하므로(고정 id 없음) "화면에 실제 내용이 그려졌는가" 로 본다.
     await page.waitForFunction(
       () => {
         const root = document.getElementById("root");
-        return !!root && root.children.length > 0;
+        if (root) return root.children.length > 0;
+        const body = document.body;
+        if (!body) return false;
+        const hasElement = body.querySelector("div, main, section, header, nav, ul, table");
+        return !!hasElement && (body.innerText ?? "").trim().length > 0;
       },
       undefined,
       { timeout: opts.mountTimeoutMs },
@@ -343,26 +425,36 @@ async function checkConsoleErrorsHeadless(
     await new Promise((r) => setTimeout(r, 500));
 
     if (errors.length > 0) {
-      return {
+      out.push({
         key: "console_errors",
         ok: false,
         detail:
           `콘솔/페이지 에러 ${errors.length}건 — ${url}\n  ` +
           errors.slice(0, 5).join("\n  ") +
           (errors.length > 5 ? `\n  ... +${errors.length - 5}건` : ""),
-      };
+      });
+    } else {
+      out.push({
+        key: "console_errors",
+        ok: true,
+        detail: `Playwright 헤드리스 로드 OK, 콘솔 에러 0건 (${url})`,
+      });
     }
-    return {
-      key: "console_errors",
-      ok: true,
-      detail: `Playwright 헤드리스 로드 OK, 콘솔 에러 0건 (${url})`,
-    };
+    out.push(buildExternalRequestFinding(requested, origin, allowlist));
+    return out;
   } catch (err) {
-    return {
-      key: "console_errors",
-      ok: false,
-      detail: `Playwright 검사 중 예외: ${(err as Error).message}`,
-    };
+    return [
+      {
+        key: "console_errors",
+        ok: false,
+        detail: `Playwright 검사 중 예외: ${(err as Error).message}`,
+      },
+      {
+        key: "external_urls",
+        ok: false,
+        detail: "브라우저 검사가 실패해 실제 요청을 확인하지 못함",
+      },
+    ];
   } finally {
     if (browser) {
       try {
