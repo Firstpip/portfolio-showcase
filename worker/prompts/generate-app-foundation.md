@@ -138,6 +138,12 @@
    - `// tier: N` 주석은 반드시 첫 줄에 (Pass 2 가 본문 작성 시 참고).
    - placeholder 본문에 form/입력/store 사용 절대 금지 — 단순 div + 제목 + "생성 중..." 만.
 
+9. **`src/pages/Home.tsx`** — 데모의 **첫 화면**. ⚠️ **placeholder 로 만들지 마라.** 여기는 정식 본문을 이번 Pass 에서 완성해야 한다.
+   - **Pass 2 는 flow page 만 덮어쓴다.** Home 은 flow 가 아니므로 여기서 placeholder 를 넣으면 그대로 배포되고, 클라이언트가 링크를 열었을 때 가장 먼저 보는 화면이 "생성 중..." 이 된다.
+   - 내용: 서비스명 + 한 줄 소개(도메인·페르소나 반영) → tier 1 flow 카드 그리드(제목 + 한 줄 설명 + 진입 버튼) → tier 2/3 는 아래에 간단한 목록으로.
+   - 시드 데이터에서 뽑은 요약 숫자 1~3개를 넣으면 좋다 (예: "등록 강사 12명 · 이번 주 예약 34건").
+   - 30 LOC 이상, 실제 서비스 랜딩처럼 보여야 한다.
+
 ## 절대 만들지 말 것 (이번 Pass 에서)
 
 - **`src/components/ui/*.tsx`** (shadcn 컴포넌트 풀세트) — 만들지 마라. Pass 2 가 page 안에서 raw HTML + tailwind class 로 직접 처리.
@@ -359,6 +365,7 @@ JSON 작성 직전 다음을 모두 통과시켜라:
 
 - [ ] `src/App.tsx` 가 모든 `core_flows[].id` 에 대해 `<Route path="/{id}" element={<XxxPage />} />` 등록 + 해당 page import.
 - [ ] 각 `core_flows[].id` 마다 `src/pages/*.tsx` 에 placeholder 존재 (5~10 LOC, form/input/store 호출 0).
+- [ ] `src/pages/Home.tsx` 가 **정식 본문**이다 — "생성 중" 같은 placeholder 문구가 들어있지 않다 (Pass 2 가 덮어쓰지 않는 유일한 page).
 - [ ] 각 page 첫 줄 주석에 `// tier: 1` 또는 `// tier: 2` / `// tier: 3`.
 - [ ] **`tailwind.config.cjs` 는 응답에 포함 안 함** (T8.4 모듈이 처리).
 - [ ] `src/types.ts` 가 `data_entities[].name` 모두 TypeScript interface 로 정의.

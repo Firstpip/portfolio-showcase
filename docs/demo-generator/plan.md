@@ -971,7 +971,7 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
   - 참고: strict 후보의 `demo_mode` 는 `admin-dashboard`(T8.11 폴백 대상)로 나왔지만 전용 분기 없이 standard React SPA 로 잘 빌드됐다. T8.11 이 얼마나 급한지 재평가 여지 있음
 
 #### T8.13 홈 화면이 placeholder 로 남는 문제 (T8.11 검증 중 발견)
-- **상태**: `TODO`
+- **상태**: `DONE`
 - **depends_on**: T8.3
 - **requires_test**: yes
 - **파일**: `worker/prompts/generate-app-foundation.md`
@@ -981,9 +981,9 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
   - **T8.10 에서 새로 쓴 vue/next 프롬프트는 Home 을 명시 항목으로 넣어 이 문제가 없다** — next 데모 홈은 5211자로 정상. 즉 React 프롬프트만의 결함.
 - **해야 할 일**: foundation(React) 프롬프트의 파일 목록에 `src/pages/Home.tsx` 를 **정식 본문** 항목으로 추가하고, placeholder 규칙이 Home 에는 적용되지 않음을 명시. 품질 체크에도 항목 추가.
 - **test_spec**:
-  - [ ] 프롬프트에 Home 정식 본문 항목 + placeholder 예외 명시
-  - [ ] LLM E2E — 생성된 홈이 placeholder 문구 없이 도메인 소개 + flow 카드로 렌더 (실측 문자 수·카드 수)
-  - [ ] 기존 피해 데모(`260904_webinar-member-site`) 재생성으로 복구 확인
+  - [x] 파일 목록에 항목 9 `src/pages/Home.tsx` 추가 — placeholder 금지 + "Pass 2 는 flow page 만 덮어쓴다" 이유 + 내용 지시(소개 → tier1 flow 카드 그리드 → tier2/3 목록 → 시드 요약 숫자, 30 LOC 이상). 품질 체크에도 항목 추가. vue/next 프롬프트의 홈 항목 유지도 회귀 검사
+  - [x] LLM E2E — 배포된 홈에서 placeholder 문구 0건, 본문 613자, 진입 요소 20개(링크 18 + 버튼 2), 제목 3개, 콘솔 에러 0
+  - [x] 피해 데모 `260904_webinar-member-site` 재생성(307s) → 홈 **126자 "생성 중..." → 613자 정식 화면**으로 복구
 - **last_failure**: —
 
 #### T8.12 운영 — 워커 상시화 + heartbeat
@@ -1086,10 +1086,10 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 
 ## 8. 현재 상태 스냅샷
 
-- **마지막 업데이트**: 2026-09-09 (T8.11 DONE — Phase 8 계획 task 전부 완료. 검증 중 발견한 T8.13 신규 등록)
-- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3, T8.4, T8.5, T8.6, T8.3b, T8.7, T8.8a, T8.8b, T8.8, T8.10, T8.10b, T8.12, T8.9, T8.11
+- **마지막 업데이트**: 2026-09-09 (T8.13 DONE — Phase 8 전 task 완료)
+- **완료된 task**: T0.1, T0.2, T0.3, T1.1, T1.2, T2.1, T2.2, T2.3, T2.4, T3.1, T3.2, T3.3, T3.4, T3.5, T4.1, T4.2, T4.3, T5.1, T5.2, T6.1, T6.2, T6.3, T7.1, T7.2, T8.0, T8.1, T8.2, T8.3, T8.4, T8.5, T8.6, T8.3b, T8.7, T8.8a, T8.8b, T8.8, T8.10, T8.10b, T8.12, T8.9, T8.11, T8.13
 - **진행 중 task**: 없음
-- **다음에 착수 가능**: **T8.13 (홈 화면 placeholder 결함)** — 사용자가 보는 첫 화면 문제라 우선순위 최상
+- **다음에 착수 가능**: 없음 — **Phase 8 전 task 완료**. 후속은 새 요구가 생길 때 신규 task 로
 - **prod 노출 완료 (2026-09-09)**: `DEMO_GEN_ENABLED` 플래그 제거. 전제였던 "워커가 꺼져 있으면 행이 영구히 멈춘다" 는 T8.12 의 heartbeat + `💤 워커 꺼짐` 버튼으로 해소됐고, launchd 로 워커가 상시 실행된다. 이제 워크룸에서 누구나 데모 생성을 트리거할 수 있으며 **트리거마다 Max 구독 사용량이 차감되고 main 에 배포 커밋이 쌓인다**
 - **T8.11 우선순위 하향 근거**: strict 후보가 `demo_mode='admin-dashboard'` 로 분류됐는데 전용 분기 없이 standard React SPA 로 정상 빌드·동작했다 (콘솔 에러 0). 전용 템플릿의 실익 재평가 필요
 - **블로킹 중**: T7.3 (Phase 8 완료 후 재개)
@@ -1143,6 +1143,7 @@ Phase 7 (1-click Auto Pipeline) — 후속 설계 변경
 | 2026-04-27 | T6.2 완료 | extract 프롬프트 N:M 자동 분해. `worker/prompts/extract-spec.md` 에 "N:M 관계 분해 규칙" 섹션 (감지 신호·금지 패턴·올바른 분해+예시) + 품질체크 항목 2개 추가. `worker/shared/validate-spec.ts` 에 `detectPluralRef` 헬퍼 — `_ids` 접미사 또는 's' 끝 ref 거부 (allowlist: address·status·process·class·series). `worker/test-extract-nm.ts` 신규 — 발달센터 회귀(spec_raw 복제) + 합성 3건(clinic_review_tag, study_member_group, ecom_product_category). 자동 검증 4/4 통과: (1) 발달센터 → review_tag {review_id, tag_id} 자동 등장, 보너스 center_therapy_type 분해 (T6.1 수동 패치 불필요화) (2) clinic → review_tag 분해 (3) study → group_member 분해 (study_group 도메인 prefix → group_id 참조) (4) ecom → product_category 분해. 복수형 ref 위반 0건, Sonnet 4회 호출 (cache_read 21K 재사용) |
 | 2026-04-27 | T6.3 완료 | extract 프롬프트 read-only flow tier 분류 개선. `worker/prompts/extract-spec.md` tier 1 정의에 "steps 안에 write step 적어도 하나 필수" 규칙 + read+persist 예외 단락(찜·북마크·별점·알림 등록은 read 처럼 보여도 tier 1 자격) + 절대 금지 패턴(steps 가 전부 검색·둘러보기·필터·조회 같은 읽기 동사로만 구성된 경우 tier 2 강제) + 4단계 결정 절차 + 품질 체크 2항목 추가. `worker/extract-spec.ts` `stripJsonFence` 를 outer-slice(첫 `{`~마지막 `}`) 무조건 적용으로 보강 — 종료 펜스 + trailing 텍스트 케이스 안전망. `worker/test-extract-tier.ts` 신규 — 발달센터 회귀 + 합성 3건(realestate_browse/event_calendar/recipe_browse). 각 케이스 (1) handleExtractQueued ok (2) tier_1 모든 flow write 동사 step ≥1 (3) read-only flow ≥1 존재 (4) read-only flow 가 tier_1 에 0개. 자동 검증 4/4 통과: T6.1 시점 발달센터 수동 패치(flow_2/flow_4 tier 2 재분류) 가 prompt-only 로 자동 해결. 1회차 실패 — Sonnet 이 ```json 펜스 + trailing 텍스트로 응답해 종료 펜스 정규식 미매칭 (realestate) → stripJsonFence outer-slice 무조건 적용, 그리고 분류기 false positive (recipe 의 "재료 다중 입력" 의 `입력`, "작성자 프로필" 의 `작성`) → 단독 `입력` 제거 + `작성(?!자)` 부정선후행. 사용자 위임 승인 |
 | 2026-04-27 | T0.3 완료 | 디자인 토큰 추출 유틸 manual-review 통과 (사용자 승인). `worker/test-extract-tokens.ts` 로 5개 도메인 portfolio-1 (발달센터/핀테크/병원/임원 대시보드/커뮤니티) 검증. NO_LLM=1: 4/5 케이스 100% 일치 + 5번(하드코딩 케이스)은 휴리스틱 실패 → graceful fallback 안착 (throw 0). LLM ON: Sonnet 1회 호출(10s, 37 output 토큰)로 5번 케이스도 100% 매칭 → 전체 5/5 = 100%. 빈 HTML 입력에서도 `_source='fallback'` 으로 안전하게 떨어짐 확인. 데모 생성기 모든 task (T0.1~T6.3) 완료 |
+| 2026-09-09 | T8.13 완료 | React 데모의 홈 화면이 "생성 중..." placeholder 로 배포되던 문제 수정. 클라이언트가 링크를 열면 가장 먼저 보는 화면이라 치명적이었다. 원인: foundation 프롬프트가 라우팅 설명과 예시 코드에서는 `HomePage` 를 언급하지만 **"만들어야 할 파일" 목록에 `src/pages/Home.tsx` 항목이 없었다.** LLM 은 Home 을 flow placeholder 와 같은 취급으로 "생성 중..." 만 넣고, Pass 2 는 flow page 만 덮어쓰므로 그대로 배포된다. T8.10 에서 새로 쓴 vue/next 프롬프트는 Home 을 명시 항목으로 넣어 문제가 없었다 — React 프롬프트만의 누락이었다. 수정: 파일 목록에 항목 9 를 추가하고 placeholder 금지 + 덮어쓰지 않는 이유 + 구체 내용(소개 → tier1 카드 그리드 → tier2/3 목록 → 시드 요약 숫자)을 명시, 품질 체크 항목도 추가. 검증: 프롬프트 정적 8항목 + 피해 데모 `260904_webinar-member-site` 재생성(307s) 실측 — 홈이 **126자 placeholder → 613자 정식 화면**(진입 요소 20개·제목 3개·콘솔 에러 0)으로 복구. 교훈: 프롬프트의 산문 설명과 파일 목록이 어긋나면 LLM 은 목록을 따른다 — 요구사항은 목록에 항목으로 있어야 한다. |
 | 2026-09-09 | T8.11 완료 | admin-dashboard / workflow-diagram 폴백 모드. T8.9 에서 만든 모드 조각 구조(`prompts/modes/{mode}.md` 를 시스템 프롬프트 뒤에 덧붙임)를 그대로 재사용해 조각 2개만 추가했다 — 결정론적 보정이 필요한 요소는 없었다(mobile-web 의 프레임 같은 것). admin-dashboard: 백엔드 공고를 "입력 → 처리 → 결과" 운영 대시보드로 시연. 상단 KPI 카드 → 실행 영역 → 결과 → 이력 순서, 0.8~1.5s 가짜 지연으로 처리 중을 연출, 숫자에 증감 맥락 부여. **차트는 스택별 허용 패키지에 있을 때만** — recharts 는 React 계열엔 있지만 vite-vue 엔 없어서, 없으면 CSS 막대/진행바로 그리라고 안내한다(무조건 요구했으면 Vue 스택 빌드가 깨진다). workflow-diagram: 노코드·SaaS 연동 공고를 트리거→단계→결과 세로 다이어그램으로. **순차 점등이 핵심** — 정적인 그림은 인상을 못 준다. mermaid·reactflow·d3 는 런타임에 없으므로 순수 HTML+Tailwind 로 그리게 명시. 자동 검증 30/30: 조각 내용, 4모드 합성(standard byte-identical), **런타임 package.json 을 실제로 읽어** 조각의 패키지 안내가 모순되지 않는지 + 금지 대상이 정말 미설치인지, mobile-web 프레임이 다른 모드에 안 붙는지(대조군 포함). LLM E2E 221s: validate 5항목 통과·콘솔 에러 0, flow 페이지에 KPI 숫자 4개·버튼 5개·table 0개로 조각 지시가 실제 반영됨, body 폭 1440px 로 프레임 미적용 확인. **검증 중 별개 결함 발견 → T8.13 신규 등록**: React 데모의 홈 화면이 "생성 중..." placeholder 로 남는다(T8.10 에서 새로 쓴 vue/next 프롬프트는 Home 을 명시해 문제없음). |
 | 2026-09-09 | T8.9 완료 | demo_mode='mobile-web' 폴백. 모바일 앱 공고를 웹으로 시연하되 화면을 390px 폭에 가두고 가운데 세워 앱으로 인지되게 한다. **프레임은 프롬프트가 아니라 코드로 주입**(`mobile-frame.ts` → 스택별 전역 스타일시트에 append) — Phase 8 내내 확인된 대로 규칙을 부탁하면 확률적으로 빠진다. LLM 에는 프롬프트 조각(`prompts/modes/mobile-web.md`)으로 하단 탭바·세로 스택·44px 터치타깃·가로스크롤 금지 같은 **내용**만 맡겼다. body 자체를 프레임으로 써서 마운트 지점이 다른 3개 스택 모두에 통하고 포털(toast)도 프레임 안에 머문다. 모드 조각은 스택과 직교하므로 프롬프트를 모드×스택으로 복제하지 않고 뒤에 덧붙인다 — 전용 조각이 없는 모드는 경고만 남기고 standard 로 진행해 파이프라인이 멈추지 않는다. 자동 검증 37/37: deriveDemoMode 10케이스, 스택 3종 주입·기존 스타일 보존·부재 시 실패 보고, idempotent, 조각 합성(standard 는 byte-identical), 실제 빌드 + dist CSS 반영 + validate 5항목, 헤드리스 폭 실측(1440px→390px 가운데 / 390px→전체 폭). LLM E2E 201s: 배포본에서 하단 고정 탭바 1개·table 0개·가로스크롤 없음·콘솔 에러 0 확인. **운영 발견**: launchd 워커는 코드 변경을 자동 반영하지 않아 첫 E2E 가 구코드로 돌았다 — 수정 후 `launchctl kickstart -k` 필요. |
 | 2026-09-09 | T8.12 완료 + prod 노출 | 워커 상시화(launchd) + heartbeat. 데모 파이프라인은 맥북 로컬 워커가 처리하는데 워커가 꺼져 있으면 대시보드 버튼을 눌러도 행이 `autorun_queued` 에 영원히 멈추고 사용자는 이유를 알 방법이 없었다 — §8 미결정이던 "워커 오프라인 시 대시보드 UX" 를 여기서 확정. `demo_worker_heartbeat` 단일 행을 워커가 30s 마다 upsert 하고(테이블이 자라지 않음) 대시보드가 authenticated SELECT 로 읽는다. **살아있음 판정은 status 문자열이 아니라 `last_seen_at` 신선도(90s)** — SIGKILL 로 죽으면 'stopping' 을 남길 기회조차 없다. heartbeat 기록 실패는 throw 없이 false 만 반환(heartbeat 때문에 워커가 죽으면 본말전도). 대시보드는 워커가 죽어 있으면 `💤 워커 꺼짐` 비활성 버튼 + title 에 마지막 신호 시각·호스트명을 보여주고, 실패 후 "다시 시도" 도 같은 규칙으로 막는다. `scripts/install-launchd.sh` + plist 템플릿 — RunAtLoad + KeepAlive, ThrottleInterval 30s 로 재시작 폭주 방지, 자격증명은 plist 가 아니라 `.env.local`. 자동 검증 25/25(테이블·권한, 기록·갱신·단일행, 신선도 8케이스 경계값 포함, 주기 갱신·정지, 기록 실패 안전성, plist lint·자리표시자·비밀값 미포함) + 실제 launchd install 후 워커 자동 기동·heartbeat 활성 확인. `GITHUB_TOKEN` 을 `.env.local` 에 추가해 배포 경로까지 완결(push 권한 200/true 확인). **`DEMO_GEN_ENABLED` 제거** — 전제였던 오프라인 문제가 해소돼 데모 생성기 UI 를 실배포 워크룸에 노출한다. 한계: 맥북이 잠들면 워커도 멈춘다(launchd 는 죽은 프로세스를 되살릴 뿐 절전을 이기지 못함). 완전 무인 운영은 상시 서버 필요 — 지금은 heartbeat 로 정직하게 표시하는 쪽을 택했다. |
