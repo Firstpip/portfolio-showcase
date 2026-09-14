@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>실습 컨테이너 인프라 관제 콘솔 — 구현 데모</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P2 — 메인 1 · 서브 3 · 나머지 무채색 (gen-color-tokens.js 산출, hue 108°, dark) ── */
+:root{
+  --m50:#edfde9; --m100:#dbfad4; --m200:#c5f7b9; --m300:#adf49c; --m400:#96f180;
+  --m500:#7fee64; --m600:#68c352; --m700:#519840; --m800:#396b2d; --m900:#396b2d;
+  --n0:#1e201e; --n1:#373a36; --n2:#555a53; --n3:#727a71; --n4:#919890;
+  --n5:#b6bab5; --n6:#d5d7d5; --n7:#e5e6e5; --n8:#eff0ef; --n9:#f7f8f7; --n10:#fcfdfc;
+  --s1:#3bce78; --s1-bg:#183926; --s1-text:#86eaaf;
+  --s2:#ff5c5c; --s2-bg:#391818; --s2-text:#ea8686;
+  --s3:#d6a95c; --s3-bg:#392d18; --s3-text:#eac586;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { width: 100%; height: 100%; }
+body {
+  font-family: 'Pretendard', -apple-system, system-ui, sans-serif;
+  background: var(--n0);
+  color: var(--n9);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.012em;
+}
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input { font-family: inherit; }
+::selection { background: var(--m300); color: #0c1a0e; }
+
+/* ── keyframes (실사용 ≥3) ── */
+@keyframes glowPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(127,238,100,.4); } 50% { box-shadow: 0 0 0 7px rgba(127,238,100,0); } }
+@keyframes spinRing { to { transform: rotate(360deg); } }
+@keyframes riseFade { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes barGrow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes toastSlide { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes dashScroll { to { stroke-dashoffset: -40; } }
+
+/* ── layout: topbar-analytics (sidebar 절대 금지) ── */
+[data-archetype="topbar-analytics"] { min-height: 100vh; width: 100%; display: flex; flex-direction: column; }
+
+.app-header {
+  position: sticky; top: 0; z-index: 20; height: 64px; display: flex; align-items: center; gap: 20px;
+  padding: 0 28px; background: var(--n1); border-bottom: 1px solid var(--n3); backdrop-filter: blur(10px);
+}
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; color: var(--n9); flex-shrink: 0; }
+.brand-icon { width: 30px; height: 30px; border-radius: 8px; background: var(--m500); color: #0c1a0e; display: flex; align-items: center; justify-content: center; position: relative; z-index: 1; }
+.brand-icon::before {
+  content: ''; position: absolute; inset: -9px; border-radius: 50%; z-index: -1;
+  background: radial-gradient(circle, color-mix(in srgb, var(--m500) 32%, transparent) 0%, transparent 72%);
+}
+.brand-icon .pulse-ring { position: absolute; inset: -7px; z-index: -1; }
+.project-switcher {
+  display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--n3);
+  font-size: 12.5px; color: var(--n7); background: var(--n0);
+}
+.project-switcher:hover { border-color: var(--n4); }
+.global-nav { display: flex; align-items: center; gap: 4px; margin-left: 8px; }
+.nav-link { padding: 7px 12px; border-radius: 8px; font-size: 13px; color: var(--n6); }
+.nav-link:hover { color: var(--n9); background: var(--n2); }
+.nav-link.active { color: var(--n9); background: var(--n2); }
+.header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.header-icon-btn { width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--n6); border: 1px solid transparent; position: relative; }
+.header-icon-btn:hover { background: var(--n2); color: var(--n9); }
+.header-icon-btn .ping { position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--s2); }
+.header-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--n2); color: var(--n8); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; border: 1px solid var(--n3); }
+
+.tab-bar { display: flex; align-items: center; gap: 4px; padding: 0 28px; height: 48px; border-bottom: 1px solid var(--n3); background: var(--n0); }
+.tab { display: flex; align-items: center; gap: 7px; padding: 0 4px; height: 100%; font-size: 13px; color: var(--n6); border-bottom: 2px solid transparent; }
+.tab i { font-size: 15px; }
+.tab:hover { color: var(--n8); }
+.tab.active { color: var(--m500); border-bottom-color: var(--m500); font-weight: 500; }
+
+.content { flex: 1; max-width: 1320px; width: 100%; margin: 0 auto; padding: 28px; animation: riseFade 280ms ease-out; }
+.view-head { margin-bottom: 20px; }
+.view-title { font-size: 22px; font-weight: 600; color: var(--n9); margin-bottom: 5px; letter-spacing: -0.015em; }
+.view-sub { font-size: 13px; color: var(--n5); }
+
+/* ── composition: command-tower (main 화면) ── */
+.status-strip { display: flex; gap: 0; border: 1px solid var(--n3); border-radius: 8px; background: var(--n1); margin-bottom: 20px; overflow: hidden; }
+.stat-chip { flex: 1; padding: 14px 20px; border-right: 1px solid var(--n3); display: flex; flex-direction: column; gap: 4px; }
+.stat-chip:last-child { border-right: none; }
+.stat-chip .stat-label { font-size: 11px; color: var(--n5); display: flex; align-items: center; gap: 5px; }
+.stat-chip .stat-value { font-size: 26px; font-weight: 600; color: var(--n9); font-variant-numeric: tabular-nums; }
+.stat-chip .stat-value.hero { font-size: 38px; color: var(--m500); }
+.stat-chip .stat-trend { font-size: 11px; color: var(--n5); }
+.stat-chip .stat-trend.err { color: var(--s2-text); }
+
+.tower-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; margin-bottom: 18px; }
+.panel {
+  background: var(--n1); border: 1px solid var(--n3); border-radius: 8px; padding: 22px;
+  transition: box-shadow 200ms, border-color 200ms;
+}
+.panel:hover { border-color: var(--n4); box-shadow: 0 0 0 1px var(--n3), 0 8px 28px -10px rgba(127,238,100,.12); }
+.panel-title { font-size: 14px; font-weight: 600; color: var(--n8); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+.panel-title i { color: var(--n5); font-size: 16px; }
+.panel-title .count-pill { margin-left: auto; font-size: 11px; color: var(--n5); font-weight: 400; }
+
+.board { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+.board-col-head { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--n6); margin-bottom: 10px; font-weight: 500; }
+.board-col-head .cdot { width: 7px; height: 7px; border-radius: 50%; }
+.board-col-head .cdot.run { background: var(--m500); }
+.board-col-head .cdot.wait { background: var(--n4); }
+.board-col-head .cdot.err { background: var(--s2); }
+.board-card {
+  background: var(--n0); border: 1px solid var(--n3); border-radius: 8px; padding: 12px; margin-bottom: 10px;
+  font-size: 12px; display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left;
+}
+.board-card:hover { border-color: var(--n4); }
+.board-card .bc-top { display: flex; align-items: center; justify-content: space-between; }
+.board-card .bc-name { color: var(--n8); font-weight: 500; }
+.board-card .bc-id { color: var(--n5); font-family: ui-monospace, monospace; font-size: 10.5px; }
+.mono-chip {
+  display: inline-block; padding: 2px 7px; border-radius: 4px; background: #231c1c; color: #ddffdc;
+  font-family: ui-monospace, monospace; font-size: 10.5px; letter-spacing: 0;
+}
+.board-card .bc-meta { display: flex; align-items: center; gap: 5px; color: var(--n5); font-size: 11px; }
+.board-card.running .bc-meta .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--m500); animation: glowPulse 1.6s ease-out infinite; }
+.board-card.err { border-color: rgba(255,92,92,.3); }
+
+.priority-rail { display: flex; flex-direction: column; gap: 10px; }
+.pr-item { display: flex; gap: 10px; padding: 12px; border-radius: 8px; background: var(--n0); border: 1px solid var(--n3); align-items: flex-start; }
+.pr-item .pr-icon { width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; background: var(--n2); color: var(--n6); }
+.pr-item.crit .pr-icon { background: var(--s2-bg); color: var(--s2-text); }
+.pr-item.warn .pr-icon { background: var(--s3-bg); color: var(--s3-text); }
+.pr-item .pr-body { flex: 1; min-width: 0; }
+.pr-item .pr-title { font-size: 12.5px; color: var(--n8); font-weight: 500; margin-bottom: 2px; }
+.pr-item .pr-desc { font-size: 11px; color: var(--n5); }
+.pr-item .pr-action { margin-left: auto; flex-shrink: 0; font-size: 11px; color: var(--m500); padding: 4px 9px; border: 1px solid var(--m700); border-radius: 6px; }
+.pr-item .pr-action:hover { background: rgba(127,238,100,.08); }
+
+.secondary-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.ring-wrap { display: flex; align-items: center; gap: 16px; }
+.ring-num { font-size: 24px; font-weight: 600; color: var(--n9); }
+.spark-wrap svg { display: block; }
+
+/* ── 공용 컴포넌트 ── */
+.card { background: var(--n1); border: 1px solid var(--n3); border-radius: 8px; padding: 22px; }
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 20px; font-size: 11.5px; font-weight: 500; }
+.badge.ok { background: var(--s1-bg); color: var(--s1-text); }
+.badge.err { background: var(--s2-bg); color: var(--s2-text); }
+.badge.warn { background: var(--s3-bg); color: var(--s3-text); }
+.badge.neutral { background: var(--n2); color: var(--n6); }
+.badge i { font-size: 12px; }
+
+.btn-primary {
+  padding: 9px 16px; border-radius: 12px; background: var(--m500); color: #0c1a0e; font-size: 13px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 7px; transition: background 200ms;
+}
+.btn-primary:hover { background: var(--m400); }
+.btn-primary:disabled { opacity: .5; cursor: default; }
+.btn-outline {
+  padding: 8px 14px; border-radius: 12px; border: 1px solid var(--n4); color: var(--n8); font-size: 13px;
+  display: inline-flex; align-items: center; gap: 7px; background: transparent;
+}
+.btn-outline:hover { border-color: var(--n5); background: var(--n2); }
+.btn-ghost { padding: 6px 10px; border-radius: 8px; font-size: 12.5px; color: var(--n6); display: inline-flex; align-items: center; gap: 6px; }
+.btn-ghost:hover { color: var(--n9); background: var(--n2); }
+
+.table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table th { text-align: left; font-size: 10.5px; color: var(--n5); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 10px 12px; border-bottom: 1px solid var(--n3); }
+.table td { padding: 12px; border-bottom: 1px solid var(--n2); color: var(--n8); vertical-align: middle; }
+.table tr:last-child td { border-bottom: none; }
+.table tr:hover td { background: rgba(255,255,255,.015); }
+
+.resource-bar-track { width: 100%; height: 6px; border-radius: 6px; background: var(--n2); overflow: hidden; }
+.resource-bar-fill { height: 100%; border-radius: 6px; background: var(--m500); transform-origin: left; animation: barGrow 700ms ease-out; }
+.resource-bar-fill.hot { background: var(--s3); }
+.resource-bar-fill.crit { background: var(--s2); }
+
+.chart-wrap { position: relative; height: 240px; width: 100%; }
+
+.spinner { width: 14px; height: 14px; border: 2px solid var(--n3); border-top-color: var(--m500); border-radius: 50%; animation: spinRing 700ms linear infinite; display: inline-block; }
+
+.toggle { width: 38px; height: 22px; border-radius: 20px; background: var(--n2); border: 1px solid var(--n3); position: relative; flex-shrink: 0; transition: background 160ms; }
+.toggle .knob { width: 16px; height: 16px; border-radius: 50%; background: var(--n6); position: absolute; top: 2px; left: 2px; transition: transform 160ms, background 160ms; }
+.toggle.on { background: rgba(127,238,100,.16); border-color: var(--m700); }
+.toggle.on .knob { transform: translateX(16px); background: var(--m500); }
+
+.slider-row { display: flex; align-items: center; gap: 14px; }
+.slider-row input[type=range] { flex: 1; accent-color: var(--m500); }
+.slider-val { font-size: 13px; font-weight: 600; color: var(--n9); min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
+
+.checklist-row { display: flex; align-items: center; gap: 12px; padding: 10px 4px; border-bottom: 1px solid var(--n2); }
+.checklist-row:last-child { border-bottom: none; }
+.checkbox { width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--n4); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.checkbox.checked { background: var(--m500); border-color: var(--m500); color: #0c1a0e; }
+
+.progress-track { width: 100%; height: 8px; border-radius: 8px; background: var(--n2); overflow: hidden; }
+.progress-fill { height: 100%; background: var(--m500); border-radius: 8px; transition: width 200ms linear; }
+
+.route-conflict { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px; background: var(--s3-bg); color: var(--s3-text); font-size: 12px; margin-bottom: 12px; }
+
+.toast {
+  position: fixed; bottom: 24px; right: 24px; background: var(--n2); color: var(--n9); border: 1px solid var(--n4);
+  padding: 12px 16px; border-radius: 10px; font-size: 13px; display: flex; align-items: center; gap: 9px;
+  animation: toastSlide 220ms ease-out; box-shadow: rgba(0,0,0,.4) 0px 12px 28px 0px; z-index: 200;
+}
+.toast i { color: var(--m500); font-size: 16px; }
+
+@media (max-width: 1100px) {
+  .tower-grid, .secondary-row { grid-template-columns: 1fr; }
+  .board { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div id="app-root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+function Icon({ name, className, style }) {
+  return <i className={'ph ph-' + name + (className ? ' ' + className : '')} style={style}></i>;
+}
+
+const TABS = [
+  { id: 'main', label: '관제 현황', icon: 'gauge' },
+  { id: 'resource-monitor', label: '학생 접속 & 리소스 사용량 모니터링', icon: 'chart-line' },
+  { id: 'bulk-reclaim', label: '일괄 컨테이너 회수 & 타임아웃 정책', icon: 'stack' },
+  { id: 'security-proxy', label: '보안 격리 & 프록시 라우팅 설정', icon: 'shield-check' },
+];
+
+const CLASSROOMS = [
+  { name: '파이썬 기초반 A', running: 7, waiting: 1, err: 0 },
+  { name: '파이썬 기초반 B', running: 5, waiting: 2, err: 1 },
+  { name: '데이터 분석 심화반', running: 4, waiting: 0, err: 0 },
+];
+
+const RUNNING_CONTAINERS = [
+  { name: '김민수', id: 'ctn-a1f3', elapsed: '12분', status: 'running' },
+  { name: '이지은', id: 'ctn-b8e2', elapsed: '9분', status: 'running' },
+  { name: '최유나', id: 'ctn-c2d1', elapsed: '21분', status: 'running' },
+];
+const WAITING_CONTAINERS = [
+  { name: '정하윤', id: '—', elapsed: '대기', status: 'waiting' },
+  { name: '오태양', id: '—', elapsed: '대기', status: 'waiting' },
+];
+const ERR_CONTAINERS = [
+  { name: '박서준', id: 'ctn-d9a4', elapsed: '2분 응답없음', status: 'err' },
+];
+
+const PRIORITY_QUEUE = [
+  { level: 'crit', icon: 'warning-octagon', title: '박서준 컨테이너 응답 없음', desc: '헬스체크 2회 연속 실패 · ctn-d9a4', action: '재생성' },
+  { level: 'warn', icon: 'cpu', title: '이지은 컨테이너 CPU 92%', desc: '임계치 초과 지속 40초 · ctn-b8e2', action: '확인' },
+  { level: 'warn', icon: 'clock', title: '무입력 컨테이너 3건', desc: '10시간 경과 · 2시간 후 자동 종료', action: '연장' },
+];
+
+const RESOURCE_ROWS = [
+  { name: '김민수', id: 'ctn-a1f3', cpu: 34, mem: 41 },
+  { name: '이지은', id: 'ctn-b8e2', cpu: 92, mem: 58 },
+  { name: '최유나', id: 'ctn-c2d1', cpu: 21, mem: 33 },
+  { name: '박서준', id: 'ctn-d9a4', cpu: 0, mem: 12 },
+];
+
+const PROXY_ROUTES = [
+  { ctn: 'ctn-a1f3', path: '/preview/a1f3/', target: ':8501', conflict: false },
+  { ctn: 'ctn-b8e2', path: '/preview/b8e2/', target: ':8501', conflict: false },
+  { ctn: 'ctn-c2d1', path: '/preview/c2d1/', target: ':8501', conflict: false },
+  { ctn: 'ctn-d9a4', path: '/preview/a1f3/', target: ':8501', conflict: true },
+];
+
+function Toast({ toast }) {
+  if (!toast) return null;
+  return <div className="toast"><Icon name="check-circle" />{toast}</div>;
+}
+
+function Sparkline({ points, color }) {
+  const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${i * (140 / (points.length - 1))} ${40 - p * 0.32}`).join(' ');
+  return (
+    <svg width="140" height="42" className="spark-wrap">
+      <path d={path} fill="none" stroke={color || 'var(--m500)'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function Ring({ pct }) {
+  const r = 26, c = 2 * Math.PI * r;
+  return (
+    <svg width="64" height="64" viewBox="0 0 64 64">
+      <circle cx="32" cy="32" r={r} fill="none" stroke="var(--n3)" strokeWidth="6" />
+      <circle cx="32" cy="32" r={r} fill="none" stroke="var(--m500)" strokeWidth="6" strokeLinecap="round"
+        strokeDasharray={c} strokeDashoffset={c - (pct / 100) * c} transform="rotate(-90 32 32)" />
+    </svg>
+  );
+}
+
+function MainScreen({ onAction }) {
+  return (
+    <div>
+      <div className="view-head">
+        <div className="view-title">실시간 컨테이너 관제 현황판</div>
+        <div className="view-sub">현재 실행 중인 학생별 컨테이너 상태를 상태바·보드·우선순위 큐로 한눈에 확인합니다</div>
+      </div>
+
+      {/* status-strip */}
+      <div className="status-strip">
+        <div className="stat-chip">
+          <span className="stat-label"><Icon name="play-circle" />실행 중 컨테이너</span>
+          <span className="stat-value hero">16</span>
+        </div>
+        <div className="stat-chip">
+          <span className="stat-label"><Icon name="users-three" />접속 학생</span>
+          <span className="stat-value">16 / 22</span>
+          <span className="stat-trend">여유분 6개 유지</span>
+        </div>
+        <div className="stat-chip">
+          <span className="stat-label"><Icon name="warning" />오류 컨테이너</span>
+          <span className="stat-value">1</span>
+          <span className="stat-trend err">자동 복구 대기 중</span>
+        </div>
+        <div className="stat-chip">
+          <span className="stat-label"><Icon name="timer" />평균 가동시간</span>
+          <span className="stat-value">14분</span>
+        </div>
+      </div>
+
+      {/* primary-focus + priority-rail */}
+      <div className="tower-grid">
+        <div className="panel">
+          <div className="panel-title"><Icon name="squares-four" />실시간 관제 보드<span className="count-pill">3개 강의실 · 13개 컨테이너</span></div>
+          <div className="board">
+            <div>
+              <div className="board-col-head"><span className="cdot run" />실행 중 ({RUNNING_CONTAINERS.length})</div>
+              {RUNNING_CONTAINERS.map((c, i) => (
+                <button key={i} className="board-card running" onClick={() => onAction(`${c.name} 컨테이너 상세 정보를 확인합니다`)}>
+                  <div className="bc-top"><span className="bc-name">{c.name}</span><span className="mono-chip">{c.id}</span></div>
+                  <div className="bc-meta"><span className="live-dot" />{c.elapsed} 경과</div>
+                </button>
+              ))}
+            </div>
+            <div>
+              <div className="board-col-head"><span className="cdot wait" />대기 중 ({WAITING_CONTAINERS.length})</div>
+              {WAITING_CONTAINERS.map((c, i) => (
+                <button key={i} className="board-card" onClick={() => onAction(`${c.name} 학생은 아직 미접속 상태입니다`)}>
+                  <div className="bc-top"><span className="bc-name">{c.name}</span><span className="bc-id">미생성</span></div>
+                  <div className="bc-meta"><Icon name="hourglass" />입장 대기</div>
+                </button>
+              ))}
+            </div>
+            <div>
+              <div className="board-col-head"><span className="cdot err" />오류 ({ERR_CONTAINERS.length})</div>
+              {ERR_CONTAINERS.map((c, i) => (
+                <button key={i} className="board-card err" onClick={() => onAction(`${c.name} 컨테이너 재생성을 큐에 등록했습니다`)}>
+                  <div className="bc-top"><span className="bc-name">{c.name}</span><span className="mono-chip">{c.id}</span></div>
+                  <div className="bc-meta" style={{ color: 'var(--s2-text)' }}><Icon name="warning-circle" />{c.elapsed}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-title"><Icon name="list-magnifying-glass" />우선 대응 큐</div>
+          <div className="priority-rail">
+            {PRIORITY_QUEUE.map((p, i) => (
+              <div className={'pr-item ' + p.level} key={i}>
+                <div className="pr-icon"><Icon name={p.icon} /></div>
+                <div className="pr-body">
+                  <div className="pr-title">{p.title}</div>
+                  <div className="pr-desc">{p.desc}</div>
+                </div>
+                <button className="pr-action" onClick={() => onAction(`"${p.title}" 항목을 처리했습니다`)}>{p.action}</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* secondary */}
+      <div className="secondary-row">
+        <div className="card">
+          <div className="panel-title" style={{ marginBottom: 14 }}><Icon name="chart-donut" />컨테이너 사용률</div>
+          <div className="ring-wrap">
+            <Ring pct={73} />
+            <div>
+              <div className="ring-num">16 / 22</div>
+              <div style={{ fontSize: 11.5, color: 'var(--n5)' }}>정원 대비 73% 사용 중</div>
+            </div>
+          </div>
+        </div>
+        <div className="card">
+          <div className="panel-title" style={{ marginBottom: 14 }}><Icon name="trend-up" />지난 1시간 접속 추이</div>
+          <div className="ring-wrap">
+            <Sparkline points={[4, 6, 5, 9, 12, 10, 14, 16]} />
+            <div>
+              <div className="ring-num">+12명</div>
+              <div style={{ fontSize: 11.5, color: 'var(--n5)' }}>09:00 대비 접속 증가</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResourceMonitorScreen({ selected, setSelected, onAction }) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  const row = RESOURCE_ROWS.find(r => r.id === selected) || RESOURCE_ROWS[0];
+
+  useEffect(() => {
+    if (!canvasRef.current || !window.Chart) return;
+    if (chartRef.current) chartRef.current.destroy();
+    const labels = ['-5분', '-4분', '-3분', '-2분', '-1분', '현재'];
+    const base = row.cpu;
+    const cpuData = labels.map((_, i) => Math.max(4, base - (labels.length - 1 - i) * (base / 9) + (i % 2 ? 4 : -3)));
+    const memData = labels.map((_, i) => Math.max(4, row.mem - (labels.length - 1 - i) * 1.4));
+    chartRef.current = new window.Chart(canvasRef.current, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: 'CPU %', data: cpuData, borderColor: '#7fee64', backgroundColor: 'rgba(127,238,100,.12)', fill: true, tension: 0.35, pointRadius: 0, borderWidth: 2 },
+          { label: 'Memory %', data: memData, borderColor: '#919890', backgroundColor: 'rgba(145,152,144,.08)', fill: true, tension: 0.35, pointRadius: 0, borderWidth: 2 },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#d5d7d5', boxWidth: 10, font: { size: 11 } } } },
+        scales: {
+          x: { ticks: { color: '#727a71', font: { size: 10.5 } }, grid: { color: '#373a36' } },
+          y: { ticks: { color: '#727a71', font: { size: 10.5 } }, grid: { color: '#373a36' }, min: 0, max: 100 },
+        },
+      },
+    });
+    return () => { if (chartRef.current) chartRef.current.destroy(); };
+  }, [selected]);
+
+  return (
+    <div>
+      <div className="view-head">
+        <div className="view-title">학생 접속 &amp; 리소스 사용량 모니터링</div>
+        <div className="view-sub">강의실별 학생 접속 현황과 컨테이너별 CPU·메모리 사용량을 실시간 그래프로 확인합니다</div>
+      </div>
+      <div className="tower-grid">
+        <div className="panel">
+          <div className="panel-title"><Icon name="chart-line" />{row.name} — 최근 5분 리소스 추이</div>
+          <div className="chart-wrap"><canvas ref={canvasRef}></canvas></div>
+        </div>
+        <div className="panel">
+          <div className="panel-title"><Icon name="rows" />컨테이너별 사용량<span className="count-pill">클릭하여 조회</span></div>
+          {RESOURCE_ROWS.map(r => (
+            <button key={r.id} className="board-card" style={{ marginBottom: 10, borderColor: selected === r.id ? 'var(--m600)' : 'var(--n3)' }} onClick={() => setSelected(r.id)}>
+              <div className="bc-top"><span className="bc-name">{r.name}</span><span className="mono-chip">{r.id}</span></div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: 'var(--n5)' }}><span>CPU</span><span>{r.cpu}%</span></div>
+                <div className="resource-bar-track"><div className={'resource-bar-fill' + (r.cpu >= 90 ? ' crit' : r.cpu >= 70 ? ' hot' : '')} style={{ width: r.cpu + '%' }} /></div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="card">
+        <div className="panel-title"><Icon name="table" />강의실별 접속 현황</div>
+        <table className="table">
+          <thead><tr><th>강의실</th><th>실행 중</th><th>대기</th><th>오류</th><th>작업</th></tr></thead>
+          <tbody>
+            {CLASSROOMS.map((c, i) => (
+              <tr key={i}>
+                <td>{c.name}</td>
+                <td><span className="badge ok"><Icon name="check" />{c.running}</span></td>
+                <td><span className="badge neutral">{c.waiting}</span></td>
+                <td>{c.err > 0 ? <span className="badge err"><Icon name="warning" />{c.err}</span> : <span className="badge neutral">0</span>}</td>
+                <td><button className="btn-ghost" onClick={() => onAction(`${c.name} 강의실 상세 리소스 리포트를 열었습니다`)}><Icon name="magnifying-glass" />상세보기</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function BulkReclaimScreen({ onAction }) {
+  const [checked, setChecked] = useState(CLASSROOMS.map(() => true));
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [timeout, setTimeoutH] = useState(12);
+  const [failedRetry, setFailedRetry] = useState(false);
+
+  function toggleAll() {
+    const allOn = checked.every(Boolean);
+    setChecked(checked.map(() => !allOn));
+  }
+  function toggleOne(i) {
+    setChecked(checked.map((c, idx) => idx === i ? !c : c));
+  }
+
+  function runBulkReclaim() {
+    if (running) return;
+    setRunning(true); setProgress(0); setFailedRetry(false);
+    const timer = setInterval(() => {
+      setProgress(p => {
+        const next = p + 14;
+        if (next >= 100) {
+          clearInterval(timer);
+          setRunning(false);
+          setFailedRetry(true);
+          onAction('일괄 회수 완료 — 12개 정상 종료, 1개 재시도 큐로 이동');
+          return 100;
+        }
+        return next;
+      });
+    }, 260);
+  }
+
+  return (
+    <div>
+      <div className="view-head">
+        <div className="view-title">일괄 컨테이너 회수 &amp; 타임아웃 정책</div>
+        <div className="view-sub">수업 종료 시 전체 컨테이너를 큐 기반으로 안전하게 회수하고, 무입력 타임아웃 정책을 관리합니다</div>
+      </div>
+      <div className="tower-grid">
+        <div className="panel">
+          <div className="panel-title"><Icon name="stack" />일괄 회수 대상 선택<span className="count-pill">{checked.filter(Boolean).length} / {CLASSROOMS.length}개 강의실</span></div>
+          {CLASSROOMS.map((c, i) => (
+            <div className="checklist-row" key={i}>
+              <button className={'checkbox' + (checked[i] ? ' checked' : '')} onClick={() => toggleOne(i)}>{checked[i] && <Icon name="check" style={{ fontSize: 12 }} />}</button>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, color: 'var(--n8)' }}>{c.name}</div>
+                <div style={{ fontSize: 11, color: 'var(--n5)' }}>실행 중 {c.running} · 대기 {c.waiting} · 오류 {c.err}</div>
+              </div>
+            </div>
+          ))}
+          <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+            <button className="btn-outline" onClick={toggleAll}><Icon name="check-square" />전체 {checked.every(Boolean) ? '해제' : '선택'}</button>
+            <button className="btn-primary" onClick={runBulkReclaim} disabled={running}>
+              {running ? <span className="spinner" /> : <Icon name="power" />}
+              {running ? `회수 진행 중 ${progress}%` : '일괄 회수 실행'}
+            </button>
+          </div>
+          {(running || progress > 0) && (
+            <div style={{ marginTop: 14 }}>
+              <div className="progress-track"><div className="progress-fill" style={{ width: progress + '%' }} /></div>
+            </div>
+          )}
+          {failedRetry && (
+            <div className="pr-item warn" style={{ marginTop: 14 }}>
+              <div className="pr-icon"><Icon name="arrow-counter-clockwise" /></div>
+              <div className="pr-body">
+                <div className="pr-title">1개 컨테이너 회수 실패 — 재시도 큐로 분리됨</div>
+                <div className="pr-desc">ctn-d9a4 · 나머지 12개는 정상 종료되어 전체 작업에 영향 없음</div>
+              </div>
+              <button className="pr-action" onClick={() => { setFailedRetry(false); onAction('실패 항목을 재시도 큐에서 재처리했습니다'); }}>재시도</button>
+            </div>
+          )}
+        </div>
+        <div className="panel">
+          <div className="panel-title"><Icon name="timer" />무입력 타임아웃 정책</div>
+          <div style={{ fontSize: 12, color: 'var(--n5)', marginBottom: 16 }}>설정 값을 변경하면 신규 적용 대상 컨테이너부터 즉시 반영됩니다</div>
+          <div className="slider-row">
+            <input type="range" min="1" max="24" value={timeout} onChange={e => setTimeoutH(Number(e.target.value))} />
+            <span className="slider-val">{timeout}시간</span>
+          </div>
+          <button className="btn-outline" style={{ marginTop: 16, width: '100%', justifyContent: 'center' }} onClick={() => onAction(`무입력 타임아웃이 ${timeout}시간으로 저장되었습니다`)}>
+            <Icon name="floppy-disk" />정책 저장
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SecurityProxyScreen({ onAction }) {
+  const [inbound, setInbound] = useState(CLASSROOMS.map(() => true));
+  const [cpu, setCpu] = useState(50);
+  const [mem, setMem] = useState(60);
+
+  return (
+    <div>
+      <div className="view-head">
+        <div className="view-title">보안 격리 &amp; 프록시 라우팅 설정</div>
+        <div className="view-sub">컨테이너 인바운드 차단, 프록시 노출 경로, cgroup 리소스 제한 정책을 확인하고 조정합니다</div>
+      </div>
+      <div className="tower-grid">
+        <div className="panel">
+          <div className="panel-title"><Icon name="lock-key" />강의실별 인바운드 차단 정책</div>
+          {CLASSROOMS.map((c, i) => (
+            <div className="checklist-row" key={i}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, color: 'var(--n8)' }}>{c.name}</div>
+                <div style={{ fontSize: 11, color: 'var(--n5)' }}>외부 인바운드 전체 차단 · 프록시 경유만 노출</div>
+              </div>
+              <button className={'toggle' + (inbound[i] ? ' on' : '')} onClick={() => { setInbound(inbound.map((v, idx) => idx === i ? !v : v)); onAction(`${c.name} 인바운드 차단을 ${inbound[i] ? '해제' : '적용'}했습니다`); }}>
+                <span className="knob" />
+              </button>
+            </div>
+          ))}
+          <div className="panel-title" style={{ marginTop: 22 }}><Icon name="sliders" />cgroup 리소스 제한</div>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--n6)', marginBottom: 6 }}><span>CPU 제한</span><span>{cpu}%</span></div>
+            <div className="slider-row"><input type="range" min="10" max="100" value={cpu} onChange={e => setCpu(Number(e.target.value))} /></div>
+          </div>
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--n6)', marginBottom: 6 }}><span>메모리 제한</span><span>{mem}%</span></div>
+            <div className="slider-row"><input type="range" min="10" max="100" value={mem} onChange={e => setMem(Number(e.target.value))} /></div>
+          </div>
+          <button className="btn-primary" style={{ marginTop: 14 }} onClick={() => onAction(`cgroup 제한이 CPU ${cpu}% · 메모리 ${mem}%로 적용되었습니다`)}>
+            <Icon name="check" />변경사항 저장
+          </button>
+        </div>
+        <div className="panel">
+          <div className="panel-title"><Icon name="arrows-left-right" />프록시 라우팅 규칙</div>
+          <div className="route-conflict"><Icon name="warning" />경로 충돌 감지 — ctn-d9a4가 ctn-a1f3과 동일 경로를 사용 중입니다</div>
+          <table className="table">
+            <thead><tr><th>컨테이너</th><th>경로</th><th>대상</th></tr></thead>
+            <tbody>
+              {PROXY_ROUTES.map((r, i) => (
+                <tr key={i}>
+                  <td><span className="mono-chip">{r.ctn}</span></td>
+                  <td style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12, color: r.conflict ? 'var(--s2-text)' : 'var(--n8)' }}>{r.path}</td>
+                  <td>
+                    {r.conflict
+                      ? <button className="btn-ghost" style={{ color: 'var(--s2-text)' }} onClick={() => onAction(`${r.ctn} 경로 충돌을 새 경로로 자동 재배정했습니다`)}><Icon name="warning-circle" />충돌 해결</button>
+                      : <span className="badge ok"><Icon name="check" />정상</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [tab, setTab] = useState('main');
+  const [toast, setToast] = useState(null);
+  const [selectedResource, setSelectedResource] = useState('ctn-b8e2');
+
+  function showToast(msg) { setToast(msg); setTimeout(() => setToast(null), 2400); }
+
+  return (
+    <div data-archetype="topbar-analytics">
+      <header className="app-header">
+        <div className="brand">
+          <div className="brand-icon">
+            <svg className="pulse-ring" width="44" height="44" viewBox="0 0 44 44">
+              <circle cx="22" cy="22" r="19" fill="none" stroke="var(--m500)" strokeWidth="1.5" strokeDasharray="4 5" opacity="0.55" style={{ animation: 'dashScroll 3.5s linear infinite' }} />
+            </svg>
+            <Icon name="terminal-window" />
+          </div>
+          Square Learning 관제
+        </div>
+        <button className="project-switcher" onClick={() => showToast('실습 인프라 프로젝트 전환 목록을 열었습니다')}>
+          실습 인프라 <Icon name="caret-down" />
+        </button>
+        <nav className="global-nav">
+          <button className="nav-link active" onClick={() => setTab('main')}>개요</button>
+          <button className="nav-link" onClick={() => showToast('운영 히스토리 로그를 확인합니다')}>히스토리</button>
+        </nav>
+        <div className="header-actions">
+          <button className="header-icon-btn" onClick={() => showToast('전체 컨테이너 검색을 엽니다')}><Icon name="magnifying-glass" /></button>
+          <button className="header-icon-btn" onClick={() => showToast('알림 1건 — 박서준 컨테이너 응답 없음')}><Icon name="bell" /><span className="ping" /></button>
+          <div className="header-avatar">강</div>
+        </div>
+      </header>
+
+      <nav className="tab-bar">
+        {TABS.map(t => (
+          <button key={t.id} className={'tab' + (tab === t.id ? ' active' : '')} onClick={() => setTab(t.id)}>
+            <Icon name={t.icon} />{t.label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="content" key={tab}>
+        {tab === 'main' && <MainScreen onAction={showToast} />}
+        {tab === 'resource-monitor' && <ResourceMonitorScreen selected={selectedResource} setSelected={setSelectedResource} onAction={showToast} />}
+        {tab === 'bulk-reclaim' && <BulkReclaimScreen onAction={showToast} />}
+        {tab === 'security-proxy' && <SecurityProxyScreen onAction={showToast} />}
+      </div>
+
+      <Toast toast={toast} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('app-root')).render(<App />);
+</script>
+</body>
+</html>
