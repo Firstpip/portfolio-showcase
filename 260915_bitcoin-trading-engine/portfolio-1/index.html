@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>오르빗데스크 — 자동매매 주문 실행 관제</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P1 — 메인 1 · 서브 2 · 나머지 무채색 (gen-color-tokens.js 산출, hue 22°, light) ── */
+:root{
+  --m50:#fff4ed; --m100:#fee8db; --m200:#fed2b8; --m300:#fdb68c; --m400:#fc975c;
+  --m500:#fb7a2e; --m600:#fa5d00; --m700:#cd4c00; --m800:#a03c00; --m900:#712a00;
+  --n0:#fff8f1; --n1:#ffffff; --n2:#f0f0ef; --n3:#e6e5e5; --n4:#d7d6d5;
+  --n5:#bab7b5; --n6:#989390; --n7:#7a7471; --n8:#615f5c; --n9:#3a3836; --n10:#1d1e1c;
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b;
+  --s2:#cf3f3f; --s2-bg:#f9e7e7; --s2-text:#ad1f1f;
+  --radius:20px; --radius-sm:12px;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+html,body{height:100%;}
+body{
+  font-family:'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
+  background:var(--n0);
+  color:var(--n10);
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+button{font-family:inherit; cursor:pointer; border:none; background:none;}
+input{font-family:inherit;}
+::-webkit-scrollbar{width:8px; height:8px;}
+::-webkit-scrollbar-thumb{background:var(--n4); border-radius:8px;}
+
+@keyframes fadeSlideIn{ from{opacity:0; transform:translateY(10px);} to{opacity:1; transform:translateY(0);} }
+@keyframes pulseDot{ 0%,100%{box-shadow:0 0 0 0 rgba(31,137,75,.45);} 50%{box-shadow:0 0 0 6px rgba(31,137,75,0);} }
+@keyframes countUpFade{ from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);} }
+@keyframes shimmerSweep{ 0%{background-position:-200px 0;} 100%{background-position:200px 0;} }
+@keyframes ripple{ from{transform:scale(0); opacity:.55;} to{transform:scale(2.6); opacity:0;} }
+@keyframes toastIn{ from{opacity:0; transform:translate(-50%,16px);} to{opacity:1; transform:translate(-50%,0);} }
+@keyframes spinSlow{ from{transform:rotate(0);} to{transform:rotate(360deg);} }
+
+.app{display:flex; min-height:100vh;}
+
+/* ── 시그니처 1: 사이드바 240px ── */
+.sidebar{
+  width:240px; min-width:240px; background:var(--n1); border-right:1px solid var(--n3);
+  display:flex; flex-direction:column; padding:20px 14px; gap:22px;
+}
+.sidebar-brand{display:flex; align-items:center; gap:10px; padding:4px 8px 12px;}
+.brand-mark{
+  width:34px; height:34px; border-radius:10px; background:var(--m600);
+  display:flex; align-items:center; justify-content:center; color:#fff; flex-shrink:0;
+}
+.brand-name{font-weight:800; font-size:15px; letter-spacing:-.2px;}
+.brand-sub{font-size:11px; color:var(--n7); margin-top:1px;}
+.env-toggle{
+  display:flex; align-items:center; gap:8px; background:var(--n2); border-radius:999px;
+  padding:6px 10px; font-size:12px; color:var(--n8); font-weight:600;
+}
+.env-dot{width:7px; height:7px; border-radius:50%; background:var(--s1); animation:pulseDot 2.2s infinite;}
+.sidebar-section{display:flex; flex-direction:column; gap:2px;}
+.sidebar-section-title{font-size:11px; font-weight:700; color:var(--n6); text-transform:uppercase; letter-spacing:.06em; padding:6px 10px 4px;}
+.sidebar-link{
+  display:flex; align-items:center; gap:10px; padding:10px 10px; border-radius:10px;
+  font-size:13px; color:var(--n8); font-weight:600; text-align:left; width:100%; line-height:1.3;
+  transition:background .15s, color .15s;
+}
+.sidebar-link:hover{background:var(--n2);}
+.sidebar-link.active{background:var(--m50); color:var(--m700);}
+.sidebar-link.active svg{color:var(--m600);}
+.sidebar-link svg{width:17px; height:17px; flex-shrink:0; color:var(--n6);}
+.sidebar-foot{margin-top:auto; padding:12px 10px; border-top:1px solid var(--n3); font-size:11px; color:var(--n6);}
+
+/* ── main ── */
+.main{flex:1; min-width:0; padding:26px 32px 60px; animation:fadeSlideIn .35s ease;}
+.page-header{display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:20px; flex-wrap:wrap;}
+.page-title-row h1{font-size:38px; font-weight:800; letter-spacing:-.8px; line-height:1.15;}
+.page-meta{font-size:12.5px; color:var(--n7); margin-top:4px;}
+.page-actions{display:flex; gap:8px; flex-wrap:wrap;}
+.btn{
+  position:relative; overflow:hidden; padding:9px 16px; border-radius:var(--radius-sm); font-size:13px; font-weight:700;
+  display:inline-flex; align-items:center; gap:6px; transition:transform .12s, box-shadow .15s;
+}
+.btn:active{transform:scale(.97);}
+.btn-primary{background:var(--m600); color:#fff; box-shadow:0 6px 16px -6px rgba(250,93,0,.55);}
+.btn-primary:hover{background:var(--m700);}
+.btn-secondary{background:var(--n1); color:var(--n9); border:1px solid var(--n4);}
+.btn-secondary:hover{background:var(--n2);}
+.btn-ghost{background:transparent; color:var(--n8); border:1px solid var(--n3);}
+.btn-ghost:hover{background:var(--n2);}
+
+.ripple-el{position:absolute; border-radius:50%; background:#fff; pointer-events:none; animation:ripple .55s ease-out;}
+
+/* ── 시그니처 2: KPI stat-row ── */
+.stat-row{display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:22px;}
+.stat-card{
+  background:var(--n1); border:1px solid var(--n3); border-radius:16px; padding:18px 20px;
+  display:flex; flex-direction:column; gap:6px; box-shadow:0 8px 22px -18px rgba(29,30,28,.4);
+  animation:countUpFade .4s ease backwards;
+}
+.stat-label{font-size:12px; color:var(--n7); font-weight:600; display:flex; align-items:center; gap:6px;}
+.stat-value{font-size:30px; font-weight:800; letter-spacing:-.5px; color:var(--n10);}
+.stat-row-bottom{display:flex; align-items:center; justify-content:space-between;}
+.stat-delta{font-size:12px; font-weight:700; display:flex; align-items:center; gap:3px;}
+.stat-delta.positive{color:var(--s1);}
+.stat-delta.negative{color:var(--s2);}
+.stat-delta.neutral{color:var(--n6);}
+.stat-sparkline{width:64px; height:26px;}
+
+/* ── 관제탑 변형: 우선 대응 큐 + 보조 위젯 ── */
+.tower-grid{display:grid; grid-template-columns:2.1fr 1fr; gap:16px; align-items:start;}
+.panel{background:var(--n1); border:1px solid var(--n3); border-radius:var(--radius); padding:0; overflow:hidden;}
+.panel-head{display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--n3);}
+.panel-head h3{font-size:14.5px; font-weight:800;}
+
+.tab-bar{display:flex; gap:4px; padding:10px 20px 0;}
+.tab{padding:9px 14px; font-size:12.5px; font-weight:700; color:var(--n7); border-bottom:2px solid transparent; border-radius:8px 8px 0 0;}
+.tab:hover{color:var(--n9);}
+.tab.active{color:var(--m700); border-bottom-color:var(--m600);}
+.data-toolbar{display:flex; align-items:center; gap:8px; padding:12px 20px; flex-wrap:wrap;}
+.search{flex:1; min-width:160px; padding:8px 12px; border:1px solid var(--n3); border-radius:10px; font-size:12.5px; background:var(--n0);}
+.filter-chip{padding:6px 12px; font-size:12px; font-weight:600; border-radius:999px; background:var(--n2); color:var(--n8); border:1px solid transparent;}
+.filter-chip.active{background:var(--m50); color:var(--m700); border-color:var(--m200);}
+.export-btn{padding:8px 12px; font-size:12px; font-weight:700; border:1px solid var(--n3); border-radius:10px; color:var(--n8); display:flex; align-items:center; gap:6px;}
+.export-btn:hover{background:var(--n2);}
+
+.data-table-wrap{overflow-x:auto; padding:0 4px 8px;}
+table.data-table{width:100%; border-collapse:collapse; font-size:12.5px;}
+table.data-table th{text-align:left; padding:10px 16px; color:var(--n6); font-weight:700; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; border-bottom:1px solid var(--n3);}
+table.data-table td{padding:11px 16px; border-bottom:1px solid var(--n2); color:var(--n9);}
+table.data-table tbody tr{transition:background .12s;}
+table.data-table tbody tr:hover{background:var(--n0);}
+.badge{display:inline-flex; align-items:center; gap:5px; padding:4px 10px; border-radius:999px; font-size:11px; font-weight:700;}
+.badge.ok{background:var(--s1-bg); color:var(--s1-text);}
+.badge.fail{background:var(--s2-bg); color:var(--s2-text);}
+.badge.pending{background:var(--n2); color:var(--n7);}
+.mono{font-variant-numeric:tabular-nums; color:var(--n7); font-size:12px;}
+.row-btn{padding:5px 9px; border-radius:8px; color:var(--n6); font-size:14px;}
+.row-btn:hover{background:var(--n2); color:var(--n9);}
+
+.priority-item{display:flex; gap:10px; align-items:flex-start; padding:12px 16px; border-bottom:1px solid var(--n2);}
+.priority-item:last-child{border-bottom:none;}
+.priority-icon{width:30px; height:30px; border-radius:9px; background:var(--n2); display:flex; align-items:center; justify-content:center; flex-shrink:0; color:var(--n7);}
+.priority-icon.urgent{background:var(--s2-bg); color:var(--s2-text);}
+.priority-title{font-size:12.5px; font-weight:700; color:var(--n9);}
+.priority-sub{font-size:11.5px; color:var(--n6); margin-top:2px;}
+.priority-action{margin-left:auto; font-size:11.5px; font-weight:700; color:var(--m700); flex-shrink:0;}
+
+.secondary-row{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:16px;}
+.mini-panel{background:var(--n1); border:1px solid var(--n3); border-radius:var(--radius); padding:18px 20px;}
+.mini-panel h4{font-size:13px; font-weight:800; margin-bottom:12px; display:flex; align-items:center; gap:8px;}
+.dist-bar{display:flex; height:10px; border-radius:6px; overflow:hidden; background:var(--n2); margin-bottom:10px;}
+.dist-seg{height:100%;}
+.dist-legend{display:flex; gap:16px; font-size:11.5px; color:var(--n7); flex-wrap:wrap;}
+.dist-legend span{display:flex; align-items:center; gap:6px;}
+.dist-legend i{width:8px; height:8px; border-radius:50%; display:inline-block;}
+
+/* ── 어댑터 다이어그램 (거래소 연동 화면) ── */
+.adapter-flow{display:flex; align-items:center; gap:0; padding:28px 20px; overflow-x:auto;}
+.flow-node{min-width:130px; background:var(--n0); border:1.5px dashed var(--n4); border-radius:16px; padding:14px 16px; text-align:center; flex-shrink:0;}
+.flow-node.core{background:var(--m50); border:1.5px solid var(--m300);}
+.flow-node .fn-icon{width:34px; height:34px; border-radius:10px; background:var(--n2); display:flex; align-items:center; justify-content:center; margin:0 auto 8px; color:var(--n8);}
+.flow-node.core .fn-icon{background:var(--m600); color:#fff;}
+.flow-node .fn-label{font-size:12px; font-weight:700; color:var(--n9);}
+.flow-node .fn-sub{font-size:10.5px; color:var(--n6); margin-top:2px;}
+.flow-arrow{flex:1; min-width:36px; height:2px; background:repeating-linear-gradient(90deg, var(--n4) 0 6px, transparent 6px 11px); position:relative;}
+.flow-arrow::after{content:''; position:absolute; right:0; top:-4px; width:0; height:0; border:5px solid transparent; border-left-color:var(--n5);}
+
+.exchange-card{background:var(--n1); border:1px solid var(--n3); border-radius:var(--radius); padding:20px 22px; margin-bottom:16px;}
+.exchange-card-head{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;}
+.exchange-name{display:flex; align-items:center; gap:10px; font-weight:800; font-size:15px;}
+.exchange-logo{width:36px; height:36px; border-radius:10px; background:var(--n2); display:flex; align-items:center; justify-content:center; color:var(--n8); font-weight:800; font-size:12px;}
+.conn-status{display:flex; align-items:center; gap:6px; font-size:12px; font-weight:700;}
+.conn-dot{width:7px; height:7px; border-radius:50%;}
+.conn-dot.ok{background:var(--s1); animation:pulseDot 2.4s infinite;}
+.conn-dot.retry{background:var(--n6);}
+.ex-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:12px;}
+.ex-metric{background:var(--n0); border-radius:12px; padding:12px 14px;}
+.ex-metric .em-label{font-size:11px; color:var(--n6); font-weight:600;}
+.ex-metric .em-value{font-size:16px; font-weight:800; margin-top:3px;}
+
+/* ── 주문 상세 슬라이드오버 ── */
+.overlay{position:fixed; inset:0; background:rgba(29,30,28,.35); z-index:40; animation:fadeSlideIn .2s ease;}
+.drawer{position:fixed; top:0; right:0; bottom:0; width:400px; max-width:92vw; background:var(--n1); z-index:41; box-shadow:-14px 0 40px -12px rgba(29,30,28,.35); padding:24px; overflow-y:auto; animation:fadeSlideIn .28s ease;}
+.drawer h3{font-size:16px; font-weight:800; margin-bottom:4px;}
+.drawer-close{position:absolute; top:20px; right:20px; width:30px; height:30px; border-radius:9px; display:flex; align-items:center; justify-content:center; color:var(--n7);}
+.drawer-close:hover{background:var(--n2);}
+.drawer-row{display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--n2); font-size:13px;}
+.drawer-row span:first-child{color:var(--n6);}
+.drawer-row span:last-child{font-weight:700; color:var(--n9);}
+.idem-log{background:var(--n0); border-radius:12px; padding:12px 14px; font-size:11.5px; color:var(--n7); margin-top:16px; line-height:1.7; font-family:'SF Mono', monospace;}
+
+/* ── 장애복구/검증 화면 ── */
+.watchdog-card{background:var(--n1); border:1px solid var(--n3); border-radius:var(--radius); padding:22px; margin-bottom:16px; display:flex; align-items:center; gap:20px;}
+.watchdog-ring{width:64px; height:64px; border-radius:50%; border:4px solid var(--s1); display:flex; align-items:center; justify-content:center; flex-shrink:0; position:relative;}
+.watchdog-ring svg{position:absolute; color:var(--s1);}
+.checklist{background:var(--n1); border:1px solid var(--n3); border-radius:var(--radius); padding:22px; margin-bottom:16px;}
+.check-item{display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--n2);}
+.check-item:last-child{border-bottom:none;}
+.check-box{width:22px; height:22px; border-radius:7px; border:2px solid var(--n4); display:flex; align-items:center; justify-content:center; flex-shrink:0; transition:all .15s;}
+.check-box.done{background:var(--s1); border-color:var(--s1); color:#fff;}
+.recovery-log{display:flex; gap:12px; padding:12px 16px; border-bottom:1px solid var(--n2); font-size:12.5px; align-items:flex-start;}
+.recovery-log .rl-time{color:var(--n6); font-size:11.5px; min-width:76px; font-variant-numeric:tabular-nums;}
+.mode-switch{display:flex; background:var(--n2); border-radius:999px; padding:4px; gap:2px;}
+.mode-btn{padding:8px 18px; border-radius:999px; font-size:12.5px; font-weight:700; color:var(--n7);}
+.mode-btn.active{background:var(--n1); color:var(--n10); box-shadow:0 2px 6px rgba(29,30,28,.12);}
+
+/* ── 알림 설정 화면 ── */
+.matrix-table{width:100%; border-collapse:collapse;}
+.matrix-table th, .matrix-table td{padding:14px 16px; text-align:center; border-bottom:1px solid var(--n2);}
+.matrix-table th:first-child, .matrix-table td:first-child{text-align:left;}
+.matrix-table th{font-size:11.5px; color:var(--n6); font-weight:700; text-transform:uppercase;}
+.toggle{width:38px; height:22px; border-radius:999px; background:var(--n3); position:relative; display:inline-block; transition:background .15s;}
+.toggle.on{background:var(--m600);}
+.toggle-knob{position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background:#fff; transition:transform .18s; box-shadow:0 1px 3px rgba(0,0,0,.25);}
+.toggle.on .toggle-knob{transform:translateX(16px);}
+
+.skeleton{background:linear-gradient(90deg, var(--n2) 0%, var(--n3) 50%, var(--n2) 100%); background-size:400px 100%; animation:shimmerSweep 1.3s infinite linear; border-radius:8px;}
+
+.toast{position:fixed; left:50%; bottom:28px; transform:translateX(-50%); background:var(--n10); color:#fff; padding:12px 20px; border-radius:12px; font-size:13px; font-weight:600; display:flex; align-items:center; gap:8px; z-index:60; animation:toastIn .3s ease; box-shadow:0 12px 30px -10px rgba(0,0,0,.4);}
+
+@media (max-width: 980px){
+  .stat-row{grid-template-columns:repeat(2,1fr);}
+  .tower-grid{grid-template-columns:1fr;}
+  .secondary-row{grid-template-columns:1fr;}
+  .ex-grid{grid-template-columns:1fr 1fr;}
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const {useState, useEffect, useRef} = React;
+
+const ICON = (name, props={}) => <i data-lucide={name} {...props}></i>;
+
+function useIcons(dep){
+  useEffect(() => { if(window.lucide) window.lucide.createIcons(); }, dep);
+}
+
+function Ripple({onClick, children, className, ...rest}){
+  const ref = useRef(null);
+  const handle = (e) => {
+    const el = ref.current;
+    if(el){
+      const rect = el.getBoundingClientRect();
+      const span = document.createElement('span');
+      span.className = 'ripple-el';
+      const size = Math.max(rect.width, rect.height);
+      span.style.width = span.style.height = size + 'px';
+      span.style.left = (e.clientX - rect.left - size/2) + 'px';
+      span.style.top = (e.clientY - rect.top - size/2) + 'px';
+      el.appendChild(span);
+      setTimeout(() => span.remove(), 550);
+    }
+    if(onClick) onClick(e);
+  };
+  return <button ref={ref} className={className} onClick={handle} {...rest}>{children}</button>;
+}
+
+const SPARKS = {
+  up: "M2 20 L10 15 L18 17 L26 10 L34 12 L42 4",
+  down: "M2 6 L10 10 L18 8 L26 15 L34 13 L42 20",
+  flat: "M2 12 L10 10 L18 13 L26 11 L34 12 L42 10"
+};
+
+function Sparkline({kind='up'}){
+  const color = kind === 'down' ? 'var(--s2)' : kind === 'flat' ? 'var(--n6)' : 'var(--s1)';
+  return (
+    <svg className="stat-sparkline" viewBox="0 0 44 24" fill="none">
+      <path d={SPARKS[kind]} stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
+const NAV_GROUPS = [
+  { title: '관제', items: [
+    { key: 'main', label: '통합 관제 대시보드', icon: 'layout-dashboard' },
+    { key: 'alerts', label: '오류 알림 설정', icon: 'bell-ring' },
+  ]},
+  { title: '실행 엔진', items: [
+    { key: 'exchanges', label: '멀티 거래소 연동 (OKX·Bitget)', icon: 'plug-zap' },
+    { key: 'orders', label: '주문 실행 엔진 & 중복 방지', icon: 'list-checks' },
+    { key: 'resilience', label: '장애 자동 복구 & 모의계좌 검증', icon: 'shield-check' },
+  ]},
+];
+
+const ORDERS = [
+  { id: 'ORD-88213', ex: 'OKX', symbol: 'BTC/USDT', side: '매수', qty: '0.042', status: 'ok', statusLabel: '체결', time: '14:32:08' },
+  { id: 'ORD-88212', ex: 'Bitget', symbol: 'BTC/USDT', side: '매도', qty: '0.018', status: 'ok', statusLabel: '체결', time: '14:29:41' },
+  { id: 'ORD-88211', ex: 'OKX', symbol: 'ETH/USDT', side: '매수', qty: '0.51', status: 'pending', statusLabel: '대기', time: '14:27:16' },
+  { id: 'ORD-88210', ex: 'Bitget', symbol: 'BTC/USDT', side: '매도', qty: '0.030', status: 'fail', statusLabel: '실패', time: '14:24:02' },
+  { id: 'ORD-88209', ex: 'OKX', symbol: 'BTC/USDT', side: '매수', qty: '0.070', status: 'ok', statusLabel: '체결', time: '14:19:55' },
+  { id: 'ORD-88208', ex: 'OKX', symbol: 'ETH/USDT', side: '매도', qty: '0.22', status: 'ok', statusLabel: '체결', time: '14:15:30' },
+  { id: 'ORD-88207', ex: 'Bitget', symbol: 'BTC/USDT', side: '매수', qty: '0.015', status: 'pending', statusLabel: '재시도 대기', time: '14:11:47' },
+];
+
+function StatRow(){
+  const stats = [
+    { label: '엔진 상태', icon: 'activity', value: '정상', delta: '가동 3일 12시간', kind:'positive', spark:'flat' },
+    { label: '합산 잔고 (USDT)', icon: 'wallet', value: '128,402', delta: '+1.8% (24h)', kind:'positive', spark:'up' },
+    { label: '미체결 주문', icon: 'clock-4', value: '3', delta: '재시도 대기 1건', kind:'neutral', spark:'flat' },
+    { label: '24h 체결 건수', icon: 'repeat', value: '241', delta: '-4건 전일대비', kind:'negative', spark:'down' },
+  ];
+  return (
+    <section className="stat-row" data-stat-row>
+      {stats.map((s, i) => (
+        <div className="stat-card" key={s.label} style={{animationDelay: (i*0.06)+'s'}}>
+          <div className="stat-label">{ICON(s.icon, {style:{width:14,height:14}})} {s.label}</div>
+          <div className="stat-value">{s.value}</div>
+          <div className="stat-row-bottom">
+            <span className={"stat-delta " + s.kind}>{s.delta}</span>
+            <Sparkline kind={s.spark}/>
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function OrderDrawer({order, onClose}){
+  if(!order) return null;
+  return (
+    <React.Fragment>
+      <div className="overlay" onClick={onClose}></div>
+      <div className="drawer">
+        <button className="drawer-close" onClick={onClose}>{ICON('x', {style:{width:16,height:16}})}</button>
+        <h3>{order.id}</h3>
+        <p style={{fontSize:12.5, color:'var(--n7)', marginBottom:16}}>{order.ex} · {order.symbol}</p>
+        <div className="drawer-row"><span>방향</span><span>{order.side}</span></div>
+        <div className="drawer-row"><span>수량</span><span>{order.qty}</span></div>
+        <div className="drawer-row"><span>상태</span><span>{order.statusLabel}</span></div>
+        <div className="drawer-row"><span>접수 시각</span><span>{order.time}</span></div>
+        <div className="drawer-row"><span>멱등키</span><span className="mono">idem_{order.id.toLowerCase()}</span></div>
+        <div className="idem-log">
+          [14:32:07.812] 신호 수신 · idem_key={order.id.toLowerCase()}<br/>
+          [14:32:07.815] 중복 대조 · 미발견 → 신규 처리<br/>
+          [14:32:07.902] 거래소 전송 · {order.ex} REST 큐 등록<br/>
+          [14:32:08.114] 체결 확인 · 로컬 상태 동기화 완료
+        </div>
+      </div>
+    </React.Fragment>
+  );
+}
+
+function MainView(){
+  const [selected, setSelected] = useState(null);
+  const [tab, setTab] = useState('전체');
+  const [statusFilter, setStatusFilter] = useState('전체');
+  const [toast, setToast] = useState('');
+  const tabs = ['전체', 'OKX', 'Bitget'];
+  const statusMap = { '체결':'ok', '대기':'pending', '실패':'fail' };
+  const byTab = tab === '전체' ? ORDERS : ORDERS.filter(o => o.ex === tab);
+  const rows = statusFilter === '전체' ? byTab : byTab.filter(o => o.status === statusMap[statusFilter]);
+  const flash = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2000); };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div className="page-title-row">
+          <h1>통합 관제 대시보드</h1>
+          <p className="page-meta">마지막 동기화 14:32:11 · 테스트넷 모드</p>
+        </div>
+        <div className="page-actions">
+          <Ripple className="btn btn-secondary">{ICON('calendar', {style:{width:14,height:14}})}오늘</Ripple>
+          <Ripple className="btn btn-primary">{ICON('download', {style:{width:14,height:14}})}리포트 내보내기</Ripple>
+        </div>
+      </div>
+
+      <StatRow/>
+
+      <div className="tower-grid">
+        <div className="panel">
+          <div className="panel-head">
+            <h3>실시간 체결 타임라인</h3>
+            <Ripple className="btn btn-ghost" style={{padding:'6px 10px'}}>{ICON('refresh-cw', {style:{width:13,height:13}})}새로고침</Ripple>
+          </div>
+          <div className="tab-bar" data-tabs>
+            {tabs.map(t => (
+              <button key={t} className={"tab" + (tab===t ? " active" : "")} onClick={() => setTab(t)}>{t}</button>
+            ))}
+          </div>
+          <div className="data-toolbar">
+            <input className="search" placeholder="주문번호·심볼 검색…"/>
+            {['전체','체결','대기','실패'].map(f => (
+              <button key={f} className={"filter-chip" + (statusFilter===f ? " active" : "")} onClick={() => setStatusFilter(f)}>{f}</button>
+            ))}
+            <button className="export-btn" onClick={() => flash('CSV로 내보냈습니다')}>{ICON('file-down', {style:{width:13,height:13}})}CSV</button>
+          </div>
+          <div className="data-table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr><th>주문 ID</th><th>거래소</th><th>심볼</th><th>방향</th><th>수량</th><th>상태</th><th>시각</th><th></th></tr>
+              </thead>
+              <tbody>
+                {rows.map(o => (
+                  <tr key={o.id}>
+                    <td className="mono">{o.id}</td>
+                    <td>{o.ex}</td>
+                    <td>{o.symbol}</td>
+                    <td>{o.side}</td>
+                    <td className="mono">{o.qty}</td>
+                    <td><span className={"badge " + o.status}>{o.statusLabel}</span></td>
+                    <td className="mono">{o.time}</td>
+                    <td><button className="row-btn" onClick={() => setSelected(o)}>{ICON('more-horizontal', {style:{width:15,height:15}})}</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-head"><h3>우선 대응 큐</h3></div>
+          <div>
+            <div className="priority-item">
+              <div className="priority-icon urgent">{ICON('alert-triangle', {style:{width:15,height:15}})}</div>
+              <div>
+                <div className="priority-title">ORD-88210 체결 실패</div>
+                <div className="priority-sub">Bitget · 레이트리밋 초과</div>
+              </div>
+              <button className="priority-action" onClick={() => setSelected(ORDERS[3])}>확인</button>
+            </div>
+            <div className="priority-item">
+              <div className="priority-icon">{ICON('clock', {style:{width:15,height:15}})}</div>
+              <div>
+                <div className="priority-title">ORD-88207 재시도 대기</div>
+                <div className="priority-sub">Bitget · 다음 재시도 22초 후</div>
+              </div>
+              <button className="priority-action" onClick={() => setSelected(ORDERS[6])}>확인</button>
+            </div>
+            <div className="priority-item">
+              <div className="priority-icon">{ICON('wifi', {style:{width:15,height:15}})}</div>
+              <div>
+                <div className="priority-title">OKX WS 재연결 이력 1건</div>
+                <div className="priority-sub">14:02 · 자동 복구 완료</div>
+              </div>
+              <button className="priority-action" onClick={() => flash('OKX WS 재연결 로그를 확인합니다')}>로그</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      {toast && <div className="toast">{ICON('check-circle-2', {style:{width:15,height:15}})}{toast}</div>}
+
+      <div className="secondary-row">
+        <div className="mini-panel">
+          <h4>{ICON('pie-chart', {style:{width:15,height:15}})}거래소별 잔고 비중</h4>
+          <div className="dist-bar">
+            <div className="dist-seg" style={{width:'62%', background:'var(--m500)'}}></div>
+            <div className="dist-seg" style={{width:'38%', background:'var(--n4)'}}></div>
+          </div>
+          <div className="dist-legend">
+            <span><i style={{background:'var(--m500)'}}></i>OKX 62%</span>
+            <span><i style={{background:'var(--n4)'}}></i>Bitget 38%</span>
+          </div>
+        </div>
+        <div className="mini-panel">
+          <h4>{ICON('layers', {style:{width:15,height:15}})}포지션 방향 분포</h4>
+          <div className="dist-bar">
+            <div className="dist-seg" style={{width:'55%', background:'var(--m500)'}}></div>
+            <div className="dist-seg" style={{width:'45%', background:'var(--n4)'}}></div>
+          </div>
+          <div className="dist-legend">
+            <span><i style={{background:'var(--m500)'}}></i>롱 55%</span>
+            <span><i style={{background:'var(--n4)'}}></i>숏 45%</span>
+          </div>
+        </div>
+      </div>
+
+      <OrderDrawer order={selected} onClose={() => setSelected(null)}/>
+    </div>
+  );
+}
+
+function ExchangesView(){
+  return (
+    <div>
+      <div className="page-header">
+        <div className="page-title-row">
+          <h1>멀티 거래소 연동 (OKX·Bitget)</h1>
+          <p className="page-meta">공통 어댑터 인터페이스로 거래소별 차이를 흡수합니다</p>
+        </div>
+        <div className="page-actions">
+          <Ripple className="btn btn-secondary">{ICON('key', {style:{width:14,height:14}})}API 키 관리</Ripple>
+        </div>
+      </div>
+
+      <div className="panel" style={{marginBottom:20}}>
+        <div className="panel-head"><h3>신호 → 어댑터 → 거래소 처리 흐름</h3></div>
+        <div className="adapter-flow">
+          <div className="flow-node">
+            <div className="fn-icon">{ICON('radio', {style:{width:16,height:16}})}</div>
+            <div className="fn-label">외부 신호</div>
+            <div className="fn-sub">웹훅 / API</div>
+          </div>
+          <div className="flow-arrow"></div>
+          <div className="flow-node core">
+            <div className="fn-icon">{ICON('shuffle', {style:{width:16,height:16}})}</div>
+            <div className="fn-label">공통 어댑터</div>
+            <div className="fn-sub">인증·서명·레이트리밋</div>
+          </div>
+          <div className="flow-arrow"></div>
+          <div className="flow-node">
+            <div className="fn-icon">{ICON('server', {style:{width:16,height:16}})}</div>
+            <div className="fn-label">OKX API</div>
+            <div className="fn-sub">REST / WS</div>
+          </div>
+          <div className="flow-arrow"></div>
+          <div className="flow-node">
+            <div className="fn-icon">{ICON('server', {style:{width:16,height:16}})}</div>
+            <div className="fn-label">Bitget API</div>
+            <div className="fn-sub">REST / WS</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="exchange-card">
+        <div className="exchange-card-head">
+          <div className="exchange-name"><div className="exchange-logo">OKX</div>OKX</div>
+          <div className="conn-status"><span className="conn-dot ok"></span>연결됨</div>
+        </div>
+        <div className="ex-grid">
+          <div className="ex-metric"><div className="em-label">잔고 (USDT)</div><div className="em-value">79,608</div></div>
+          <div className="ex-metric"><div className="em-label">보유 포지션</div><div className="em-value">4건</div></div>
+          <div className="ex-metric"><div className="em-label">마지막 동기화</div><div className="em-value">2초 전</div></div>
+        </div>
+      </div>
+
+      <div className="exchange-card">
+        <div className="exchange-card-head">
+          <div className="exchange-name"><div className="exchange-logo">BG</div>Bitget</div>
+          <div className="conn-status"><span className="conn-dot retry"></span>재연결 시도 중</div>
+        </div>
+        <div className="ex-grid">
+          <div className="ex-metric"><div className="em-label">잔고 (USDT)</div><div className="em-value">48,794</div></div>
+          <div className="ex-metric"><div className="em-label">보유 포지션</div><div className="em-value">2건</div></div>
+          <div className="ex-metric"><div className="em-label">마지막 동기화</div><div className="em-value">18초 전</div></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OrdersView(){
+  const [selected, setSelected] = useState(null);
+  const [filter, setFilter] = useState('전체');
+  const [toast, setToast] = useState('');
+  const filters = ['전체', '체결', '대기', '실패'];
+  const map = { '체결':'ok', '대기':'pending', '실패':'fail' };
+  const rows = filter === '전체' ? ORDERS : ORDERS.filter(o => o.status === map[filter]);
+  const flash = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2000); };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div className="page-title-row">
+          <h1>주문 실행 엔진 & 중복 방지</h1>
+          <p className="page-meta">멱등키 대조와 트랜잭션 처리로 중복 주문을 차단합니다</p>
+        </div>
+        <div className="page-actions">
+          <Ripple className="btn btn-primary">{ICON('plus', {style:{width:14,height:14}})}수동 주문 테스트</Ripple>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="data-toolbar" style={{paddingTop:18}}>
+          <input className="search" placeholder="주문 ID·심볼 검색…"/>
+          {filters.map(f => (
+            <button key={f} className={"filter-chip" + (filter===f ? " active" : "")} onClick={() => setFilter(f)}>{f}</button>
+          ))}
+          <button className="export-btn" onClick={() => flash('CSV로 내보냈습니다')}>{ICON('file-down', {style:{width:13,height:13}})}CSV</button>
+        </div>
+        <div className="data-table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr><th>주문 ID</th><th>거래소</th><th>심볼</th><th>방향</th><th>수량</th><th>상태</th><th>시각</th><th></th></tr>
+            </thead>
+            <tbody>
+              {rows.map(o => (
+                <tr key={o.id}>
+                  <td className="mono">{o.id}</td>
+                  <td>{o.ex}</td>
+                  <td>{o.symbol}</td>
+                  <td>{o.side}</td>
+                  <td className="mono">{o.qty}</td>
+                  <td><span className={"badge " + o.status}>{o.statusLabel}</span></td>
+                  <td className="mono">{o.time}</td>
+                  <td><button className="row-btn" onClick={() => setSelected(o)}>{ICON('more-horizontal', {style:{width:15,height:15}})}</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <OrderDrawer order={selected} onClose={() => setSelected(null)}/>
+      {toast && <div className="toast">{ICON('check-circle-2', {style:{width:15,height:15}})}{toast}</div>}
+    </div>
+  );
+}
+
+function ResilienceView(){
+  const [mode, setMode] = useState('테스트넷');
+  const [checks, setChecks] = useState([true, true, true, false]);
+  const items = [
+    '모의 계좌 주문 생성·취소 검증 완료',
+    '중복 주문 방지 로직 재현 테스트 완료',
+    '워치독 강제 재기동 시나리오 검증 완료',
+    '실제 계좌 소액 체결 리허설 완료',
+  ];
+  const allDone = checks.every(Boolean);
+  const toggle = (i) => setChecks(cs => cs.map((c, idx) => idx===i ? !c : c));
+
+  return (
+    <div>
+      <div className="page-header">
+        <div className="page-title-row">
+          <h1>장애 자동 복구 & 모의계좌 검증</h1>
+          <p className="page-meta">워치독 헬스체크와 재기동 후 상태 재동기화 구조</p>
+        </div>
+        <div className="mode-switch">
+          <button className={"mode-btn" + (mode==='테스트넷' ? " active" : "")} onClick={() => setMode('테스트넷')}>테스트넷</button>
+          <button className={"mode-btn" + (mode==='실거래' ? " active" : "")} onClick={() => allDone && setMode('실거래')} style={{opacity: allDone ? 1 : .45}}>실거래</button>
+        </div>
+      </div>
+
+      <div className="watchdog-card">
+        <div className="watchdog-ring">
+          {ICON('heart-pulse', {style:{width:22,height:22}})}
+        </div>
+        <div>
+          <div style={{fontWeight:800, fontSize:15}}>워치독 정상 가동 중</div>
+          <div style={{fontSize:12.5, color:'var(--n7)', marginTop:3}}>마지막 헬스체크 3초 전 · 마지막 재기동 없음 (72시간 연속 가동)</div>
+        </div>
+      </div>
+
+      <div className="checklist">
+        <h3 style={{fontSize:14.5, fontWeight:800, marginBottom:14}}>실거래 전환 전 검증 체크리스트</h3>
+        {items.map((it, i) => (
+          <div className="check-item" key={it}>
+            <button className={"check-box" + (checks[i] ? " done" : "")} onClick={() => toggle(i)}>
+              {checks[i] && ICON('check', {style:{width:13,height:13}})}
+            </button>
+            <span style={{fontSize:13, color:'var(--n9)'}}>{it}</span>
+          </div>
+        ))}
+        {!allDone && <p style={{fontSize:12, color:'var(--n6)', marginTop:10}}>모든 항목 완료 시 실거래 모드 전환 버튼이 활성화됩니다.</p>}
+      </div>
+
+      <div className="panel">
+        <div className="panel-head"><h3>재기동 이력</h3></div>
+        <div>
+          <div className="recovery-log">
+            <span className="rl-time">09-12 03:14</span>
+            <div>
+              <div style={{fontWeight:700}}>프로세스 비정상 종료 감지 → 자동 재기동</div>
+              <div style={{color:'var(--n6)', marginTop:2}}>재기동 후 거래소 재조회로 주문 3건 상태 재동기화 완료</div>
+            </div>
+          </div>
+          <div className="recovery-log">
+            <span className="rl-time">09-08 21:02</span>
+            <div>
+              <div style={{fontWeight:700}}>Bitget WebSocket 연결 끊김 → 5초 내 재연결</div>
+              <div style={{color:'var(--n6)', marginTop:2}}>재시도 2회 만에 복구, 데이터 유실 없음</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AlertsView(){
+  const channels = ['이메일', '텔레그램', '카카오톡'];
+  const severities = ['정보', '경고', '긴급'];
+  const [matrix, setMatrix] = useState({
+    정보: [true, false, false],
+    경고: [true, true, false],
+    긴급: [true, true, true],
+  });
+  const [toast, setToast] = useState(false);
+  const flip = (sev, idx) => setMatrix(m => ({...m, [sev]: m[sev].map((v,i) => i===idx ? !v : v)}));
+  const save = () => { setToast(true); setTimeout(() => setToast(false), 2200); };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div className="page-title-row">
+          <h1>오류 알림 설정</h1>
+          <p className="page-meta">심각도별 채널 매트릭스로 알림 발송 범위를 관리합니다</p>
+        </div>
+        <div className="page-actions">
+          <Ripple className="btn btn-primary" onClick={save}>{ICON('save', {style:{width:14,height:14}})}저장</Ripple>
+        </div>
+      </div>
+
+      <div className="panel" style={{marginBottom:20}}>
+        <div className="panel-head"><h3>심각도 × 채널 매트릭스</h3></div>
+        <div style={{padding:'6px 20px 20px'}}>
+          <table className="matrix-table">
+            <thead>
+              <tr><th>심각도</th>{channels.map(c => <th key={c}>{c}</th>)}</tr>
+            </thead>
+            <tbody>
+              {severities.map(sev => (
+                <tr key={sev}>
+                  <td style={{fontWeight:700}}>{sev}</td>
+                  {channels.map((c, idx) => (
+                    <td key={c}>
+                      <button className={"toggle" + (matrix[sev][idx] ? " on" : "")} onClick={() => flip(sev, idx)}>
+                        <span className="toggle-knob"></span>
+                      </button>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-head"><h3>최근 알림 발송 로그</h3></div>
+        <div>
+          <div className="recovery-log">
+            <span className="rl-time">14:24:03</span>
+            <div><div style={{fontWeight:700}}>ORD-88210 체결 실패 — 긴급</div><div style={{color:'var(--n6)', marginTop:2}}>이메일·텔레그램·카카오톡 동시 발송 완료</div></div>
+          </div>
+          <div className="recovery-log">
+            <span className="rl-time">09-12 03:14</span>
+            <div><div style={{fontWeight:700}}>엔진 재기동 — 경고</div><div style={{color:'var(--n6)', marginTop:2}}>이메일·텔레그램 발송 완료</div></div>
+          </div>
+        </div>
+      </div>
+
+      {toast && <div className="toast">{ICON('check-circle-2', {style:{width:15,height:15}})}알림 설정이 저장되었습니다</div>}
+    </div>
+  );
+}
+
+function App(){
+  const [view, setView] = useState('main');
+  useIcons([view]);
+
+  const views = {
+    main: <MainView/>,
+    exchanges: <ExchangesView/>,
+    orders: <OrdersView/>,
+    resilience: <ResilienceView/>,
+    alerts: <AlertsView/>,
+  };
+
+  return (
+    <div className="app" data-archetype="stripe-multipane">
+      <aside className="sidebar" data-sidebar>
+        <div className="sidebar-brand">
+          <div className="brand-mark">{ICON('flame', {style:{width:18,height:18}})}</div>
+          <div>
+            <div className="brand-name">오르빗데스크</div>
+            <div className="brand-sub">주문 실행 관제</div>
+          </div>
+        </div>
+        <div className="env-toggle"><span className="env-dot"></span>테스트넷 · 정상 가동</div>
+        {NAV_GROUPS.map(group => (
+          <div className="sidebar-section" key={group.title}>
+            <div className="sidebar-section-title">{group.title}</div>
+            {group.items.map(item => (
+              <button
+                key={item.key}
+                className={"sidebar-link" + (view===item.key ? " active" : "")}
+                onClick={() => setView(item.key)}
+              >
+                {ICON(item.icon)}
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>
+        ))}
+        <div className="sidebar-foot">© 2026 오르빗데스크 — 자체 개발 프로젝트</div>
+      </aside>
+      <main className="main" key={view}>
+        {views[view]}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
