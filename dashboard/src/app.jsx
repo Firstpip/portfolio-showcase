@@ -274,6 +274,22 @@ function getCurrentWeek(startDate) {
   return Math.floor(diffDays / 7) + 1;
 }
 
+// ─── 반응형 — 640px 이하는 '모바일': 목록은 카드, 칸반은 1열, 모달은 바텀시트 (2026-09-18) ───
+const MOBILE_MQ = '(max-width: 640px)';
+function useMediaQuery(query) {
+  const get = () => (typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(query).matches : false);
+  const [matches, setMatches] = useState(get);
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mql = window.matchMedia(query);
+    const h = e => setMatches(e.matches);
+    mql.addEventListener ? mql.addEventListener('change', h) : mql.addListener(h);
+    setMatches(mql.matches);
+    return () => { mql.removeEventListener ? mql.removeEventListener('change', h) : mql.removeListener(h); };
+  }, [query]);
+  return matches;
+}
+
 // ─── Theme ───
 function useTheme() {
   const [theme, setThemeState] = useState(() => document.documentElement.getAttribute('data-theme') || 'dark');
@@ -551,7 +567,7 @@ function ShortcutHelp({ onClose }) {
 // ─── Toast ───
 function ToastContainer({ toasts }) {
   return (
-    <div style={{ position:'fixed', bottom:24, right:24, zIndex:9999, display:'flex', flexDirection:'column', gap:8 }}>
+    <div className="toast-container" role="status" aria-live="polite" style={{ position:'fixed', bottom:24, right:24, zIndex:9999, display:'flex', flexDirection:'column', gap:8 }}>
       {toasts.map(t => (
         <div key={t.id} style={{
           padding:'0.7rem 1.2rem', borderRadius:10,
@@ -825,8 +841,9 @@ function BudgetAnalysis({ data }) {
 // ─── FilterTabs ───
 function FilterTabs({ active, onChange, counts }) {
   const tabs = [{ key:'all', label:'전체' }, ...STATUS_ORDER.map(s => ({ key:s, label:STATUS_META[s].label }))];
+  const isMobile = useMediaQuery(MOBILE_MQ);
   return (
-    <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+    <div className={isMobile ? 'hscroll' : undefined} style={{ display:'flex', gap:8, flexWrap:isMobile?'nowrap':'wrap', flex:isMobile?'1 1 100%':undefined, minWidth:0 }}>
       {tabs.map(t => {
         const count = t.key === 'all' ? counts.total : (counts[t.key]||0);
         if (t.key !== 'all' && count === 0) return null;
@@ -1699,6 +1716,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
   const [dragOverCol, setDragOverCol] = useState(null);
   const [showWeeklyInput, setShowWeeklyInput] = useState(false);
   const [weekFilter, setWeekFilter] = useState('all'); // 'all' | number | 'none'
+  const isMobile = useMediaQuery(MOBILE_MQ);
   const [editStart, setEditStart] = useState(project?.start_date || '');
   const [editDeadline, setEditDeadline] = useState(project?.deadline || '');
   // 외부(Realtime)로 착수/마감일이 바뀌면, 사용자가 손대지 않은 필드만 입력값을 재동기화한다.
@@ -2168,7 +2186,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
           </div>
         </div>
       ) : (
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, minmax(0, 1fr))', gap:14 }}>
+        <div style={{ display:'grid', gridTemplateColumns:isMobile?'1fr':'repeat(3, minmax(0, 1fr))', gap:14 }}>
           {MILESTONE_STAGE_ORDER.map(stageKey => {
             const stage = MILESTONE_STAGES[stageKey];
             const cards = sorted.filter(m => m.status === stageKey);
@@ -3297,6 +3315,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
   const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s=new Set(prev); s.has(slug)?s.delete(slug):s.add(slug); return s; }); };
   // 필터/검색/정렬 변경 시 1페이지로 자동 리셋 (빈 페이지 노출 방지)
   useEffect(() => { setPage(1); setSelected(new Set()); }, [filter, search, dateRange, memberFilter, sortKey, sortOrder]);
+  const isMobile = useMediaQuery(MOBILE_MQ);
   // 실시간 삭제 등으로 목록에서 사라진 슬러그는 선택에서도 제거
   useEffect(() => { setSelected(prev => { const live = new Set(data.map(d => d.slug)); const next = new Set([...prev].filter(s => live.has(s))); return next.size === prev.size ? prev : next; }); }, [data]);
   // 오늘/내일 긴급 표시가 탭을 열어둔 채로도 갱신되도록 1분 tick
@@ -3383,6 +3402,27 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
     { key:'note',       label:'메모',  sortable:false, width:'160px' },
   ];
 
+  const emptyNode = (
+    <>
+    {data.length === 0 ? (
+      <EmptyState
+        icon="📋"
+        title="첫 프로젝트를 등록해보세요"
+        hint="위시켓에서 가져온 견적 요청이나 직접 입력한 프로젝트를 한 곳에서 관리할 수 있어요."
+        primary={onAddNew ? { label:'＋ 프로젝트 등록', onClick:onAddNew } : null}
+      />
+    ) : (search.trim() || memberFilter || (dateRange && dateRange !== 'all') || filter !== 'all') ? (
+      <EmptyState
+        icon="🔍"
+        title="조건에 일치하는 프로젝트가 없습니다"
+        hint="검색어·상태·기간·담당 필터를 조정하거나 초기화해보세요."
+        primary={onResetFilters ? { label:'필터 초기화', onClick:onResetFilters } : null}
+      />
+    ) : (
+      <EmptyState icon="📭" title="표시할 프로젝트가 없습니다" />
+    )}
+    </>
+  );
   return (
     <div style={{ background:'var(--surface)', borderRadius:12, border:'1px solid var(--border)', overflow:'hidden' }}>
       {selected.size > 0 && (
@@ -3394,6 +3434,82 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
           </div>
         </div>
       )}
+      {isMobile ? (
+        <div>
+          {/* 모바일: 정렬 컨트롤 (테이블 헤더 대체) */}
+          <div style={{ display:'flex', alignItems:'center', gap:8, padding:'0.55rem 0.9rem', borderBottom:'1px solid var(--border)', fontSize:'0.8rem', color:'var(--text2)' }}>
+            <span style={{ flexShrink:0 }}>정렬</span>
+            <select value={sortKey} onChange={e => { if (e.target.value !== sortKey) onSort(e.target.value); }} aria-label="정렬 기준"
+              style={{ flex:1, minWidth:0, padding:'0.35rem 0.5rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.85rem' }}>
+              {cols.filter(c => c.sortable).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+            <button onClick={() => onSort(sortKey)} aria-label="정렬 방향 전환"
+              style={{ flexShrink:0, padding:'0.35rem 0.6rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', cursor:'pointer' }}>
+              {sortOrder==='desc' ? '▼ 내림차순' : '▲ 오름차순'}
+            </button>
+          </div>
+          {filtered.length === 0 ? emptyNode : pagedRows.map(r => {
+            const meta = STATUS_META[r.current_status]||{};
+            const meetingStr = formatMeetingAt(r.meeting_at);
+            const urgency = r._urgency||null;
+            const ms = getMeetingStatus(r.meeting_at, r.current_status);
+            const mt = MEETING_TYPES.find(t => t.key===r.meeting_type);
+            const isPostDev = POST_DEV.includes(r.current_status);
+            const entries = hideAssigned ? [] : assignRolesFor(filter)
+              .filter(role => roleAppliesToRow(role, r))
+              .map(role => ({ label: role.label, m: teamMembers?.find(tm => tm.id === r[role.field]) }))
+              .filter(e => e.m);
+            const bg = urgency==='today'?'var(--surface-warning-soft)':urgency==='tomorrow'?'var(--surface-info-soft)':r._stale?'var(--surface-danger-soft)':'transparent';
+            const links = (r.portfolio_links||[]).length;
+            const staleDays = r._stale ? daysBetween(r.created_at, new Date()) : 0;
+            return (
+              <div key={r.slug} role="button" tabIndex={0} onClick={() => onRowClick(r)}
+                aria-label={`${meta.label||''} · ${r.title||r.slug}`}
+                onKeyDown={e => { if (e.key==='Enter' && e.target===e.currentTarget) { e.preventDefault(); onRowClick(r); } }}
+                style={{ padding:'0.75rem 0.9rem', borderBottom:'1px solid var(--border)', background:bg, cursor:'pointer' }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:6 }}>
+                  <span style={{ display:'inline-flex', alignItems:'center', gap:5, padding:'0.2rem 0.55rem', borderRadius:6, fontSize:'0.75rem', fontWeight:600, background:meta.color+'30', color:meta.color, border:`1px solid ${meta.color}55`, whiteSpace:'nowrap' }}>
+                    {meta.emoji} {meta.label}
+                  </span>
+                  {urgency ? (
+                    <span style={{ padding:'0.15rem 0.45rem', borderRadius:5, fontSize:'0.75rem', fontWeight:700, background:urgency==='today'?'var(--surface-warning-mid)':'var(--surface-info-mid)', color:urgency==='today'?'var(--yellow)':'var(--blue)', animation:urgency==='today'?'pulse 2s infinite':'none' }}>
+                      {urgency==='today'?'오늘 미팅':'내일 미팅'}
+                    </span>
+                  ) : r._stale ? (
+                    <span style={{ fontSize:'0.75rem', color:'var(--red)', fontWeight:600 }} title="지원 후 30일 이상 무응답">⏰ {staleDays}일 무응답</span>
+                  ) : null}
+                </div>
+                <div style={{ fontWeight:600, fontSize:'0.92rem', lineHeight:1.35, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden', wordBreak:'break-word' }}>{r.title||r.slug}</div>
+                <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:3, minWidth:0 }}>
+                  <span style={{ fontSize:'0.75rem', color:'var(--text2)', fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0 }}>{r.slug}</span>
+                  {links > 0 && <span style={{ fontSize:'0.72rem', color:'var(--green)', fontWeight:500, flexShrink:0 }}>🔗{links}</span>}
+                </div>
+                {(() => {
+                  const parts = [];
+                  if (isPostDev) { if (r.deadline) parts.push(<span key="dl" style={{ color:'var(--green)' }}>✅ 개발완료 {r.deadline}</span>); }
+                  else if (!hideMeeting && meetingStr) parts.push(<span key="mt" style={{ color:ms==='done'?'var(--text2)':'var(--yellow)', fontWeight:ms==='done'?400:600 }}>{mt?mt.emoji:'📅'} {meetingStr}{ms==='done'?' · 완료':''}</span>);
+                  if (!isPostDev && HAS_MILESTONES.includes(r.current_status) && r.deadline) parts.push(<span key="dd" style={{ color:'var(--text2)' }}>마감 {r.deadline}</span>);
+                  entries.forEach((e, i) => parts.push(
+                    <span key={'a'+i} style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
+                      <MemberAvatar member={e.m} size={14} />
+                      <span style={{ color:e.m.color, fontWeight:600 }}>{e.m.name}</span>
+                      <span style={{ color:'var(--text2)' }}>{e.label}</span>
+                    </span>
+                  ));
+                  return parts.length ? <div style={{ display:'flex', flexWrap:'wrap', gap:'4px 12px', marginTop:6, fontSize:'0.8rem', alignItems:'center' }}>{parts}</div> : null;
+                })()}
+                {r.memo && <div style={{ marginTop:5, fontSize:'0.78rem', color:'var(--text2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>📝 {r.memo}</div>}
+                {HAS_MILESTONES.includes(r.current_status) && !milestonesSetupNeeded && (
+                  <button onClick={e=>{ e.stopPropagation(); onOpenProject(r.slug); }}
+                    style={{ marginTop:8, display:'inline-flex', alignItems:'center', gap:4, padding:'0.35rem 0.7rem', borderRadius:6, border:'1px solid var(--surface-accent-strong)', background:'var(--surface-accent-soft)', color:'var(--accent)', cursor:'pointer', fontSize:'0.78rem', fontWeight:600 }}>
+                    🛠 작업페이지 →
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
       <div style={{ overflowX:'auto' }}>
         <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.85rem', tableLayout:'fixed' }}>
           <thead>
@@ -3415,23 +3531,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
           <tbody>
             {filtered.length === 0 ? (
               <tr><td colSpan={cols.length+1} style={{ padding:0 }}>
-                {data.length === 0 ? (
-                  <EmptyState
-                    icon="📋"
-                    title="첫 프로젝트를 등록해보세요"
-                    hint="위시켓에서 가져온 견적 요청이나 직접 입력한 프로젝트를 한 곳에서 관리할 수 있어요."
-                    primary={onAddNew ? { label:'＋ 프로젝트 등록', onClick:onAddNew } : null}
-                  />
-                ) : (search.trim() || memberFilter || (dateRange && dateRange !== 'all') || filter !== 'all') ? (
-                  <EmptyState
-                    icon="🔍"
-                    title="조건에 일치하는 프로젝트가 없습니다"
-                    hint="검색어·상태·기간·담당 필터를 조정하거나 초기화해보세요."
-                    primary={onResetFilters ? { label:'필터 초기화', onClick:onResetFilters } : null}
-                  />
-                ) : (
-                  <EmptyState icon="📭" title="표시할 프로젝트가 없습니다" />
-                )}
+                {emptyNode}
               </td></tr>
             ) : pagedRows.map(r => {
               const meta = STATUS_META[r.current_status]||{};
@@ -3549,6 +3649,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
           </tbody>
         </table>
       </div>
+      )}
       <div style={{ padding:'0.7rem 1rem', borderTop:'1px solid var(--border)', fontSize:'0.8rem', color:'var(--text2)', display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, flexWrap:'wrap' }}>
         <span>
           {filtered.length === 0
@@ -3621,6 +3722,7 @@ function App({ session }) {
   const [saving, setSaving]               = useState(false);
   const [connected, setConnected]         = useState(false);
   const wasDisconnectedRef = useRef(false);
+  const isMobile = useMediaQuery(MOBILE_MQ);
   const [sortKey, setSortKey]             = useState('created_at');
   const [sortOrder, setSortOrder]         = useState('desc');
   const [dateRange, setDateRange]         = useState('all');
@@ -4616,7 +4718,7 @@ function App({ session }) {
       )}
 
       {/* 필터 바 (검색·상태·담당·기간) — 표 스크롤 시 블록 전체가 상단 sticky로 고정 */}
-      <div className="fade-in delay-1" style={{ position:'sticky', top:0, background:'var(--bg)', zIndex:5, padding:'0.5rem 0', marginBottom:'1rem' }}>
+      <div className="fade-in delay-1" style={{ position:isMobile?'static':'sticky', top:0, background:'var(--bg)', zIndex:5, padding:'0.5rem 0', marginBottom:'1rem' }}>
       <div style={{ display:'flex', gap:'0.6rem', marginBottom:'0.5rem', flexWrap:'wrap', alignItems:'center' }}>
         <input ref={searchRef} type="text" placeholder="제목·슬러그·메모 검색 (/)" value={search} onChange={e => setSearch(e.target.value)}
           style={{ padding:'0.4rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', flex:'1 1 180px', minWidth:180, maxWidth:280, outline:'none' }}
@@ -4638,7 +4740,7 @@ function App({ session }) {
           const relevant = activeMembers.filter(m => counts[m.id] > 0);
           if (relevant.length === 0) return null;
           return (
-          <>
+          <div className={isMobile ? 'hscroll' : undefined} style={{ display:'flex', gap:8, alignItems:'center', flex:isMobile?'1 1 100%':'0 1 auto', minWidth:0 }}>
             <span style={{ fontSize:'0.8rem', color:'var(--text2)', flexShrink:0 }}>담당:</span>
             <button onClick={() => setMemberFilter('')} style={{
               padding:'0.25rem 0.65rem', borderRadius:20, cursor:'pointer',
@@ -4663,10 +4765,10 @@ function App({ session }) {
                 </button>
               );
             })}
-          </>
+          </div>
           );
         })()}
-        {/* 기간 필터 — 우측 정렬, 항상 표시 */}
+        {/* 기간 필터 — 우측 정렬, 항상 표시 (모바일에선 담당 행 아래 줄로 내려감) */}
         <div style={{ marginLeft:'auto', display:'flex', gap:3 }}>
           {[{key:'all',label:'전체'},{key:'7d',label:'7일'},{key:'30d',label:'30일'},{key:'90d',label:'90일'}].map(d => (
             <button key={d.key} onClick={() => setDateRange(d.key)} style={{
