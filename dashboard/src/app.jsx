@@ -2405,7 +2405,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const [editTitle, setEditTitle] = useState(project?.title||'');
   const [editBudget, setEditBudget] = useState(project?.budget||'');
   const [editTimeline, setEditTimeline] = useState(project?.timeline||'');
-  const [editDate, setEditDate] = useState(project?.created_at||'');
+  // 생성일은 timestamptz — date 입력엔 KST 날짜만 바인딩하고, 저장 시 기존 시각(정렬 정밀도)을 보존한다 (2026-09-18)
+  const createdDateStr = kstParts(project?.created_at)?.date || (project?.created_at||'').slice(0,10);
+  const [editDate, setEditDate] = useState(createdDateStr);
   const [editStartDate, setEditStartDate] = useState(project?.start_date||'');
   const [startDateChanged, setStartDateChanged] = useState(false);
   const [editDeadline, setEditDeadline] = useState(project?.deadline||'');
@@ -2637,7 +2639,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                 </div>
                 <div>
                   <div style={labelS}>생성일</div>
-                  <input type="date" value={editDate} onChange={e => { setEditDate(e.target.value); setDateChanged(e.target.value!==(project.created_at||'')); }} style={inputS} />
+                  <input type="date" value={editDate} onChange={e => { setEditDate(e.target.value); setDateChanged(e.target.value!==createdDateStr); }} style={inputS} />
                 </div>
                 {HAS_MILESTONES.includes(project.current_status) && (
                   <div style={{ display:'flex', gap:10 }}>
@@ -2782,7 +2784,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                 <button onClick={() => {
                   const fields = {};
                   if (infoChanged) { fields.title=editTitle; fields.budget=editBudget; fields.timeline=editTimeline; }
-                  if (dateChanged) fields.created_at = editDate;
+                  if (dateChanged) fields.created_at = editDate ? kstToIso(editDate, kstParts(project.created_at)?.time || '12:00') : project.created_at;
                   if (startDateChanged) fields.start_date = editStartDate || null;
                   if (deadlineChanged) fields.deadline = editDeadline || null;
                   if (urlChanged)  fields.wishket_url = editUrl;
