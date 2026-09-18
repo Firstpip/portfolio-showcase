@@ -357,13 +357,16 @@ function groupMeetingHistory(history) {
   return [...map.entries()].sort((a,b) => b[0]-a[0]).map(([,g]) => g);
 }
 const meetingTypeLabel = (k) => MEETING_TYPES.find(t => t.key===k)?.label || '미지정';
+// 예산 문자열 → 만원 단위 숫자. 범위 표기("1,000~3,000만원", "1000-3000만원")는 하한값.
+// 콤마는 천 단위 구분자로 먼저 제거(이전 구현은 "1,000~3,000"을 1로 읽었음 — 2026-09-18 수정).
+const BUDGET_RANGE_RE = /(\d)\s*[~\-–]\s*(\d)/;
+const isBudgetRange = (v) => BUDGET_RANGE_RE.test(String(v||'').replace(/,/g, ''));
 function parseBudgetNum(v) {
-  // 범위 표기("1000-3000만원")는 첫 숫자 그룹만, 단일 표기는 전체 숫자 사용
-  const s = String(v||'');
-  const groups = s.match(/\d+/g);
-  if (!groups || groups.length === 0) return 0;
-  if (/[~\-–]/.test(s)) return Number(groups[0]);
-  return Number(groups.join(''));
+  const s = String(v||'').replace(/,/g, '');
+  if (!s) return 0;
+  const first = isBudgetRange(s) ? s.split(/[~\-–]/)[0] : s;
+  const digits = first.replace(/[^0-9]/g, '');
+  return digits ? Number(digits) : 0;
 }
 // Supabase/PostgreSQL 에러를 사용자 친화 메시지로 변환
 function friendlyError(error) {
@@ -2417,7 +2420,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const [resultMemo, setResultMemo] = useState(() => isAddMode ? latestMeetingMemo(project?.history, project?.meeting_at) : '');
   const [resultMemoChanged, setResultMemoChanged] = useState(false);
 
-  const parseBN = (v) => { const d=(v||'').replace(/[^0-9]/g,''); return d ? Number(d).toLocaleString() : ''; };
+  const budgetIsRange = isBudgetRange(project?.budget);
+  const parseBN = (v) => { if (isBudgetRange(v)) return String(v||''); const n = parseBudgetNum(v); return n ? n.toLocaleString() : ''; };
   const [budgetNum, setBudgetNum] = useState(() => parseBN(project?.budget));
   // Assignment
   const [assignManager, setAssignManager] = useState(project?.assigned_manager||null);
@@ -2595,8 +2599,10 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                   <div>
                     <div style={labelS}>예산</div>
                     <div style={{ display:'flex', alignItems:'center' }}>
-                      <input type="text" value={budgetNum} placeholder="2,000" onChange={e => { handleBudgetChange(e.target.value); }}
-                        style={{ ...inputS, borderTopRightRadius:0, borderBottomRightRadius:0, borderRight:'none' }} />
+                      <input type="text" value={budgetNum} placeholder="2,000" readOnly={budgetIsRange}
+                        title={budgetIsRange ? '범위 예산은 여기서 수정할 수 없습니다. 통계·정렬에는 하한값이 쓰입니다.' : undefined}
+                        onChange={e => { if (!budgetIsRange) handleBudgetChange(e.target.value); }}
+                        style={{ ...inputS, borderTopRightRadius:0, borderBottomRightRadius:0, borderRight:'none', opacity:budgetIsRange?0.7:1, cursor:budgetIsRange?'not-allowed':'text' }} />
                       <span style={{ padding:'0.5rem 0.6rem', borderRadius:'0 8px 8px 0', fontSize:'0.85rem', background:'var(--border)', color:'var(--text2)', border:'1px solid var(--border)', lineHeight:1.5, whiteSpace:'nowrap' }}>만원</span>
                     </div>
                     {CONTRACT_NET_STATUSES.includes(project.current_status) && !isDirectContract({ wishket_url: editUrl, direct_contract: editDirect }) && parseBudgetNum(editBudget) > 0 && (() => {
@@ -2847,11 +2853,16 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
               setMeetingChanged(false);
             };
             const deleteMeeting = () => {
+              // '미팅 예정'에서 일정만 지우면 일정 없는 예정 상태에 갇힘 → 지원 완료로 함께 되돌림 (이력에 명시)
+              const revert = st === 'interview';
               const go = () => {
-                onAppendHistory(project, [{ status:st, note:`미팅 일정 삭제 (${formatMeetingAt(currentMeeting.meeting_at)})` }], { meeting_at:null, meeting_type:null });
+                const entries = [{ status: revert ? 'applied' : st, note:`미팅 일정 삭제 (${formatMeetingAt(currentMeeting.meeting_at)})${revert ? ' — 지원 완료로 되돌림' : ''}` }];
+                const fields = { meeting_at:null, meeting_type:null, ...(revert ? { current_status:'applied' } : {}) };
+                onAppendHistory(project, entries, fields);
                 setEditMeeting(''); setEditMeetingType(''); setEditMeetingMemo(''); setMeetingChanged(false);
               };
-              if (onRequestConfirm) onRequestConfirm({ title:'미팅 일정 삭제', message:`${formatMeetingAt(currentMeeting.meeting_at)} 일정을 삭제합니다.\n이력은 남고, 프로젝트의 미팅 일시만 비워집니다.`, confirmLabel:'삭제', destructive:true, onConfirm:go });
+              const msg = `${formatMeetingAt(currentMeeting.meeting_at)} 일정을 삭제합니다.\n이력은 남고, 프로젝트의 미팅 일시만 비워집니다.` + (revert ? `\n\n일정이 없는 '미팅 예정'은 유지할 수 없어 상태가 '지원 완료'로 돌아갑니다. 새 일정을 잡으면 다시 '미팅 예정'으로 전환됩니다.` : '');
+              if (onRequestConfirm) onRequestConfirm({ title: revert ? '미팅 일정 삭제 + 지원 완료로 되돌리기' : '미팅 일정 삭제', message: msg, confirmLabel:'삭제', destructive:true, onConfirm:go });
               else go();
             };
             return (
@@ -3285,7 +3296,9 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
   const [page, setPage] = useState(1);
   const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s=new Set(prev); s.has(slug)?s.delete(slug):s.add(slug); return s; }); };
   // 필터/검색/정렬 변경 시 1페이지로 자동 리셋 (빈 페이지 노출 방지)
-  useEffect(() => { setPage(1); }, [filter, search, dateRange, memberFilter, sortKey, sortOrder]);
+  useEffect(() => { setPage(1); setSelected(new Set()); }, [filter, search, dateRange, memberFilter, sortKey, sortOrder]);
+  // 실시간 삭제 등으로 목록에서 사라진 슬러그는 선택에서도 제거
+  useEffect(() => { setSelected(prev => { const live = new Set(data.map(d => d.slug)); const next = new Set([...prev].filter(s => live.has(s))); return next.size === prev.size ? prev : next; }); }, [data]);
   // 오늘/내일 긴급 표시가 탭을 열어둔 채로도 갱신되도록 1분 tick
   const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => { const id = setInterval(() => setNowTick(Date.now()), 60000); return () => clearInterval(id); }, []);
@@ -3347,7 +3360,8 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
     return [...enriched.urgent, ...sortedRest];
   }, [enriched, sortKey, sortOrder]);
 
-  const toggleAll = () => { setSelected(prev => prev.size===filtered.length ? new Set() : new Set(filtered.map(r=>r.slug))); };
+  // 전체 선택은 '현재 페이지'만 — 보이지 않는 다른 페이지 행까지 잡히면 일괄 삭제 범위가 화면과 어긋남 (2026-09-18)
+  const toggleAll = () => { setSelected(prev => { const ids = pagedRows.map(r=>r.slug); const all = ids.every(s => prev.has(s)); const next = new Set(prev); ids.forEach(s => all ? next.delete(s) : next.add(s)); return next; }); };
 
   // 페이지네이션: 50개 단위. 필터 결과가 50개 이하면 컨트롤 자동 숨김 (방해 안 됨)
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -3606,6 +3620,7 @@ function App({ session }) {
   const [selectedProject, setSelectedProject] = useState(null);
   const [saving, setSaving]               = useState(false);
   const [connected, setConnected]         = useState(false);
+  const wasDisconnectedRef = useRef(false);
   const [sortKey, setSortKey]             = useState('created_at');
   const [sortOrder, setSortOrder]         = useState('desc');
   const [dateRange, setDateRange]         = useState('all');
@@ -3767,7 +3782,8 @@ function App({ session }) {
           // 신선한 base를 쓰고, 모달이 편집 중이면 외부 변경 경고 배너가 발화함 (2026-06-07)
           setSelectedProject(prev => prev && prev.slug===payload.new.slug ? payload.new : prev);
         }
-        else if (payload.eventType==='INSERT') setData(prev => prev?[payload.new,...prev]:[payload.new]);
+        // 빠른 등록은 REST 응답으로 이미 로컬에 추가되므로 같은 행의 Realtime INSERT는 무시 (중복 행 방지)
+        else if (payload.eventType==='INSERT') setData(prev => !prev ? [payload.new] : prev.some(d => d.id===payload.new.id) ? prev : [payload.new,...prev]);
         else if (payload.eventType==='DELETE') {
           setData(prev => prev?prev.filter(d => d.id!==payload.old.id):prev);
           // 외부에서 row가 삭제되면 열려있는 모달도 닫음 (유령 모달 방지)
@@ -3778,6 +3794,7 @@ function App({ session }) {
         if (payload.eventType === 'INSERT') {
           setTeamMembers(prev => {
             const newItem = payload.new;
+            if (prev.some(m => m.id === newItem.id)) return prev;  // 로컬 추가와 Realtime 이벤트 중복 방지
             const newTime = new Date(newItem.created_at).getTime();
             const idx = prev.findIndex(m => new Date(m.created_at).getTime() > newTime);
             if (idx === -1) return [...prev, newItem];
@@ -3791,8 +3808,22 @@ function App({ session }) {
           loadTeamMembers(); // 알 수 없는 이벤트는 전체 리로드 fallback
         }
       })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
+      .subscribe((status) => {
+        // 채널 상태를 실제 연결 표시에 반영. 끊겼다 다시 붙으면 그 사이 이벤트가 유실됐을 수 있으니 전체 재로드
+        const ok = status === 'SUBSCRIBED';
+        if (ok && wasDisconnectedRef.current) { loadData(); loadMilestones(); loadTeamMembers(); }
+        if (!ok) wasDisconnectedRef.current = true;
+        setConnected(ok);
+      });
+    // 탭 복귀·네트워크 복구 시에도 재동기화 (슬립 중 놓친 변경 반영)
+    const resync = () => { if (document.visibilityState === 'visible') { loadData(); loadMilestones(); } };
+    document.addEventListener('visibilitychange', resync);
+    window.addEventListener('online', resync);
+    return () => {
+      supabase.removeChannel(channel);
+      document.removeEventListener('visibilitychange', resync);
+      window.removeEventListener('online', resync);
+    };
   }, [loadData, loadTeamMembers, loadMilestones]);
 
   // Team CRUD
@@ -4192,7 +4223,17 @@ function App({ session }) {
     });
     if (targets.length === 0) { toast(protectedSkipped.length ? `삭제 대상 없음 — 보호상태 ${protectedSkipped.length}건 제외됨` : '삭제할 프로젝트가 없습니다','info'); return; }
     if (protectedSkipped.length) toast(`보호상태(개발중·계약 등) ${protectedSkipped.length}건은 일괄삭제에서 제외됩니다`,'info');
-    if (!confirm(`${targets.length}건 프로젝트를 완전히 삭제합니다.\nDB 레코드 + 포트폴리오 파일이 전부 제거되며 되돌릴 수 없습니다.\n계속하시겠습니까?`)) return;
+    // 대상 목록을 보여주는 확인창 + 건수 입력 — 화면 밖 행이 섞여 삭제되는 사고 방지
+    const titles = targets.map(s => { const p = data.find(d => d.slug===s); return `• ${p?.title || s}`; });
+    const preview = titles.slice(0, 8).join('\n') + (titles.length > 8 ? `\n… 외 ${titles.length - 8}건` : '');
+    const ok = await new Promise(resolve => setConfirmState({
+      title: `프로젝트 ${targets.length}건 일괄 삭제`,
+      message: `${preview}\n\nDB 레코드 + 포트폴리오 파일이 전부 제거되며 되돌릴 수 없습니다.`,
+      confirmLabel: '삭제', destructive: true,
+      confirmInput: { label: `확인을 위해 건수 ${targets.length} 를 입력하세요`, match: String(targets.length) },
+      onConfirm: () => resolve(true), onCancel: () => resolve(false),
+    }));
+    if (!ok) return;
     setSaving(true);
     let success = 0, failSlugs = [];
     for (const slug of targets) {
@@ -4218,7 +4259,7 @@ function App({ session }) {
     });
     setSaving(false);
     if (failSlugs.length === 0) toast(`${success}건 삭제 완료`,'success');
-    else toast(`${success}건 삭제, ${failSlugs.length}건 실패`, failSlugs.length===targets.length?'error':'info');
+    else toast(`${success}건 삭제, ${failSlugs.length}건 실패: ${failSlugs.slice(0,3).join(', ')}${failSlugs.length>3?' …':''}`, failSlugs.length===targets.length?'error':'info');
   }, [data, toast]);
 
   const handleDelete = useCallback(async (project) => {
@@ -4357,7 +4398,7 @@ function App({ session }) {
     return (
       <div>
         <ToastContainer toasts={toasts} />
-        <ConfirmModal state={confirmState} onCancel={() => setConfirmState(null)} />
+        <ConfirmModal state={confirmState} onCancel={() => { confirmState?.onCancel?.(); setConfirmState(null); }} />
         <ProjectView
           project={proj}
           milestones={milestones[route.slug] || []}
@@ -4402,11 +4443,11 @@ function App({ session }) {
   return (
     <div>
       <ToastContainer toasts={toasts} />
-      <ConfirmModal state={confirmState} onCancel={() => setConfirmState(null)} />
+      <ConfirmModal state={confirmState} onCancel={() => { confirmState?.onCancel?.(); setConfirmState(null); }} />
       {showShortcuts && <ShortcutHelp onClose={() => setShowShortcuts(false)} />}
       {selectedProject && (
         <StatusModal
-          key={selectedProject.slug+'-'+selectedProject.current_status}
+          key={selectedProject.slug}
           project={selectedProject}
           onClose={() => setSelectedProject(null)}
           onSave={handleSave}

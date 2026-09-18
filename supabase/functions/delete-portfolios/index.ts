@@ -127,6 +127,12 @@ const TABLE   = "wishket_projects";
 // 통째로 날아가면 안 된다(예: in_progress=개발 중, won=계약 논의 중). 과거에 개발중 프로젝트가
 // 실수로 삭제·캐스케이드된 사고가 있어, 삭제 직전 current_status를 확인해 보호한다.
 // 안전 삭제 가능: generated / applied / interview / meeting_done / lost.
+// 대시보드 QuickAddModal 의 SLUG_RE 와 동일 규칙
+const SLUG_RE = /^\d{6}_[a-z0-9]+(-[a-z0-9]+)*$/;
+// 2026-04 이전 등록분: 날짜 접두어 없는 kebab. DB row 존재 시에만 허용 (아래 핸들러 참고)
+const LEGACY_SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+// 슬러그와 무관하게 절대 지우면 안 되는 루트 엔트리
+const RESERVED_ROOT = new Set(["dashboard", "docs", "supabase", "scripts", "assets", "index", "readme"]);
 const PROTECTED_STATUSES = new Set([
   "won", "contracted", "in_progress",
   "maintenance_free", "maintenance_paid", "delivered", "settled",
@@ -396,6 +402,20 @@ Deno.serve(async (req) => {
 
   if (!slug) {
     return new Response(JSON.stringify({ error: "slug is required", reqId }), { status: 400, headers });
+  }
+  // slug는 프로젝트 폴더명 형식(YYMMDD_kebab)만 허용 — 루트 트리에서 path !== slug 로 필터하므로
+  // 무검증이면 "dashboard"/".github" 같은 최상위 폴더도 삭제 가능했음 (2026-09-18 하드닝).
+  if (typeof slug !== "string" || !(SLUG_RE.test(slug) || LEGACY_SLUG_RE.test(slug)) || RESERVED_ROOT.has(slug)) {
+    return new Response(JSON.stringify({ error: "slug must match YYMMDD_kebab-slug", reqId }), { status: 400, headers });
+  }
+  // 날짜 접두어 없는 구형 슬러그(예: wow-planner)는 DB 에 row 가 실제로 있을 때만 허용 —
+  // row 없는 임의 이름으로 루트 폴더를 지우는 경로를 차단한다.
+  if (!SLUG_RE.test(slug)) {
+    const legacyProbe = await getStatus(slug);
+    if (legacyProbe.kind !== "ok") {
+      console.warn(`[${reqId}] legacy slug rejected`, { slug, probe: legacyProbe });
+      return new Response(JSON.stringify({ error: "legacy slug not found in DB", reqId }), { status: 400, headers });
+    }
   }
 
   // path 모드: <slug>/portfolio-N 폴더만 삭제 (배포만 내림). DB row는 절대 건드리지 않음.
