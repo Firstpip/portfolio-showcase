@@ -3317,7 +3317,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
   useEffect(() => { setPage(1); setSelected(new Set()); }, [filter, search, dateRange, memberFilter, sortKey, sortOrder]);
   const isMobile = useMediaQuery(MOBILE_MQ);
   // 실시간 삭제 등으로 목록에서 사라진 슬러그는 선택에서도 제거
-  useEffect(() => { setSelected(prev => { const live = new Set(data.map(d => d.slug)); const next = new Set([...prev].filter(s => live.has(s))); return next.size === prev.size ? prev : next; }); }, [data]);
+  useEffect(() => { setSelected(prev => { const live = new Set((data||[]).map(d => d.slug)); const next = new Set([...prev].filter(s => live.has(s))); return next.size === prev.size ? prev : next; }); }, [data]);
   // 오늘/내일 긴급 표시가 탭을 열어둔 채로도 갱신되도록 1분 tick
   const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => { const id = setInterval(() => setNowTick(Date.now()), 60000); return () => clearInterval(id); }, []);
@@ -3710,7 +3710,8 @@ function App({ session }) {
   const [memberFilter, setMemberFilter]   = useState('');
 
   // ─── 로그인 사용자 ↔ 팀원 매칭 ───
-  const isAdmin = session?.user?.user_metadata?.role === 'admin';
+  // app_metadata는 서비스 롤/대시보드에서만 쓸 수 있음. user_metadata는 사용자 본인이 수정 가능해 권한 판정에 부적합 (2026-09-18)
+  const isAdmin = session?.user?.app_metadata?.role === 'admin';
   const currentMember = useMemo(() => {
     if (!session?.user?.id || !teamMembers.length) return null;
     return teamMembers.find(m => m.user_id === session.user.id) || null;
