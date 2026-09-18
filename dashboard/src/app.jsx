@@ -4731,13 +4731,54 @@ function App({ session }) {
 }
 
 // ─── QuickAddModal ───
+// ─── 슬러그 자동 생성 — `YYMMDD_영문-케밥` (배포 폴더명·전 시스템 조인 키. 등록 후 변경 불가) (2026-09-18) ───
+// 한글은 국어의 로마자 표기법(2000) 단순 매핑으로 음절 단위 변환. 외부 API 없이 즉시 생성.
+const RR_INITIALS = ['g','kk','n','d','tt','r','m','b','pp','s','ss','','j','jj','ch','k','t','p','h'];
+const RR_MEDIALS  = ['a','ae','ya','yae','eo','e','yeo','ye','o','wa','wae','oe','yo','u','wo','we','wi','yu','eu','ui','i'];
+const RR_FINALS   = ['','k','k','k','n','n','n','t','l','k','m','l','l','l','p','l','m','p','p','t','t','ng','t','t','k','t','p','t'];
+const SLUG_STOPWORDS = new Set(['개발','구축','제작','리뉴얼','의뢰','요청','및','작업','프로젝트','건','관련','용','위한','위해']);
+// 자주 쓰는 외래어는 발음 로마자(hompeiji) 대신 원어 철자로 — 기존 슬러그 관례(homepage, saas, platform…)와 맞춤
+const SLUG_LOANWORDS = { '홈페이지':'homepage','웹사이트':'website','사이트':'site','시스템':'system','플랫폼':'platform','앱':'app','어플':'app','웹':'web',
+  '쇼핑몰':'shopping-mall','챗봇':'chatbot','렌탈':'rental','서비스':'service','솔루션':'solution','모바일':'mobile','데이터':'data','마케팅':'marketing',
+  '디자인':'design','커뮤니티':'community','대시보드':'dashboard','포털':'portal','마켓플레이스':'marketplace','콘텐츠':'content','컨텐츠':'content',
+  '온라인':'online','스토어':'store','매칭':'matching','키오스크':'kiosk','에이전트':'agent','블로그':'blog','랜딩':'landing','페이지':'page' };
+const SLUG_RE = /^\d{6}_[a-z0-9]+(-[a-z0-9]+)*$/;
+const SLUG_BODY_MAX = 40;
+function romanizeToken(tk) {
+  let out = '';
+  for (const ch of tk) {
+    const code = ch.charCodeAt(0);
+    if (code >= 0xAC00 && code <= 0xD7A3) {
+      const i = code - 0xAC00;
+      out += RR_INITIALS[Math.floor(i / 588)] + RR_MEDIALS[Math.floor((i % 588) / 28)] + RR_FINALS[i % 28];
+    } else if (/[a-z0-9]/i.test(ch)) out += ch.toLowerCase();
+  }
+  return out;
+}
+// 제목 → 케밥 본문(날짜 접두어 제외). 불용어 제거 후 앞 4단어, 최대 40자
+function slugBodyFromTitle(title) {
+  const tokens = String(title || '').normalize('NFC').split(/[^0-9A-Za-z가-힣]+/).filter(Boolean);
+  const words = [];
+  for (const tk of tokens) {
+    if (SLUG_STOPWORDS.has(tk)) continue;
+    const r = SLUG_LOANWORDS[tk] || romanizeToken(tk);
+    if (r) words.push(r);
+    if (words.length >= 4) break;
+  }
+  return words.join('-');
+}
+// 직접 수정 입력값 정규화: 소문자·숫자·하이픈만, 하이픈 연속/양끝 제거
+const normalizeSlugBody = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/-+/g, '-').replace(/^-/, '');
+const slugDatePrefix = () => kstDateStr().replace(/-/g, '').slice(2);   // '2026-09-18' → '260918'
+
 function QuickAddModal({ onClose, onAdd, saving }) {
   const trapRef = useFocusTrap();
   const [url, setUrl]     = useState('');
   const [title, setTitle] = useState('');
   const [budget, setBudget] = useState('');
-  const [slug, setSlug]   = useState('');
-  const [slugEdited, setSlugEdited] = useState(false);
+  const [manualSlug, setManualSlug] = useState(false);   // 직접 수정 모드
+  const [slugBody, setSlugBody] = useState('');          // 직접 수정 모드의 본문
+  const [slugErr, setSlugErr] = useState('');
 
   useEffect(() => {
     const handler = e => { if (e.key === 'Escape') onClose(); };
@@ -4745,32 +4786,46 @@ function QuickAddModal({ onClose, onAdd, saving }) {
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  const extractSlug = (inputUrl) => {
-    const match = inputUrl.match(/\/project\/(\d+)/);
-    if (match && !slugEdited) {
-      const d = new Date();
-      const pad = n => String(n).padStart(2,'0');
-      const prefix = `${String(d.getFullYear()).slice(2)}${pad(d.getMonth()+1)}${pad(d.getDate())}`;
-      setSlug(`${prefix}_${match[1]}`);
-    }
-  };
-
-  const handleUrlChange = (val) => {
-    setUrl(val);
-    extractSlug(val);
-  };
+  const prefix = slugDatePrefix();
+  const wishketId = (url.match(/\/project\/(\d+)/) || [])[1] || null;
+  // 자동 생성 본문: 제목 로마자 케밥 + (URL 있으면) -w공고번호. 제목에서 아무것도 못 뽑으면 manual-난수
+  const autoBody = useMemo(() => {
+    let base = slugBodyFromTitle(title);
+    if (wishketId) base = base ? `${base}-w${wishketId}` : `w${wishketId}`;
+    if (!base) base = `manual-${Math.random().toString(36).slice(2, 6)}`;
+    return base.slice(0, SLUG_BODY_MAX).replace(/-+$/, '');
+  }, [title, wishketId]);
+  const body = manualSlug ? slugBody : autoBody;
+  const fullSlug = `${prefix}_${body}`;
+  const slugValid = SLUG_RE.test(fullSlug) && body.length <= SLUG_BODY_MAX;
 
   const handleBudgetChange = (val) => {
     const digits = val.replace(/[^0-9]/g,'');
     setBudget(digits ? Number(digits).toLocaleString() : '');
   };
 
+  // 저장 전 중복 확인 — 같은 슬러그가 있으면 -2, -3 … 접미어. 자동 모드에서만 (직접 수정은 사용자 의도 존중 → 오류로 안내)
+  const resolveUniqueSlug = async (slug) => {
+    const { data:rows, error } = await supabase.from(TABLE).select('slug').like('slug', `${slug}%`);
+    if (error) throw error;
+    const taken = new Set((rows || []).map(r => r.slug));
+    if (!taken.has(slug)) return slug;
+    if (manualSlug) return null;
+    for (let n = 2; n < 100; n++) { const c = `${slug}-${n}`; if (!taken.has(c)) return c; }
+    return null;
+  };
+
   const handleSubmit = async () => {
-    if (!slug.trim() || !title.trim()) return;
-    const today = new Date().toISOString().split('T')[0];
+    if (!slugValid || !title.trim() || saving) return;
+    setSlugErr('');
+    let slug;
+    try { slug = await resolveUniqueSlug(fullSlug); }
+    catch (e) { setSlugErr('슬러그 중복 확인 실패: ' + friendlyError(e)); return; }
+    if (!slug) { setSlugErr('이미 존재하는 슬러그입니다. 다른 값으로 수정하세요.'); setManualSlug(true); setSlugBody(body); return; }
+    const today = kstDateStr();
     const budgetVal = budget ? budget.replace(/,/g,'')+'만원' : null;
     await onAdd({
-      slug: slug.trim(),
+      slug,
       title: title.trim(),
       budget: budgetVal,
       wishket_url: url||null,
@@ -4783,7 +4838,9 @@ function QuickAddModal({ onClose, onAdd, saving }) {
   };
 
   const inputS = { width:'100%', padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.85rem', outline:'none' };
-  const canSubmit = slug.trim() && title.trim() && !saving;
+  const canSubmit = slugValid && title.trim() && !saving;
+  const focusOn  = e => e.target.style.borderColor='var(--accent)';
+  const focusOff = e => e.target.style.borderColor='var(--border)';
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
@@ -4798,30 +4855,46 @@ function QuickAddModal({ onClose, onAdd, saving }) {
         </div>
         <div style={{ padding:'1.25rem 1.5rem', display:'flex', flexDirection:'column', gap:12 }}>
           <div>
-            <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>위시켓 공고 URL</div>
-            <input type="url" value={url} onChange={e => handleUrlChange(e.target.value)}
-              placeholder="https://www.wishket.com/project/123456/"
-              style={inputS}
-              onFocus={e => e.target.style.borderColor='var(--accent)'}
-              onBlur={e  => e.target.style.borderColor='var(--border)'} />
-            {slug && <div style={{ fontSize:'0.8rem', color:'var(--accent2)', marginTop:4 }}>슬러그 자동 생성: <code>{slug}</code></div>}
-          </div>
-          <div>
-            <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>슬러그 <span style={{ color:'var(--red)' }}>*</span></div>
-            <input type="text" value={slug} onChange={e => { setSlug(e.target.value); setSlugEdited(true); }}
-              placeholder="260409_project-name"
-              style={inputS}
-              onFocus={e => e.target.style.borderColor='var(--accent)'}
-              onBlur={e  => e.target.style.borderColor='var(--border)'} />
-          </div>
-          <div>
             <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>프로젝트명 <span style={{ color:'var(--red)' }}>*</span></div>
-            <input type="text" value={title} onChange={e => setTitle(e.target.value)}
-              placeholder="AI 챗봇 개발"
+            <input type="text" value={title} onChange={e => setTitle(e.target.value)} autoFocus
+              placeholder="병원 홈페이지 지역 SEO"
               onKeyDown={e => e.key==='Enter' && canSubmit && handleSubmit()}
-              style={inputS}
-              onFocus={e => e.target.style.borderColor='var(--accent)'}
-              onBlur={e  => e.target.style.borderColor='var(--border)'} />
+              style={inputS} onFocus={focusOn} onBlur={focusOff} />
+          </div>
+          <div>
+            <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>위시켓 공고 URL (선택)</div>
+            <input type="url" value={url} onChange={e => setUrl(e.target.value)}
+              placeholder="https://www.wishket.com/project/123456/"
+              style={inputS} onFocus={focusOn} onBlur={focusOff} />
+          </div>
+          <div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:5 }}>
+              <div style={{ fontSize:'0.8rem', color:'var(--text2)', fontWeight:500 }}>슬러그 {manualSlug ? '(직접 수정)' : '(자동 생성)'}</div>
+              <button type="button" onClick={() => { if (manualSlug) { setManualSlug(false); setSlugErr(''); } else { setManualSlug(true); setSlugBody(autoBody); } }}
+                style={{ fontSize:'0.75rem', padding:'0.15rem 0.5rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer' }}>
+                {manualSlug ? '자동 생성으로' : '직접 수정'}
+              </button>
+            </div>
+            {manualSlug ? (
+              <div style={{ display:'flex', alignItems:'center' }}>
+                <span style={{ padding:'0.55rem 0.6rem', borderRadius:'8px 0 0 8px', fontSize:'0.85rem', fontFamily:'monospace', background:'var(--border)', color:'var(--text2)', border:'1px solid var(--border)', borderRight:'none', whiteSpace:'nowrap' }}>{prefix}_</span>
+                <input type="text" value={slugBody} onChange={e => { setSlugBody(normalizeSlugBody(e.target.value)); setSlugErr(''); }}
+                  onBlur={e => { setSlugBody(normalizeSlugBody(e.target.value).replace(/-+$/, '')); focusOff(e); }}
+                  placeholder="project-name" spellCheck={false} aria-label="슬러그 본문"
+                  style={{ ...inputS, borderTopLeftRadius:0, borderBottomLeftRadius:0, fontFamily:'monospace' }} onFocus={focusOn} />
+              </div>
+            ) : (
+              <div style={{ ...inputS, fontFamily:'monospace', color: title.trim() ? 'var(--text)' : 'var(--text2)', background:'var(--surface)', userSelect:'all' }}>
+                {title.trim() || wishketId ? fullSlug : `${prefix}_… (프로젝트명을 입력하면 생성)`}
+              </div>
+            )}
+            <div style={{ fontSize:'0.75rem', color: slugErr ? 'var(--red)' : (manualSlug && !slugValid) ? 'var(--red)' : 'var(--text2)', marginTop:4, lineHeight:1.5 }}>
+              {slugErr
+                ? slugErr
+                : manualSlug && !slugValid
+                  ? (body.length > SLUG_BODY_MAX ? `본문은 ${SLUG_BODY_MAX}자 이하` : '소문자 영문·숫자·하이픈만 사용, 하이픈으로 시작·끝 불가')
+                  : '배포 폴더명과 연동 키로 쓰여 등록 후에는 변경할 수 없습니다. 중복 시 자동으로 -2, -3이 붙습니다.'}
+            </div>
           </div>
           <div>
             <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>예산 (선택)</div>
@@ -4829,8 +4902,7 @@ function QuickAddModal({ onClose, onAdd, saving }) {
               <input type="text" value={budget} onChange={e => handleBudgetChange(e.target.value)}
                 placeholder="2,000"
                 style={{ ...inputS, borderTopRightRadius:0, borderBottomRightRadius:0, borderRight:'none' }}
-                onFocus={e => e.target.style.borderColor='var(--accent)'}
-                onBlur={e  => e.target.style.borderColor='var(--border)'} />
+                onFocus={focusOn} onBlur={focusOff} />
               <span style={{ padding:'0.55rem 0.7rem', borderRadius:'0 8px 8px 0', fontSize:'0.85rem', background:'var(--border)', color:'var(--text2)', border:'1px solid var(--border)', whiteSpace:'nowrap' }}>만원</span>
             </div>
           </div>
