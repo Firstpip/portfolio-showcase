@@ -287,37 +287,76 @@ function useTheme() {
 }
 
 // ─── Utils ───
-function getMeetingStatus(meetingAt) {
-  if (!meetingAt) return null;
-  const d = new Date(meetingAt);
-  return isNaN(d) ? null : d > new Date() ? 'upcoming' : 'done';
-}
-function getMeetingUrgency(meetingAt) {
-  if (!meetingAt) return null;
-  const m = new Date(meetingAt);
-  if (isNaN(m)) return null;
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
-  const dayAfter  = new Date(today); dayAfter.setDate(today.getDate() + 2);
-  if (m >= today    && m < tomorrow) return 'today';
-  if (m >= tomorrow && m < dayAfter) return 'tomorrow';
-  return null;
-}
-function toLocalInput(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d)) return '';
-  const pad = n => String(n).padStart(2,'0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-function formatMeetingAt(iso) {
+// ─── 미팅 시각 유틸 — 모든 미팅 시각은 Asia/Seoul 고정 (브라우저 시간대 무관, 2026-09-18) ───
+const KST_TZ = 'Asia/Seoul';
+const _kstFmt = new Intl.DateTimeFormat('sv-SE', { timeZone:KST_TZ, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23' });
+// ISO → { date:'YYYY-MM-DD', time:'HH:MM' } (KST). 무효값이면 null
+function kstParts(iso) {
   if (!iso) return null;
   const d = new Date(iso);
   if (isNaN(d)) return null;
-  const pad = n => String(n).padStart(2,'0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const s = _kstFmt.format(d);   // 'YYYY-MM-DD HH:MM'
+  return { date:s.slice(0,10), time:s.slice(11,16) };
 }
+// KST 날짜+시각 → ISO(UTC). 한국은 DST 없음 → +09:00 고정
+function kstToIso(date, time) {
+  if (!date || !time) return null;
+  const d = new Date(`${date}T${time}:00+09:00`);
+  return isNaN(d) ? null : d.toISOString();
+}
+function kstDateStr(d = new Date()) { return _kstFmt.format(d).slice(0,10); }
+function formatMeetingAt(iso) { const p = kstParts(iso); return p ? `${p.date} ${p.time}` : null; }
+// 예정/완료 뱃지 — 시각 비교가 아니라 프로젝트 상태 기준 (상태와 표시 불일치 방지)
+function getMeetingStatus(meetingAt, currentStatus) {
+  if (!meetingAt) return null;
+  if (currentStatus === 'meeting_done') return 'done';
+  if (currentStatus === 'interview') return 'upcoming';
+  const d = new Date(meetingAt);
+  return isNaN(d) ? null : d > new Date() ? 'upcoming' : 'done';
+}
+// 오늘/내일 긴급 표시 — KST 날짜 기준
+function getMeetingUrgency(meetingAt) {
+  const p = kstParts(meetingAt);
+  if (!p) return null;
+  if (p.date === kstDateStr()) return 'today';
+  if (p.date === kstDateStr(new Date(Date.now() + 86400000))) return 'tomorrow';
+  return null;
+}
+// 주말·업무시간 외 경고 문구 (저장은 허용, 안내만)
+function meetingTimeWarnings(iso) {
+  const p = kstParts(iso);
+  if (!p) return [];
+  const w = [];
+  const dow = new Date(`${p.date}T12:00:00+09:00`).getUTCDay();
+  if (dow === 0 || dow === 6) w.push('주말 일정입니다');
+  const h = Number(p.time.slice(0,2));
+  if (h < 8 || h >= 20) w.push('업무시간(08~20시) 외 일정입니다');
+  return w;
+}
+const sameInstant = (a, b) => !!a && !!b && new Date(a).getTime() === new Date(b).getTime();
+// 같은 미팅(meeting_at 동일)의 가장 최근 메모 — history는 append-only라 "수정"은 새 항목 추가로 표현됨
+function latestMeetingMemo(history, meetingAt) {
+  if (!meetingAt) return '';
+  const hs = (history || []).filter(h => sameInstant(h.meeting_at, meetingAt) && h.meeting_memo);
+  return hs.length ? hs[hs.length - 1].meeting_memo : '';
+}
+// 미팅 이력을 meeting_at 단위로 묶기 — 종류/메모는 최신값, 노트는 최신 노트. 최신 미팅이 먼저
+function groupMeetingHistory(history) {
+  const map = new Map();
+  (history || []).forEach(h => {
+    if (!h.meeting_at) return;
+    const t = new Date(h.meeting_at).getTime();
+    if (isNaN(t)) return;
+    const g = map.get(t) || { meeting_at:h.meeting_at, meeting_type:null, meeting_memo:'', note:'', count:0 };
+    if (h.meeting_type) g.meeting_type = h.meeting_type;
+    if (h.meeting_memo) g.meeting_memo = h.meeting_memo;
+    if (h.note) g.note = h.note;
+    g.count++;
+    map.set(t, g);
+  });
+  return [...map.entries()].sort((a,b) => b[0]-a[0]).map(([,g]) => g);
+}
+const meetingTypeLabel = (k) => MEETING_TYPES.find(t => t.key===k)?.label || '미지정';
 function parseBudgetNum(v) {
   // 범위 표기("1000-3000만원")는 첫 숫자 그룹만, 단일 표기는 전체 숫자 사용
   const s = String(v||'');
@@ -2276,6 +2315,63 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
 }
 
 // ─── StatusModal ───
+// ─── 미팅 일시 피커 — 날짜 + 30분 단위 프리셋(08:00~20:00) + 직접 입력. value/onChange는 ISO(UTC) (2026-09-18) ───
+const MEETING_TIME_PRESETS = (() => {
+  const a = [];
+  for (let h = 8; h <= 20; h++) { a.push(`${String(h).padStart(2,'0')}:00`); if (h < 20) a.push(`${String(h).padStart(2,'0')}:30`); }
+  return a;
+})();
+function MeetingDateTimePicker({ value, onChange, inputStyle, disabled }) {
+  const init = kstParts(value);
+  const [date, setDate] = useState(init?.date || '');
+  const [time, setTime] = useState(init?.time || '');
+  const [custom, setCustom] = useState(!!init && !MEETING_TIME_PRESETS.includes(init.time));
+  // 외부 value가 바뀌면(저장 후 갱신·일정 삭제) 동기화. 로컬 입력 중(날짜만 입력 등)엔 건드리지 않음
+  useEffect(() => {
+    if (kstToIso(date, time) === (value || null)) return;
+    const p = kstParts(value);
+    setDate(p?.date || ''); setTime(p?.time || '');
+    setCustom(!!p && !MEETING_TIME_PRESETS.includes(p.time));
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const emit = (d, t) => onChange(kstToIso(d, t));
+  const quick = (days) => { const d = kstDateStr(new Date(Date.now() + days*86400000)); setDate(d); emit(d, time); };
+  const chip = (active=false) => ({ padding:'0.2rem 0.55rem', borderRadius:6, fontSize:'0.75rem', cursor:disabled?'default':'pointer',
+    border:`1px solid ${active?'var(--yellow)':'var(--border)'}`, background:active?'var(--surface-warning-soft)':'var(--surface2)', color:active?'var(--yellow)':'var(--text2)' });
+  const fieldS = { ...inputStyle, width:'auto', fontFamily:'inherit' };
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+        <input type="date" value={date} disabled={disabled} aria-label="미팅 날짜"
+          onChange={e => { setDate(e.target.value); emit(e.target.value, time); }} style={{ ...fieldS, flex:'1 1 150px' }} />
+        {custom ? (
+          <input type="time" step="300" value={time} disabled={disabled} aria-label="미팅 시각 (직접 입력)"
+            onChange={e => { setTime(e.target.value); emit(date, e.target.value); }} style={{ ...fieldS, flex:'1 1 110px' }} />
+        ) : (
+          <select value={time} disabled={disabled} aria-label="미팅 시각"
+            onChange={e => { const v = e.target.value; if (v === '__custom') { setCustom(true); return; } setTime(v); emit(date, v); }}
+            style={{ ...fieldS, flex:'1 1 110px' }}>
+            <option value="">시각 선택</option>
+            {MEETING_TIME_PRESETS.map(t => <option key={t} value={t}>{t}</option>)}
+            <option value="__custom">직접 입력…</option>
+          </select>
+        )}
+        {custom && (
+          <button type="button" disabled={disabled} style={chip()} title="30분 단위 프리셋으로 돌아가기"
+            onClick={() => { setCustom(false); if (!MEETING_TIME_PRESETS.includes(time)) { setTime(''); emit(date, ''); } }}>30분 단위</button>
+        )}
+      </div>
+      <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+        {[['오늘',0],['내일',1],['모레',2],['다음주',7]].map(([l,o]) => {
+          const d = kstDateStr(new Date(Date.now() + o*86400000));
+          return <button type="button" key={l} disabled={disabled} onClick={() => quick(o)} style={chip(date===d)}>{l}</button>;
+        })}
+        {(date || time) && <button type="button" disabled={disabled} style={{ ...chip(), marginLeft:'auto' }}
+          onClick={() => { setDate(''); setTime(''); setCustom(false); onChange(null); }}>지우기</button>}
+      </div>
+    </div>
+  );
+}
+
 function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, onDelete, saving, teamMembers, milestones, milestonesSetupNeeded, onMilestoneUpdate, onMilestoneDelete, onMilestoneAdd, onMilestoneReorder, onCreateFromTemplate, onOpenProjectView, onBulkCreateWeekly, onClearWeeklyPlan, onRequestConfirm, onBackfillAssignees }) {
   const trapRef = useFocusTrap();
   const isPostWon = HAS_MILESTONES.includes(project?.current_status);
@@ -2293,8 +2389,10 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const [startDateChanged, setStartDateChanged] = useState(false);
   const [editDeadline, setEditDeadline] = useState(project?.deadline||'');
   const [deadlineChanged, setDeadlineChanged] = useState(false);
-  const [editMeeting, setEditMeeting] = useState(toLocalInput(project?.meeting_at));
-  const [editMeetingType, setEditMeetingType] = useState(project?.meeting_type||'');
+  // 미팅 폼 모드: '미팅 완료' + 기존 미팅 있음 → "추가 미팅 등록"(새 미팅, 빈 폼). 그 외 → 현재 미팅 수정(프리필)
+  const isAddMode = project?.current_status === 'meeting_done' && !!project?.meeting_at;
+  const [editMeeting, setEditMeeting] = useState(isAddMode ? '' : (project?.meeting_at || ''));   // ISO(UTC) 또는 ''
+  const [editMeetingType, setEditMeetingType] = useState(isAddMode ? '' : (project?.meeting_type || ''));
   const [editMemo, setEditMemo] = useState(project?.memo||'');
   const [memoChanged, setMemoChanged] = useState(false);
   const [editUrl, setEditUrl] = useState(project?.wishket_url||'');
@@ -2314,7 +2412,10 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const [infoChanged, setInfoChanged] = useState(false);
   const [dateChanged, setDateChanged] = useState(false);
   const [meetingChanged, setMeetingChanged] = useState(false);
-  const [editMeetingMemo, setEditMeetingMemo] = useState('');
+  const [editMeetingMemo, setEditMeetingMemo] = useState(() => isAddMode ? '' : latestMeetingMemo(project?.history, project?.meeting_at));
+  // 추가 등록 모드에서 직전(완료) 미팅의 결과 메모를 따로 수정
+  const [resultMemo, setResultMemo] = useState(() => isAddMode ? latestMeetingMemo(project?.history, project?.meeting_at) : '');
+  const [resultMemoChanged, setResultMemoChanged] = useState(false);
 
   const parseBN = (v) => { const d=(v||'').replace(/[^0-9]/g,''); return d ? Number(d).toLocaleString() : ''; };
   const [budgetNum, setBudgetNum] = useState(() => parseBN(project?.budget));
@@ -2325,7 +2426,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const [assignChanged, setAssignChanged] = useState(false);
 
   // ── 미저장 변경 통합 플래그 — 닫기 가드 + 외부 변경 경고에 사용 (2026-06-07) ──
-  const anyDirty = infoChanged||dateChanged||startDateChanged||deadlineChanged||urlChanged||memoChanged||linksChanged||assignChanged||meetingChanged||!!newStatus;
+  const anyDirty = infoChanged||dateChanged||startDateChanged||deadlineChanged||urlChanged||memoChanged||linksChanged||assignChanged||meetingChanged||resultMemoChanged||!!newStatus;
 
   // 편집 중(미저장 변경 존재)에 project prop이 Realtime 외부 갱신으로 교체되면 경고 배너.
   // 자기 저장은 dirty 플래그를 같은 배치에서 해제하므로 echo에는 발화하지 않음.
@@ -2698,38 +2799,124 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
 
           {/* 미팅 탭 */}
           {tab === 'meeting' && (() => {
-            const meetingHistory = (project.history||[]).filter(h => h.meeting_at).sort((a,b) => new Date(b.meeting_at)-new Date(a.meeting_at));
+            const st = project.current_status;
+            const meetingHistory = groupMeetingHistory(project.history);
             const currentMeeting = project.meeting_at ? { meeting_at:project.meeting_at, meeting_type:project.meeting_type } : null;
+            const nowMs = Date.now();
+            const selMs = editMeeting ? new Date(editMeeting).getTime() : null;
+            const isFuture = selMs != null && selMs > nowMs;
+            const isPast   = selMs != null && selMs <= nowMs;
+            const timeWarns = editMeeting ? meetingTimeWarnings(editMeeting) : [];
+            // 미래 일시 등록 시 '미팅 예정'으로 전환되는 상태: 지원(applied) / 미팅 완료(meeting_done)
+            const willTransition = isFuture && (st === 'applied' || st === 'meeting_done');
+            const missing = [];
+            if (!editMeeting) missing.push('일시');
+            if (!editMeetingType) missing.push('종류');
+            const canSave = meetingChanged && missing.length === 0 && !saving;
+            const formTitle = isAddMode ? '추가 미팅 등록' : currentMeeting ? '미팅 수정' : '미팅 등록';
+            const bannerS = (kind) => ({
+              padding:'0.5rem 0.7rem', borderRadius:8, marginBottom:'0.75rem', fontSize:'0.8rem', lineHeight:1.5,
+              background:`var(--surface-${kind}-soft)`, border:`1px solid var(--surface-${kind}-mid)`,
+              color: kind==='success'?'var(--green)':kind==='warning'?'var(--yellow)':kind==='danger'?'var(--red)':'var(--text2)',
+            });
+            const saveMeeting = () => {
+              const iso = editMeeting;
+              const type = editMeetingType || null;
+              const memo = editMeetingMemo.trim() || null;
+              if (willTransition) {
+                const entries = [];
+                if (st === 'meeting_done' && currentMeeting) {
+                  entries.push({ status:'meeting_done', note:'미팅 완료 (아카이브)', meeting_at:currentMeeting.meeting_at,
+                    meeting_type:currentMeeting.meeting_type||null, meeting_memo:latestMeetingMemo(project.history, currentMeeting.meeting_at)||null });
+                }
+                entries.push({ status:'interview', note: st==='meeting_done' ? '추가 미팅 예정' : '미팅 예정', meeting_at:iso, meeting_type:type, meeting_memo:memo });
+                onAppendHistory(project, entries, { meeting_at:iso, meeting_type:type, current_status:'interview' });
+              } else {
+                let note;
+                if (!currentMeeting) note = '미팅 등록';
+                else if (isAddMode) note = '지난 미팅 기록 추가';
+                else {
+                  const parts = [];
+                  if (!sameInstant(iso, currentMeeting.meeting_at)) parts.push(`일시 ${formatMeetingAt(currentMeeting.meeting_at)} → ${formatMeetingAt(iso)}`);
+                  if (type !== (currentMeeting.meeting_type||null)) parts.push(`종류 ${meetingTypeLabel(currentMeeting.meeting_type)} → ${meetingTypeLabel(type)}`);
+                  if ((memo||'') !== (latestMeetingMemo(project.history, currentMeeting.meeting_at)||'')) parts.push('메모 수정');
+                  note = parts.length ? `미팅 변경 — ${parts.join(', ')}` : '미팅 정보 재저장';
+                }
+                onAppendHistory(project, [{ status:st, note, meeting_at:iso, meeting_type:type, meeting_memo:memo }], { meeting_at:iso, meeting_type:type });
+              }
+              setMeetingChanged(false);
+            };
+            const deleteMeeting = () => {
+              const go = () => {
+                onAppendHistory(project, [{ status:st, note:`미팅 일정 삭제 (${formatMeetingAt(currentMeeting.meeting_at)})` }], { meeting_at:null, meeting_type:null });
+                setEditMeeting(''); setEditMeetingType(''); setEditMeetingMemo(''); setMeetingChanged(false);
+              };
+              if (onRequestConfirm) onRequestConfirm({ title:'미팅 일정 삭제', message:`${formatMeetingAt(currentMeeting.meeting_at)} 일정을 삭제합니다.\n이력은 남고, 프로젝트의 미팅 일시만 비워집니다.`, confirmLabel:'삭제', destructive:true, onConfirm:go });
+              else go();
+            };
             return (
               <>
                 {currentMeeting && (() => {
-                  const ms = getMeetingStatus(currentMeeting.meeting_at);
+                  const ms = getMeetingStatus(currentMeeting.meeting_at, st);
                   const mt = MEETING_TYPES.find(t => t.key===currentMeeting.meeting_type);
                   const mStr = formatMeetingAt(currentMeeting.meeting_at);
                   const isDone = ms === 'done';
+                  const urg = !isDone ? getMeetingUrgency(currentMeeting.meeting_at) : null;
                   return (
-                    <div style={{ padding:'0.7rem 0.9rem', borderRadius:8, background:isDone?'var(--surface-info-soft)':'var(--surface-warning-soft)', border:`1px solid ${isDone?'var(--surface-info-mid)':'var(--surface-warning-mid)'}`, marginBottom:'1rem', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                      <div>
-                        <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:2 }}>{isDone?'최근 미팅':'다음 미팅'}</div>
-                        <div style={{ fontSize:'0.9rem', fontWeight:600, color:isDone?'var(--blue)':'var(--yellow)' }}>{mt&&mt.emoji+' '}{mStr}</div>
+                    <div style={{ padding:'0.7rem 0.9rem', borderRadius:8, background:isDone?'var(--surface-info-soft)':'var(--surface-warning-soft)', border:`1px solid ${isDone?'var(--surface-info-mid)':'var(--surface-warning-mid)'}`, marginBottom:'1rem' }}>
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8 }}>
+                        <div>
+                          <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:2 }}>{isDone?'최근 미팅':'다음 미팅'}</div>
+                          <div style={{ fontSize:'0.9rem', fontWeight:600, color:isDone?'var(--blue)':'var(--yellow)' }}>
+                            {mt&&mt.emoji+' '}{mStr}
+                            {urg && <span style={{ marginLeft:8, padding:'0.1rem 0.4rem', borderRadius:4, fontSize:'0.75rem', background:'var(--surface-warning-mid)' }}>{urg==='today'?'오늘':'내일'}</span>}
+                          </div>
+                        </div>
+                        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                          <span style={{ padding:'0.15rem 0.45rem', borderRadius:5, fontSize:'0.8rem', fontWeight:600, background:isDone?'var(--surface-info-mid)':'var(--surface-warning-mid)', color:isDone?'var(--blue)':'var(--yellow)' }}>{isDone?'완료':'예정'}</span>
+                          {!isDone && st !== 'meeting_done' && (
+                            <button onClick={deleteMeeting} disabled={saving} title="미팅 일정 삭제"
+                              style={{ padding:'0.15rem 0.45rem', borderRadius:5, fontSize:'0.75rem', border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer' }}>일정 삭제</button>
+                          )}
+                        </div>
                       </div>
-                      <span style={{ padding:'0.15rem 0.45rem', borderRadius:5, fontSize:'0.8rem', fontWeight:600, background:isDone?'var(--surface-info-mid)':'var(--surface-warning-mid)', color:isDone?'var(--blue)':'var(--yellow)' }}>{isDone?'완료':'예정'}</span>
+                      {isAddMode && (
+                        <div style={{ marginTop:8 }}>
+                          <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginBottom:4 }}>미팅 결과 메모</div>
+                          <textarea value={resultMemo} placeholder="논의 내용, 고객 반응, 다음 액션…"
+                            onChange={e => { setResultMemo(e.target.value); setResultMemoChanged(true); }}
+                            style={{ ...inputS, minHeight:56, resize:'vertical', fontFamily:'inherit', lineHeight:1.5 }} />
+                          {resultMemoChanged && (
+                            <button disabled={saving} style={{ ...saveBtnS(true), marginTop:6 }}
+                              onClick={() => {
+                                onAppendHistory(project, [{ status:st, note:'미팅 결과 메모 수정', meeting_at:currentMeeting.meeting_at, meeting_type:currentMeeting.meeting_type||null, meeting_memo:resultMemo.trim()||null }], {});
+                                setResultMemoChanged(false);
+                              }}>{saving?'저장 중...':'결과 메모 저장'}</button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
 
+                {st === 'interview' && !currentMeeting && (
+                  <div style={bannerS('danger')}>⚠️ '미팅 예정' 상태인데 등록된 일정이 없습니다. 일시를 등록하거나 상태 탭에서 상태를 되돌리세요.</div>
+                )}
+
                 {meetingHistory.length > 0 && (
                   <div style={{ marginBottom:'1rem' }}>
-                    <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:6, fontWeight:600 }}>미팅 이력</div>
+                    <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:6, fontWeight:600 }}>미팅 이력 ({meetingHistory.length})</div>
                     <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
                       {meetingHistory.map((h,i) => {
                         const mt = MEETING_TYPES.find(t => t.key===h.meeting_type);
+                        const isCur = currentMeeting && sameInstant(h.meeting_at, currentMeeting.meeting_at);
                         return (
-                          <div key={i} style={{ padding:'0.45rem 0.6rem', borderRadius:6, background:'var(--surface2)', fontSize:'0.8rem' }}>
+                          <div key={i} style={{ padding:'0.45rem 0.6rem', borderRadius:6, background:'var(--surface2)', fontSize:'0.8rem', border:isCur?'1px solid var(--border)':'1px solid transparent' }}>
                             <div style={{ display:'flex', alignItems:'center', gap:8 }}>
                               <span>{mt?mt.emoji:'📅'}</span>
                               <span style={{ color:'var(--text2)' }}>{formatMeetingAt(h.meeting_at)}</span>
-                              {h.note && <span style={{ color:'var(--text2)', opacity:0.6, fontSize:'0.8rem' }}>— {h.note}</span>}
+                              {mt && <span style={{ color:'var(--text2)', opacity:0.7 }}>{mt.label}</span>}
+                              {h.note && <span style={{ color:'var(--text2)', opacity:0.6, fontSize:'0.8rem', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>— {h.note}</span>}
                             </div>
                             {h.meeting_memo && <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--text2)', lineHeight:1.5, paddingLeft:22, whiteSpace:'pre-wrap' }}>{h.meeting_memo}</div>}
                           </div>
@@ -2739,73 +2926,60 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                   </div>
                 )}
 
-                <div style={{ fontSize:'0.85rem', fontWeight:600, marginBottom:8 }}>{currentMeeting?(project.current_status==='meeting_done'?'추가 미팅 등록':'미팅 수정'):'미팅 등록'}</div>
-                {project.current_status === 'meeting_done' && (() => {
-                  const selectedIso = editMeeting ? new Date(editMeeting) : null;
-                  const isFuture = selectedIso && selectedIso > new Date();
-                  const isPast   = selectedIso && selectedIso <= new Date();
-                  if (isFuture) return (
-                    <div style={{ padding:'0.5rem 0.7rem', borderRadius:8, background:'var(--surface-success-soft)', border:'1px solid var(--surface-success-mid)', marginBottom:'0.75rem', fontSize:'0.8rem', color:'var(--green)' }}>
-                      ✅ 미래 일정 — 저장 시 '미팅 예정' 상태로 자동 전환됩니다
-                    </div>
-                  );
-                  if (isPast) return (
-                    <div style={{ padding:'0.5rem 0.7rem', borderRadius:8, background:'var(--surface-neutral-soft)', border:'1px solid var(--surface-neutral-mid)', marginBottom:'0.75rem', fontSize:'0.8rem', color:'var(--text2)' }}>
-                      ℹ️ 과거 일정 — 상태 전환 없이 미팅 기록만 저장됩니다
-                    </div>
-                  );
-                  return (
-                    <div style={{ padding:'0.5rem 0.7rem', borderRadius:8, background:'var(--surface-warning-soft)', border:'1px solid var(--surface-warning-mid)', marginBottom:'0.75rem', fontSize:'0.8rem', color:'var(--yellow)' }}>
-                      💡 미래 일정을 등록하면 자동으로 '미팅 예정'으로 전환됩니다
-                    </div>
-                  );
-                })()}
+                <div style={{ fontSize:'0.85rem', fontWeight:600, marginBottom:8 }}>{formTitle}</div>
+
+                {/* 상태별 안내 — 저장하면 무슨 일이 생기는지 미리 알린다 */}
+                {editMeeting ? (
+                  isFuture ? (
+                    willTransition
+                      ? <div style={bannerS('success')}>✅ 미래 일정 — 저장 시 '미팅 예정' 상태로 자동 전환됩니다</div>
+                      : null
+                  ) : st === 'interview' ? (
+                    <div style={bannerS('warning')}>⏱ 이미 지난 시각입니다. 저장하면 잠시 후 '미팅 완료'로 자동 전환됩니다. 앞으로 잡힌 미팅이면 일시를 다시 확인하세요.</div>
+                  ) : (
+                    <div style={bannerS('neutral')}>ℹ️ 과거 일정 — 상태 전환 없이 미팅 기록만 저장됩니다</div>
+                  )
+                ) : (
+                  (st === 'applied' || st === 'meeting_done')
+                    ? <div style={bannerS('warning')}>💡 미래 일정을 등록·저장하면 자동으로 '미팅 예정'으로 전환됩니다</div>
+                    : null
+                )}
+                {timeWarns.length > 0 && (
+                  <div style={bannerS('warning')}>{timeWarns.map(w => `⚠️ ${w}`).join(' · ')}</div>
+                )}
+
                 <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
                   <div>
-                    <div style={labelS}>미팅 일시</div>
-                    <input type="datetime-local" value={editMeeting} onChange={e => { setEditMeeting(e.target.value); setMeetingChanged(true); }} style={inputS} />
+                    <div style={labelS}>미팅 일시 <span style={{ color:'var(--red)' }}>*</span></div>
+                    <MeetingDateTimePicker value={editMeeting} inputStyle={inputS} disabled={saving}
+                      onChange={iso => { setEditMeeting(iso || ''); setMeetingChanged(true); }} />
                   </div>
                   <div>
-                    <div style={labelS}>미팅 종류</div>
-                    <div style={{ display:'flex', gap:6 }}>
+                    <div style={labelS}>미팅 종류 <span style={{ color:'var(--red)' }}>*</span></div>
+                    <div style={{ display:'flex', gap:6 }} role="radiogroup" aria-label="미팅 종류">
                       {MEETING_TYPES.map(mt => {
                         const sel = editMeetingType===mt.key;
-                        return (<button key={mt.key} onClick={() => { setEditMeetingType(mt.key); setMeetingChanged(true); }} style={{ flex:1, padding:'0.5rem', borderRadius:8, fontSize:'0.85rem', cursor:'pointer', border:sel?'2px solid var(--yellow)':'2px solid transparent', transition:'all 0.15s', background:sel?'var(--yellow)30':'var(--surface2)', color:sel?'var(--yellow)':'var(--text2)', fontWeight:sel?600:400 }}>{mt.emoji} {mt.label}</button>);
+                        return (<button key={mt.key} role="radio" aria-checked={sel} onClick={() => { setEditMeetingType(sel ? '' : mt.key); setMeetingChanged(true); }} title={sel ? '다시 클릭하면 선택 해제' : undefined} style={{ flex:1, padding:'0.5rem', borderRadius:8, fontSize:'0.85rem', cursor:'pointer', border:sel?'2px solid var(--yellow)':'2px solid transparent', transition:'all 0.15s', background:sel?'var(--yellow)30':'var(--surface2)', color:sel?'var(--yellow)':'var(--text2)', fontWeight:sel?600:400 }}>{mt.emoji} {mt.label}</button>);
                       })}
                     </div>
                   </div>
                   <div>
                     <div style={labelS}>미팅 메모</div>
-                    <textarea value={editMeetingMemo} placeholder="논의 내용, 다음 액션 등..."
+                    <textarea value={editMeetingMemo} placeholder={isAddMode ? '다음 미팅 안건, 준비 사항…' : '논의 내용, 다음 액션 등...'}
                       onChange={e => { setEditMeetingMemo(e.target.value); setMeetingChanged(true); }}
                       style={{ ...inputS, minHeight:72, resize:'vertical', fontFamily:'inherit', lineHeight:1.5 }} />
                   </div>
                 </div>
-                {meetingChanged && (() => {
-                  const iso = editMeeting ? new Date(editMeeting).toISOString() : null;
-                  const willTransition = project.current_status==='meeting_done' && iso && new Date(iso)>new Date();
-                  const shouldArchive = willTransition && currentMeeting;
-                  return (
-                    <button onClick={() => {
-                      const entries = [];
-                      if (shouldArchive) entries.push({ status:'meeting_done', note:'미팅 완료 (아카이브)', meeting_at:currentMeeting.meeting_at, meeting_type:currentMeeting.meeting_type, meeting_memo:editMeetingMemo||null });
-                      if (willTransition) {
-                        entries.push({ status:'interview', note:'추가 미팅 예정', meeting_at:iso, meeting_type:editMeetingType||null, meeting_memo:editMeetingMemo||null });
-                        onAppendHistory(project, entries, { meeting_at:iso, meeting_type:editMeetingType||null, current_status:'interview' });
-                      } else {
-                        const isChange = !!currentMeeting;
-                        const changeNote = isChange
-                          ? `미팅 변경 (${currentMeeting.meeting_at?.slice(0,10)} → ${iso?.slice(0,10)||'삭제'})`
-                          : '미팅 등록';
-                        onAppendHistory(project, [{ status:project.current_status, note:changeNote, meeting_at:iso, meeting_type:editMeetingType||null, meeting_memo:editMeetingMemo||null }], { meeting_at:iso, meeting_type:editMeetingType||null });
-                      }
-                      setEditMeetingMemo('');
-                      setMeetingChanged(false);
-                    }} disabled={saving} style={{ ...saveBtnS(true), width:'100%', marginTop:12 }}>
-                      {saving?'저장 중...':willTransition?'📅 미팅 등록 + 미팅 예정 전환':'미팅 저장'}
+                {meetingChanged && (
+                  <>
+                    {missing.length > 0 && (
+                      <div style={{ marginTop:8, fontSize:'0.8rem', color:'var(--red)' }}>미팅 {missing.join('·')}을(를) 입력해야 저장할 수 있습니다</div>
+                    )}
+                    <button onClick={saveMeeting} disabled={!canSave} style={{ ...saveBtnS(canSave), width:'100%', marginTop:missing.length?6:12, cursor:canSave?'pointer':'not-allowed' }}>
+                      {saving?'저장 중...':willTransition?'📅 미팅 등록 + 미팅 예정 전환':isAddMode?'지난 미팅 기록 저장':currentMeeting?'미팅 변경 저장':'미팅 저장'}
                     </button>
-                  );
-                })()}
+                  </>
+                )}
 
                 {/* 담당자 지정 */}
                 <div style={{ marginTop:'1.25rem', borderTop:'1px solid var(--border)', paddingTop:'1.25rem' }}>
@@ -2847,13 +3021,21 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                   )}
                 </div>
 
-                {(project.current_status==='applied'||project.current_status==='interview'||project.current_status==='meeting_done') && (
+                {st === 'interview' && (
                   <div style={{ marginTop:'1.5rem', borderTop:'1px solid var(--border)', paddingTop:'1rem' }}>
                     <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:8 }}>빠른 상태 변경</div>
                     <div style={{ display:'flex', gap:8 }}>
-                      {project.current_status==='applied' && <button onClick={() => onSave(project,'interview','미팅 예정')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'var(--surface-warning-mid)', color:'var(--yellow)' }}>📅 미팅 예정으로 변경</button>}
-                      {project.current_status==='interview' && <button onClick={() => onSave(project,'meeting_done','미팅 완료')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'var(--surface-info-mid)', color:'var(--blue)' }}>🤝 미팅 완료로 변경</button>}
-                      {project.current_status==='meeting_done' && <button onClick={() => onSave(project,'interview','추가 미팅 예정')} disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'var(--surface-warning-mid)', color:'var(--yellow)' }}>📅 추가 미팅 예정으로 변경</button>}
+                      <button disabled={saving} style={{ flex:1, padding:'0.5rem', borderRadius:8, border:'none', fontSize:'0.85rem', fontWeight:600, cursor:'pointer', background:'var(--surface-info-mid)', color:'var(--blue)' }}
+                        onClick={() => {
+                          const go = () => onSave(project,'meeting_done','미팅 완료');
+                          const fut = currentMeeting && new Date(currentMeeting.meeting_at) > new Date();
+                          if (fut && onRequestConfirm) onRequestConfirm({
+                            title:'미팅 완료 처리',
+                            message:`예정 시각(${formatMeetingAt(currentMeeting.meeting_at)})이 아직 지나지 않았습니다.\n완료 처리하면 미팅 시각이 지금으로 기록됩니다. 계속할까요?`,
+                            confirmLabel:'완료 처리', onConfirm:go,
+                          });
+                          else go();
+                        }}>🤝 미팅 완료로 변경</button>
                     </div>
                   </div>
                 )}
@@ -3104,6 +3286,9 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
   const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s=new Set(prev); s.has(slug)?s.delete(slug):s.add(slug); return s; }); };
   // 필터/검색/정렬 변경 시 1페이지로 자동 리셋 (빈 페이지 노출 방지)
   useEffect(() => { setPage(1); }, [filter, search, dateRange, memberFilter, sortKey, sortOrder]);
+  // 오늘/내일 긴급 표시가 탭을 열어둔 채로도 갱신되도록 1분 tick
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => { const id = setInterval(() => setNowTick(Date.now()), 60000); return () => clearInterval(id); }, []);
 
   // 1) 필터링만
   const filteredOnly = useMemo(() => {
@@ -3133,13 +3318,14 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
     const urgent=[]; const rest=[];
     for (const r of filteredOnly) {
       const _stale = r.current_status==='applied' && r.created_at && daysBetween(r.created_at, now)>=30;
-      const urg = getMeetingUrgency(r.meeting_at);
+      // 긴급(오늘/내일) 표시는 '미팅 예정' 상태에만 — 완료된 미팅이 오늘이라고 깜빡이지 않게
+      const urg = r.current_status==='interview' ? getMeetingUrgency(r.meeting_at) : null;
       if (urg) urgent.push({ ...r, _stale, _urgency:urg });
       else rest.push({ ...r, _stale });
     }
     urgent.sort((a,b) => new Date(a.meeting_at)-new Date(b.meeting_at));
     return { urgent, rest };
-  }, [filteredOnly]);
+  }, [filteredOnly, nowTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 3) 정렬 (정렬 키만 바뀔 때 재계산)
   const filtered = useMemo(() => {
@@ -3236,7 +3422,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
             ) : pagedRows.map(r => {
               const meta = STATUS_META[r.current_status]||{};
               const meetingStr = formatMeetingAt(r.meeting_at);
-              const urgency = r._urgency||getMeetingUrgency(r.meeting_at);
+              const urgency = r._urgency||null;
               const urgBg  = urgency==='today'?'var(--surface-warning-soft)':urgency==='tomorrow'?'var(--surface-info-soft)':r._stale?'var(--surface-danger-soft)':'transparent';
               const urgBdr = urgency==='today'?'var(--surface-warning-strong)':urgency==='tomorrow'?'var(--surface-info-mid)':r._stale?'var(--surface-danger-mid)':'var(--border)';
               return (
@@ -3293,7 +3479,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                         </span>
                       ) : <span style={{ color:'var(--text2)' }}>—</span>
                     ) : meetingStr ? (() => {
-                      const ms = getMeetingStatus(r.meeting_at);
+                      const ms = getMeetingStatus(r.meeting_at, r.current_status);
                       const mt = MEETING_TYPES.find(t => t.key===r.meeting_type);
                       const isDone = ms==='done';
                       const urgLabel = urgency==='today'?'오늘':urgency==='tomorrow'?'내일':null;
@@ -3446,12 +3632,11 @@ function App({ session }) {
 
   const checkMeetingNotifications = useCallback((rows) => {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    const todayStr = new Date().toISOString().split('T')[0];
-    const key = `notified_${todayStr}`;
+    const key = `notified_${kstDateStr()}`;
     const notified = JSON.parse(localStorage.getItem(key)||'[]');
     const now = new Date();
     rows.forEach(p => {
-      if (!p.meeting_at) return;
+      if (!p.meeting_at || p.current_status !== 'interview') return;
       const m = new Date(p.meeting_at);
       const diffH = (m - now) / 3600000;
       if (diffH >= 0 && diffH <= 24 && !notified.includes(p.slug)) {
@@ -3537,6 +3722,21 @@ function App({ session }) {
     setData(finalRows); setConnected(true);
     checkMeetingNotifications(finalRows);
   }, [toast, checkMeetingNotifications]);
+
+  // 미팅 시각 경과 자동 전환 — 페이지 로드뿐 아니라 열어둔 탭에서도 1분 주기로 확인해 RPC 호출 (2026-09-18)
+  const [meetingTick, setMeetingTick] = useState(() => Date.now());
+  useEffect(() => { const id = setInterval(() => setMeetingTick(Date.now()), 60000); return () => clearInterval(id); }, []);
+  const passedSigRef = useRef('');
+  useEffect(() => {
+    if (!data) return;
+    const passed = data.filter(d => d.current_status==='interview' && d.meeting_at && new Date(d.meeting_at).getTime() <= meetingTick).map(d => d.slug).sort().join(',');
+    if (!passed || passed === passedSigRef.current) return;
+    passedSigRef.current = passed;
+    supabase.rpc('transition_passed_meetings').then(({ data:n, error:e }) => {
+      if (e) { console.warn('미팅 자동 전환 RPC 실패:', e.message); passedSigRef.current = ''; return; }
+      if (n > 0) toast(`🤝 미팅 경과 자동 전환 ${n}건 → 미팅 완료`, 'info');
+    });
+  }, [data, meetingTick, toast]);
 
   useEffect(() => {
     loadData();
@@ -4043,11 +4243,18 @@ function App({ session }) {
   }, [toast]);
 
   const handleSave = useCallback(async (project, newStatus, note) => {
+    // '미팅 예정' 진입 가드 — 일정 없이/지난 일정으로 들어가면 자동 전환이 곧바로 되돌려(핑퐁) 상태가 꼬인다 (2026-09-18)
+    if (newStatus === 'interview') {
+      if (!project.meeting_at) { toast('미팅 일시를 먼저 등록하세요. 미팅 탭에서 미래 일정을 저장하면 자동으로 전환됩니다.', 'error'); return; }
+      if (new Date(project.meeting_at) <= new Date()) { toast('등록된 미팅 시각이 이미 지났습니다. 미팅 탭에서 새 일시를 등록하세요.', 'error'); return; }
+    }
     setSaving(true);
     try {
       const entry = { status:newStatus, note:note||'' };
       if (newStatus==='meeting_done' && project.meeting_at) { entry.meeting_at=project.meeting_at; entry.meeting_type=project.meeting_type||null; }
       const fields = { current_status:newStatus };
+      // 예정 시각 전에 완료 처리하면 미팅 시각을 지금으로 맞춤 — 완료 상태에 미래 일정이 남아 긴급표시/알림이 계속 뜨는 불일치 방지
+      if (newStatus==='meeting_done' && project.meeting_at && new Date(project.meeting_at) > new Date()) fields.meeting_at = new Date().toISOString();
       // 개발 중 → 계약 논의 중 되돌리기: 착수일/마감일을 비워 시간기반 자동전환(won→in_progress)이 다시 끌어올리지 않게 한다.
       // (이 전이는 되돌리기 버튼으로만 발생 — 정방향 TRANSITION_TARGETS에는 in_progress→won 경로가 없음)
       if (project.current_status === 'in_progress' && newStatus === 'won') { fields.start_date = null; fields.deadline = null; }
