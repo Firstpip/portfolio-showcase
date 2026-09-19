@@ -385,6 +385,14 @@ function parseBudgetNum(v) {
   return digits ? Number(digits) : 0;
 }
 // Supabase/PostgreSQL 에러를 사용자 친화 메시지로 변환
+// supabase.functions.invoke 의 non-2xx 오류는 message 가 고정 문구라 함수가 body 에 담은 reason/error 를 꺼낸다
+async function edgeErrorMessage(fnErr) {
+  try {
+    const body = fnErr?.context && typeof fnErr.context.json === 'function' ? await fnErr.context.clone().json() : null;
+    if (body?.reason || body?.error) return `${body.reason || body.error}${body.reqId ? ` (req ${body.reqId})` : ''}`;
+  } catch {}
+  return fnErr?.message || '엣지 함수 호출 실패';
+}
 function friendlyError(error) {
   if (!error) return '알 수 없는 오류가 발생했습니다.';
   const code = error.code || '';
@@ -476,9 +484,10 @@ function ConfirmModal({ state, onCancel }) {
   }, [state]);
   useEffect(() => {
     if (!state) return;
-    const h = e => { if (e.key === 'Escape') onCancel(); };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
+    // capture 단계에서 소비 — 뒤에 열린 모달(StatusModal 등)의 window keydown 리스너까지 ESC 가 전파되지 않게
+    const h = e => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); onCancel(); } };
+    window.addEventListener('keydown', h, true);
+    return () => window.removeEventListener('keydown', h, true);
   }, [state, onCancel]);
   if (!state) return null;
   const { title, message, confirmLabel = '확인', cancelLabel = '취소', destructive, onConfirm, confirmInput } = state;
@@ -1079,7 +1088,7 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
   }, [projects]);
 
   const handleAdd = async () => {
-    if (!newName.trim()) return;
+    if (!newName.trim() || saving) return;   // Enter 연타로 중복 생성 방지
     setSaving(true);
     await onAdd({ name: newName.trim(), color: newColor });
     setNewName(''); setNewColor(MEMBER_COLORS[0]);
@@ -1522,6 +1531,7 @@ function PhaseDetail({ milestone, teamMembers, saving, onUpdate, onDelete, weekO
 
   const changedFields = Object.keys(draft).filter(k => {
     if (k === 'week_number') return String(draft[k]) !== String(orig[k]);
+    if (k === 'blocked_reason' && !draft.blocked) return !!orig.blocked;   // 해제 상태의 사유 텍스트는 저장 대상이 아님
     return draft[k] !== orig[k];
   });
   const hasPending = changedFields.length > 0;
@@ -1674,7 +1684,7 @@ function MilestoneEditModal({ milestone, teamMembers, saving, onUpdate, onDelete
   if (!milestone) return null;
   const stage = MILESTONE_STAGES[milestone.status] || MILESTONE_STAGES.planned;
 
-  const wrappedDelete = (m) => { onDelete(m); onClose(); };
+  const wrappedDelete = async (m) => { const ok = await onDelete(m); if (ok) onClose(); };   // 취소/실패 시 편집 모달 유지
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1500, padding:'2rem 1rem' }}>
@@ -1919,7 +1929,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
           if (!startVal || totalWeeks === 0) return '';
           const d = new Date(startVal);
           if (isNaN(d.getTime())) return '';
-          d.setDate(d.getDate() + totalWeeks * 7);
+          d.setDate(d.getDate() + totalWeeks * 7 - 1);   // N주 = 착수일 포함 7N일 → 마감은 7N-1일 뒤 (totalWeeksBetween 과 정합)
           return d.toISOString().split('T')[0];
         };
         const handleStartChange = (val) => {
@@ -1972,7 +1982,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
       {/* Weekly milestone input */}
       {showWeeklyInput && (
         <div style={{ marginBottom:14 }}>
-          <WeeklyMilestoneInput project={project} saving={saving} milestones={milestones} onBulkCreate={(slug, weeks) => { onBulkCreateWeekly(slug, weeks); setShowWeeklyInput(false); }} onClearPlan={(slug) => { onClearWeeklyPlan && onClearWeeklyPlan(slug); setShowWeeklyInput(false); }} onClose={() => setShowWeeklyInput(false)} onRequestConfirm={onRequestConfirm} />
+          <WeeklyMilestoneInput project={project} saving={saving} milestones={milestones} onBulkCreate={async (slug, weeks) => { const ok = await onBulkCreateWeekly(slug, weeks); if (ok) setShowWeeklyInput(false); }} onClearPlan={(slug) => { onClearWeeklyPlan && onClearWeeklyPlan(slug); setShowWeeklyInput(false); }} onClose={() => setShowWeeklyInput(false)} onRequestConfirm={onRequestConfirm} />
         </div>
       )}
 
@@ -2450,7 +2460,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const [assignChanged, setAssignChanged] = useState(false);
 
   // ── 미저장 변경 통합 플래그 — 닫기 가드 + 외부 변경 경고에 사용 (2026-06-07) ──
-  const anyDirty = infoChanged||dateChanged||startDateChanged||deadlineChanged||urlChanged||memoChanged||linksChanged||assignChanged||meetingChanged||resultMemoChanged||!!newStatus;
+  const anyDirty = infoChanged||dateChanged||startDateChanged||deadlineChanged||urlChanged||memoChanged||linksChanged||assignChanged||meetingChanged||resultMemoChanged||directChanged||!!newLinkUrl.trim()||!!note.trim()||!!newStatus;
 
   // 편집 중(미저장 변경 존재)에 project prop이 Realtime 외부 갱신으로 교체되면 경고 배너.
   // 자기 저장은 dirty 플래그를 같은 배치에서 해제하므로 echo에는 발화하지 않음.
@@ -2482,18 +2492,35 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
     return () => window.removeEventListener('keydown', handler);
   }, [guardedClose]);
 
+  // 작업 페이지로 이동도 닫기와 같은 가드를 거친다 (미저장 편집 소실 방지)
+  const openProjectViewGuarded = useCallback(() => {
+    const go = () => { onOpenProjectView(project.slug); onClose(); };
+    if (!anyDirty) { go(); return; }
+    if (onRequestConfirm) onRequestConfirm({ title:'저장하지 않은 변경사항', message:'저장하지 않은 변경사항이 있습니다.\n작업 페이지로 이동하면 사라집니다. 이동할까요?', confirmLabel:'이동', onConfirm:go });
+    else go();
+  }, [anyDirty, onOpenProjectView, onClose, onRequestConfirm, project]);
+
   if (!project) return null;
   const targets = TRANSITION_TARGETS[project.current_status]||[];
   // 직전 상태(되돌리기 대상): history 역순의 최근 다른 상태(STATUS_ORDER에 있는 것), 없으면 STATUS_ORDER상 한 단계 이전.
   const prevStatus = (() => {
     const hist = project.history || [];
+    const ci = STATUS_ORDER.indexOf(project.current_status);
     for (let i = hist.length - 1; i >= 0; i--) {
       const s = hist[i].status;
-      if (s && s !== project.current_status && STATUS_ORDER.includes(s)) return s;
+      // 되돌리기 후보는 STATUS_ORDER 상 현재보다 앞 단계만 — 되돌린 직후 history 최근값이 다음 단계라서
+      // 정방향 전환이 '되돌리기'로 표시되던 오류 방지 (2026-09-18)
+      if (s && s !== project.current_status && STATUS_ORDER.includes(s) && STATUS_ORDER.indexOf(s) < ci) return s;
     }
-    const oi = STATUS_ORDER.indexOf(project.current_status);
-    return oi > 0 ? STATUS_ORDER[oi - 1] : null;
+    return ci > 0 ? STATUS_ORDER[ci - 1] : null;
   })();
+  // 되돌려도 자동 전환이 곧바로 되돌려 놓는(핑퐁) 경우는 버튼을 막고 이유를 보여준다
+  const revertBlocked = !prevStatus ? null
+    : prevStatus === 'interview' && !(project.meeting_at && new Date(project.meeting_at) > new Date())
+      ? '미팅 일시가 없거나 이미 지났습니다. 미팅 탭에서 새 일정을 등록하면 자동으로 미팅 예정이 됩니다.'
+    : prevStatus === 'in_progress' && project.deadline && project.deadline < kstDateStr()
+      ? `마감일(${project.deadline})이 지나 되돌려도 자동으로 유지보수(무상)로 다시 전환됩니다. 정보 탭에서 마감일을 연장한 뒤 되돌리세요.`
+    : null;
   const canRevert = !!prevStatus;
   // 전진 후보에서 직전 상태는 제외 — 되돌리기 버튼이 담당하므로 같은 상태가 중복 노출되지 않게 한다.
   const forwardTargets = targets.filter(s => s !== prevStatus);
@@ -2569,7 +2596,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
 
           {/* 작업페이지 바로가기 — 수주 후 단계 프로젝트에 한해 노출 */}
           {HAS_MILESTONES.includes(project.current_status) && !milestonesSetupNeeded && (
-            <button onClick={() => { onOpenProjectView(project.slug); onClose(); }}
+            <button onClick={openProjectViewGuarded}
               style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, width:'100%', padding:'0.55rem 0.75rem', borderRadius:8, fontSize:'0.85rem', fontWeight:600, background:'var(--accent)', color:'#fff', border:'none', cursor:'pointer', marginBottom:'0.75rem' }}>
               🛠 작업페이지 열기 →
             </button>
@@ -2731,7 +2758,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                                   setDeployBusy(true); setDeployErr('');
                                   try {
                                     const { data:fnData, error:fnErr } = await supabase.functions.invoke('delete-portfolios', { body:{ slug: project.slug, path: sub } });
-                                    if (fnErr) throw new Error(fnErr.message);
+                                    if (fnErr) throw new Error(await edgeErrorMessage(fnErr));
                                     if (!fnData?.deleted) throw new Error(fnData?.reason || '배포 파일 삭제 실패');
                                     // 배포 삭제 성공 → 링크 제거 + count 감소를 즉시 저장 (대기 중이던 다른 링크 편집도 함께 저장됨)
                                     const next = editLinks.filter((_, i) => i !== idx);
@@ -3081,7 +3108,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
             const pct = list.length ? Math.round((doneCount/list.length)*100) : 0;
             const hasBlocked = list.some(m => m.blocked);
             const current = list.find(m => m.status==='in_progress') || list.find(m => m.status!=='done');
-            const openFull = () => { onOpenProjectView(project.slug); onClose(); };
+            const openFull = openProjectViewGuarded;
             if (milestonesSetupNeeded) {
               return (
                 <div>
@@ -3246,8 +3273,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                 return (
                   <div style={{ marginTop:'1.25rem', paddingTop:'1rem', borderTop:'1px solid var(--border)' }}>
                     <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:8 }}>되돌리기</div>
-                    <button onClick={doRevert} disabled={saving}
-                      style={{ width:'100%', padding:'0.6rem', borderRadius:10, cursor:saving?'not-allowed':'pointer', fontSize:'0.85rem', fontWeight:600, background:'var(--surface2)', color:pm.color, border:`1px solid ${pm.color}55`, opacity:saving?0.7:1 }}>
+                    {revertBlocked && <div style={{ fontSize:'0.8rem', color:'var(--yellow)', marginBottom:8, lineHeight:1.5 }}>⚠️ {revertBlocked}</div>}
+                    <button onClick={doRevert} disabled={saving || !!revertBlocked} title={revertBlocked || undefined}
+                      style={{ width:'100%', padding:'0.6rem', borderRadius:10, cursor:(saving||revertBlocked)?'not-allowed':'pointer', opacity:revertBlocked?0.5:1, fontSize:'0.85rem', fontWeight:600, background:'var(--surface2)', color:pm.color, border:`1px solid ${pm.color}55`, opacity:saving?0.7:1 }}>
                       ↩ 이전 상태로 되돌리기 ({pm.emoji} {pm.label})
                     </button>
                   </div>
@@ -3696,6 +3724,15 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
 function App({ session }) {
   const { theme, toggle: toggleTheme } = useTheme();
   const [data, setData]                   = useState(null);
+  const dataRef = useRef(null);   // 비동기 핸들러에서 최신 data 를 동기적으로 읽기 위한 ref
+  // 더블클릭/Enter 연타로 같은 작업이 두 번 실행되지 않게 — saving 플래그와 동기 ref 를 함께 세움
+  const inflightRef = useRef(false);
+  const withSaving = (fn) => async (...args) => {
+    if (inflightRef.current) return false;
+    inflightRef.current = true; setSaving(true);
+    try { return await fn(...args); } finally { inflightRef.current = false; setSaving(false); }
+  };
+  useEffect(() => { dataRef.current = data; }, [data]);
   const [teamMembers, setTeamMembers]     = useState([]);
   const [teamSetupNeeded, setTeamSetupNeeded] = useState(false);
   const [milestones, setMilestones]       = useState({}); // { [slug]: Milestone[] }
@@ -3825,18 +3862,20 @@ function App({ session }) {
     let finalRows = rows;
     // 시각/날짜 경과 시 status 자동 전환 (모두 단일 atomic SQL).
     // 전환된 row는 Realtime UPDATE 이벤트로 자동 동기화됨 (별도 setData 불필요).
-    supabase.rpc('transition_passed_meetings').then(({ data:n, error:e }) => {
-      if (e) { console.warn('미팅 자동 전환 RPC 실패:', e.message); return; }
-      if (n > 0) toast(`🤝 미팅 경과 자동 전환 ${n}건 → 미팅 완료`, 'info');
-    });
-    supabase.rpc('transition_passed_start_dates').then(({ data:n, error:e }) => {
-      if (e) { console.warn('착수일 자동 전환 RPC 실패:', e.message); return; }
-      if (n > 0) toast(`⚙️ 착수일 경과 자동 전환 ${n}건 → 개발 중`, 'info');
-    });
-    supabase.rpc('transition_passed_deadlines').then(({ data:n, error:e }) => {
-      if (e) { console.warn('마감일 자동 전환 RPC 실패:', e.message); return; }
-      if (n > 0) toast(`🔧 마감일 경과 자동 전환 ${n}건 → 유지보수 (무상)`, 'info');
-    });
+    // 세 RPC 는 순차 실행 — 동시에 쏘면 같은 행이 착수일 전이 직후 마감일 전이까지 한 번에 넘어가
+    // (계약 논의 중 → 개발 중 → 유지보수) 사용자가 '개발 중' 단계를 보지 못한다 (2026-09-18)
+    (async () => {
+      const steps = [
+        ['transition_passed_meetings',    n => `🤝 미팅 경과 자동 전환 ${n}건 → 미팅 완료`,        '미팅'],
+        ['transition_passed_start_dates', n => `⚙️ 착수일 경과 자동 전환 ${n}건 → 개발 중`,        '착수일'],
+        ['transition_passed_deadlines',   n => `🔧 마감일 경과 자동 전환 ${n}건 → 유지보수 (무상)`, '마감일'],
+      ];
+      for (const [fn, msg, label] of steps) {
+        const { data:n, error:e } = await supabase.rpc(fn);
+        if (e) { console.warn(`${label} 자동 전환 RPC 실패:`, e.message); continue; }
+        if (n > 0) toast(msg(n), 'info');
+      }
+    })();
     // (구) P2/P3 orphan 정리 cron(cleanup-p2p3.yml)은 제거됨 — 미선정은 이제 즉시 삭제
     // (handleDelete/handleBatchDelete)로 DB+파일을 함께 정리하므로 별도 정리 작업 불필요.
     setData(finalRows); setConnected(true);
@@ -3965,7 +4004,7 @@ function App({ session }) {
   }, [data, teamMembers]);
 
   // Milestone CRUD
-  const handleCreateMilestonesFromTemplate = useCallback(async (slug, templateKey) => {
+  const handleCreateMilestonesFromTemplate = useCallback(withSaving(async (slug, templateKey) => {
     const tpl = MILESTONE_TEMPLATES[templateKey];
     if (!tpl) return;
     const assignee = defaultAssigneeFor(slug);
@@ -3998,7 +4037,7 @@ function App({ session }) {
     }
     setMilestones(prev => ({ ...prev, [slug]: [...(inserted||[])].sort((a,b)=>a.order_idx-b.order_idx) }));
     toast(`📋 ${tpl.label} 템플릿 적용 (${rows.length}개 작업)`,'success');
-  }, [toast, defaultAssigneeFor]);
+  }), [toast, defaultAssigneeFor]);
 
   // 다중 세션 history lost-update 방지 — 서버 RPC로 원자적 append + 동반 컬럼 set, 권위행 반환.
   // entries: history에 추가할 항목(객체 1개 또는 배열). fields: 함께 set할 컬럼(없으면 {}). date는 서버가 KST로 stamp.
@@ -4041,24 +4080,28 @@ function App({ session }) {
     // 마일스톤 완료를 프로젝트 history에 기록 — 서버 RPC 원자적 append(다중 세션 안전)
     if (fields.status === 'done' && milestone.status !== 'done') {
       // 프로젝트 현재 상태는 최신 로컬 상태에서 읽는다(closure stale 방지)
-      let proj = null;
-      setData(prev => { proj = prev?.find(d => d.slug === milestone.project_slug) || null; return prev; });
+      const proj = dataRef.current?.find(d => d.slug === milestone.project_slug) || null;
       if (proj) handleAppendHistory(proj, [{ status: proj.current_status, note: `✅ ${milestone.phase_label} 완료` }]);
     }
     } finally { setSaving(false); }
   }, [toast, handleAppendHistory]);
 
-  const handleMilestoneDelete = useCallback(async (milestone) => {
-    if (!confirm(`"${milestone.phase_label}" 작업을 삭제하시겠습니까?`)) return;
+  const handleMilestoneDelete = useCallback(withSaving(async (milestone) => {
+    const ok = await new Promise(resolve => setConfirmState({
+      title: '작업 삭제', message: `"${milestone.phase_label}" 작업을 삭제합니다.\n되돌릴 수 없습니다.`,
+      confirmLabel: '삭제', destructive: true, onConfirm: () => resolve(true), onCancel: () => resolve(false),
+    }));
+    if (!ok) return false;
     const { error } = await supabase.from(MILESTONES_TABLE).delete().eq('id',milestone.id);
-    if (error) { toast('삭제 실패: '+friendlyError(error),'error'); return; }
+    if (error) { toast('삭제 실패: '+friendlyError(error),'error'); return false; }
     setMilestones(prev => {
       const next = { ...prev };
       next[milestone.project_slug] = (next[milestone.project_slug]||[]).filter(m => m.id!==milestone.id);
       return next;
     });
     toast('작업 삭제','success');
-  }, [toast]);
+    return true;
+  }), [toast]);
 
   const handleMilestoneReorder = useCallback(async (milestone, direction) => {
     const list = [...(milestones[milestone.project_slug]||[])].sort((a,b)=>(a.order_idx||0)-(b.order_idx||0));
@@ -4086,7 +4129,7 @@ function App({ session }) {
     if (r1.error || r2.error) toast('순서 변경 실패: '+(r1.error||r2.error).message,'error');
   }, [milestones, toast]);
 
-  const handleMilestoneAdd = useCallback(async (slug, label, weekNumber) => {
+  const handleMilestoneAdd = useCallback(withSaving(async (slug, label, weekNumber) => {
     if (!label?.trim()) return;
     const existing = milestones[slug] || [];
     const maxOrder = existing.reduce((mx,m) => Math.max(mx, m.order_idx||0), -1);
@@ -4103,10 +4146,10 @@ function App({ session }) {
     const { data:inserted, error } = await supabase.from(MILESTONES_TABLE).insert([row]).select().single();
     if (error) { toast('추가 실패: '+friendlyError(error),'error'); return; }
     setMilestones(prev => ({ ...prev, [slug]: [...(prev[slug]||[]), inserted] }));
-  }, [milestones, toast, defaultAssigneeFor]);
+  }), [milestones, toast, defaultAssigneeFor]);
 
   // Bulk add: 단일 DB insert로 order_idx 충돌 없이 여러 티켓을 한 번에 생성
-  const handleMilestoneBulkAdd = useCallback(async (slug, items) => {
+  const handleMilestoneBulkAdd = useCallback(withSaving(async (slug, items) => {
     const cleaned = (items || []).filter(it => it?.label?.trim());
     if (cleaned.length === 0) return;
     const existing = milestones[slug] || [];
@@ -4130,7 +4173,7 @@ function App({ session }) {
     if (error) { toast('일괄 생성 실패: '+friendlyError(error),'error'); return; }
     setMilestones(prev => ({ ...prev, [slug]: [...(prev[slug]||[]), ...(inserted||[])] }));
     toast(`✨ ${inserted?.length||cleaned.length}개 티켓 생성 완료`,'success');
-  }, [milestones, toast, defaultAssigneeFor]);
+  }), [milestones, toast, defaultAssigneeFor]);
 
   // Backfill: 미지정/고아(삭제·비활성 멤버 참조) 담당자를 프로젝트 기본 담당자로 일괄 채움
   const backfillInFlightRef = useRef(new Set()); // slug 단위로 중복 방지
@@ -4163,16 +4206,19 @@ function App({ session }) {
     }
   }, [milestones, teamMembers, toast, defaultAssigneeFor]);
 
-  const handleBulkCreateWeekly = useCallback(async (slug, weeks) => {
-    if (!weeks || weeks.length === 0) return;
+  const handleBulkCreateWeekly = useCallback(withSaving(async (slug, weeks) => {
+    if (!weeks || weeks.length === 0) return false;
+    const project = data?.find(d => d.slug === slug);
+    const prevPlan = Array.isArray(project?.weekly_plan) ? project.weekly_plan : [];
+    // 주차 텍스트 편집기는 week/title 만 왕복하므로, 새 항목에 description 이 없으면 같은 주차의 기존 값을 보존한다 (2026-09-18)
     const weeklyPlan = weeks.map(w => ({
       week: w.week,
       title: w.title || '',
-      description: Array.isArray(w.description) ? w.description : [],
+      description: Array.isArray(w.description) && w.description.length > 0
+        ? w.description
+        : (prevPlan.find(p => p.week === w.week)?.description || []),
     }));
     // Orphan detection: weeks that existed in the prior plan (or were referenced by tickets) but are missing from the new plan
-    const project = data?.find(d => d.slug === slug);
-    const prevPlan = Array.isArray(project?.weekly_plan) ? project.weekly_plan : [];
     const newWeekSet = new Set(weeklyPlan.map(w => w.week));
     const ticketList = milestones[slug] || [];
     const orphanGroups = {};
@@ -4193,7 +4239,7 @@ function App({ session }) {
         } else {
           toast('주차별 계획 저장 실패: '+friendlyError(error),'error');
         }
-        return;
+        return false;
       }
       let orphanIds = [];
       if (totalOrphan > 0) {
@@ -4206,7 +4252,7 @@ function App({ session }) {
           } else {
             toast('고아 티켓 주차 해제 실패: '+mErr.message+' · 계획 저장 롤백됨','error');
           }
-          return;
+          return false;
         }
       }
       setData(prev => prev.map(d => d.slug===slug ? { ...d, weekly_plan: weeklyPlan } : d));
@@ -4218,21 +4264,24 @@ function App({ session }) {
         }));
       }
       toast(`📅 ${weeks.length}주차 계획 저장 완료${totalOrphan>0 ? ` · ${totalOrphan}개 티켓 주차 해제` : ''}`,'success');
+      return true;
     };
 
     if (totalOrphan > 0) {
       const weekList = Object.keys(orphanGroups).map(Number).sort((a,b)=>a-b).join(', ');
-      setConfirmState({
+      // 확인/취소 결과를 호출자에게 돌려줘 입력 패널이 성공 시에만 닫히게 한다
+      return await new Promise(resolve => setConfirmState({
         title: '사라지는 주차가 있습니다',
         message: `${weekList}주차가 새 계획에 포함되지 않습니다.\n해당 주차에 배정된 ${totalOrphan}개 티켓의 주차 연결이 해제됩니다.\n\n계속할까요?`,
         confirmLabel: '저장하고 주차 해제',
         destructive: true,
-        onConfirm: () => { doSave(); },
-      });
-    } else {
-      await doSave();
+        // 확인창은 확인 후에도 onCancel 을 호출하므로, 확인 시 doSave 의 Promise 로 먼저 resolve 해 결과를 고정한다
+        onConfirm: () => resolve(doSave()),
+        onCancel: () => resolve(false),
+      }));
     }
-  }, [data, milestones, toast]);
+    return await doSave();
+  }), [data, milestones, toast]);
 
   const handleClearWeeklyPlan = useCallback((slug) => {
     const linkedCount = (milestones[slug]||[]).filter(m => m.week_number != null).length;
@@ -4344,7 +4393,8 @@ function App({ session }) {
     for (const slug of targets) {
       try {
         const { data:fnData, error:fnErr } = await supabase.functions.invoke('delete-portfolios', { body:{ slug } });
-        if (fnErr) throw new Error(fnErr.message);
+        if (fnErr) throw new Error(await edgeErrorMessage(fnErr));
+        if (fnData?.cascade_enqueued === false) console.warn(`[batchDelete] ${slug} 캐스케이드 큐 적재 실패`, fnData.reqId);
         if (!fnData?.deleted) throw new Error(fnData?.reason || 'GitHub 파일 삭제 실패');
         if (!fnData?.db_updated) {
           const { error } = await supabase.from(TABLE).delete().eq('slug',slug);
@@ -4374,7 +4424,7 @@ function App({ session }) {
       // 4면(showcase·row·위시켓·홈페이지) 전부 삭제. (보호 트리거/가드는 스크립트·실수·직접삭제만 막음.)
       // 파일 → DB 순으로 함수가 책임짐. 실패 시 row 보존되어 재시도 가능.
       const { data:fnData, error:fnErr } = await supabase.functions.invoke('delete-portfolios', { body:{ slug:project.slug, force:true } });
-      if (fnErr) throw new Error(fnErr.message);
+      if (fnErr) throw new Error(await edgeErrorMessage(fnErr));
       if (!fnData?.deleted) throw new Error(fnData?.reason || 'GitHub 파일 삭제 실패');
       if (!fnData?.db_updated) {
         // 파일은 지워졌으나 DB row 삭제 실패 — force RPC로 명시적 fallback(보호 트리거 우회).
@@ -4385,6 +4435,9 @@ function App({ session }) {
       setMilestones(prev => { const next = { ...prev }; delete next[project.slug]; return next; });
       setSelectedProject(null);
       toast(`프로젝트 삭제 완료 (${project.slug})`,'success');
+      // 확인창이 약속한 '위시켓·홈페이지 카드 삭제'는 큐 적재에 달려 있다 — 실패·보존을 숨기지 않는다
+      if (fnData.cascade_enqueued === false) toast(`⚠️ 위시켓·홈페이지 카드 삭제 큐 적재 실패 — 수동 정리 필요${fnData.reqId ? ` (req ${fnData.reqId})` : ''}`, 'error');
+      if (fnData.showcase_kept) toast(`ℹ️ 다른 프로젝트가 참조 중이라 쇼케이스 파일은 보존됨${fnData.showcase_refs?.length ? `: ${fnData.showcase_refs.join(', ')}` : ''}`, 'info');
     } catch(err) { toast('삭제 실패: '+friendlyError(err),'error'); } finally { setSaving(false); }
   }, [toast]);
 
@@ -4393,6 +4446,9 @@ function App({ session }) {
     if (newStatus === 'interview') {
       if (!project.meeting_at) { toast('미팅 일시를 먼저 등록하세요. 미팅 탭에서 미래 일정을 저장하면 자동으로 전환됩니다.', 'error'); return; }
       if (new Date(project.meeting_at) <= new Date()) { toast('등록된 미팅 시각이 이미 지났습니다. 미팅 탭에서 새 일시를 등록하세요.', 'error'); return; }
+    }
+    if (newStatus === 'in_progress' && project.deadline && project.deadline < kstDateStr()) {
+      toast(`마감일(${project.deadline})이 이미 지나 '개발 중'으로 바꿔도 자동으로 유지보수(무상)로 재전환됩니다. 정보 탭에서 마감일을 먼저 연장하세요.`, 'error'); return;
     }
     setSaving(true);
     try {
