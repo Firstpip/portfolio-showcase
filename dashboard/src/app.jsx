@@ -428,7 +428,73 @@ function daysBetween(d1, d2) {
   return Math.floor((ub - ua) / 86400000);
 }
 
+// DB 에 저장된 URL 을 그대로 href 에 넣으면 javascript: 같은 스킴도 실행 가능 → http(s) 만 통과 (2026-09-20)
+function safeHttpUrl(u) {
+  const s = String(u || '').trim();
+  if (!s) return null;
+  try { const x = new URL(s); return (x.protocol === 'http:' || x.protocol === 'https:') ? x.href : null; }
+  catch { return null; }
+}
+// 사람이 'example.com' 처럼 스킴 없이 입력한 경우 https 를 붙여 준다(저장 시점 정규화용)
+function normalizeUrlInput(u) {
+  const s = String(u || '').trim();
+  if (!s) return '';
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(s)) return safeHttpUrl(s) || '';
+  return safeHttpUrl('https://' + s) || '';
+}
+
+// ─── 미팅 알림 — 브라우저 알림 권한은 사용자 제스처에서만 요청 가능하므로 메뉴 항목으로 노출 (2026-09-20) ───
+// 지금까지 requestPermission 호출이 없어 알림이 한 번도 발송되지 않았다.
+const NOTIFY_KEY = 'meeting_notify';          // { enabled, leads:[분] }
+const NOTIFY_SENT_KEY = 'meeting_notified';   // { "<slug>@<meetingISO>@<lead>": <발송시각> }
+const NOTIFY_LEADS = [1440, 60];              // 하루 전 · 1시간 전
+const notifySupported = () => typeof window !== 'undefined' && 'Notification' in window;
+function readNotifyPref() {
+  try { const v = JSON.parse(localStorage.getItem(NOTIFY_KEY) || '{}'); return { enabled: !!v.enabled, leads: Array.isArray(v.leads) && v.leads.length ? v.leads : NOTIFY_LEADS }; }
+  catch { return { enabled: false, leads: NOTIFY_LEADS }; }
+}
+function writeNotifyPref(v) { try { localStorage.setItem(NOTIFY_KEY, JSON.stringify(v)); } catch {} }
+function readNotifySent() { try { return JSON.parse(localStorage.getItem(NOTIFY_SENT_KEY) || '{}'); } catch { return {}; } }
+function writeNotifySent(v) {
+  // 30일 지난 기록은 정리 (localStorage 무한 증가 방지)
+  const cutoff = Date.now() - 30*86400000;
+  const pruned = Object.fromEntries(Object.entries(v).filter(([,t]) => t > cutoff));
+  try { localStorage.setItem(NOTIFY_SENT_KEY, JSON.stringify(pruned)); } catch {}
+}
+const leadLabel = (m) => m >= 1440 ? `${m/1440}일 전` : m >= 60 ? `${m/60}시간 전` : `${m}분 전`;
+
 // ─── Hash routing ───
+const SORT_KEYS = ['created_at','meeting_at','budget','title','status'];
+const DATE_RANGES = ['all','7d','30d','90d'];
+// 표 화면의 필터 상태를 해시 쿼리로 읽고 쓴다 — 새로고침·뒤로가기·링크 공유에서 보존 (2026-09-20)
+function parseTableQuery() {
+  const h = (window.location.hash || '').replace(/^#/, '');
+  const qi = h.indexOf('?');
+  if (qi < 0) return null;
+  const sp = new URLSearchParams(h.slice(qi + 1));
+  const f = sp.get('f') || 'all';
+  const d = sp.get('d') || 'all';
+  const [sk, so] = (sp.get('s') || '').split(':');
+  return {
+    filter: (f === 'all' || STATUS_ORDER.includes(f)) ? f : 'all',
+    search: sp.get('q') || '',
+    memberFilter: sp.get('m') || '',
+    dateRange: DATE_RANGES.includes(d) ? d : 'all',
+    sortKey: SORT_KEYS.includes(sk) ? sk : 'created_at',
+    sortOrder: so === 'asc' ? 'asc' : 'desc',
+  };
+}
+function buildTableHash({ filter, search, memberFilter, dateRange, sortKey, sortOrder }) {
+  const sp = new URLSearchParams();
+  if (filter && filter !== 'all') sp.set('f', filter);
+  if (search) sp.set('q', search);
+  if (memberFilter) sp.set('m', memberFilter);
+  if (dateRange && dateRange !== 'all') sp.set('d', dateRange);
+  if (sortKey !== 'created_at' || sortOrder !== 'desc') sp.set('s', `${sortKey}:${sortOrder}`);
+  const q = sp.toString();
+  return q ? `#table?${q}` : '';
+}
+
 function parseHash() {
   const h = (window.location.hash || '').replace(/^#/, '');
   const m = h.match(/^project\/([^/]+)\/tasks$/);
@@ -646,7 +712,7 @@ function LiveDot({ connected }) {
 }
 
 // ─── UserMenu ───
-function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onDeleted, onShortcuts, onSignOut }) {
+function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onDeleted, onShortcuts, onSignOut, notifyState, notifyLeads, onToggleNotify }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -694,6 +760,16 @@ function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onD
               </button>
             </>
           )}
+          <div style={{ height:1, background:'var(--border)', margin:'2px 6px' }} />
+          <button onClick={select(onToggleNotify)} style={itemStyle} disabled={notifyState === 'unsupported'}
+            title={notifyState === 'blocked' ? '브라우저에서 차단됨 — 사이트 설정에서 허용 후 다시 눌러주세요'
+              : notifyState === 'on' ? `알림 켜짐 (${(notifyLeads||[]).map(leadLabel).join(' · ')})` : '미팅 전에 브라우저 알림을 받습니다'}
+            onMouseEnter={e=>onItemHover(e,true)} onMouseLeave={e=>onItemHover(e,false)}>
+            <span style={{ width:18 }}>{notifyState === 'on' ? '🔔' : '🔕'}</span> 미팅 알림
+            <span style={{ marginLeft:'auto', fontSize:'0.7rem', color: notifyState === 'on' ? 'var(--green)' : notifyState === 'blocked' ? 'var(--red)' : 'var(--text2)' }}>
+              {notifyState === 'on' ? (notifyLeads||[]).map(leadLabel).join(' · ') : notifyState === 'blocked' ? '차단됨' : notifyState === 'unsupported' ? '미지원' : '꺼짐'}
+            </span>
+          </button>
           <div style={{ height:1, background:'var(--border)', margin:'2px 6px' }} />
           <button onClick={select(onDeleted)} style={itemStyle}
             onMouseEnter={e=>onItemHover(e,true)} onMouseLeave={e=>onItemHover(e,false)}>
@@ -1935,7 +2011,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
       </div>
       <div style={{ fontSize:'0.8rem', color:'var(--text2)', fontFamily:'monospace', marginBottom:14, paddingLeft:2, display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
         {project.slug}
-        {project.wishket_url && <> · <a href={project.wishket_url} target="_blank" rel="noopener" style={{ color:'var(--yellow)', textDecoration:'none' }}>위시켓 공고 ↗</a></>}
+        {safeHttpUrl(project.wishket_url) && <> · <a href={safeHttpUrl(project.wishket_url)} target="_blank" rel="noopener noreferrer" style={{ color:'var(--yellow)', textDecoration:'none' }}>위시켓 공고 ↗</a></>}
       </div>
       {/* 착수일 / 마감일 */}
       {onFieldSave && (() => {
@@ -2454,6 +2530,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const [linksChanged, setLinksChanged] = useState(false);
   const [newLinkLabel, setNewLinkLabel] = useState('');
   const [newLinkUrl, setNewLinkUrl] = useState('');
+  const [linkErr, setLinkErr] = useState('');
   const [editingLinkIdx, setEditingLinkIdx] = useState(-1);
   const [deployBusy, setDeployBusy] = useState(false);   // 배포까지 삭제 진행 중
   const [deployErr, setDeployErr] = useState('');
@@ -2544,6 +2621,15 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const inputS  = { width:'100%', padding:'0.5rem 0.7rem', borderRadius:8, fontSize:'0.85rem', border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', outline:'none' };
   const labelS  = { fontSize:'0.8rem', color:'var(--text2)', marginBottom:6, fontWeight:500 };
   const saveBtnS = (act) => ({ padding:'0.5rem 0.85rem', borderRadius:8, border:'none', cursor:'pointer', fontSize:'0.8rem', fontWeight:600, background:act?'var(--blue)':'var(--surface2)', color:act?'#fff':'var(--text2)', opacity:saving?0.7:1 });
+  // 링크 추가 — http(s) 만, 중복 금지. 성공 시 true (호출부에서 입력칸 초기화 여부 판단)
+  const addLink = () => {
+    const url = normalizeUrlInput(newLinkUrl);
+    if (!url) { setLinkErr('http:// 또는 https:// 로 시작하는 주소만 추가할 수 있습니다'); return false; }
+    if (editLinks.some(l => (l.url || '').replace(/\/$/, '') === url.replace(/\/$/, ''))) { setLinkErr('이미 추가된 링크입니다'); return false; }
+    setEditLinks([...editLinks, { label: newLinkLabel.trim() || url, url }]);
+    setNewLinkLabel(''); setNewLinkUrl(''); setLinksChanged(true); setLinkErr('');
+    return true;
+  };
   const checkInfo = (t,b,tl) => setInfoChanged(t!==(project.title||'') || b!==(project.budget||'') || tl!==(project.timeline||''));
 
   const handleBudgetChange = (val) => {
@@ -2593,7 +2679,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
           </div>
 
           {project.wishket_url && (
-            <a href={project.wishket_url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+            <a href={safeHttpUrl(project.wishket_url) || undefined} title={safeHttpUrl(project.wishket_url) ? undefined : "잘못된 주소 형식 — 링크로 열 수 없습니다"} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
               style={{ display:'flex', alignItems:'center', gap:6, padding:'0.5rem 0.75rem', borderRadius:8, fontSize:'0.8rem', fontWeight:500, background:'var(--surface-warning-soft)', color:'var(--yellow)', textDecoration:'none', border:'1px solid var(--surface-warning-mid)', marginBottom:'0.5rem' }}
             >📋 위시켓 공고 보기 <span style={{ fontSize:'0.8rem', color:'var(--text2)', marginLeft:'auto' }}>{project.wishket_url.split('/project/')[1]?.replace('/','')}</span></a>
           )}
@@ -2601,7 +2687,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
           {((project.portfolio_links||[]).length > 0) && (
             <div style={{ display:'flex', gap:4, marginBottom:'0.75rem', flexWrap:'wrap' }}>
               {(project.portfolio_links||[]).map((link, i) => (
-                <a key={`cl-${i}`} href={link.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+                <a key={`cl-${i}`} href={safeHttpUrl(link.url) || undefined} title={safeHttpUrl(link.url) ? undefined : "잘못된 주소 형식 — 링크로 열 수 없습니다"} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
                   title={link.url}
                   style={{ flex:1, padding:'0.3rem', borderRadius:6, fontSize:'0.8rem', fontWeight:500, background:'var(--surface2)', color:'var(--accent2)', textDecoration:'none', textAlign:'center', border:'1px solid var(--border)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
                 >{link.label}</a>
@@ -2752,7 +2838,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                             </>
                           ) : (
                             <>
-                              <a href={link.url} target="_blank" rel="noopener" onClick={e => e.stopPropagation()}
+                              <a href={safeHttpUrl(link.url) || undefined} title={safeHttpUrl(link.url) ? undefined : "잘못된 주소 형식 — 링크로 열 수 없습니다"} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
                                 style={{ flex:1, minWidth:0, textDecoration:'none', color:'var(--accent2)', fontSize:'0.8rem', fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
                                 title={link.url}
                               >{link.label || link.url}</a>
@@ -2800,19 +2886,12 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                   <div style={{ display:'flex', gap:6 }}>
                     <input type="text" value={newLinkLabel} placeholder="라벨 (예: P1 데모)" onChange={e => setNewLinkLabel(e.target.value)}
                       style={{ ...inputS, flex:'0 0 35%', fontSize:'0.8rem', padding:'0.4rem 0.6rem' }} />
-                    <input type="url" value={newLinkUrl} placeholder="https://..." onChange={e => setNewLinkUrl(e.target.value)}
+                    <input type="url" value={newLinkUrl} placeholder="https://..." onChange={e => { setNewLinkUrl(e.target.value); setLinkErr(''); }}
                       onKeyDown={e => {
-                        if (e.key === 'Enter' && newLinkUrl.trim()) {
-                          setEditLinks([...editLinks, { label: newLinkLabel.trim() || newLinkUrl.trim(), url: newLinkUrl.trim() }]);
-                          setLinksChanged(true); setNewLinkLabel(''); setNewLinkUrl('');
-                        }
+                        if (e.key === 'Enter' && newLinkUrl.trim()) addLink();
                       }}
                       style={{ ...inputS, flex:1, fontSize:'0.8rem', padding:'0.4rem 0.6rem' }} />
-                    <button onClick={() => {
-                      if (!newLinkUrl.trim()) return;
-                      setEditLinks([...editLinks, { label: newLinkLabel.trim() || newLinkUrl.trim(), url: newLinkUrl.trim() }]);
-                      setLinksChanged(true); setNewLinkLabel(''); setNewLinkUrl('');
-                    }} disabled={!newLinkUrl.trim()} style={{
+                    <button onClick={addLink} disabled={!newLinkUrl.trim()} style={{
                       padding:'0.4rem 0.7rem', borderRadius:8, border:'1px solid var(--accent)',
                       background: newLinkUrl.trim() ? 'var(--accent)' : 'var(--surface2)',
                       color: newLinkUrl.trim() ? '#fff' : 'var(--text2)',
@@ -2820,6 +2899,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                       fontSize:'0.8rem', fontWeight:600, flexShrink:0,
                     }}>+</button>
                   </div>
+                  {linkErr && <div style={{ fontSize:'0.75rem', color:'var(--red)', marginTop:6 }}>⚠ {linkErr}</div>}
                 </div>
               </div>
               {(infoChanged||dateChanged||startDateChanged||deadlineChanged||urlChanged||memoChanged||linksChanged||directChanged) && (
@@ -3755,14 +3835,22 @@ function App({ session }) {
   const [milestonesSetupNeeded, setMilestonesSetupNeeded] = useState(false);
   const [route, setRoute]                 = useState(() => parseHash());
   useEffect(() => {
-    const h = () => setRoute(parseHash());
+    const h = () => {
+      setRoute(parseHash());
+      const q = parseTableQuery();
+      if (q && parseHash().name === 'table') {
+        setFilter(q.filter); setSearch(q.search); setMemberFilter(q.memberFilter);
+        setDateRange(q.dateRange); setSortKey(q.sortKey); setSortOrder(q.sortOrder);
+      }
+    };
     window.addEventListener('hashchange', h);
     return () => window.removeEventListener('hashchange', h);
   }, []);
   const [showTeamMgr, setShowTeamMgr]     = useState(false);
   const [showDeleted, setShowDeleted]     = useState(false);
   const [showQuickAdd, setShowQuickAdd]   = useState(false);
-  const [memberFilter, setMemberFilter]   = useState('');
+  const initialQuery = useRef(parseTableQuery()).current;
+  const [memberFilter, setMemberFilter]   = useState(initialQuery?.memberFilter || '');
 
   // ─── 로그인 사용자 ↔ 팀원 매칭 ───
   // app_metadata는 서비스 롤/대시보드에서만 쓸 수 있음. user_metadata는 사용자 본인이 수정 가능해 권한 판정에 부적합 (2026-09-18)
@@ -3772,8 +3860,8 @@ function App({ session }) {
     return teamMembers.find(m => m.user_id === session.user.id) || null;
   }, [session?.user?.id, teamMembers]);
   const displayName = currentMember?.name || session?.user?.user_metadata?.display_name || session?.user?.email;
-  const [filter, setFilter]               = useState('all');
-  const [search, setSearch]               = useState('');
+  const [filter, setFilter]               = useState(initialQuery?.filter || 'all');
+  const [search, setSearch]               = useState(initialQuery?.search || '');
   const [selectedProject, setSelectedProject] = useState(null);
   const [saving, setSaving]               = useState(false);
   const [connected, setConnected]         = useState(false);
@@ -3789,9 +3877,9 @@ function App({ session }) {
     const ro = new ResizeObserver(apply); ro.observe(el);
     return () => ro.disconnect();
   }, [isMobile, filter, memberFilter, search, data]);
-  const [sortKey, setSortKey]             = useState('created_at');
-  const [sortOrder, setSortOrder]         = useState('desc');
-  const [dateRange, setDateRange]         = useState('all');
+  const [sortKey, setSortKey]             = useState(initialQuery?.sortKey || 'created_at');
+  const [sortOrder, setSortOrder]         = useState(initialQuery?.sortOrder || 'desc');
+  const [dateRange, setDateRange]         = useState(initialQuery?.dateRange || 'all');
   const [showStats, setShowStats]         = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const { toasts, toast, dismissToast } = useToast();
@@ -3813,25 +3901,56 @@ function App({ session }) {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
+  // 리드타임별로 한 번씩만 발송. 키에 미팅 시각을 넣어 일정이 바뀌면 다시 알린다.
   const checkMeetingNotifications = useCallback((rows) => {
-    if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    const key = `notified_${kstDateStr()}`;
-    const notified = JSON.parse(localStorage.getItem(key)||'[]');
-    const now = new Date();
-    rows.forEach(p => {
+    if (!notifySupported() || Notification.permission !== 'granted') return;
+    const pref = readNotifyPref();
+    if (!pref.enabled) return;
+    const sent = readNotifySent();
+    const now = Date.now();
+    let changed = false;
+    (rows || []).forEach(p => {
       if (!p.meeting_at || p.current_status !== 'interview') return;
-      const m = new Date(p.meeting_at);
-      const diffH = (m - now) / 3600000;
-      if (diffH >= 0 && diffH <= 24 && !notified.includes(p.slug)) {
-        new Notification('📅 미팅 알림', {
-          body: `${p.title||p.slug}\n${formatMeetingAt(p.meeting_at)}`,
-          icon: 'https://firstpip.github.io/portfolio-showcase/dashboard/icon.png',
-        });
-        notified.push(p.slug);
+      const m = new Date(p.meeting_at).getTime();
+      if (isNaN(m) || m < now) return;
+      for (const lead of pref.leads) {
+        const fireAt = m - lead * 60000;
+        // 예정 시각이 지나기 전이고, 리드타임 시점을 막 지난 경우에만 (최대 2시간 늦게 열어도 1회는 발송)
+        if (now < fireAt || now - fireAt > 2 * 3600000) continue;
+        const key = `${p.slug}@${p.meeting_at}@${lead}`;
+        if (sent[key]) continue;
+        try {
+          new Notification('📅 미팅 알림', {
+            body: `${p.title || p.slug}\n${formatMeetingAt(p.meeting_at)} (${leadLabel(lead)})`,
+            icon: 'https://firstpip.github.io/portfolio-showcase/dashboard/icon.png',
+            tag: key,
+          });
+          sent[key] = now; changed = true;
+        } catch (e) { console.warn('알림 발송 실패:', e.message); }
       }
     });
-    localStorage.setItem(key, JSON.stringify(notified));
+    if (changed) writeNotifySent(sent);
   }, []);
+
+  // 알림 켜기/끄기 — 권한 요청은 반드시 클릭 핸들러(사용자 제스처) 안에서
+  const [notifyPref, setNotifyPref] = useState(() => readNotifyPref());
+  const notifyState = !notifySupported() ? 'unsupported'
+    : Notification.permission === 'denied' ? 'blocked'
+    : notifyPref.enabled && Notification.permission === 'granted' ? 'on' : 'off';
+  const handleToggleNotify = useCallback(async () => {
+    if (!notifySupported()) { toast('이 브라우저는 알림을 지원하지 않습니다', 'error'); return; }
+    const pref = readNotifyPref();
+    if (pref.enabled && Notification.permission === 'granted') {
+      const next = { ...pref, enabled: false }; writeNotifyPref(next); setNotifyPref(next);
+      toast('미팅 알림을 껐습니다', 'info'); return;
+    }
+    let perm = Notification.permission;
+    if (perm === 'default') { try { perm = await Notification.requestPermission(); } catch { perm = 'denied'; } }
+    if (perm !== 'granted') { toast('브라우저에서 알림이 차단돼 있습니다. 주소창 옆 사이트 설정에서 허용해 주세요.', 'error'); setNotifyPref(readNotifyPref()); return; }
+    const next = { ...pref, enabled: true, leads: pref.leads }; writeNotifyPref(next); setNotifyPref(next);
+    toast(`미팅 알림을 켰습니다 (${next.leads.map(leadLabel).join(' · ')})`, 'success');
+    checkMeetingNotifications(dataRef.current);
+  }, [toast, checkMeetingNotifications]);
 
   const loadMilestones = useCallback(async () => {
     const { data:rows, error } = await supabase.from(MILESTONES_TABLE).select('*').order('order_idx', { ascending:true });
@@ -3908,6 +4027,14 @@ function App({ session }) {
     checkMeetingNotifications(finalRows);
   }, [toast, checkMeetingNotifications]);
 
+  // 필터 상태 → 해시 동기화. replaceState 라 히스토리가 쌓이지 않고 hashchange 도 발생하지 않는다.
+  useEffect(() => {
+    if (route.name !== 'table') return;
+    const next = buildTableHash({ filter, search, memberFilter, dateRange, sortKey, sortOrder });
+    const cur = window.location.hash || '';
+    if (cur !== next) window.history.replaceState(null, '', next || window.location.pathname + window.location.search);
+  }, [route.name, filter, search, memberFilter, dateRange, sortKey, sortOrder]);
+
   // 미팅 시각 경과 자동 전환 — 페이지 로드뿐 아니라 열어둔 탭에서도 1분 주기로 확인해 RPC 호출 (2026-09-18)
   const [meetingTick, setMeetingTick] = useState(() => Date.now());
   useEffect(() => { const id = setInterval(() => setMeetingTick(Date.now()), 60000); return () => clearInterval(id); }, []);
@@ -3922,6 +4049,9 @@ function App({ session }) {
       if (n > 0) toast(`🤝 미팅 경과 자동 전환 ${n}건 → 미팅 완료`, 'info');
     });
   }, [data, meetingTick, toast]);
+
+  // 알림도 1분 주기로 점검 — 탭을 열어둔 채로 리드타임이 지나면 그 시점에 발송
+  useEffect(() => { checkMeetingNotifications(dataRef.current); }, [meetingTick, checkMeetingNotifications]);
 
   useEffect(() => {
     loadData();
@@ -4706,6 +4836,7 @@ function App({ session }) {
             currentMember={currentMember}
             displayName={displayName}
             isAdmin={isAdmin}
+            notifyState={notifyState} notifyLeads={notifyPref.leads} onToggleNotify={handleToggleNotify}
             onTeamMgr={() => setShowTeamMgr(true)}
             onDeleted={() => setShowDeleted(true)}
             onShortcuts={() => setShowShortcuts(true)}
