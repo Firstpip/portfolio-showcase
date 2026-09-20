@@ -29,6 +29,10 @@ const STATUS_META = {
 };
 const STATUS_ORDER = ['generated','applied','interview','meeting_done','won','in_progress','maintenance_free','maintenance_paid','delivered','settled'];
 const POST_WON = ['in_progress','maintenance_free','maintenance_paid','delivered','settled']; // stats: 계약 논의(won) 후 진행 단계
+// 수주 성공으로 세는 상태 — 퍼널·월별 차트·예산 구간·KPI 가 모두 이 하나를 쓴다 (기준 불일치 방지, 2026-09-20)
+const SECURED_STATUSES = ['won', ...POST_WON];
+// 전환율 분모 — '미팅 완료' 이후만. 아직 미팅을 하지 않은 '미팅 예정'은 결과가 나오지 않아 제외한다.
+const MEETING_REACHED_STATUSES = ['meeting_done', ...SECURED_STATUSES];
 const HAS_MILESTONES = ['won','in_progress','maintenance_free','maintenance_paid','delivered','settled']; // 마일스톤 트래커 노출 대상
 const ACTIVE_WORK = ['won','in_progress']; // 상단 '내 담당 프로젝트' 카드 노출 대상 — 납품·정산 완료 제외
 const POST_DEV = ['maintenance_free','maintenance_paid','delivered','settled']; // 개발 종료 후 상태 — 주차 진행/마감 초과 등 실시간 일정 표시 숨김
@@ -574,14 +578,17 @@ function ShortcutHelp({ onClose }) {
 }
 
 // ─── Toast ───
-function ToastContainer({ toasts }) {
+function ToastContainer({ toasts, onDismiss }) {
   return (
     <div className="toast-container" role="status" aria-live="polite" style={{ position:'fixed', bottom:24, right:24, zIndex:9999, display:'flex', flexDirection:'column', gap:8 }}>
       {toasts.map(t => (
-        <div key={t.id} style={{
-          padding:'0.7rem 1.2rem', borderRadius:10,
+        <div key={t.id} onClick={() => onDismiss && onDismiss(t.id)} title="클릭하면 닫기" style={{
+          padding:'0.7rem 1.2rem', borderRadius:10, cursor:'pointer', maxWidth:'min(92vw, 460px)',
           background: t.type==='error' ? 'var(--red)' : t.type==='success' ? 'var(--green)' : 'var(--surface2)',
-          color:'#fff', fontSize:'0.85rem', fontWeight:500,
+          // info 는 표면색 배경이라 흰 글자면 라이트 모드에서 거의 안 보임 → 본문색 + 테두리 (2026-09-20)
+          color: t.type==='info' ? 'var(--text)' : '#fff',
+          border: t.type==='info' ? '1px solid var(--border)' : 'none',
+          fontSize:'0.85rem', fontWeight:500, lineHeight:1.5, whiteSpace:'pre-wrap',
           boxShadow:'0 4px 20px var(--shadow)', animation:'toastIn 0.25s ease-out',
         }}>{t.message}</div>
       ))}
@@ -594,9 +601,12 @@ function useToast() {
     // 충돌 없는 고유 id (Date.now()는 같은 ms 동시 토스트 시 key 중복 → 둘 다 제거됨)
     const id = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.random()}`;
     setToasts(prev => [...prev, { id, message, type }]);
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3000);
+    // 오류는 읽을 시간이 필요하고 안내는 짧게 — 타입별 표시 시간 (2026-09-20)
+    const ms = type === 'error' ? 8000 : type === 'info' ? 5000 : 3000;
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), ms);
   }, []);
-  return { toasts, toast: add };
+  const dismiss = useCallback((id) => setToasts(prev => prev.filter(t => t.id !== id)), []);
+  return { toasts, toast: add, dismissToast: dismiss };
 }
 
 // ─── Loading ───
@@ -673,7 +683,7 @@ function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onD
             <div style={{ fontSize:'0.9rem', fontWeight:600, color:'var(--text)' }}>{displayName}</div>
             <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginTop:2 }}>{session?.user?.email}</div>
             {isAdmin && <span style={{ display:'inline-block', marginTop:6, fontSize:'0.65rem', padding:'0.1rem 0.4rem',
-              borderRadius:4, background:'var(--accent)30', color:'var(--accent)', fontWeight:600 }}>관리자</span>}
+              borderRadius:4, background:'color-mix(in srgb, var(--accent) 19%, transparent)', color:'var(--accent)', fontWeight:600 }}>관리자</span>}
           </div>
           {isAdmin && (
             <>
@@ -770,16 +780,21 @@ function Funnel({ data }) {
 // ─── MonthlyChart ───
 function MonthlyChart({ data }) {
   const monthData = useMemo(() => {
+    // 최근 6개월을 먼저 만들어 0으로 채운다 — 데이터 없는 달이 빠져 '최근 6개월'이 6개월이 아니게 되던 문제 (2026-09-20)
     const months = {};
+    const base = new Date(`${kstDateStr()}T00:00:00+09:00`);
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(base); d.setUTCMonth(d.getUTCMonth() - i);
+      months[kstDateStr(d).slice(0,7)] = { applied:0, won:0 };
+    }
     data.forEach(d => {
-      const m = (d.created_at||'').substring(0,7);
-      if (!m) return;
-      if (!months[m]) months[m] = { applied:0, won:0 };
+      const m = kstParts(d.created_at)?.date.slice(0,7) || (d.created_at||'').substring(0,7);   // KST 기준 월
+      if (!m || !months[m]) return;
       months[m].applied++;
       // 수주 후 단계(개발중/납품/정산 등)로 넘어간 건도 수주로 집계 — 퍼널과 기준 일치 (2026-06-07)
-      if (d.current_status === 'won' || POST_WON.includes(d.current_status)) months[m].won++;
+      if (SECURED_STATUSES.includes(d.current_status)) months[m].won++;
     });
-    return Object.entries(months).sort((a,b) => a[0].localeCompare(b[0])).slice(-6);
+    return Object.entries(months).sort((a,b) => a[0].localeCompare(b[0]));
   }, [data]);
   if (monthData.length === 0) return null;
   const maxVal = Math.max(...monthData.map(([,v]) => v.applied), 1);
@@ -823,7 +838,7 @@ function BudgetAnalysis({ data }) {
         const budget = parseBudgetNum(d.budget);
         return budget > 0 && budget >= b.min && budget < b.max && d.current_status !== 'generated';
       });
-      const won = inRange.filter(d => d.current_status === 'won').length;
+      const won = inRange.filter(d => SECURED_STATUSES.includes(d.current_status)).length;   // 퍼널·차트와 같은 기준
       return { ...b, total:inRange.length, won, rate: inRange.length > 0 ? ((won/inRange.length)*100).toFixed(0) : '—' };
     }).filter(b => b.total > 0);
   }, [data]);
@@ -936,7 +951,7 @@ function AssignPicker({ label, members, value, onChange, exclude }) {
         <button onClick={() => onChange(null)} style={{
           padding:'0.3rem 0.65rem', borderRadius:20, cursor:'pointer',
           border: !value ? '1px solid var(--accent)' : '1px solid var(--border)',
-          background: !value ? 'var(--accent)30' : 'transparent',
+          background: !value ? 'color-mix(in srgb, var(--accent) 19%, transparent)' : 'transparent',
           color: !value ? 'var(--accent)' : 'var(--text2)',
           fontSize:'0.8rem', fontWeight: !value ? 600 : 400,
         }}>없음</button>
@@ -1423,10 +1438,10 @@ function WeeklyProgressBars({ weeklyPlan, milestones, onAddTicket, onFilterWeek,
         const isToday = calWeek === week;
         const isActive = activeFilter === week;
         const barColor = blockedCount > 0 ? 'var(--red)' : allDone ? 'var(--green)' : isFocus ? 'var(--accent)' : 'var(--text2)';
-        const rowBg = isToday ? 'var(--green)18' : isFocus ? 'var(--accent)18' : 'transparent';
+        const rowBg = isToday ? 'color-mix(in srgb, var(--green) 9%, transparent)' : isFocus ? 'color-mix(in srgb, var(--accent) 9%, transparent)' : 'transparent';
         const rowBorderColor = isToday ? 'var(--green)' : isFocus ? 'var(--accent)' : 'transparent';
         return (
-          <div key={week} style={{ borderRadius:7, border:`1px solid ${isToday ? 'var(--green)33' : isFocus ? 'var(--accent)30' : 'transparent'}`, background: rowBg, overflow:'hidden' }}>
+          <div key={week} style={{ borderRadius:7, border:`1px solid ${isToday ? 'color-mix(in srgb, var(--green) 20%, transparent)' : isFocus ? 'color-mix(in srgb, var(--accent) 19%, transparent)' : 'transparent'}`, background: rowBg, overflow:'hidden' }}>
             {/* 주차 헤더 행 */}
             <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 8px', borderLeft:`3px solid ${rowBorderColor}` }}>
               {/* 주차 배지 */}
@@ -1434,9 +1449,9 @@ function WeeklyProgressBars({ weeklyPlan, milestones, onAddTicket, onFilterWeek,
                 <span style={{
                   display:'inline-block', padding:'1px 7px', borderRadius:10,
                   fontSize:'0.8rem', fontWeight:700, letterSpacing:'0.01em',
-                  background: allDone ? 'var(--green)30' : isToday ? 'var(--green)30' : isFocus ? 'var(--accent)30' : 'var(--surface2)',
+                  background: allDone ? 'color-mix(in srgb, var(--green) 19%, transparent)' : isToday ? 'color-mix(in srgb, var(--green) 19%, transparent)' : isFocus ? 'color-mix(in srgb, var(--accent) 19%, transparent)' : 'var(--surface2)',
                   color: allDone ? 'var(--green)' : isToday ? 'var(--green)' : isFocus ? 'var(--accent2)' : 'var(--text2)',
-                  border: `1px solid ${allDone ? 'var(--green)33' : isToday ? 'var(--green)44' : isFocus ? 'var(--accent)33' : 'var(--border)'}`,
+                  border: `1px solid ${allDone ? 'color-mix(in srgb, var(--green) 20%, transparent)' : isToday ? 'color-mix(in srgb, var(--green) 27%, transparent)' : isFocus ? 'color-mix(in srgb, var(--accent) 20%, transparent)' : 'var(--border)'}`,
                 }}>
                   {allDone ? '✓' : isToday ? '📍' : isFocus ? '▶' : ''}{week}주
                 </span>
@@ -1456,7 +1471,7 @@ function WeeklyProgressBars({ weeklyPlan, milestones, onAddTicket, onFilterWeek,
               {onFilterWeek && !empty && (
                 <button onClick={(e) => { e.stopPropagation(); onFilterWeek(isActive ? 'all' : week); }}
                   title={isActive ? '필터 해제' : '이 주차만 보기'}
-                  style={{ padding:'2px 7px', borderRadius:4, border:`1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}`, background: isActive ? 'var(--accent)30' : 'transparent', color: isActive ? 'var(--accent2)' : 'var(--text2)', cursor:'pointer', fontSize:'0.8rem', flexShrink:0, fontWeight: isActive ? 600 : 400 }}>
+                  style={{ padding:'2px 7px', borderRadius:4, border:`1px solid ${isActive ? 'var(--accent)' : 'var(--border)'}`, background: isActive ? 'color-mix(in srgb, var(--accent) 19%, transparent)' : 'transparent', color: isActive ? 'var(--accent2)' : 'var(--text2)', cursor:'pointer', fontSize:'0.8rem', flexShrink:0, fontWeight: isActive ? 600 : 400 }}>
                   {isActive ? '해제' : '필터'}
                 </button>
               )}
@@ -1912,7 +1927,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
           const overdue = totalW > 0 && cw > totalW;
           return (
             <span title={`착수일: ${project.start_date} 기준`}
-              style={{ padding:'0.25rem 0.6rem', borderRadius:6, fontSize:'0.8rem', fontWeight:600, background: overdue ? 'var(--surface-danger-mid)' : 'var(--green)30', color: overdue ? 'var(--red)' : 'var(--green)', border:`1px solid ${overdue ? 'var(--surface-danger-strong)' : 'var(--green)44'}`, flexShrink:0, whiteSpace:'nowrap' }}>
+              style={{ padding:'0.25rem 0.6rem', borderRadius:6, fontSize:'0.8rem', fontWeight:600, background: overdue ? 'var(--surface-danger-mid)' : 'color-mix(in srgb, var(--green) 19%, transparent)', color: overdue ? 'var(--red)' : 'var(--green)', border:`1px solid ${overdue ? 'var(--surface-danger-strong)' : 'color-mix(in srgb, var(--green) 27%, transparent)'}`, flexShrink:0, whiteSpace:'nowrap' }}>
               📍 {cw}주차 진행 중{overdue && ` (총 ${totalW}주 초과)`}
             </span>
           );
@@ -1997,7 +2012,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                 {focusWeek != null && (
                   <button onClick={() => setWeekFilter(weekFilter === focusWeek ? 'all' : focusWeek)}
                     title="이 주차로 칸반 필터링"
-                    style={{ marginLeft:8, padding:'1px 6px', borderRadius:4, border:'1px solid var(--accent)44', background: weekFilter===focusWeek ? 'var(--accent)30' : 'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600, textTransform:'none', letterSpacing:0 }}>
+                    style={{ marginLeft:8, padding:'1px 6px', borderRadius:4, border:'1px solid color-mix(in srgb, var(--accent) 27%, transparent)', background: weekFilter===focusWeek ? 'color-mix(in srgb, var(--accent) 19%, transparent)' : 'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600, textTransform:'none', letterSpacing:0 }}>
                     👉 다음 {focusWeek}주차
                   </button>
                 )}
@@ -2043,13 +2058,13 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                   }}
                   disabled={saving}
                   title={`미지정·고아 담당 ${needsFill}개를 프로젝트 담당자로 일괄 배정 (전체 기준)`}
-                  style={{ padding:'0.3rem 0.65rem', borderRadius:6, border:'1px solid var(--accent2)44', background:'var(--accent2)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
+                  style={{ padding:'0.3rem 0.65rem', borderRadius:6, border:'1px solid color-mix(in srgb, var(--accent2) 27%, transparent)', background:'color-mix(in srgb, var(--accent2) 7%, transparent)', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
                   👤 담당자 백필 ({needsFill})
                 </button>
               );
             })()}
             {weekOptions.length === 0 && (
-              <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.3rem 0.65rem', borderRadius:6, border:'1px solid var(--accent)44', background:'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:500 }}>📅 주차 계획 등록</button>
+              <button onClick={() => setShowWeeklyInput(true)} style={{ padding:'0.3rem 0.65rem', borderRadius:6, border:'1px solid color-mix(in srgb, var(--accent) 27%, transparent)', background:'transparent', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:500 }}>📅 주차 계획 등록</button>
             )}
             {sortedAll.length > 0 && <div style={{ fontSize:'0.8rem', fontWeight:600, color:hasBlocked?'var(--red)':'var(--text2)' }}>{pct}%</div>}
           </div>
@@ -2077,7 +2092,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
             const chipStyle = (active) => ({
               padding:'0.25rem 0.65rem', borderRadius:14, fontSize:'0.8rem', fontWeight:500,
               border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
-              background: active ? 'var(--accent)30' : 'var(--surface)',
+              background: active ? 'color-mix(in srgb, var(--accent) 19%, transparent)' : 'var(--surface)',
               color: active ? 'var(--accent2)' : 'var(--text2)',
               cursor:'pointer',
             });
@@ -2117,12 +2132,12 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         const prevFilter = idx > 0 ? filterOrder[idx - 1] : null;
         const nextFilter = idx >= 0 && idx < filterOrder.length - 1 ? filterOrder[idx + 1] : null;
         const navBtn = (enabled) => ({
-          padding:'0.25rem 0.55rem', borderRadius:6, border:'1px solid var(--accent)44',
+          padding:'0.25rem 0.55rem', borderRadius:6, border:'1px solid color-mix(in srgb, var(--accent) 27%, transparent)',
           background: enabled ? 'var(--surface)' : 'transparent', color: enabled ? 'var(--accent2)' : 'var(--text2)',
           cursor: enabled ? 'pointer' : 'not-allowed', fontSize:'0.8rem', fontWeight:600, opacity: enabled ? 1 : 0.4,
         });
         return (
-          <div style={{ display:'flex', alignItems:'center', gap:10, padding:'0.5rem 0.8rem', marginBottom:10, borderRadius:8, background:'var(--accent)20', border:'1px solid var(--accent)44' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10, padding:'0.5rem 0.8rem', marginBottom:10, borderRadius:8, background:'color-mix(in srgb, var(--accent) 13%, transparent)', border:'1px solid color-mix(in srgb, var(--accent) 27%, transparent)' }}>
             <span style={{ fontSize:'0.8rem', color:'var(--accent2)', fontWeight:600 }}>🔍 {activeLabel} 필터링 중</span>
             <span style={{ fontSize:'0.8rem', color:'var(--text2)' }}>{sorted.length}개 표시 · {hidden}개 숨김</span>
             <div style={{ flex:1 }} />
@@ -2131,7 +2146,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
             <button onClick={() => nextFilter != null && setWeekFilter(nextFilter)} disabled={nextFilter == null}
               title="다음 주차 (단축키: ])" style={navBtn(nextFilter != null)}>다음 →</button>
             <button onClick={() => setWeekFilter('all')}
-              style={{ padding:'0.25rem 0.7rem', borderRadius:6, border:'1px solid var(--accent)44', background:'var(--surface)', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
+              style={{ padding:'0.25rem 0.7rem', borderRadius:6, border:'1px solid color-mix(in srgb, var(--accent) 27%, transparent)', background:'var(--surface)', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
               ✕ 해제
             </button>
           </div>
@@ -2172,13 +2187,13 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                     doBulk();
                   }
                 }} disabled={saving}
-                  style={{ padding:'0.8rem', borderRadius:10, border:'1px solid var(--accent2)', background:'var(--accent2)22', color:'var(--accent2)', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>
+                  style={{ padding:'0.8rem', borderRadius:10, border:'1px solid var(--accent2)', background:'color-mix(in srgb, var(--accent2) 13%, transparent)', color:'var(--accent2)', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>
                   ✨ 주차 계획에서 {allItems.length}개 티켓 일괄 생성
                 </button>
               );
             })()}
             <button onClick={() => setShowWeeklyInput(true)} disabled={saving}
-              style={{ padding:'0.8rem', borderRadius:10, border:'1px solid var(--accent)', background:'var(--accent)20', color:'var(--accent2)', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>
+              style={{ padding:'0.8rem', borderRadius:10, border:'1px solid var(--accent)', background:'color-mix(in srgb, var(--accent) 13%, transparent)', color:'var(--accent2)', cursor:'pointer', fontSize:'0.9rem', fontWeight:600 }}>
               📅 주차 계획 (Epic) {(project?.weekly_plan || []).length > 0 ? '수정' : '등록'}
             </button>
             {Object.entries(MILESTONE_TEMPLATES).map(([key,tpl]) => (
@@ -2260,7 +2275,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                           display:'flex', flexDirection:'column', gap:6,
                           opacity: isDragging ? 0.4 : 1,
                         }}
-                        onMouseEnter={e=>{ if(!isDragging){ e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 10px var(--shadow)'; e.currentTarget.style.borderColor=m.blocked?'color-mix(in srgb, var(--red) 67%, transparent)':'var(--accent)88'; } }}
+                        onMouseEnter={e=>{ if(!isDragging){ e.currentTarget.style.transform='translateY(-1px)'; e.currentTarget.style.boxShadow='0 4px 10px var(--shadow)'; e.currentTarget.style.borderColor=m.blocked?'color-mix(in srgb, var(--red) 67%, transparent)':'color-mix(in srgb, var(--accent) 53%, transparent)'; } }}
                         onMouseLeave={e=>{ e.currentTarget.style.transform='none'; e.currentTarget.style.boxShadow='none'; e.currentTarget.style.borderColor=m.blocked?'var(--surface-danger-strong)':'var(--border)'; }}
                         title="드래그로 컬럼 이동 · 클릭으로 상세 편집">
                         {/* Line 1: emoji + label + delete */}
@@ -2282,7 +2297,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                         {/* Line 2: badges */}
                         {(assignee || noteHasSub || m.week_number != null) && (
                           <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap', paddingLeft:23 }}>
-                            {m.week_number != null && <span style={{ padding:'0.08rem 0.4rem', borderRadius:4, background:'var(--accent)30', color:'var(--accent2)', fontWeight:600, fontSize:'0.8rem' }}>{m.week_number}W</span>}
+                            {m.week_number != null && <span style={{ padding:'0.08rem 0.4rem', borderRadius:4, background:'color-mix(in srgb, var(--accent) 19%, transparent)', color:'var(--accent2)', fontWeight:600, fontSize:'0.8rem' }}>{m.week_number}W</span>}
                             {assignee && <MemberAvatar member={assignee} size={14} />}
                             {noteHasSub && <span title="서브태스크 있음" style={{ fontSize:'0.8rem', color:'var(--text2)', opacity:0.7 }}>📝</span>}
                           </div>
@@ -2306,7 +2321,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
                 {/* Add card (only in planned column) */}
                 {isPlannedCol && (
                   <div style={{ marginTop:10, padding:'0.45rem 0.55rem', borderRadius:6, border:'1px dashed var(--border)', display:'flex', flexDirection:'column', gap:4, flexShrink:0, transition:'border-color 0.15s' }}
-                    onMouseEnter={e=>e.currentTarget.style.borderColor='var(--accent)66'}
+                    onMouseEnter={e=>e.currentTarget.style.borderColor='color-mix(in srgb, var(--accent) 40%, transparent)'}
                     onMouseLeave={e=>e.currentTarget.style.borderColor='var(--border)'}>
                     <div style={{ display:'flex', gap:6, alignItems:'center' }}>
                       <span style={{ fontSize:'0.95rem', color:'var(--text2)', lineHeight:1, flexShrink:0 }}>＋</span>
@@ -3017,7 +3032,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                     <div style={{ display:'flex', gap:6 }} role="radiogroup" aria-label="미팅 종류">
                       {MEETING_TYPES.map(mt => {
                         const sel = editMeetingType===mt.key;
-                        return (<button key={mt.key} role="radio" aria-checked={sel} onClick={() => { setEditMeetingType(sel ? '' : mt.key); setMeetingChanged(true); }} title={sel ? '다시 클릭하면 선택 해제' : undefined} style={{ flex:1, padding:'0.5rem', borderRadius:8, fontSize:'0.85rem', cursor:'pointer', border:sel?'2px solid var(--yellow)':'2px solid transparent', transition:'all 0.15s', background:sel?'var(--yellow)30':'var(--surface2)', color:sel?'var(--yellow)':'var(--text2)', fontWeight:sel?600:400 }}>{mt.emoji} {mt.label}</button>);
+                        return (<button key={mt.key} role="radio" aria-checked={sel} onClick={() => { setEditMeetingType(sel ? '' : mt.key); setMeetingChanged(true); }} title={sel ? '다시 클릭하면 선택 해제' : undefined} style={{ flex:1, padding:'0.5rem', borderRadius:8, fontSize:'0.85rem', cursor:'pointer', border:sel?'2px solid var(--yellow)':'2px solid transparent', transition:'all 0.15s', background:sel?'color-mix(in srgb, var(--yellow) 19%, transparent)':'var(--surface2)', color:sel?'var(--yellow)':'var(--text2)', fontWeight:sel?600:400 }}>{mt.emoji} {mt.label}</button>);
                       })}
                     </div>
                   </div>
@@ -3173,7 +3188,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                                 onBackfillAssignees(project.slug);
                               }
                             }}
-                            style={{ marginTop:8, width:'100%', padding:'0.4rem', borderRadius:6, border:'1px solid var(--accent2)44', background:'var(--accent2)11', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
+                            style={{ marginTop:8, width:'100%', padding:'0.4rem', borderRadius:6, border:'1px solid color-mix(in srgb, var(--accent2) 27%, transparent)', background:'color-mix(in srgb, var(--accent2) 7%, transparent)', color:'var(--accent2)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
                             👤 담당자 백필 ({needsFill})
                           </button>
                         );
@@ -3454,7 +3469,8 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
     </>
   );
   return (
-    <div style={{ background:'var(--surface)', borderRadius:12, border:'1px solid var(--border)', overflow:'hidden' }}>
+    // overflow:hidden 은 스크롤 컨테이너를 만들어 thead sticky 를 무력화한다 → clip (2026-09-20)
+    <div style={{ background:'var(--surface)', borderRadius:12, border:'1px solid var(--border)', overflow:'clip' }}>
       {selected.size > 0 && (
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0.6rem 1rem', background:'var(--surface-danger-soft)', borderBottom:'1px solid var(--surface-danger-mid)' }}>
           <span style={{ fontSize:'0.85rem', color:'var(--text)' }}>{selected.size}건 선택됨</span>
@@ -3540,11 +3556,11 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
           })}
         </div>
       ) : (
-      <div style={{ overflowX:'auto' }}>
+      <div className="table-scroll">
         <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.85rem', tableLayout:'fixed' }}>
           <thead>
             <tr style={{ borderBottom:'1px solid var(--border)', background:'var(--surface)' }}>
-              <th style={{ padding:'0.75rem 0.5rem 0.75rem 1rem', width:'36px', position:'sticky', top:0, background:'var(--surface)', zIndex:1 }}>
+              <th style={{ padding:'0.75rem 0.5rem 0.75rem 1rem', width:'36px', position:'sticky', top:'var(--filterbar-h, 0px)', background:'var(--surface)', zIndex:4 }}>
                 <input type="checkbox" checked={filtered.length>0 && selected.size===filtered.length} onChange={toggleAll} style={{ cursor:'pointer', accentColor:'var(--accent)' }} />
               </th>
               {cols.map(c => (
@@ -3552,7 +3568,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                   role={c.sortable?'button':undefined} tabIndex={c.sortable?0:undefined}
                   aria-sort={c.sortable ? (sortKey===c.key ? (sortOrder==='desc'?'descending':'ascending') : 'none') : undefined}
                   onKeyDown={c.sortable ? (e => { if (e.key==='Enter' || e.key===' ') { e.preventDefault(); onSort(c.key); } }) : undefined}
-                  style={{ padding:'0.75rem 1rem', textAlign:'left', fontWeight:600, color:'var(--text2)', fontSize:'0.8rem', whiteSpace:'nowrap', width:c.width||'auto', cursor:c.sortable?'pointer':'default', userSelect:c.sortable?'none':'auto', position:'sticky', top:0, background:'var(--surface)', zIndex:1 }}>
+                  style={{ padding:'0.75rem 1rem', textAlign:'left', fontWeight:600, color:'var(--text2)', fontSize:'0.8rem', whiteSpace:'nowrap', width:c.width||'auto', cursor:c.sortable?'pointer':'default', userSelect:c.sortable?'none':'auto', position:'sticky', top:'var(--filterbar-h, 0px)', background:'var(--surface)', zIndex:4 }}>
                   {c.label}{c.sortable&&sortKey===c.key&&(sortOrder==='desc'?' ▼':' ▲')}
                 </th>
               ))}
@@ -3595,9 +3611,9 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
                       <div style={{ marginTop:6 }}>
                         <button onClick={e=>{ e.stopPropagation(); onOpenProject(r.slug); }}
                           title="작업 페이지 열기"
-                          style={{ display:'inline-flex', alignItems:'center', gap:4, padding:'0.18rem 0.55rem', borderRadius:6, border:'1px solid var(--accent)44', background:'var(--accent)15', color:'var(--accent)', cursor:'pointer', fontSize:'0.78rem', fontWeight:600 }}
-                          onMouseEnter={e=>e.currentTarget.style.background='var(--accent)28'}
-                          onMouseLeave={e=>e.currentTarget.style.background='var(--accent)15'}>
+                          style={{ display:'inline-flex', alignItems:'center', gap:4, padding:'0.18rem 0.55rem', borderRadius:6, border:'1px solid color-mix(in srgb, var(--accent) 27%, transparent)', background:'color-mix(in srgb, var(--accent) 8%, transparent)', color:'var(--accent)', cursor:'pointer', fontSize:'0.78rem', fontWeight:600 }}
+                          onMouseEnter={e=>e.currentTarget.style.background='color-mix(in srgb, var(--accent) 16%, transparent)'}
+                          onMouseLeave={e=>e.currentTarget.style.background='color-mix(in srgb, var(--accent) 8%, transparent)'}>
                           🛠 작업페이지 →
                         </button>
                       </div>
@@ -3763,12 +3779,22 @@ function App({ session }) {
   const [connected, setConnected]         = useState(false);
   const wasDisconnectedRef = useRef(false);
   const isMobile = useMediaQuery(MOBILE_MQ);
+  // 표 헤더 sticky 가 필터 바에 가리지 않도록, 필터 바 높이를 CSS 변수로 노출 (2026-09-20)
+  const filterBarRef = useRef(null);
+  useEffect(() => {
+    const el = filterBarRef.current;
+    const apply = () => document.documentElement.style.setProperty('--filterbar-h', `${(!isMobile && el ? el.offsetHeight : 0)}px`);
+    apply();
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(apply); ro.observe(el);
+    return () => ro.disconnect();
+  }, [isMobile, filter, memberFilter, search, data]);
   const [sortKey, setSortKey]             = useState('created_at');
   const [sortOrder, setSortOrder]         = useState('desc');
   const [dateRange, setDateRange]         = useState('all');
   const [showStats, setShowStats]         = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
-  const { toasts, toast } = useToast();
+  const { toasts, toast, dismissToast } = useToast();
   const [confirmState, setConfirmState] = useState(null); // { title, message, confirmLabel, destructive, onConfirm }
   const searchRef = useRef(null);
 
@@ -4558,7 +4584,7 @@ function App({ session }) {
     const proj = data.find(d => d.slug === route.slug);
     return (
       <div>
-        <ToastContainer toasts={toasts} />
+        <ToastContainer toasts={toasts} onDismiss={dismissToast} />
         <ConfirmModal state={confirmState} onCancel={() => { confirmState?.onCancel?.(); setConfirmState(null); }} />
         <ProjectView
           project={proj}
@@ -4587,23 +4613,27 @@ function App({ session }) {
   STATUS_ORDER.forEach(s => counts[s]=data.filter(d=>d.current_status===s).length);
   const appliedOrBeyond = data.filter(d=>d.current_status!=='generated').length;
   // 수주 = won 이후 모든 단계. 한 번 수주된 이상 진행 단계와 무관하게 카운트.
-  const SECURED_STATUSES = ['won','in_progress','maintenance_free','maintenance_paid','delivered','settled'];
-  const POST_MEETING = ['interview','meeting_done', ...SECURED_STATUSES];
+
   // 수주율 분모 = "미팅을 거친 모든 프로젝트" (interview, meeting_done, 또는 수주 후 단계)
   const wonCount = data.filter(d => SECURED_STATUSES.includes(d.current_status)).length;
-  const meetingReachedCount = data.filter(d => POST_MEETING.includes(d.current_status)).length;
+  const meetingReachedCount = data.filter(d => MEETING_REACHED_STATUSES.includes(d.current_status)).length;
   const winRate = meetingReachedCount > 0 ? ((wonCount/meetingReachedCount)*100).toFixed(1) : '0.0';
 
   const now = new Date();
-  const weekStart = new Date(now); weekStart.setDate(now.getDate()-now.getDay());
-  const weekEnd   = new Date(weekStart); weekEnd.setDate(weekStart.getDate()+7);
-  const thisWeekMeetings = data.filter(d => d.meeting_at && new Date(d.meeting_at)>=weekStart && new Date(d.meeting_at)<weekEnd);
+  // 이번 주(한국 시간, 일요일 시작) 남은 미팅 — 이미 끝난 미팅·지난 시각은 제외 (2026-09-20)
+  const weekEndKst = (() => {
+    const t = new Date(`${kstDateStr()}T00:00:00+09:00`);
+    t.setDate(t.getDate() + (7 - t.getUTCDay() % 7));   // 다음 일요일 0시 KST
+    return t;
+  })();
+  const thisWeekMeetings = data.filter(d => d.current_status === 'interview' && d.meeting_at
+    && new Date(d.meeting_at) >= now && new Date(d.meeting_at) < weekEndKst);
   const staleCount = data.filter(d => d.current_status==='applied' && d.created_at && daysBetween(d.created_at,now)>=30).length;
   const activeMembers = teamMembers.filter(m => m.is_active);
 
   return (
     <div>
-      <ToastContainer toasts={toasts} />
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
       <ConfirmModal state={confirmState} onCancel={() => { confirmState?.onCancel?.(); setConfirmState(null); }} />
       {showShortcuts && <ShortcutHelp onClose={() => setShowShortcuts(false)} />}
       {selectedProject && (
@@ -4764,7 +4794,7 @@ function App({ session }) {
         <div className="fade-in" style={{ display:'flex', gap:'0.6rem', marginBottom:'1rem', flexWrap:'wrap' }}>
           {thisWeekMeetings.length>0 && (
             <div style={{ flex:'1 1 0', minWidth:0, padding:'0.5rem 0.8rem', borderRadius:8, background:'var(--surface-warning-soft)', border:'1px solid var(--surface-warning-mid)', fontSize:'0.8rem', color:'var(--yellow)', display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
-              <span style={{ fontWeight:600, flexShrink:0 }}>📅 이번 주 미팅 {thisWeekMeetings.length}건</span>
+              <span style={{ fontWeight:600, flexShrink:0 }}>📅 이번 주 남은 미팅 {thisWeekMeetings.length}건</span>
               <span style={{ fontSize:'0.8rem', color:'var(--text2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0, flex:1 }}>{thisWeekMeetings.map(m=>(m.title||m.slug).substring(0,15)).join(', ')}</span>
             </div>
           )}
@@ -4777,7 +4807,7 @@ function App({ session }) {
       )}
 
       {/* 필터 바 (검색·상태·담당·기간) — 표 스크롤 시 블록 전체가 상단 sticky로 고정 */}
-      <div className="fade-in delay-1" style={{ position:isMobile?'static':'sticky', top:0, background:'var(--bg)', zIndex:5, padding:'0.5rem 0', marginBottom:'1rem' }}>
+      <div ref={filterBarRef} className="fade-in delay-1" style={{ position:isMobile?'static':'sticky', top:0, background:'var(--bg)', zIndex:5, padding:'0.5rem 0', marginBottom:'1rem' }}>
       <div style={{ display:'flex', gap:'0.6rem', marginBottom:'0.5rem', flexWrap:'wrap', alignItems:'center' }}>
         <input ref={searchRef} type="text" placeholder="제목·슬러그·메모 검색 (/)" value={search} onChange={e => setSearch(e.target.value)}
           style={{ padding:'0.4rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', flex:'1 1 180px', minWidth:180, maxWidth:280, outline:'none' }}
@@ -4804,7 +4834,7 @@ function App({ session }) {
             <button onClick={() => setMemberFilter('')} style={{
               padding:'0.25rem 0.65rem', borderRadius:20, cursor:'pointer',
               border:!memberFilter?'1px solid var(--accent)':'1px solid transparent',
-              background:!memberFilter?'var(--accent)30':'var(--surface2)',
+              background:!memberFilter?'color-mix(in srgb, var(--accent) 19%, transparent)':'var(--surface2)',
               color:!memberFilter?'var(--accent)':'var(--text2)',
               fontSize:'0.8rem', fontWeight:!memberFilter?600:400,
             }}>전체</button>
@@ -4865,7 +4895,7 @@ function App({ session }) {
         const numStyle = (color) => ({ fontWeight:700, fontSize:'0.95rem', color });
         return (
           <div className="fade-in delay-2" style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:'1rem' }}>
-            <div style={kpiStyle} title="미팅을 거친 모든 프로젝트 대비 수주 성공 비율">
+            <div style={kpiStyle} title="'미팅 완료' 이후 단계에 도달한 건 대비 수주 성공 비율.&#10;아직 미팅 전인 '미팅 예정'은 분모에서 제외됩니다.&#10;※ 미선정으로 삭제된 건은 집계에 남지 않아 실제보다 높게 나올 수 있습니다.">
               <span style={{ color:'var(--text2)' }}>미팅 → 수주 전환율</span>
               <span style={numStyle('var(--green)')}>{winRate}%</span>
               <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>({wonCount}/{meetingReachedCount})</span>
@@ -4910,7 +4940,7 @@ function App({ session }) {
               return (
                 <div style={{ display:'flex', gap:'0.75rem', flexWrap:'wrap', marginTop:'0.75rem', marginBottom:'1rem' }}>
                   <StatCard title="총 프로젝트" value={data.length} sub={`생성 ${counts.generated||0} / 지원 ${appliedOrBeyond}`} delay={1} />
-                  <StatCard title="미팅 → 수주 전환율" value={`${winRate}%`} sub={`${wonCount} / ${meetingReachedCount}`} color="var(--green)" delay={1} />
+                  <StatCard title="미팅 → 수주 전환율" value={`${winRate}%`} sub={`${wonCount} / ${meetingReachedCount} · 미팅 완료 이후 기준`} color="var(--green)" delay={1} />
                   <StatCard title="수주대금" value={wonBudgetStr} sub={`${wonCount}건 합산 · 수수료 차감 (부가세 제외)`} color="var(--green)" delay={1} />
                   <StatCard title="진행 중" value={SECURED_STATUSES.reduce((s,k)=>s+(counts[k]||0),0)}
                     sub={SECURED_STATUSES.map(k=>counts[k]>0?`${STATUS_META[k].label} ${counts[k]}`:'').filter(Boolean).join(' · ')||'없음'} color="var(--accent2)" delay={1} />
