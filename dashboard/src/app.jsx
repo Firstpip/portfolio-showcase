@@ -949,11 +949,11 @@ function FilterTabs({ active, onChange, counts }) {
         if (t.key !== 'all' && count === 0) return null;
         const isActive = active === t.key;
         return (
-          <button key={t.key} onClick={() => onChange(t.key)} style={{
-            padding:'0.45rem 0.9rem', borderRadius:8, border:'none', cursor:'pointer',
-            fontSize:'0.8rem', fontWeight:isActive?600:400, transition:'all 0.15s',
+          <button key={t.key} onClick={() => onChange(t.key)} style={btn.primary({
+            padding:'0.45rem 0.9rem', fontSize:'var(--text-sm)', fontWeight:isActive?600:400,
+            transition:'all 0.15s',
             background:isActive?'var(--accent)':'var(--surface2)', color:isActive?'#fff':'var(--text2)',
-          }}>
+          })}>
             {t.key !== 'all' && STATUS_META[t.key]?.emoji+' '}{t.label} {count}
           </button>
         );
@@ -3555,8 +3555,8 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'0.6rem 1rem', background:'var(--surface-danger-soft)', borderBottom:'1px solid var(--surface-danger-mid)' }}>
           <span style={{ fontSize:'0.85rem', color:'var(--text)' }}>{selected.size}건 선택됨</span>
           <div style={{ display:'flex', gap:8 }}>
-            <button onClick={() => setSelected(new Set())} style={{ padding:'0.35rem 0.7rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer', fontSize:'0.8rem' }}>선택 해제</button>
-            <button onClick={() => { onBatchDelete([...selected]); setSelected(new Set()); }} style={{ padding:'0.35rem 0.7rem', borderRadius:6, border:'none', background:'var(--red)', color:'#fff', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>일괄 삭제</button>
+            <button onClick={() => setSelected(new Set())} style={btn.secondary({ padding:'0.35rem 0.7rem', borderRadius:'var(--radius-md)', fontSize:'var(--text-sm)' })}>선택 해제</button>
+            <button onClick={() => { onBatchDelete([...selected]); setSelected(new Set()); }} style={btn.primary({ padding:'0.35rem 0.7rem', borderRadius:'var(--radius-md)', background:'var(--red)', fontSize:'var(--text-sm)' })}>일괄 삭제</button>
           </div>
         </div>
       )}
@@ -3570,7 +3570,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
               {cols.filter(c => c.sortable).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
             </select>
             <button onClick={() => onSort(sortKey)} aria-label="정렬 방향 전환"
-              style={{ flexShrink:0, padding:'0.35rem 0.6rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.8rem', cursor:'pointer' }}>
+              style={btn.secondary({ flexShrink:0, padding:'0.35rem 0.6rem', background:'var(--surface2)', color:'var(--text)', fontSize:'var(--text-sm)' })}>
               {sortOrder==='desc' ? '▼ 내림차순' : '▲ 오름차순'}
             </button>
           </div>
@@ -3795,19 +3795,24 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
             items.push(p);
             prev = p;
           }
-          const btn = (label, onClick, disabled, active) => (
+          const pageBtn = (label, onClick, disabled, active) => (
             <button key={label+(active?'-a':'')} onClick={onClick} disabled={disabled}
-              style={{ padding:'0.25rem 0.55rem', borderRadius:6, border:'1px solid '+(active?'var(--accent)':'var(--border)'), background:active?'var(--accent)':'transparent', color:active?'#fff':disabled?'var(--text2)':'var(--text)', cursor:disabled?'not-allowed':'pointer', fontSize:'0.75rem', fontWeight:active?600:400, opacity:disabled?0.4:1, minWidth:28 }}>
+              style={btn.secondary({ padding:'0.25rem 0.55rem', borderRadius:'var(--radius-md)',
+                border:'1px solid '+(active?'var(--accent)':'var(--border)'),
+                background:active?'var(--accent)':'transparent',
+                color:active?'#fff':disabled?'var(--text2)':'var(--text)',
+                cursor:disabled?'not-allowed':'pointer', fontSize:'0.75rem',
+                fontWeight:active?600:400, opacity:disabled?0.4:1, minWidth:28 })}>
               {label}
             </button>
           );
           return (
             <div style={{ display:'flex', gap:4, alignItems:'center' }}>
-              {btn('‹', () => setPage(p => Math.max(1, p-1)), safePage===1, false)}
+              {pageBtn('‹', () => setPage(p => Math.max(1, p-1)), safePage===1, false)}
               {items.map((it, i) => it === '…'
                 ? <span key={'e'+i} style={{ padding:'0 4px', color:'var(--text2)' }}>…</span>
-                : btn(String(it), () => setPage(it), false, it===safePage))}
-              {btn('›', () => setPage(p => Math.min(totalPages, p+1)), safePage===totalPages, false)}
+                : pageBtn(String(it), () => setPage(it), false, it===safePage))}
+              {pageBtn('›', () => setPage(p => Math.min(totalPages, p+1)), safePage===totalPages, false)}
             </div>
           );
         })()}
