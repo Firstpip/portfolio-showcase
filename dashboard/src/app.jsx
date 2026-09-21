@@ -1954,7 +1954,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
   const subM  = teamMembers?.find(tm => tm.id===project?.assigned_sub);
 
   const backBtn = (
-    <button onClick={onBack} style={{ padding:'0.5rem 0.85rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface)', color:'var(--text)', cursor:'pointer', fontSize:'0.85rem', fontWeight:500, flexShrink:0 }}>← 대시보드로</button>
+    <button onClick={onBack} style={btn.secondary({ padding:'0.5rem 0.85rem', background:'var(--surface)', color:'var(--text)', fontWeight:500, flexShrink:0 })}>← 대시보드로</button>
   );
 
   if (!project) {
@@ -1979,7 +1979,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         </div>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
           <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>Supabase SQL 에디터에서 실행</div>
-          <button onClick={() => { navigator.clipboard.writeText(MILESTONE_SETUP_SQL); }} style={{ padding:'0.35rem 0.7rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', cursor:'pointer', fontSize:'0.8rem' }}>📋 SQL 복사</button>
+          <button onClick={() => { navigator.clipboard.writeText(MILESTONE_SETUP_SQL); }} style={btn.secondary({ padding:'0.35rem 0.7rem', borderRadius:'var(--radius-md)', background:'var(--surface2)', color:'var(--text)', fontSize:'var(--text-sm)' })}>📋 SQL 복사</button>
         </div>
         <pre style={{ background:'var(--bg)', padding:'0.9rem', borderRadius:8, fontSize:'0.8rem', color:'var(--text2)', overflow:'auto', maxHeight:360, border:'1px solid var(--border)', lineHeight:1.5 }}>{MILESTONE_SETUP_SQL}</pre>
       </div>
@@ -2167,12 +2167,11 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:12, flexWrap:'wrap' }}>
           <span style={{ fontSize:'0.8rem', color:'var(--text2)', marginRight:4 }}>주차 필터</span>
           {(() => {
-            const chipStyle = (active) => ({
-              padding:'0.25rem 0.65rem', borderRadius:14, fontSize:'0.8rem', fontWeight:500,
+            const chipStyle = (active) => btn.secondary({
+              padding:'0.25rem 0.65rem', borderRadius:14, fontSize:'var(--text-sm)', fontWeight:500,
               border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
               background: active ? 'color-mix(in srgb, var(--accent) 19%, transparent)' : 'var(--surface)',
               color: active ? 'var(--accent2)' : 'var(--text2)',
-              cursor:'pointer',
             });
             const chips = [
               <button key="all" onClick={() => setWeekFilter('all')} style={chipStyle(weekFilter==='all')}>전체 ({sortedAll.length})</button>,
@@ -2209,10 +2208,11 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         const idx = filterOrder.indexOf(weekFilter);
         const prevFilter = idx > 0 ? filterOrder[idx - 1] : null;
         const nextFilter = idx >= 0 && idx < filterOrder.length - 1 ? filterOrder[idx + 1] : null;
-        const navBtn = (enabled) => ({
-          padding:'0.25rem 0.55rem', borderRadius:6, border:'1px solid color-mix(in srgb, var(--accent) 27%, transparent)',
+        const navBtn = (enabled) => btn.secondary({
+          padding:'0.25rem 0.55rem', borderRadius:'var(--radius-md)',
+          border:'1px solid color-mix(in srgb, var(--accent) 27%, transparent)',
           background: enabled ? 'var(--surface)' : 'transparent', color: enabled ? 'var(--accent2)' : 'var(--text2)',
-          cursor: enabled ? 'pointer' : 'not-allowed', fontSize:'0.8rem', fontWeight:600, opacity: enabled ? 1 : 0.4,
+          cursor: enabled ? 'pointer' : 'not-allowed', fontSize:'var(--text-sm)', fontWeight:600, opacity: enabled ? 1 : 0.4,
         });
         return (
           <div style={{ display:'flex', alignItems:'center', gap:10, padding:'0.5rem 0.8rem', marginBottom:10, borderRadius:8, background:'color-mix(in srgb, var(--accent) 13%, transparent)', border:'1px solid color-mix(in srgb, var(--accent) 27%, transparent)' }}>
