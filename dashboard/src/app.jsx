@@ -1197,7 +1197,9 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
   const inactive = members.filter(m => !m.is_active);
 
   const inputS = { flex:1, padding:'0.45rem 0.7rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.85rem', outline:'none' };
-  const btnS   = (col, ghost) => ({ padding:'0.25rem 0.6rem', borderRadius:6, cursor:'pointer', fontSize:'0.8rem', fontWeight:600, border: ghost?`1px solid ${col}44`:'none', background:ghost?'transparent':col, color:ghost?col:'#fff' });
+  // 팀원 행 버튼 — 전역 btn 헬퍼 기반. 과거 지역 헬퍼는 `1px solid ${col}44` 로 테두리를 만들었는데
+  // col 이 var(--x) 토큰이 되면서 CSS 가 무효가 돼(0px none) 테두리가 사라져 있었다.
+  const rowBtn = { padding:'0.25rem 0.6rem', borderRadius:'var(--radius-md)', fontSize:'var(--text-sm)', fontWeight:600 };
 
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'var(--overlay)', backdropFilter:'blur(4px)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
@@ -1262,8 +1264,8 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
                             onKeyDown={e => { if(e.key==='Enter') handleUpdate(m.id); if(e.key==='Escape') setEditId(null); }}
                             autoFocus
                             style={{ flex:1, padding:'0.3rem 0.5rem', borderRadius:6, border:'1px solid var(--accent)', background:'var(--surface)', color:'var(--text)', fontSize:'0.85rem', outline:'none' }} />
-                          <button onClick={() => handleUpdate(m.id)} disabled={saving} style={btnS('var(--accent)',false)}>저장</button>
-                          <button onClick={() => setEditId(null)} style={btnS('var(--border)',true)}>취소</button>
+                          <button onClick={() => handleUpdate(m.id)} disabled={saving} style={btn.primary(rowBtn)}>저장</button>
+                          <button onClick={() => setEditId(null)} style={btn.secondary(rowBtn)}>취소</button>
                         </>
                       ) : (
                         <>
@@ -1275,9 +1277,9 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
                             </div>
                           </div>
                           <button onClick={() => { setEditId(m.id); setEditName(m.name); setEditColor(m.color); }}
-                            style={btnS('var(--border)',true)}>수정</button>
+                            style={btn.secondary(rowBtn)}>수정</button>
                           <button onClick={() => { if(confirm(`'${m.name}' 비활성화하시겠습니까?\n기존 배정 내역은 유지됩니다.`)) onDeactivate(m.id); }}
-                            style={btnS('var(--red)',true)}>비활성</button>
+                            style={btn.danger(rowBtn)}>비활성</button>
                         </>
                       )}
                     </div>
@@ -1301,7 +1303,7 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
                   <div key={m.id} style={{ padding:'0.5rem 0.75rem', borderRadius:8, background:'var(--surface2)', border:'1px solid var(--border)', display:'flex', alignItems:'center', gap:8, opacity:0.55 }}>
                     <MemberAvatar member={m} size={22} />
                     <span style={{ flex:1, fontSize:'0.85rem', color:'var(--text2)' }}>{m.name}</span>
-                    <button onClick={() => onUpdate(m.id, { is_active:true })} style={btnS('var(--green)',true)}>복구</button>
+                    <button onClick={() => onUpdate(m.id, { is_active:true })} style={btn.secondary({ ...rowBtn, border:'1px solid var(--surface-success-mid)', color:'var(--green)' })}>복구</button>
                   </div>
                 ))}
               </div>
