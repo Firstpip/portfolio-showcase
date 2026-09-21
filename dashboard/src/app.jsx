@@ -2622,7 +2622,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
 
   const inputS  = { width:'100%', padding:'0.5rem 0.7rem', borderRadius:8, fontSize:'0.85rem', border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', outline:'none' };
   const labelS  = { fontSize:'0.8rem', color:'var(--text2)', marginBottom:6, fontWeight:500 };
-  const saveBtnS = (act) => ({ padding:'0.5rem 0.85rem', borderRadius:8, border:'none', cursor:'pointer', fontSize:'0.8rem', fontWeight:600, background:act?'var(--blue)':'var(--surface2)', color:act?'#fff':'var(--text2)', opacity:saving?0.7:1 });
+  // 저장 계열 버튼 프리셋 — 전역 btn.primary 기반. 호출부는 {...saveBtnS(act), ...} 로 스프레드해 쓴다.
+  const saveBtnS = (act) => btn.primary({ padding:'0.5rem 0.85rem', fontSize:'var(--text-sm)',
+    background:act?'var(--blue)':'var(--surface2)', color:act?'#fff':'var(--text2)', opacity:saving?0.7:1 });
   // 링크 추가 — http(s) 만, 중복 금지. 성공 시 true (호출부에서 입력칸 초기화 여부 판단)
   const addLink = () => {
     const url = normalizeUrlInput(newLinkUrl);
@@ -2709,7 +2711,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
           {externalChanged && (
             <div style={{ marginBottom:8, padding:'0.5rem 0.75rem', borderRadius:8, background:'var(--surface-warning-soft)', border:'1px solid var(--surface-warning-strong)', color:'var(--yellow)', fontSize:'0.8rem', display:'flex', alignItems:'flex-start', gap:8 }}>
               <span style={{ flex:1 }}>⚠ 이 프로젝트가 방금 외부(자동화·다른 기기)에서 변경되었습니다. 지금 저장하면 그 변경을 덮어쓸 수 있습니다 — 모달을 닫았다 다시 열면 최신값으로 편집할 수 있습니다.</span>
-              <button onClick={() => setExternalChanged(false)} style={{ background:'none', border:'none', color:'var(--yellow)', cursor:'pointer', fontSize:'0.85rem', padding:0, flexShrink:0 }} title="경고 닫기">&#x2715;</button>
+              <button onClick={() => setExternalChanged(false)} style={btn.ghost({ color:'var(--yellow)', padding:0, flexShrink:0 })} title="경고 닫기">&#x2715;</button>
             </div>
           )}
 
@@ -2836,7 +2838,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                                   setEditLinks(next); setLinksChanged(true);
                                 }} style={{ ...inputS, fontSize:'0.8rem', padding:'0.3rem 0.5rem' }} />
                               </div>
-                              <button onClick={() => setEditingLinkIdx(-1)} style={{ background:'none', border:'none', color:'var(--green)', cursor:'pointer', fontSize:'0.9rem', padding:'4px', flexShrink:0 }} title="완료">&#x2714;</button>
+                              <button onClick={() => setEditingLinkIdx(-1)} style={btn.ghost({ color:'var(--green)', fontSize:'var(--text-md)', padding:'4px', flexShrink:0 })} title="완료">&#x2714;</button>
                             </>
                           ) : (
                             <>
@@ -2844,7 +2846,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                                 style={{ flex:1, minWidth:0, textDecoration:'none', color:'var(--accent2)', fontSize:'0.8rem', fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
                                 title={link.url}
                               >{link.label || link.url}</a>
-                              <button onClick={() => setEditingLinkIdx(idx)} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'0.75rem', padding:'2px 4px', flexShrink:0 }} title="수정">&#x270E;</button>
+                              <button onClick={() => setEditingLinkIdx(idx)} style={btn.ghost({ fontSize:'0.75rem', padding:'2px 4px', flexShrink:0 })} title="수정">&#x270E;</button>
                               {(() => {
                                 // 삭제 버튼은 행마다 하나만: 쇼케이스 배포 링크(이 프로젝트 slug와 일치) → 🗑(배포까지 삭제),
                                 // 그 외(외부 링크 등) → ✕(링크만 삭제). 쇼케이스 링크를 ✕로 지우면 배포만 남는
