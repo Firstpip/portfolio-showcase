@@ -1119,7 +1119,7 @@ function DeletedProjectsModal({ onClose, onRestored, toast }) {
             <div style={{ fontWeight:700, fontSize:'1rem' }}>🗑 최근 삭제</div>
             <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginTop:2 }}>삭제된 프로젝트를 워크룸 DB에만 원상 복원합니다 (포트폴리오/배포 제외)</div>
           </div>
-          <button onClick={onClose} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem', padding:'2px 4px' }}>✕</button>
+          <button onClick={onClose} style={btn.ghost({ fontSize:'1.1rem', padding:'2px 4px' })}>✕</button>
         </div>
         <div style={{ padding:'1rem 1.5rem', overflowY:'auto' }}>
           {list === null && !err && <div style={{ color:'var(--text2)', fontSize:'0.85rem' }}>불러오는 중…</div>}
@@ -1140,7 +1140,7 @@ function DeletedProjectsModal({ onClose, onRestored, toast }) {
                 </div>
               </div>
               <button onClick={() => restore(r.slug)} disabled={busy === r.slug}
-                style={{ padding:'0.3rem 0.75rem', borderRadius:6, border:'none', background:'var(--accent)', color:'#fff', fontSize:'0.78rem', fontWeight:600, cursor:busy===r.slug?'default':'pointer', opacity:busy===r.slug?0.6:1, flexShrink:0 }}>
+                style={btn.primary({ padding:'0.3rem 0.75rem', borderRadius:'var(--radius-md)', fontSize:'0.78rem', cursor:busy===r.slug?'default':'pointer', opacity:busy===r.slug?0.6:1, flexShrink:0 })}>
                 {busy === r.slug ? '복원 중…' : '복원'}
               </button>
             </div>
@@ -1213,7 +1213,7 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
             <div style={{ fontWeight:700, fontSize:'1rem' }}>팀원 관리</div>
             <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginTop:2 }}>미팅 담당자로 배정할 팀원을 관리합니다</div>
           </div>
-          <button onClick={onClose} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem', padding:'2px 4px' }}>✕</button>
+          <button onClick={onClose} style={btn.ghost({ fontSize:'1.1rem', padding:'2px 4px' })}>✕</button>
         </div>
 
         <div style={{ padding:'1.25rem 1.5rem', overflowY:'auto', flex:1 }}>
@@ -2677,7 +2677,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                 }
               </div>
             </div>
-            <button onClick={guardedClose} style={{ background:'none', border:'none', color:'var(--text2)', cursor:'pointer', fontSize:'1.1rem', padding:'2px 4px', flexShrink:0 }}>&#x2715;</button>
+            <button onClick={guardedClose} style={btn.ghost({ fontSize:'1.1rem', padding:'2px 4px', flexShrink:0 })}>&#x2715;</button>
           </div>
 
           {project.wishket_url && (
@@ -5241,7 +5241,7 @@ function QuickAddModal({ onClose, onAdd, saving }) {
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:5 }}>
               <div style={{ fontSize:'0.8rem', color:'var(--text2)', fontWeight:500 }}>슬러그 {manualSlug ? '(직접 수정)' : '(자동 생성)'}</div>
               <button type="button" onClick={() => { if (manualSlug) { setManualSlug(false); setSlugErr(''); } else { setManualSlug(true); setSlugBody(autoBody); } }}
-                style={{ fontSize:'0.75rem', padding:'0.15rem 0.5rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', cursor:'pointer' }}>
+                style={btn.secondary({ fontSize:'0.75rem', padding:'0.15rem 0.5rem', borderRadius:'var(--radius-md)' })}>
                 {manualSlug ? '자동 생성으로' : '직접 수정'}
               </button>
             </div>
@@ -5276,13 +5276,13 @@ function QuickAddModal({ onClose, onAdd, saving }) {
               <span style={{ padding:'0.55rem 0.7rem', borderRadius:'0 8px 8px 0', fontSize:'0.85rem', background:'var(--border)', color:'var(--text2)', border:'1px solid var(--border)', whiteSpace:'nowrap' }}>만원</span>
             </div>
           </div>
-          <button onClick={handleSubmit} disabled={!canSubmit} style={{
-            marginTop:4, padding:'0.65rem', borderRadius:10, border:'none',
+          <button onClick={handleSubmit} disabled={!canSubmit} style={btn.primary({
+            marginTop:4, padding:'0.65rem', borderRadius:10,
             cursor:canSubmit?'pointer':'not-allowed',
             background:canSubmit?'var(--accent)':'var(--surface2)',
             color:canSubmit?'#fff':'var(--text2)',
-            fontSize:'0.9rem', fontWeight:700, opacity:saving?0.7:1,
-          }}>
+            fontSize:'var(--text-md)', fontWeight:700, opacity:saving?0.7:1,
+          })}>
             {saving?'등록 중...':'등록 (지원완료 상태로 시작)'}
           </button>
         </div>
