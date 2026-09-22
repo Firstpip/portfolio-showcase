@@ -100,7 +100,7 @@ async def fetch_asos_year(client: httpx.AsyncClient, station: str, year: int) ->
         # 최고기온 시각 습도는 제공되지 않아 최소상대습도(minRhm)를 우선, 없으면 평균습도 사용
         hum = f(it.get("minRhm"), f(it.get("avgRhm"), 50))
         days.append({"y": y, "m": m, "d": d, "rain": f(it.get("sumRn")), "tmax": tmax, "tmin": tmin, "hum": hum,
-                     "wind": f(it.get("maxWs")), "snow": f(it.get("ddMefs")),
+                     "wind": f(it.get("maxWs")), "gust": f(it.get("maxInsWs"), None), "snow": f(it.get("ddMefs")),
                      "feels": feels_like(tmax, hum) if tmax is not None else None})
     if len(days) >= 300:  # 연 단위 완결 데이터만 캐시
         cache_file.write_text(json.dumps(days, ensure_ascii=False))

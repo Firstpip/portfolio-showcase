@@ -117,9 +117,29 @@ def build_docx(d: dict) -> bytes:
            [[a.get('key'), a.get('pred', ''), a.get('dur'), a.get('es'), a.get('lf'), a.get('float'), f"{a.get('start','')}~{a.get('end','')}", '●' if a.get('critical') else ''] for a in d.get('cpm', [])], [3.6, 3.6, 1.4, 1.2, 1.2, 1.2, 3.2, 1.4], num_cols=(2, 3, 4, 5))
     _h(doc, '6. 공사기간 산정 총괄')
     _table(doc, ['구분', '일수', '산정 근거'], [[x.get('label'), x.get('days'), x.get('basis')] for x in d.get('totals', [])], [4, 2, 11], num_cols=(1,))
-    _h(doc, '7. 적정성 검토 의견')
+    mo = d.get('molit') or {}
+    if mo:
+        _h(doc, '7. 국토부 공사기간 산정기준 대조')
+        _p(doc, f"국토교통부 「공공 건설공사의 공사기간 산정기준」(2019 훈령) 및 「2024년 적정 공사기간 확보를 위한 가이드라인」의 산식과 참고값으로 본 산정을 검산한 결과입니다. 비작업일수 산식(A+B−C, 주 40시간 하한 {'적용' if mo.get('nw_floor') else '미적용'})으로 계산한 토공·옥외 기준 연간 비작업일수는 {mo.get('nw_formula_annual')}일이며, 본 산정의 일별 배치 기준 {mo.get('nw_ours_annual')}일입니다.")
+        rows = mo.get('nw_rows') or []
+        if rows:
+            _table(doc, ['구분(토공·옥외)'] + [f"{r['m']}월" for r in rows] + ['연간'],
+                   [['국토부 산식'] + [f"{r['formula']}{'*' if r.get('floored') else ''}" for r in rows] + [mo.get('nw_formula_annual')],
+                    ['본 산정'] + [f"{r['ours']}" for r in rows] + [mo.get('nw_ours_annual')]], num_cols=tuple(range(1, 14)))
+        reg = mo.get('regional')
+        if reg and reg.get('rows'):
+            _p(doc, f"가이드라인 부록 3 지역별 비작업일수({reg.get('station')} 지점, 2014~2023)와의 조건별 대조:", 9)
+            _table(doc, ['조건', '부록 3 연간', '본 산정 연간', '차이'], [[r['cond'], r['official'], r['ours'], f"{r['ours'] - r['official']:+.1f}"] for r in reg['rows']], [8, 3, 3, 3], num_cols=(1, 2, 3))
+        fm = mo.get('formula')
+        if fm:
+            _p(doc, f"실적 공기 대조(가이드라인 부록 5 「{fm['label']}」 산정공식, 적용범위 {fm['range']}): {fm['expr']} → Y = {fm['Y']}일, 준비·정리기간 합산 실적 공기 B = {fm['B']}일. 본 산정 공기 A = {fm['A']}일로 편차 {fm['dev']:+d}% — {fm['verdict']}.")
+            if not fm.get('ok'):
+                _p(doc, '가이드라인 제3장 (3)에 따라 ±20% 범위를 벗어나는 경우 산정 과정의 오류 여부를 재검토합니다. 회귀식은 준공 실적 전체 물량 기준이므로 내역서가 일부 공종만 담은 경우 A가 짧게 산정될 수 있습니다.', 9)
+        else:
+            _p(doc, '실적 공기 대조(부록 5 산정공식): 시설물 유형·총공사비 미입력으로 생략.', 9)
+    _h(doc, '8. 적정성 검토 의견' if mo else '7. 적정성 검토 의견')
     _ai_box(doc, n.get('label', '서술 초안 · 검토자 확인 필요'), n.get('opinion', ''))
-    _h(doc, '8. 산정 근거 및 유의사항')
+    _h(doc, '9. 산정 근거 및 유의사항' if mo else '8. 산정 근거 및 유의사항')
     for x in d.get('notes', []):
         p = doc.add_paragraph(style='List Bullet'); r = p.add_run(x); _font(r, 9)
     doc.add_paragraph()
