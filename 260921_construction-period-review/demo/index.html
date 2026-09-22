@@ -9,6 +9,7 @@
 <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="data/standards.js"></script>
+<script src="data/standards_official.js"></script>
 <script src="data/stations.js"></script>
 <style>
 :root{
@@ -227,11 +228,15 @@ function download(name,content,type){const blob=content instanceof Blob?content:
 /* ---------- 1. 표준품셈 (data/standards.js + 사용자 업로드) ---------- */
 const SCOPES={earth:'토공·옥외',concrete:'콘크리트',height:'고소·양중',interior:'실내마감',general:'일반'};
 const ALL_SCOPES=Object.keys(SCOPES);
-function STD(){return (window.STD_ITEMS||[]).concat(S.extraStd||[]);}
+let _STD_CACHE=null,_STD_KEY='';
+function STD(){const key=(S.extraStd||[]).length+'|'+(window.STD_OFFICIAL||[]).length;if(_STD_CACHE&&_STD_KEY===key)return _STD_CACHE;
+  const cur=(window.STD_ITEMS||[]);const curSecs=new Set(cur.map(s=>s.sec).filter(Boolean).map(x=>x.replace(/\s+다$/,'')));
+  const auto=(window.STD_OFFICIAL||[]).filter(s=>!curSecs.has(s.sec));
+  _STD_CACHE=cur.concat(auto,S.extraStd||[]);_STD_KEY=key;return _STD_CACHE;}
 const stdBy=code=>STD().find(s=>s.code===code);
 const PUMSEM_PDF='data/pumsem2026.pdf';
-function srcBadge(s,small){if(!s)return null;if(s.user)return h('span',{class:'pill pill-info'},'업로드');if(s.src==='official')return h('a',{class:'pill pill-good',href:`${PUMSEM_PDF}#page=${s.pdf}`,target:'_blank',title:`2026 건설공사 표준품셈 ${s.sec} 원문 보기 (PDF p.${s.pdf})`,onclick:e=>e.stopPropagation()},'공식 2026',small?null:' ↗');return h('span',{class:'pill pill-gray',title:'원문 대조 전 대표값 — 착수 후 표준품셈 원문으로 교체'},'대표값');}
-function stdCounts(){const a=STD();return {all:a.length,official:a.filter(s=>s.src==='official').length,rep:a.filter(s=>s.src!=='official'&&!s.user).length,user:a.filter(s=>s.user).length};}
+function srcBadge(s,small){if(!s)return null;if(s.user)return h('span',{class:'pill pill-info'},'업로드');if(s.src==='official'&&s.auto)return h('a',{class:'pill pill-good',style:{background:'#eef7ee',color:'#2e6b2e'},href:`${PUMSEM_PDF}#page=${s.pdf}`,target:'_blank',title:`2026 표준품셈 ${s.sec} 원문에서 자동 추출 (검수 전) — PDF p.${s.pdf}`,onclick:e=>e.stopPropagation()},'공식 2026·자동',small?null:' ↗');if(s.src==='official')return h('a',{class:'pill pill-good',href:`${PUMSEM_PDF}#page=${s.pdf}`,target:'_blank',title:`2026 건설공사 표준품셈 ${s.sec} 원문 보기 (PDF p.${s.pdf}) — 검수 완료`,onclick:e=>e.stopPropagation()},'공식 2026',small?null:' ↗');return h('span',{class:'pill pill-gray',title:'원문 대조 전 대표값 — 착수 후 표준품셈 원문으로 교체'},'대표값');}
+function stdCounts(){const a=STD();return {all:a.length,official:a.filter(s=>s.src==='official'&&!s.auto).length,auto:a.filter(s=>s.auto).length,rep:a.filter(s=>s.src!=='official'&&!s.user).length,user:a.filter(s=>s.user).length};}
 
 /* ---------- 2. 샘플 내역서 · 현장 ---------- */
 const SAMPLE_BOQ=[
@@ -426,7 +431,7 @@ async function loadWeather(stn){
   LIVE.wxLoading=null;render();
 }
 async function runAiMapping(){if(!LIVE.llm||!S.rows.length||LIVE.mapping)return;LIVE.mapping=true;render();
-  try{const body={standards:STD().map(s=>({code:s.code,name:s.name,cat:s.cat,unit:s.unit})),rows:S.rows.filter(r=>!r.manual).map(r=>({no:r.no,name:r.name,spec:r.spec||'',unit:r.unit||'',qty:r.qty,group:r.group||'',candidates:candidatesFor(r,5).map(c=>({code:c.std.code,score:c.score}))}))};
+  try{const rowsIn=S.rows.filter(r=>!r.manual).map(r=>({row:r,c:candidatesFor(r,8)}));const codes=new Set();rowsIn.forEach(x=>x.c.forEach(c=>codes.add(c.std.code)));const body={standards:STD().filter(s=>codes.has(s.code)).map(s=>({code:s.code,name:s.name+(s.part?' ['+s.part+']':''),cat:s.cat,unit:s.unit})),rows:rowsIn.map(({row:r,c})=>({no:r.no,name:r.name,spec:r.spec||'',unit:r.unit||'',qty:r.qty,group:r.group||'',candidates:c.map(x=>({code:x.std.code,score:x.score}))}))};
     const r=await fetch(API_BASE+'/api/map',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(240000)});if(!r.ok)throw new Error((await r.text()).slice(0,200));const j=await r.json();
     let changed=0,confirmed=0;const th=S.settings.thresholds;
     for(const row of S.rows){if(row.manual)continue;const res=j.results[String(row.no)];if(!res)continue;const before=row.mapped;
@@ -515,7 +520,7 @@ function viewBoq(D){
       h('div',{class:'inline',style:{justifyContent:'center'}},h('button',{class:'btn btn-primary',onclick:()=>input.click()},'파일 선택'),h('button',{class:'btn btn-outline',onclick:loadSample},'샘플 내역서로 시작 (24행)'),h('a',{class:'btn btn-ghost',href:'sample-boq.xlsx',download:'샘플_내역서_공공청사.xlsx'},'샘플 xlsx 내려받기')),input);
     wrap.append(h('div',{class:'card'},dz),
       h('div',{class:'grid3'},
-        h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title'},'① 표준품셈 대조'),h('p',{class:'small',style:{marginTop:'6px'}},`현장마다 다르게 적힌 품명(흙깎기·토사절취·절토…)을 표준품셈 ${STD().length}개 항목(공식 원문 값 ${stdCounts().official}개 + 대표값)의 동의어 사전과 문자열 유사도로 대조해 후보와 신뢰도를 제시합니다. 실연동 시 LLM이 규격·단위·공종구분 문맥으로 재판정합니다.`)),
+        h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title'},'① 표준품셈 대조'),h('p',{class:'small',style:{marginTop:'6px'}},`현장마다 다르게 적힌 품명(흙깎기·토사절취·절토…)을 표준품셈 ${fmt(STD().length)}개 항목(2026 원문 공식 값 ${fmt(stdCounts().official+stdCounts().auto)}개 + 대표값 ${stdCounts().rep}개)의 동의어 사전과 문자열 유사도로 대조해 후보와 신뢰도를 제시합니다. 실연동 시 LLM이 규격·단위·공종구분 문맥으로 재판정합니다.`)),
         h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title'},'② 신뢰도 3단계 분류'),h('p',{class:'small',style:{marginTop:'6px'}},`신뢰도 ${S.settings.thresholds.auto}% 이상 자동 확정, ${S.settings.thresholds.review}% 이상 검토 필요, 그 미만은 미매칭으로 분리합니다. 단위가 다르면 같은 공종이라도 매핑하지 않습니다.`)),
         h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title'},'③ 실무자 보정'),h('p',{class:'small',style:{marginTop:'6px'}},'후보를 고르거나 직접 지정하고, 표준품셈에 없는 항목은 작업일수를 직접 입력해 산정에 포함합니다. 귀사 표준품셈 엑셀을 올려 항목을 늘릴 수 있습니다(표준품셈 탭).'))));
     return wrap;
@@ -706,16 +711,18 @@ function parseStdWorkbook(buf,name){
 }
 function downloadStdTemplate(){if(!window.XLSX){toast('엑셀 라이브러리 없음');return;}const ws=XLSX.utils.aoa_to_sheet([['코드','명칭','공종','단위','생산성(1일)','투입조','조편성','근거','동의어(쉼표)','적용범위'],['U-01','예: 기계 터파기(0.7㎥)','토공사','m³',320,1,'백호우 0.7㎥ 1대 + 보통인부 1','표준품셈 2-3','터파기,굴착,흙파기','토공·옥외'],['U-02','예: 벽 타일붙임','타일공사','m²',10,2,'타일공 1 + 보통인부 1','표준품셈 건축','벽타일,도기질타일','실내마감']]);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'표준품셈');XLSX.writeFile(wb,'표준품셈_업로드_양식.xlsx');}
 function viewStd(D){
-  const wrap=h('div',{});const sc0=stdCounts();wrap.append(pageTitle('표준품셈 검색 DB',`항목 ${sc0.all}개 중 ${sc0.official}개는 국토교통부 공고 「2026년 적용 건설공사 표준품셈」 원문(CODIL 배포본, 동봉)의 일당 시공량·품을 조 편성으로 환산한 공식 값이고 ${sc0.rep}개는 원문 대조 전 대표값입니다. 항목의 '공식 2026' 배지를 누르면 원문 PDF 해당 페이지가 열립니다. 귀사 표준품셈 엑셀을 올리면 항목이 추가되어 매핑에 즉시 반영됩니다.`,h('a',{class:'btn btn-outline btn-sm',href:PUMSEM_PDF,target:'_blank'},'표준품셈 원문 PDF (982p)')));
+  const wrap=h('div',{});const sc0=stdCounts();wrap.append(pageTitle('표준품셈 검색 DB',`항목 ${fmt(sc0.all)}개 = 검수 완료 공식 값 ${sc0.official}개 + 원문 자동 추출 ${fmt(sc0.auto)}개(정제 파이프라인 server/pumsem_extract.py, 검수 전) + 대표값 ${sc0.rep}개${sc0.user?' + 업로드 '+sc0.user+'개':''}. 공식 값은 국토교통부 공고 「2026년 적용 건설공사 표준품셈」 원문(동봉 PDF 982p)의 (일당) 시공량 또는 (단위당) 품을 조 편성으로 환산한 것이며, 배지를 누르면 원문 페이지가 열립니다. 귀사 표준품셈 엑셀을 올리면 항목이 추가되어 매핑에 즉시 반영됩니다.`,h('a',{class:'btn btn-outline btn-sm',href:PUMSEM_PDF,target:'_blank'},'표준품셈 원문 PDF (982p)')));
   const input=h('input',{type:'text',placeholder:'현장 표기로 검색해 보세요 (예: 흙깎기, 되메움, 레미콘, 유로폼, 타일)',value:S.stdQuery,style:{flex:1},oninput:e=>{S.stdQuery=e.target.value;const body=$('#std-list');body.innerHTML='';renderStdList(body);}});
   const body=h('div',{id:'std-list'});
-  function renderStdList(el){const q2=S.stdQuery.trim();const lst=q2?STD().map(s=>({s,sc:scoreItem({name:q2,spec:'',unit:''},s)})).sort((a,b)=>b.sc.rank-a.sc.rank).slice(0,12):STD().slice(0,60).map(s=>({s,sc:null}));
-    lst.forEach(({s,sc})=>el.append(h('div',{class:'std-item'},h('div',{},h('div',{class:'t'},s.name,' ',h('span',{class:'pill pill-gray'},s.code),' ',srcBadge(s)),h('div',{class:'m'},s.cat,' · ',s.unit,' · 1일 ',fmt1(s.prod),s.unit,' · ',s.crew||'—',' · 기본 투입 ',s.nc||1,'조 · ',SCOPES[s.scope]||'일반'),h('div',{class:'tag-src'},s.ref,s.syn.length?' · 동의어: '+s.syn.join(', '):'')),sc?h('div',{class:'right'},h('span',{class:'simbar '+(sc.score>=85?'':sc.score>=60?'w':'c')},h('i',{style:{width:sc.score+'%'}})),h('b',{},sc.score,'%'),h('div',{class:'tag-src'},sc.why)):null)));
-    if(!q2&&STD().length>60)el.append(h('div',{class:'small',style:{textAlign:'center',padding:'8px'}},`… 외 ${STD().length-60}개 (검색으로 확인)`));}
+  function stdFiltered(){const f=S.stdFilter||'all';return STD().filter(s=>f==='all'||(f==='official'&&s.src==='official'&&!s.auto)||(f==='auto'&&s.auto)||(f==='rep'&&s.src!=='official'&&!s.user)||(f==='user'&&s.user));}
+  function renderStdList(el){const q2=S.stdQuery.trim();const base=stdFiltered();const lst=q2?base.map(s=>({s,sc:scoreItem({name:q2,spec:'',unit:''},s)})).sort((a,b)=>b.sc.rank-a.sc.rank).slice(0,15):base.slice(0,60).map(s=>({s,sc:null}));
+    lst.forEach(({s,sc})=>el.append(h('div',{class:'std-item'},h('div',{},h('div',{class:'t'},s.name,' ',h('span',{class:'pill pill-gray'},s.code),' ',srcBadge(s)),h('div',{class:'m'},s.part?s.part+' · ':'',s.cat,' · ',s.unit,' · 1일 ',fmt1(s.prod),s.unit,' · ',s.crew||'—',' · 기본 투입 ',s.nc||1,'조 · ',SCOPES[s.scope]||'일반'),h('div',{class:'tag-src'},s.ref,s.values&&s.values.length>1?' · 표의 변형값: '+s.values.filter(v=>v!=null).map(v=>fmt1(v)).join(' / ')+(s.vlabel?' ('+s.vlabel+')':''):(s.vlabel?' · '+s.vlabel:''),s.syn.length?' · 동의어: '+s.syn.join(', '):'')),sc?h('div',{class:'right'},h('span',{class:'simbar '+(sc.score>=85?'':sc.score>=60?'w':'c')},h('i',{style:{width:sc.score+'%'}})),h('b',{},sc.score,'%'),h('div',{class:'tag-src'},sc.why)):null)));
+    if(!q2&&base.length>60)el.append(h('div',{class:'small',style:{textAlign:'center',padding:'8px'}},`… 외 ${fmt(base.length-60)}개 (검색으로 확인)`));}
   renderStdList(body);
   const up=h('input',{type:'file',accept:'.xlsx,.xls,.csv',class:'hidden',onchange:e=>{const f=e.target.files[0];if(!f)return;const rd=new FileReader();rd.onload=ev=>parseStdWorkbook(new Uint8Array(ev.target.result),f.name);rd.readAsArrayBuffer(f);}});
   wrap.append(h('div',{class:'card'},h('div',{class:'card-head'},h('div',{},h('div',{class:'card-title'},'표준품셈 자료 업로드'),h('div',{class:'card-desc'},'엑셀 양식(코드·명칭·공종·단위·생산성·투입조·조편성·근거·동의어·적용범위)으로 항목을 추가합니다. 같은 코드는 덮어씁니다.')),h('div',{class:'inline'},h('button',{class:'btn btn-outline btn-sm',onclick:downloadStdTemplate},'업로드 양식 받기'),h('button',{class:'btn btn-primary btn-sm',onclick:()=>up.click()},'표준품셈 엑셀 업로드'),S.extraStd.length?h('button',{class:'btn btn-outline btn-sm',onclick:()=>{S.extraStd=[];remapAll();invalidate();toast('업로드 항목을 제거했습니다.');}},`업로드 항목 ${S.extraStd.length}개 제거`):null,up))));
-  wrap.append(h('div',{class:'card'},h('div',{class:'inline',style:{marginBottom:'14px'}},input,h('span',{class:'small'},STD().length,'개 항목 (공식 ',stdCounts().official,' · 대표값 ',stdCounts().rep,' · 업로드 ',S.extraStd.length,')')),body));
+  const chips=h('div',{class:'inline',style:{gap:'6px'}},...[['all','전체'],['official','검수 공식'],['auto','자동 추출'],['rep','대표값'],['user','업로드']].map(([k,l])=>h('span',{class:'chip'+((S.stdFilter||'all')===k?' on':''),onclick:()=>{S.stdFilter=k;render();}},l,' ',k==='all'?fmt(stdCounts().all):fmt(stdCounts()[k]))));
+  wrap.append(h('div',{class:'card'},h('div',{class:'inline',style:{marginBottom:'14px'}},input,chips),body));
   return wrap;
 }
 
@@ -741,7 +748,7 @@ function renderModal(D){
   if(S.modal==='about'){const src=wxSource(S.site.stn);
     box.append(h('h3',{},'데모 범위 안내'),h('div',{class:'sub'},'이 데모에서 실제로 동작하는 것과, 실 시스템에서 확장되는 것을 구분해 안내드립니다.'),
       h('table',{},h('thead',{},h('tr',{},h('th',{},'기능'),h('th',{},'데모에서 동작'),h('th',{},'실 시스템'))),h('tbody',{},
-        ...[['내역서 업로드·파싱','엑셀 실제 파싱(모든 시트), 헤더 자동 인식, 병합셀 승계','동일 + 서버 저장·내역서 버전 이력'],['공종명 매핑',LIVE.llm?'사전·유사도 1차 매핑 + LLM 문맥 보정(실동작)':'동의어 사전 + 문자열 유사도 + 단위 정합 → 신뢰도 3단계. 백엔드 실행 시 LLM 문맥 보정','벡터 검색(pgvector)으로 후보 범위 확대, 실무자 보정 이력 학습'],['표준품셈 DB',`${(window.STD_ITEMS||[]).length}개 항목 — ${stdCounts().official}개는 2026 표준품셈 원문(동봉 PDF)의 공식 값, 나머지는 대표값 + 엑셀 업로드로 확장`,'표준품셈 원문 982p 전량 정제·적재(벡터 검색)'],['기상 데이터',src!=='sim'?'기상청 ASOS API 실데이터 (2016~2025)':'이 지점은 시뮬레이션. 백엔드 실행 시 기상청 API 수집',`전국 ${(window.ASOS_STATIONS||[]).length}개 지점, 현장 좌표 기준 최근접 지점 자동 선택`],['비작업일수 룰 엔진','실제 계산 — 작업 종류별 적용 범위, 임계값 즉시 반영, 휴일·임시공휴일 중복 제외','동일 + 기준 개정 이력 관리'],['작업일수·CPM','실제 계산 — 투입조·선후행 편집, 공종구분/단위 공종 단위, 공정별 달력 배치','동일 + 공정 템플릿 관리, MS Project/엑셀 내보내기'],['보고서',LIVE.llm?'계산값 + LLM 서술(수치 검증 표시), PDF·Word(.doc)':'계산값 템플릿 서술, PDF·Word(.doc). 백엔드 실행 시 LLM 서술','DOCX·HWP 양식 출력, 서술 톤 템플릿'],['저장·이력','브라우저 자동 저장 + JSON 파일 저장/불러오기','서버 DB, 사용자·권한, 검토 이력·승인']].map(r=>h('tr',{},h('td',{},h('b',{},r[0])),h('td',{},r[1]),h('td',{},r[2]))))),
+        ...[['내역서 업로드·파싱','엑셀 실제 파싱(모든 시트), 헤더 자동 인식, 병합셀 승계','동일 + 서버 저장·내역서 버전 이력'],['공종명 매핑',LIVE.llm?'사전·유사도 1차 매핑 + LLM 문맥 보정(실동작)':'동의어 사전 + 문자열 유사도 + 단위 정합 → 신뢰도 3단계. 백엔드 실행 시 LLM 문맥 보정','벡터 검색(pgvector)으로 후보 범위 확대, 실무자 보정 이력 학습'],['표준품셈 DB',`${fmt(stdCounts().all)}개 항목 — 검수 공식 ${stdCounts().official} + 원문 자동 추출 ${fmt(stdCounts().auto)}(정제 파이프라인 실동작) + 대표값 ${stdCounts().rep}, 엑셀 업로드로 확장`,'자동 추출 항목 검수·변형(높이·규격) 선택 로직, 벡터 검색'],['기상 데이터',src!=='sim'?'기상청 ASOS API 실데이터 (2016~2025)':'이 지점은 시뮬레이션. 백엔드 실행 시 기상청 API 수집',`전국 ${(window.ASOS_STATIONS||[]).length}개 지점, 현장 좌표 기준 최근접 지점 자동 선택`],['비작업일수 룰 엔진','실제 계산 — 작업 종류별 적용 범위, 임계값 즉시 반영, 휴일·임시공휴일 중복 제외','동일 + 기준 개정 이력 관리'],['작업일수·CPM','실제 계산 — 투입조·선후행 편집, 공종구분/단위 공종 단위, 공정별 달력 배치','동일 + 공정 템플릿 관리, MS Project/엑셀 내보내기'],['보고서',LIVE.llm?'계산값 + LLM 서술(수치 검증 표시), PDF·Word(.doc)':'계산값 템플릿 서술, PDF·Word(.doc). 백엔드 실행 시 LLM 서술','DOCX·HWP 양식 출력, 서술 톤 템플릿'],['저장·이력','브라우저 자동 저장 + JSON 파일 저장/불러오기','서버 DB, 사용자·권한, 검토 이력·승인']].map(r=>h('tr',{},h('td',{},h('b',{},r[0])),h('td',{},r[1]),h('td',{},r[2]))))),
       h('div',{class:'inline',style:{justifyContent:'flex-end',marginTop:'14px'}},h('button',{class:'btn btn-primary',onclick:close},'닫기')));
   }else if(S.modal.type==='map'){
     const r=S.modal.row;const cands=candidatesFor(r,5);
