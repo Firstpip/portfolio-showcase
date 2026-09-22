@@ -364,4 +364,4 @@ app.mount("/", StaticFiles(directory=str(DEMO_DIR), html=True), name="demo")
 if __name__ == "__main__":
     import uvicorn
     print(f"KMA key: {'설정됨' if KMA_KEY else '없음(내장 데이터 폴백)'} · claude CLI: {'있음' if claude_available() else '없음'} · model={LLM_MODEL}")
-    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT", "8765")))
+    uvicorn.run(app, host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8765")))  # Docker 에서는 HOST=0.0.0.0

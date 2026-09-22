@@ -25,6 +25,15 @@ cp .env.example .env     # KMA_SERVICE_KEY 채우기 (없으면 기상만 내장
   - 최초 1회 지점별 10년치(약 3,650일)를 받아 `server/cache/asos_<지점>_<연도>.json` 에 캐시한다. 이후에는 키가 없어도 캐시로 동작한다.
   - 지점 목록·좌표: `data/stations.js` (74개). 현장 편집에서 시도/좌표로 최근접 지점을 고른다.
 
+## Docker 배포 (`Dockerfile` · `docker-compose.yml` · `deploy/OPERATIONS.md`)
+
+```bash
+cp server/.env.example server/.env   # KMA_SERVICE_KEY 입력
+docker compose up -d --build         # → http://<서버>:8765
+```
+
+이미지 하나(python:3.12-slim, 약 300MB)에 화면·데이터·서버가 들어가고, 검토 저장소(`reviews.db`)와 기상 캐시는 볼륨 `/data`에 남는다. 인증키·캐시·DB는 이미지에 포함되지 않는다(`.dockerignore`). 백업·복구·기준값 변경·장애 대응은 `deploy/OPERATIONS.md`(운영 매뉴얼 초안). 컨테이너에는 `claude` CLI가 없으므로 LLM 서술·문맥 보정은 비활성(`/api/health`의 `llm:false`)이며 실 시스템은 LLM API 키 방식으로 교체한다.
+
 ## API
 
 | 메서드 | 경로 | 설명 |
