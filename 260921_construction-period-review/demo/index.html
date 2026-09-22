@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>공사기간 산정 콘솔 — 시연 데모</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%230f3d6e%27/%3E%3Ctext x=%2716%27 y=%2722%27 font-size=%2718%27 text-anchor=%27middle%27 fill=%27%23eb6834%27 font-weight=%27700%27%3E公%3C/text%3E%3C/svg%3E">
+<meta name="description" content="내역서 업로드 → 표준품셈 매핑 → 작업일수 → 기상 비작업일수 → CPM 공정표 → 검토보고서 초안까지 한 흐름으로 동작하는 시연 데모">
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{
+  --bg:#f4f5f7;--surface:#ffffff;--ink:#0f172a;--ink2:#475569;--muted:#8a8f99;--line:#e3e6eb;--line2:#cfd4dc;
+  --brand:#0f3d6e;--brand2:#1c5cab;--accent:#eb6834;
+  --s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s7:#4a3aa7;
+  --good:#0ca30c;--warn:#fab219;--serious:#ec835a;--crit:#d03b3b;
+  --good-bg:#e8f7e8;--warn-bg:#fff5db;--crit-bg:#fdeaea;--info-bg:#e9f1fb;
+  --r:10px;--shadow:0 1px 2px rgba(15,23,42,.06),0 4px 14px rgba(15,23,42,.05);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--ink);font-family:Pretendard,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:0;background:none}
+table{border-collapse:collapse;width:100%}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle;font-variant-numeric:tabular-nums}
+th{font-size:12px;color:var(--ink2);font-weight:600;background:#f8f9fb;white-space:nowrap}
+td.num,th.num{text-align:right}
+.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12px}
+/* layout */
+.app-header{position:sticky;top:0;z-index:20;background:var(--brand);color:#fff;height:54px;display:flex;align-items:center;gap:18px;padding:0 20px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:15px;letter-spacing:-.2px}
+.brand .mark{width:28px;height:28px;border-radius:7px;background:var(--accent);display:grid;place-items:center;font-size:13px;font-weight:900}
+.brand .tag{font-size:11px;font-weight:600;background:rgba(255,255,255,.16);padding:2px 8px;border-radius:99px;margin-left:4px}
+.site{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.12);padding:6px 12px;border-radius:8px;font-size:13px}
+.site select{background:transparent;border:0;color:#fff;outline:none;font-weight:600}
+.site select option{color:#000}
+.header-right{margin-left:auto;display:flex;gap:8px;align-items:center;font-size:12.5px}
+.hbtn{color:#fff;background:rgba(255,255,255,.14);padding:7px 12px;border-radius:8px;font-weight:600;font-size:12.5px}
+.hbtn:hover{background:rgba(255,255,255,.24)}
+.stepbar{background:var(--surface);border-bottom:1px solid var(--line);padding:0 20px;display:flex;gap:4px;overflow-x:auto}
+.step{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:3px solid transparent;color:var(--ink2);font-weight:600;font-size:13px;white-space:nowrap}
+.step .n{width:22px;height:22px;border-radius:99px;background:#e9edf3;display:grid;place-items:center;font-size:11.5px;font-weight:800;color:var(--ink2)}
+.step.active{color:var(--brand);border-bottom-color:var(--brand)}
+.step.active .n{background:var(--brand);color:#fff}
+.step.done .n{background:var(--good);color:#fff}
+.step.util{margin-left:auto}
+.content{max-width:1320px;margin:0 auto;padding:22px 20px 60px}
+.page-title{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:16px;flex-wrap:wrap}
+.page-title h1{font-size:22px;font-weight:800;letter-spacing:-.3px}
+.page-title p{color:var(--ink2);font-size:13px;margin-top:2px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:18px 20px;margin-bottom:16px}
+.card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+.card-title{font-size:15px;font-weight:800;display:flex;align-items:center;gap:8px}
+.card-desc{font-size:12.5px;color:var(--ink2);margin-top:2px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.grid-side{display:grid;grid-template-columns:1fr 360px;gap:16px;align-items:start}
+@media(max-width:960px){.grid2,.grid3,.grid4,.grid-side{grid-template-columns:1fr}}
+@media(max-width:720px){.app-header{flex-wrap:wrap;height:auto;padding:8px 12px;gap:8px}.header-right{margin-left:0}.header-right>span{display:none}.content{padding:16px 16px 40px}.page-title h1{font-size:18px}.month-grid{grid-template-columns:repeat(6,1fr)}}
+/* kpi */
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.kpi .l{font-size:12px;color:var(--ink2);font-weight:600}
+.kpi .v{font-size:26px;font-weight:800;letter-spacing:-.5px;margin-top:2px;font-variant-numeric:tabular-nums}
+.kpi .v small{font-size:13px;font-weight:600;color:var(--ink2);margin-left:2px}
+.kpi .s{font-size:12px;color:var(--muted);margin-top:2px}
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;font-weight:700;font-size:13px;border:1px solid transparent;transition:.12s}
+.btn-primary{background:var(--brand);color:#fff}
+.btn-primary:hover{background:var(--brand2)}
+.btn-accent{background:var(--accent);color:#fff}
+.btn-outline{border-color:var(--line2);background:#fff;color:var(--ink)}
+.btn-outline:hover{background:#f6f7f9}
+.btn-ghost{color:var(--brand);background:transparent}
+.btn-sm{padding:5px 10px;font-size:12px;border-radius:6px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+/* pills */
+.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:99px;font-size:11.5px;font-weight:700;white-space:nowrap}
+.pill-good{background:var(--good-bg);color:#006300}
+.pill-warn{background:var(--warn-bg);color:#7a4b00}
+.pill-crit{background:var(--crit-bg);color:#9b1c1c}
+.pill-info{background:var(--info-bg);color:#184f95}
+.pill-gray{background:#eef0f3;color:var(--ink2)}
+.pill-cp{background:#fdece4;color:#9a3a10}
+/* forms */
+input[type=text],input[type=number],input[type=date],select,textarea{border:1px solid var(--line2);border-radius:7px;padding:7px 10px;background:#fff;outline:none;font-size:13px}
+input:focus,select:focus{border-color:var(--brand2);box-shadow:0 0 0 3px rgba(28,92,171,.14)}
+input[type=number]{width:90px;text-align:right}
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:12px;font-weight:600;color:var(--ink2)}
+.inline{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px}
+.switch input{appearance:none;width:34px;height:20px;border-radius:99px;background:#cfd4dc;position:relative;transition:.15s;cursor:pointer}
+.switch input:checked{background:var(--brand2)}
+.switch input::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:99px;background:#fff;transition:.15s}
+.switch input:checked::after{left:16px}
+/* dropzone */
+.dropzone{border:2px dashed var(--line2);border-radius:var(--r);padding:34px 20px;text-align:center;background:#fafbfc;transition:.15s}
+.dropzone.drag{border-color:var(--brand2);background:var(--info-bg)}
+.dropzone h3{font-size:15px;font-weight:800;margin-bottom:4px}
+.dropzone p{color:var(--ink2);font-size:12.5px;margin-bottom:14px}
+/* sim bar */
+.simbar{display:inline-block;width:64px;height:6px;border-radius:99px;background:#e9edf3;vertical-align:middle;margin-right:6px;overflow:hidden}
+.simbar i{display:block;height:100%;border-radius:99px;background:var(--s1)}
+.simbar.w i{background:var(--warn)}
+.simbar.c i{background:var(--crit)}
+/* tables */
+.tbl-wrap{overflow-x:auto}
+tr.click{cursor:pointer}
+tr.click:hover td{background:#f8fafc}
+.tag-src{font-size:11px;color:var(--muted)}
+/* charts */
+.chart{position:relative}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.axis{font-size:11px;fill:var(--muted)}
+.grid{stroke:#e1e0d9;stroke-width:1}
+.tooltip{position:absolute;pointer-events:none;background:#0f172a;color:#fff;font-size:12px;padding:6px 9px;border-radius:6px;white-space:nowrap;transform:translate(-50%,-110%);opacity:0;transition:opacity .1s;z-index:5;box-shadow:0 4px 12px rgba(0,0,0,.25)}
+.tooltip.on{opacity:1}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--ink2);margin-top:8px;flex-wrap:wrap}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+/* gantt */
+.gantt{overflow-x:auto}
+.gantt-row{display:grid;grid-template-columns:200px 1fr;align-items:center;min-height:34px;border-bottom:1px solid var(--line)}
+.gantt-row:last-child{border-bottom:0}
+.gantt-label{font-size:12.5px;font-weight:600;padding-right:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gantt-label small{display:block;color:var(--muted);font-weight:500;font-size:11px}
+.gantt-track{position:relative;height:26px;background:repeating-linear-gradient(90deg,transparent 0,transparent calc(10% - 1px),#eceff3 calc(10% - 1px),#eceff3 10%)}
+.gantt-bar{position:absolute;top:4px;height:18px;border-radius:4px;background:var(--s1);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;padding:0 6px;white-space:nowrap;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+.gantt-bar.cp{background:var(--accent)}
+.gantt-float{position:absolute;top:8px;height:10px;border-radius:3px;background:repeating-linear-gradient(135deg,#cfd4dc 0,#cfd4dc 3px,transparent 3px,transparent 6px)}
+.gantt-head{display:grid;grid-template-columns:200px 1fr;font-size:11px;color:var(--muted);padding-bottom:4px}
+.gantt-ticks{display:flex;justify-content:space-between}
+/* modal */
+.overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);display:grid;place-items:center;z-index:50;padding:20px}
+.modal{background:#fff;border-radius:14px;width:min(720px,100%);max-height:90vh;overflow:auto;padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.modal h3{font-size:17px;font-weight:800;margin-bottom:6px}
+.modal .sub{color:var(--ink2);font-size:13px;margin-bottom:14px}
+.cand{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;cursor:pointer}
+.cand:hover{border-color:var(--brand2);background:var(--info-bg)}
+.cand.sel{border-color:var(--brand);background:var(--info-bg)}
+.cand .t{font-weight:700}
+.cand .m{font-size:12px;color:var(--ink2)}
+/* toast */
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#0f172a;color:#fff;padding:10px 16px;border-radius:99px;font-size:13px;font-weight:600;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.3);animation:up .2s ease-out}
+@keyframes up{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
+/* callouts */
+.note{border-left:3px solid var(--brand2);background:var(--info-bg);padding:10px 12px;border-radius:6px;font-size:12.5px;color:#184f95}
+.note.warn{border-color:var(--warn);background:var(--warn-bg);color:#7a4b00}
+.note.crit{border-color:var(--crit);background:var(--crit-bg);color:#9b1c1c}
+.note.good{border-color:var(--good);background:var(--good-bg);color:#006300}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px}
+.kv b{color:var(--ink2);font-weight:600}
+.formula{font-family:"SF Mono",Menlo,monospace;font-size:12px;background:#f6f7f9;border:1px solid var(--line);border-radius:6px;padding:8px 10px;color:var(--ink2)}
+.rule{display:grid;grid-template-columns:auto 1fr auto auto auto;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.rule:last-child{border-bottom:0}
+.rule .name{font-weight:700}
+.rule .desc{font-size:12px;color:var(--ink2)}
+.live-pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;background:rgba(255,255,255,.14);padding:5px 10px;border-radius:99px}
+.live-pill i{width:8px;height:8px;border-radius:99px;background:#94a3b8;display:inline-block}
+.live-pill i.on{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.25)}
+.live-pill.off{opacity:.75}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:99px;animation:sp .8s linear infinite;vertical-align:-2px}
+.btn-outline .spin{border-color:#cfd4dc;border-top-color:var(--brand)}
+@keyframes sp{to{transform:rotate(360deg)}}
+.demo-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--ink2);border:1px dashed var(--line2);border-radius:6px;padding:2px 8px;margin-left:6px}
+/* report */
+.report{background:#fff;padding:40px 48px;border:1px solid var(--line);border-radius:var(--r);max-width:900px;margin:0 auto;font-size:13.5px;line-height:1.7}
+.report h2{font-size:20px;font-weight:800;text-align:center;margin-bottom:6px;letter-spacing:-.3px}
+.report .meta{text-align:center;color:var(--ink2);font-size:12.5px;margin-bottom:26px}
+.report h3{font-size:15px;font-weight:800;margin:24px 0 8px;padding-bottom:4px;border-bottom:2px solid var(--brand)}
+.report h4{font-size:13.5px;font-weight:700;margin:12px 0 4px}
+.report table{font-size:12.5px;margin:8px 0}
+.report th{background:#f1f4f8}
+.report p{margin-bottom:8px}
+.report .ai{border:1px dashed var(--brand2);background:#f7faff;padding:10px 14px;border-radius:6px;margin:8px 0}
+.report .ai .lbl{font-size:11px;font-weight:800;color:var(--brand2);letter-spacing:.3px;margin-bottom:4px}
+.report .verdict{display:flex;gap:14px;align-items:center;border:2px solid var(--line2);border-radius:8px;padding:12px 16px;margin:10px 0}
+.report .verdict .big{font-size:24px;font-weight:900}
+.report ul{padding-left:18px}
+.report li{margin-bottom:3px}
+.report .sig{margin-top:30px;text-align:right;color:var(--ink2);font-size:12.5px}
+.rep-toolbar{display:flex;gap:8px;justify-content:center;margin-bottom:14px;flex-wrap:wrap}
+@media print{
+  body{background:#fff}
+  .app-header,.stepbar,.rep-toolbar,.no-print,.toast{display:none!important}
+  .content{padding:0;max-width:none}
+  .report{border:0;padding:0;max-width:none;box-shadow:none}
+  .card{box-shadow:none}
+  @page{size:A4;margin:18mm 16mm}
+}
+.hidden{display:none!important}
+.small{font-size:12px;color:var(--ink2)}
+.right{text-align:right}
+.pre-wrap{white-space:pre-wrap}
+.std-item{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px}
+.std-item .t{font-weight:700}
+.std-item .m{font-size:12px;color:var(--ink2)}
+.month-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:4px;font-size:11px;text-align:center}
+.month-grid .c{background:#f8f9fb;border:1px solid var(--line);border-radius:6px;padding:6px 2px}
+.month-grid .c b{display:block;font-size:14px}
+.calendar{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;font-size:10.5px}
+.calendar .d{height:26px;border-radius:4px;display:grid;place-items:center;background:#f1f3f6;color:var(--ink2)}
+.calendar .d.work{background:#dbe8f8;color:#184f95;font-weight:700}
+.calendar .d.hol{background:#eef0f3;color:var(--muted)}
+.calendar .d.wx{background:#fde1d3;color:#9a3a10;font-weight:700}
+.calendar .d.prep{background:#fff5db;color:#7a4b00}
+.calendar .d.out{background:transparent}
+.calendar .h{font-weight:700;color:var(--muted);text-align:center}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* =====================================================================
+   공사기간 산정 콘솔 — 시연 데모
+   모든 수치는 화면에서 실제로 계산됩니다 (하드코딩된 결과값 없음).
+   - 내역서: 엑셀 실제 파싱(SheetJS) 또는 내장 샘플
+   - 매핑: 동의어 사전 + 문자열 유사도(바이그램 Dice) + 단위 정합 → 신뢰도
+   - 작업일수: 수량 ÷ (표준품셈 생산성 × 투입조) + 간접·보정
+   - 비작업일수: 10년 일별 기상 데이터 × 룰 엔진 × 휴일 중복 제외
+   - 공정표: CPM Forward/Backward pass, 여유일수, 주공정선
+   - 보고서: 계산값을 템플릿으로 서술 (실 시스템에서는 LLM 초안 생성 지점)
+   ===================================================================== */
+
+/* ---------- 1. 표준품셈 (데모용 요약본) ---------- */
+const STD = [
+ {code:'A-01',name:'강관비계 설치 및 해체',cat:'가설공사',unit:'m²',prod:120,nc:2,crew:'비계공 2 + 보통인부 1',ref:'표준품셈 가설공사 2-1 강관비계',syn:['비계','강관비계','외부비계','비계설치']},
+ {code:'T-01',name:'절토 (기계, 백호우 1.0㎥)',cat:'토공사',unit:'m³',prod:480,nc:1,crew:'백호우 1.0㎥ 1대 + 보통인부 1',ref:'표준품셈 토공사 2-2 기계절토',syn:['흙깎기','토사절취','절취','깎기','절토','토사깎기','절토공']},
+ {code:'T-02',name:'터파기 (기계, 백호우 0.7㎥)',cat:'토공사',unit:'m³',prod:320,nc:1,crew:'백호우 0.7㎥ 1대 + 보통인부 1',ref:'표준품셈 토공사 2-3 기계터파기',syn:['터파기','굴착','흙파기','기초터파기','굴착공']},
+ {code:'T-03',name:'되메우기 및 다짐',cat:'토공사',unit:'m³',prod:260,nc:1,crew:'백호우 0.7㎥ 1대 + 램머 1 + 보통인부 2',ref:'표준품셈 토공사 2-6 되메우기·다짐',syn:['되메움','되메우기','매립','다짐','되메우기및다짐','성토다짐']},
+ {code:'T-04',name:'잔토처리 (사토장 운반 10km)',cat:'토공사',unit:'m³',prod:400,nc:2,crew:'덤프 15t 3대 + 백호우 1대',ref:'표준품셈 토공사 2-8 토사 운반',syn:['잔토','사토','토사반출','반출','잔토처리','사토처리']},
+ {code:'T-05',name:'구조물 터파기 (인력)',cat:'토공사',unit:'m³',prod:6,nc:2,crew:'보통인부 2',ref:'표준품셈 토공사 2-4 인력터파기',syn:['인력터파기','줄기초파기','줄기초','인력굴착','소규모터파기']},
+ {code:'T-06',name:'성토 (기계)',cat:'토공사',unit:'m³',prod:500,nc:1,crew:'불도저 1대 + 진동롤러 1대',ref:'표준품셈 토공사 2-5 성토',syn:['흙쌓기','성토','쌓기']},
+ {code:'G-01',name:'잡석다짐',cat:'지정공사',unit:'m³',prod:40,nc:1,crew:'보통인부 3 + 램머 1',ref:'표준품셈 건축 3-1 잡석지정',syn:['잡석','잡석지정','자갈다짐','잡석깔기']},
+ {code:'G-02',name:'버림콘크리트 타설',cat:'지정공사',unit:'m³',prod:60,nc:1,crew:'콘크리트공 2 + 보통인부 2',ref:'표준품셈 건축 4-1 무근콘크리트',syn:['버림','밑창콘크리트','무근콘크리트','버림콘크리트','밑창']},
+ {code:'C-01',name:'콘크리트 타설 (펌프카, 기초)',cat:'철근콘크리트공사',unit:'m³',prod:150,nc:1,crew:'펌프카 1대 + 콘크리트공 3 + 보통인부 2',ref:'표준품셈 건축 4-2 콘크리트 타설(기초)',syn:['타설','레미콘','콘크리트','기초콘크리트','기초타설','매트타설']},
+ {code:'C-02',name:'콘크리트 타설 (펌프카, 벽·기둥·슬래브)',cat:'철근콘크리트공사',unit:'m³',prod:110,nc:1,crew:'펌프카 1대 + 콘크리트공 4 + 보통인부 2',ref:'표준품셈 건축 4-2 콘크리트 타설(골조)',syn:['골조타설','벽체타설','슬래브타설','벽슬래브','기둥타설','골조콘크리트','콘크리트벽슬래브','콘크리트벽','콘크리트슬래브','벽콘크리트','슬래브콘크리트','콘크리트벽기둥슬래브','콘크리트골조']},
+ {code:'C-03',name:'거푸집 설치·해체 (유로폼)',cat:'철근콘크리트공사',unit:'m²',prod:90,nc:4,crew:'형틀목공 3 + 보통인부 1',ref:'표준품셈 건축 4-4 유로폼',syn:['거푸집','유로폼','폼','형틀','거푸집설치','거푸집해체','갱폼']},
+ {code:'C-04',name:'철근 가공 및 조립 (일반)',cat:'철근콘크리트공사',unit:'ton',prod:2.8,nc:3,crew:'철근공 4 + 보통인부 1',ref:'표준품셈 건축 4-3 철근가공조립',syn:['철근','배근','철근조립','철근가공','철근가공조립','철근배근']},
+ {code:'M-01',name:'시멘트벽돌쌓기 (0.5B)',cat:'조적공사',unit:'m²',prod:25,nc:2,crew:'조적공 1 + 보통인부 1',ref:'표준품셈 건축 5-1 벽돌쌓기',syn:['벽돌','조적','블록쌓기','벽돌쌓기','시멘트벽돌','0.5b']},
+ {code:'M-02',name:'바닥 시멘트모르타르 미장',cat:'미장공사',unit:'m²',prod:70,nc:2,crew:'미장공 2 + 보통인부 1',ref:'표준품셈 건축 6-2 바닥미장',syn:['미장','모르타르','바닥미장','모르타르바름','바름']},
+ {code:'M-03',name:'액체방수 (2차)',cat:'방수공사',unit:'m²',prod:80,nc:1,crew:'방수공 2',ref:'표준품셈 건축 7-1 액체방수',syn:['방수','액방','액체방수','시멘트액체방수']},
+ {code:'P-01',name:'아스팔트 콘크리트 포장 (t=50)',cat:'포장공사',unit:'m²',prod:900,nc:1,crew:'피니셔 1 + 롤러 2 + 보통인부 4',ref:'표준품셈 토목 7-3 아스콘 포장',syn:['아스콘','포장','아스팔트','표층','아스팔트포장','아스콘포설']},
+ {code:'P-02',name:'보조기층 (혼합골재)',cat:'포장공사',unit:'m³',prod:350,nc:1,crew:'그레이더 1 + 롤러 1 + 살수차 1',ref:'표준품셈 토목 7-1 보조기층',syn:['보조기층','골재포설','기층','포설다짐']},
+ {code:'D-01',name:'우수관 부설 (HP D300)',cat:'배수공사',unit:'m',prod:40,nc:1,crew:'백호우 1대 + 관부설공 2 + 보통인부 2',ref:'표준품셈 토목 8-2 흄관 부설',syn:['우수관','흄관','배수관','관부설','hp','오수관']},
+ {code:'D-02',name:'맨홀 설치 (D900)',cat:'배수공사',unit:'개소',prod:2,nc:1,crew:'백호우 1대 + 보통인부 3',ref:'표준품셈 토목 8-5 맨홀 설치',syn:['맨홀','원형맨홀','집수정']},
+ {code:'D-03',name:'경계석 설치',cat:'부대공사',unit:'m',prod:60,nc:1,crew:'석공 1 + 보통인부 2',ref:'표준품셈 토목 7-6 경계석',syn:['경계석','보차도경계','연석','보도경계석']},
+ {code:'R-01',name:'구조물 철거 (콘크리트, 브레이커)',cat:'철거공사',unit:'m³',prod:30,nc:1,crew:'브레이커 0.7㎥ 1대 + 보통인부 1',ref:'표준품셈 토목 1-4 구조물 철거',syn:['철거','깨기','파쇄','구조물깨기','콘크리트깨기']},
+ {code:'R-02',name:'기존 포장 절단·깨기',cat:'철거공사',unit:'m²',prod:200,nc:1,crew:'커터기 1 + 브레이커 1 + 보통인부 2',ref:'표준품셈 토목 1-5 포장 절단·파쇄',syn:['포장절단','커팅','절단','포장깨기','아스팔트커팅']},
+];
+
+/* ---------- 2. 샘플 내역서 (실제 엑셀 파일과 동일 구조) ---------- */
+const SAMPLE_BOQ = /*BOQ_START*/[
+ {no:1,group:'가설공사',name:'강관비계 설치 및 해체',spec:'H=8m 이하',unit:'m2',qty:1850},
+ {no:2,group:'토공사',name:'흙깎기',spec:'토사, 백호우 1.0㎥',unit:'m3',qty:3240},
+ {no:3,group:'토공사',name:'토사절취(운반포함)',spec:'리핑암',unit:'m3',qty:610},
+ {no:4,group:'토공사',name:'기초 터파기',spec:'백호우 0.7㎥',unit:'m3',qty:1180},
+ {no:5,group:'토공사',name:'되메우기및다짐',spec:'',unit:'m3',qty:720},
+ {no:6,group:'토공사',name:'잔토처리',spec:'10km',unit:'m3',qty:2900},
+ {no:7,group:'토공사',name:'줄기초 파기(인력)',spec:'',unit:'m3',qty:46},
+ {no:8,group:'지정공사',name:'잡석지정',spec:'자갈 40mm',unit:'m3',qty:96},
+ {no:9,group:'지정공사',name:'밑창콘크리트',spec:'18-15-8',unit:'m3',qty:42},
+ {no:10,group:'철근콘크리트공사',name:'기초 콘크리트 타설',spec:'24-21-150',unit:'m3',qty:386},
+ {no:11,group:'철근콘크리트공사',name:'콘크리트(벽·슬래브)',spec:'24-21-150',unit:'m3',qty:512},
+ {no:12,group:'철근콘크리트공사',name:'유로폼 설치/해체',spec:'벽체',unit:'m2',qty:3960},
+ {no:13,group:'철근콘크리트공사',name:'철근 가공조립',spec:'HD13~25',unit:'ton',qty:118},
+ {no:14,group:'조적공사',name:'시멘트벽돌 0.5B 쌓기',spec:'190×90×57',unit:'m2',qty:640},
+ {no:15,group:'미장공사',name:'바닥 모르타르 바름',spec:'t=30',unit:'m2',qty:1120},
+ {no:16,group:'방수공사',name:'액체방수 2차',spec:'지하 외벽',unit:'m2',qty:480},
+ {no:17,group:'포장공사',name:'아스콘 표층 포설',spec:'t=50',unit:'m2',qty:2300},
+ {no:18,group:'포장공사',name:'보조기층 포설다짐',spec:'t=200',unit:'m3',qty:460},
+ {no:19,group:'배수공사',name:'흄관 부설',spec:'D300',unit:'m',qty:210},
+ {no:20,group:'배수공사',name:'원형맨홀',spec:'D900',unit:'개소',qty:6},
+ {no:21,group:'부대공사',name:'보차도 경계석',spec:'150×150×1000',unit:'m',qty:340},
+ {no:22,group:'철거공사',name:'기존 콘크리트 구조물 깨기',spec:'',unit:'m3',qty:58},
+ {no:23,group:'철거공사',name:'아스팔트 커팅',spec:'',unit:'m',qty:120},
+ {no:24,group:'기타',name:'현장 정리 및 청소',spec:'',unit:'식',qty:1}
+]/*BOQ_END*/;
+
+const SITES = [
+ {id:'daegu',name:'대구 달서구 ○○공공청사 신축',region:'대구광역시 달서구',station:'대구(143)',stn:'143',plan:180,start:'2026-11-02',urban:true,small:true},
+ {id:'gumi',name:'구미 △△산업단지 진입도로',region:'경북 구미시',station:'구미(279)',stn:'279',plan:230,start:'2027-03-02',urban:false,small:false},
+];
+
+/* ---------- 3. 설정 (코드가 아닌 설정값 — 운영에서 화면에서 조정) ---------- */
+const DEFAULT_SETTINGS = {
+ thresholds:{auto:85,review:60},
+ rules:[
+  {id:'rain',label:'강수',desc:'일 강수량 기준 이상이면 비작업',field:'rain',op:'>=',value:3,unit:'mm',enabled:true,src:'국토부 공사기간 산정기준 별표(강우)'},
+  {id:'heat',label:'폭염',desc:'일 최고 체감온도 기준 이상이면 비작업',field:'feels',op:'>=',value:33,unit:'℃',enabled:true,src:'산업안전보건기준 / 옥외작업 폭염 기준'},
+  {id:'wind',label:'강풍',desc:'일 최대풍속 기준 이상 (양중·고소작업 제한)',field:'wind',op:'>=',value:10,unit:'m/s',enabled:true,src:'산업안전보건기준 제37조'},
+  {id:'snow',label:'적설',desc:'일 신적설 기준 이상',field:'snow',op:'>=',value:1,unit:'cm',enabled:true,src:'국토부 공사기간 산정기준 별표(강설)'},
+  {id:'cold',label:'한파',desc:'일 최저기온 기준 이하 (콘크리트 타설 제한)',field:'tmin',op:'<=',value:-10,unit:'℃',enabled:false,src:'한중콘크리트 시공 기준'},
+ ],
+ holiday:{sunday:true,saturday:false,public:true,dedupe:true},
+ indirect:{inspectionPerActivity:1,curing:5},
+ adjust:{urban:5,small:5},
+ period:{prep:10,cleanup:7},
+};
+
+/* ---------- 4. 유틸 ---------- */
+const $=(s,el=document)=>el.querySelector(s);
+const h=(tag,attrs={},...kids)=>{const e=document.createElement(tag);for(const[k,v]of Object.entries(attrs)){if(k==='class')e.className=v;else if(k==='html')e.innerHTML=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else if(k==='style'&&typeof v==='object')Object.assign(e.style,v);else if(v!==false&&v!=null)e.setAttribute(k,v);}for(const c of kids.flat()){if(c==null||c===false)continue;e.append(c.nodeType?c:document.createTextNode(String(c)));}return e;};
+const fmt=n=>Number(n).toLocaleString('ko-KR');
+const fmt1=n=>Number(n).toLocaleString('ko-KR',{maximumFractionDigits:1});
+const pad=n=>String(n).padStart(2,'0');
+const ymd=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const kdate=d=>`${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일`;
+const addDays=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);return x;};
+function toast(msg){const t=h('div',{class:'toast'},msg);document.body.append(t);setTimeout(()=>t.remove(),2400);}
+function seeded(seed){let s=seed>>>0;return()=>{s=(s*1664525+1013904223)>>>0;return s/4294967296;};}
+function gauss(rnd){let u=0,v=0;while(!u)u=rnd();while(!v)v=rnd();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+
+/* ---------- 5. 공종명 매핑 엔진 ---------- */
+const UNIT_ALIAS={'m2':'m²','㎡':'m²','m^2':'m²','평방미터':'m²','m3':'m³','㎥':'m³','m^3':'m³','t':'ton','톤':'ton','ea':'개소','개':'개소','개소':'개소','m':'m','식':'식','ton':'ton','m²':'m²','m³':'m³'};
+const normUnit=u=>UNIT_ALIAS[String(u||'').trim().toLowerCase()]||String(u||'').trim();
+const norm=s=>String(s||'').toLowerCase().replace(/\(.*?\)/g,' ').replace(/[^\w가-힣]/g,'').replace(/(공사|작업|공|설치및해체|및)/g,'');
+function bigrams(s){const a=[];for(let i=0;i<s.length-1;i++)a.push(s.slice(i,i+2));return a;}
+function dice(a,b){if(!a||!b)return 0;if(a===b)return 1;const A=bigrams(a),B=bigrams(b);if(!A.length||!B.length)return a.includes(b)||b.includes(a)?0.6:0;const set=new Map();A.forEach(x=>set.set(x,(set.get(x)||0)+1));let inter=0;B.forEach(x=>{const c=set.get(x);if(c){inter++;set.set(x,c-1);}});return 2*inter/(A.length+B.length);}
+function scoreItem(row,std){
+  const rawP=norm(String(row.name).replace(/[()]/g,' ')); // 괄호 안 표기(벽·슬래브 등)를 포함한 형태
+  const raw=norm(row.name), rawFull=norm(row.name+' '+(row.spec||''));
+  let best=0,why='';
+  // 1) 동의어 사전 — 괄호 제외형/포함형 두 표기 모두 대조
+  for(const s of std.syn){const ns=norm(s);if(!ns)continue;for(const r0 of [raw,rawP]){if(!r0)continue;
+    if(r0===ns){const sc=0.98+ns.length*0.002;if(sc>best){best=sc;why='동의어 완전일치';}}
+    else if(r0.includes(ns)||ns.includes(r0)){const r=Math.min(ns.length,r0.length)/Math.max(ns.length,r0.length);const sc=0.72+0.24*r;if(sc>best){best=sc;why='동의어 부분일치';}}
+    else{const d=dice(r0,ns);if(d*0.9>best){best=d*0.9;why='동의어 유사';}}}}
+  // 2) 표준명 유사도
+  const d2=dice(rawFull,norm(std.name));if(d2*0.85>best){best=d2*0.85;why='표준명 유사';}
+  // 3) 단위 정합
+  const u=normUnit(row.unit);let unitNote='';
+  if(u&&std.unit){if(u===std.unit){best=best+0.04;}else{best*=0.55;unitNote=`단위 불일치(${u}≠${std.unit})`;}}
+  return {score:Math.min(100,Math.round(best*100)),rank:best,why:unitNote?`${why} · ${unitNote}`:why,unitMismatch:!!unitNote};
+}
+function mapRow(row,settings){
+  const cands=STD.map(s=>({std:s,...scoreItem(row,s)})).sort((a,b)=>b.rank-a.rank).slice(0,3);
+  const top=cands[0];
+  let status='unmapped';
+  if(top.score>=settings.thresholds.auto)status='auto';else if(top.score>=settings.thresholds.review)status='review';
+  return {...row,cands,mapped:status==='unmapped'?null:top.std.code,score:top.score,status,manual:false,crews:top.std.nc||1};
+}
+
+/* ---------- 6. 기상 데이터 (10년 일별, 지점별 시뮬레이션) ---------- */
+const CLIMO={ // 월별: 강수확률, 강수일 평균(mm), 최고기온 평균/표준편차, 최고기온 시각 상대습도, 평균풍속, 강설확률
+ 1:[0.10,5,3.5,4,42,2.5,0.06],2:[0.11,7,7,4,40,2.7,0.04],3:[0.16,9,13,4,40,2.9,0.01],4:[0.19,12,20,4,40,2.9,0],
+ 5:[0.20,12,25,3.5,42,2.6,0],6:[0.26,14,28,3,54,2.3,0],7:[0.34,20,31.5,2.8,60,2.3,0],8:[0.32,22,32.5,2.8,58,2.2,0],
+ 9:[0.24,16,27.5,3,56,2.2,0],10:[0.13,10,22,3.5,48,2.2,0],11:[0.12,7,13,4,46,2.4,0.01],12:[0.10,5,5.5,4,44,2.5,0.05]};
+const STATION_ADJ={daegu:{t:0,rain:1,wind:1},gumi:{t:-0.6,rain:1.05,wind:1.1}};
+function feelsLike(Ta,RH){ // 기상청 여름철 체감온도 (Stull 습구온도 기반)
+  const Tw=Ta*Math.atan(0.151977*Math.sqrt(RH+8.313659))+Math.atan(Ta+RH)-Math.atan(RH-1.67633)+0.00391838*Math.pow(RH,1.5)*Math.atan(0.023101*RH)-4.686035;
+  return -0.2442+0.55399*Tw+0.45535*Ta-0.0022*Tw*Tw+0.00278*Tw*Ta+3.0;
+}
+const WX_CACHE={};
+function weatherData(siteId){
+  if(WX_CACHE[siteId])return WX_CACHE[siteId];
+  const adj=STATION_ADJ[siteId]||STATION_ADJ.daegu;const rnd=seeded(siteId==='daegu'?20160101:20279);const days=[];
+  for(let y=2016;y<=2025;y++){const yearAdj=(y-2016)*0.06; // 완만한 온난화 추세
+    for(let m=1;m<=12;m++){const [rp,rm,tm,ts,rh,wm,sp]=CLIMO[m];const dim=new Date(y,m,0).getDate();
+      let wet=false;
+      for(let d=1;d<=dim;d++){
+        const p=rp*(wet?1.6:0.85);wet=rnd()<p;
+        const rain=wet?Math.max(0.1,Math.round((-rm*Math.log(1-rnd()*0.98))*10)/10):0;
+        const tmax=Math.round((tm+adj.t+yearAdj+gauss(rnd)*ts-(wet?2.5:0))*10)/10;
+        const tmin=Math.round((tmax-(8+gauss(rnd)*2))*10)/10;
+        const hum=Math.min(98,Math.max(20,Math.round(rh+(wet?18:0)+gauss(rnd)*8)));
+        const wind=Math.round(Math.max(0.5,(wm*adj.wind)*Math.exp(gauss(rnd)*0.45)*(m>=3&&m<=4?1.25:1))*10)/10;
+        const snow=(sp>0&&rnd()<sp)?Math.round((0.5+rnd()*6)*10)/10:0;
+        const feels=Math.round(feelsLike(tmax,hum)*10)/10;
+        days.push({y,m,d,rain,tmax,tmin,hum,wind,snow,feels});
+      }}}
+  WX_CACHE[siteId]=days;return days;
+}
+
+/* ---------- 7. 휴일 ---------- */
+const LUNAR={ // 설날·부처님오신날·추석 (대체공휴일 포함)
+ 2016:['02-07','02-08','02-09','02-10','05-14','09-14','09-15','09-16'],
+ 2017:['01-27','01-28','01-29','01-30','05-03','10-02','10-03','10-04','10-05','10-06'],
+ 2018:['02-15','02-16','02-17','05-22','09-23','09-24','09-25','09-26'],
+ 2019:['02-04','02-05','02-06','05-12','09-12','09-13','09-14'],
+ 2020:['01-24','01-25','01-26','01-27','04-30','09-30','10-01','10-02'],
+ 2021:['02-11','02-12','02-13','05-19','09-20','09-21','09-22'],
+ 2022:['01-31','02-01','02-02','05-08','09-09','09-10','09-11','09-12'],
+ 2023:['01-21','01-22','01-23','01-24','05-27','05-29','09-28','09-29','09-30','10-02'],
+ 2024:['02-09','02-10','02-11','02-12','05-15','09-16','09-17','09-18'],
+ 2025:['01-27','01-28','01-29','01-30','05-05','05-06','10-03','10-05','10-06','10-07','10-08'],
+ 2026:['02-16','02-17','02-18','05-24','05-25','09-24','09-25','09-26'],
+ 2027:['02-06','02-07','02-08','02-09','05-13','09-14','09-15','09-16'],
+ 2028:['01-26','01-27','01-28','05-02','10-02','10-03','10-04','10-05'],
+};
+const FIXED=['01-01','03-01','05-05','06-06','08-15','10-03','10-09','12-25'];
+const HOL_NAME={'01-01':'신정','03-01':'삼일절','05-05':'어린이날','06-06':'현충일','08-15':'광복절','10-03':'개천절','10-09':'한글날','12-25':'성탄절'};
+function isPublicHoliday(y,m,d){const md=`${pad(m)}-${pad(d)}`;if(FIXED.includes(md))return HOL_NAME[md];if((LUNAR[y]||[]).includes(md))return '명절·대체';
+  // 어린이날·삼일절·광복절·개천절·한글날·성탄절 대체공휴일(2021~)
+  if(y>=2022){const dt=new Date(y,m-1,d);const dow=dt.getDay();if(dow===1){for(const k of[1,2]){const p=addDays(dt,-k);const pmd=`${pad(p.getMonth()+1)}-${pad(p.getDate())}`;if(['03-01','05-05','08-15','10-03','10-09','12-25','01-01'].includes(pmd)&&(k===1||p.getDay()===6))return '대체공휴일';}}}
+  return null;}
+function dayOff(dt,hs){const dow=dt.getDay();if(hs.sunday&&dow===0)return '일요일';if(hs.saturday&&dow===6)return '토요일';if(hs.public){const n=isPublicHoliday(dt.getFullYear(),dt.getMonth()+1,dt.getDate());if(n)return n;}return null;}
+
+/* ---------- 8. 비작업일수 엔진 ---------- */
+function evalRules(day,rules){const hit=[];for(const r of rules){if(!r.enabled)continue;const v=day[r.field];if(r.op==='>='?v>=r.value:v<=r.value)hit.push(r.id);}return hit;}
+function nonWorking(siteId,settings){
+  const days=weatherData(siteId);const rules=settings.rules;const hs=settings.holiday;
+  const perYM={};const byRule={};rules.forEach(r=>byRule[r.id]=0);let wxTotal=0,wxOnHoliday=0,holTotal=0;
+  for(const day of days){const key=`${day.y}-${day.m}`;perYM[key]=perYM[key]||{wx:0,hol:0,overlap:0,days:0};const rec=perYM[key];rec.days++;
+    const hit=evalRules(day,rules);const dt=new Date(day.y,day.m-1,day.d);const off=dayOff(dt,hs);
+    if(off){rec.hol++;holTotal++;}
+    if(hit.length){wxTotal++;hit.forEach(id=>byRule[id]++);if(off){rec.overlap++;wxOnHoliday++;if(!hs.dedupe)rec.wx++;}else rec.wx++;}
+  }
+  const monthly=[];for(let m=1;m<=12;m++){let wx=0,hol=0,ov=0,cnt=0;for(let y=2016;y<=2025;y++){const r=perYM[`${y}-${m}`];wx+=r.wx;hol+=r.hol;ov+=r.overlap;cnt++;}
+    const byR={};rules.forEach(r=>byR[r.id]=0);
+    for(const day of days){if(day.m!==m)continue;const hit=evalRules(day,rules);if(!hit.length)continue;const off=dayOff(new Date(day.y,m-1,day.d),hs);if(off&&hs.dedupe)continue;hit.forEach(id=>byR[id]+=1/cnt);}
+    monthly.push({m,wx:wx/cnt,hol:hol/cnt,overlap:ov/cnt,byRule:byR});}
+  const annualWx=monthly.reduce((a,b)=>a+b.wx,0);
+  return {monthly,annualWx,byRule,wxTotal,wxOnHoliday,holTotal,years:10,days:days.length};
+}
+
+/* ---------- 9. 작업일수 & CPM ---------- */
+const stdBy=code=>STD.find(s=>s.code===code);
+function activityKey(row){const std=row.mapped?stdBy(row.mapped):null;if(std&&std.code==='T-03')return '되메우기';if(std)return std.cat;return row.group||'기타';}
+const ACT_ORDER=['가설공사','철거공사','토공사','지정공사','철근콘크리트공사','양생·검측','조적공사','방수공사','미장공사','되메우기','배수공사','포장공사','부대공사','기타'];
+const DEFAULT_PRED={'가설공사':[],'철거공사':['가설공사'],'토공사':['철거공사'],'지정공사':['토공사'],'철근콘크리트공사':['지정공사'],'양생·검측':['철근콘크리트공사'],'조적공사':['양생·검측'],'방수공사':['양생·검측'],'미장공사':['조적공사'],'되메우기':['방수공사'],'배수공사':['되메우기'],'포장공사':['배수공사'],'부대공사':['포장공사'],'기타':['부대공사','미장공사']};
+function workdays(row){const std=row.mapped?stdBy(row.mapped):null;if(!std)return null;const days=row.qty/(std.prod*(row.crews||1));return {raw:days,days:Math.max(1,Math.ceil(days-1e-9)),std};}
+function buildActivities(rows,settings,preds){
+  const groups={};for(const r of rows){const wd=workdays(r);if(!wd)continue;const k=activityKey(r);groups[k]=groups[k]||{key:k,items:[],net:0};groups[k].items.push({...r,wd});groups[k].net+=wd.days;}
+  const acts=[];for(const k of ACT_ORDER){if(!groups[k]&&k!=='양생·검측')continue;
+    if(k==='양생·검측'){if(!groups['철근콘크리트공사'])continue;acts.push({key:k,items:[],net:0,indirect:settings.indirect.curing,adj:0,dur:settings.indirect.curing,note:'콘크리트 양생 및 검측(간접작업일)'});continue;}
+    const g=groups[k];const insp=settings.indirect.inspectionPerActivity;const adjRate=(S.site.urban?settings.adjust.urban:0)+(S.site.small?settings.adjust.small:0);const adj=Math.ceil(g.net*adjRate/100-1e-9);
+    acts.push({...g,indirect:insp,adj,dur:g.net+insp+adj,note:`검측 ${insp}일 + 보정 ${adj}일`});}
+  for(const k of Object.keys(groups))if(!ACT_ORDER.includes(k)){const g=groups[k];acts.push({...g,indirect:0,adj:0,dur:g.net,note:''});}
+  const keys=new Set(acts.map(a=>a.key));
+  for(const a of acts){const p=(preds[a.key]||DEFAULT_PRED[a.key]||[]).filter(x=>keys.has(x)&&x!==a.key);a.pred=p;}
+  return acts;
+}
+function cpm(acts){ // Forward/Backward pass (topological)
+  const by={};acts.forEach(a=>by[a.key]=a);const order=[];const seen=new Set();
+  const visit=(a,stack=new Set())=>{if(seen.has(a.key))return;if(stack.has(a.key))throw new Error('순환 참조: '+a.key);stack.add(a.key);a.pred.forEach(p=>visit(by[p],stack));stack.delete(a.key);seen.add(a.key);order.push(a);};
+  acts.forEach(a=>visit(a));
+  for(const a of order){a.es=a.pred.length?Math.max(...a.pred.map(p=>by[p].ef)):0;a.ef=a.es+a.dur;}
+  const total=Math.max(0,...order.map(a=>a.ef));
+  for(const a of [...order].reverse()){const succ=order.filter(x=>x.pred.includes(a.key));a.lf=succ.length?Math.min(...succ.map(s=>s.ls)):total;a.ls=a.lf-a.dur;a.float=a.ls-a.es;a.critical=a.float===0;}
+  return {order,total};
+}
+/* 캘린더 환산: 작업일 인덱스 → 실제 날짜 (휴일·기상비작업일 건너뜀) */
+function calendarize(startStr,workDaysNeeded,settings,nw){
+  const start=new Date(startStr+'T00:00:00');const hs=settings.holiday;const days=[];let cur=new Date(start);
+  for(let i=0;i<settings.period.prep;i++){days.push({date:new Date(cur),kind:'prep',label:'준비기간'});cur=addDays(cur,1);}
+  let count=0;const monthPlan={};
+  while(count<workDaysNeeded&&days.length<2000){
+    const y=cur.getFullYear(),m=cur.getMonth()+1;const key=`${y}-${m}`;
+    if(!monthPlan[key]){const dim=new Date(y,m,0).getDate();const cand=[];for(let d=1;d<=dim;d++){const dt=new Date(y,m-1,d);if(!dayOff(dt,hs))cand.push(d);}
+      const n=Math.min(cand.length,Math.round(nw.monthly[m-1].wx));const set=new Set();for(let i=0;i<n;i++)set.add(cand[Math.floor((i+0.5)*cand.length/n)]);monthPlan[key]=set;}
+    const off=dayOff(cur,hs);
+    if(off)days.push({date:new Date(cur),kind:'hol',label:off});
+    else if(monthPlan[key].has(cur.getDate()))days.push({date:new Date(cur),kind:'wx',label:'기상 비작업일(예상)'});
+    else{count++;days.push({date:new Date(cur),kind:'work',label:`작업일 ${count}`,idx:count});}
+    cur=addDays(cur,1);
+  }
+  for(let i=0;i<settings.period.cleanup;i++){days.push({date:new Date(cur),kind:'clean',label:'정리기간'});cur=addDays(cur,1);}
+  const end=days[days.length-1].date;const cnt=k=>days.filter(d=>d.kind===k).length;
+  return {days,start,end,total:days.length,prep:cnt('prep'),work:cnt('work'),hol:cnt('hol'),wx:cnt('wx'),clean:cnt('clean')};
+}
+
+/* ---------- 9.5 실연동 (백엔드가 있을 때만) ---------- */
+const API_BASE=(location.protocol.startsWith('http')&&location.port==='8765')?'':'http://127.0.0.1:8765';
+const LIVE={probed:false,kma:false,llm:false,model:'',wxLoaded:{},wxLoading:false,wxError:null};
+async function probeLive(){try{const r=await fetch(API_BASE+'/api/health',{signal:AbortSignal.timeout(1500)});const j=await r.json();LIVE.kma=!!(j.kma||(j.kma_cached_stations||[]).length);LIVE.cachedStations=j.kma_cached_stations||[];LIVE.llm=!!j.llm;LIVE.model=j.llm_model||'';}catch(e){LIVE.kma=false;LIVE.llm=false;}
+  // 백엔드가 없어도 정적 캐시(data/asos_<지점>.json)가 있으면 기상청 실데이터 사용 (GitHub Pages 등 정적 배포용)
+  if(!LIVE.kma&&location.protocol.startsWith('http')){try{const r=await fetch('data/asos_'+S.site.stn+'.json',{method:'HEAD',signal:AbortSignal.timeout(2000)});if(r.ok){LIVE.kma=true;LIVE.static=true;}}catch(e){}}
+  LIVE.probed=true;render();if(LIVE.kma)loadLiveWeather();}
+async function loadLiveWeather(){const site=S.site;if(!LIVE.kma||LIVE.wxLoaded[site.id]||LIVE.wxLoading)return;LIVE.wxLoading=true;LIVE.wxError=null;render();
+  try{const r=await fetch(LIVE.static?`data/asos_${site.stn}.json`:`${API_BASE}/api/weather?station=${site.stn}&start=2016&end=2025`,{signal:AbortSignal.timeout(180000)});if(!r.ok){const t=await r.text();throw new Error(t.slice(0,160));}const j=await r.json();
+    if(!j.days||j.days.length<3000)throw new Error('수신 일수 부족: '+(j.days||[]).length);WX_CACHE[site.id]=j.days;LIVE.wxLoaded[site.id]={n:j.days.length,ms:j.elapsed_ms||0,static:!!LIVE.static};S.reportGenerated=false;toast(`기상청 ASOS ${site.station} 일자료 ${fmt(j.days.length)}일 수신 — 비작업일수를 실데이터로 재계산했습니다.`);}
+  catch(e){LIVE.wxError=String(e.message||e);toast('기상청 API 수신 실패 — 내장 데이터로 계속합니다.');}
+  LIVE.wxLoading=false;render();}
+async function runAiMapping(){if(!LIVE.llm||!S.rows.length||LIVE.mapping)return;LIVE.mapping=true;render();
+  try{const body={standards:STD.map(s=>({code:s.code,name:s.name,cat:s.cat,unit:s.unit})),rows:S.rows.map(r=>({no:r.no,name:r.name,spec:r.spec||'',unit:r.unit||'',qty:r.qty,group:r.group||'',candidates:STD.map(s=>({std:s,...scoreItem(r,s)})).sort((a,b)=>b.rank-a.rank).slice(0,5).map(c=>({code:c.std.code,score:c.score}))}))};
+    const r=await fetch(API_BASE+'/api/map',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(200000)});if(!r.ok)throw new Error((await r.text()).slice(0,200));const j=await r.json();
+    let changed=0,confirmed=0;for(const row of S.rows){if(row.manual)continue;const res=j.results[String(row.no)];if(!res)continue;const th=S.settings.thresholds;
+      if(res.code){const std=stdBy(res.code);const before=row.mapped;row.mapped=res.code;row.score=res.confidence;row.ai={code:res.code,confidence:res.confidence,reason:res.reason};row.status=res.confidence>=th.auto?'auto':res.confidence>=th.review?'review':'unmapped';if(row.status==='unmapped')row.mapped=null;if(row.mapped&&(row.crews==null||before!==row.mapped))row.crews=std.nc||1;if(before!==row.mapped)changed++;else confirmed++;}
+      else{row.ai={code:null,confidence:res.confidence,reason:res.reason};if(row.mapped){row.mapped=null;row.status='unmapped';row.score=res.confidence;changed++;}else confirmed++;}}
+    LIVE.mapped={model:j.model,changed,confirmed,at:new Date()};S.reportGenerated=false;toast(`AI 문맥 보정 완료 (${j.model}) — 변경 ${changed}건, 확인 ${confirmed}건`);}
+  catch(e){toast('AI 보정 실패: '+String(e.message||e).slice(0,80));}
+  LIVE.mapping=false;render();}
+async function runNarrative(summary,key){if(!LIVE.llm||LIVE.narrating)return;LIVE.narrating=true;render();
+  try{const r=await fetch(API_BASE+'/api/narrative',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({summary}),signal:AbortSignal.timeout(200000)});if(!r.ok)throw new Error((await r.text()).slice(0,200));const j=await r.json();S.narrative={key,...j};toast(`AI 서술 초안 생성 완료 (${j.model})`);}
+  catch(e){toast('AI 서술 생성 실패: '+String(e.message||e).slice(0,80));}
+  LIVE.narrating=false;render();}
+
+/* ---------- 10. 앱 상태 ---------- */
+const S={
+  tab:'boq',site:SITES[0],rows:[],fileName:null,settings:JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),preds:{},modal:null,reportGenerated:false,stdQuery:'',calMonth:0,
+};
+function derived(){
+  const rows=S.rows;const mapped=rows.filter(r=>r.mapped);
+  const acts=rows.length?buildActivities(rows,S.settings,S.preds):[];let cp={order:[],total:0},err=null;try{cp=cpm(acts);}catch(e){err=e.message;}
+  const nw=nonWorking(S.site.id,S.settings);
+  const net=acts.reduce((a,b)=>a+(b.net||0),0),ind=acts.reduce((a,b)=>a+(b.indirect||0),0),adj=acts.reduce((a,b)=>a+(b.adj||0),0);
+  const cal=rows.length?calendarize(S.site.start,cp.total,S.settings,nw):null;
+  return {rows,mapped,acts,cp,err,nw,net,ind,adj,cal,unmapped:rows.filter(r=>!r.mapped),review:rows.filter(r=>r.status==='review'&&!r.manual)};
+}
+
+/* ---------- 11. 렌더 ---------- */
+const TABS=[{id:'boq',n:1,l:'내역서·공종 매핑'},{id:'work',n:2,l:'작업일수 산정'},{id:'wx',n:3,l:'기상·비작업일수'},{id:'cpm',n:4,l:'공정표(CPM)'},{id:'report',n:5,l:'검토보고서'},{id:'std',n:'DB',l:'표준품셈',util:true},{id:'set',n:'⚙',l:'설정',util:true}];
+function render(){
+  const app=$('#app');app.innerHTML='';const D=derived();
+  const done={boq:S.rows.length>0,work:S.rows.length>0,wx:true,cpm:S.rows.length>0,report:S.reportGenerated};
+  app.append(
+    h('header',{class:'app-header'},
+      h('div',{class:'brand'},h('div',{class:'mark'},'公'),'공사기간 산정 콘솔',h('span',{class:'tag'},'시연 데모')),
+      h('div',{class:'site'},'현장',(()=>{const sel=h('select',{onchange:e=>{S.site=SITES.find(s=>s.id===e.target.value);S.reportGenerated=false;S.narrative=null;render();if(LIVE.kma)loadLiveWeather();toast('현장을 전환했습니다. 기상 지점·착수일·보정 조건이 함께 바뀝니다.');}},...SITES.map(s=>h('option',{value:s.id,selected:s.id===S.site.id},s.name)));return sel;})()),
+      h('div',{class:'header-right'},h('span',{style:{opacity:.8}},'기상 지점 ',S.site.station),liveBadge(),h('button',{class:'hbtn',onclick:()=>{S.modal='about';render();}},'데모 범위 안내'),h('button',{class:'hbtn',onclick:resetAll},'초기화'))),
+    h('nav',{class:'stepbar'},...TABS.map(t=>h('button',{class:'step'+(S.tab===t.id?' active':'')+(done[t.id]&&S.tab!==t.id&&!t.util?' done':'')+(t.util?' util':''),style:t.util&&t.id==='set'?{marginLeft:0}:{},onclick:()=>{S.tab=t.id;render();}},h('span',{class:'n'},done[t.id]&&!t.util?'✓':t.n),t.l))),
+    h('main',{class:'content'},({boq:viewBoq,work:viewWork,wx:viewWx,cpm:viewCpm,report:viewReport,std:viewStd,set:viewSet})[S.tab](D)),
+  );
+  if(S.modal)app.append(renderModal(D));
+}
+function liveBadge(){if(!LIVE.probed)return h('span',{class:'live-pill off'},'연동 확인 중…');const on=LIVE.kma||LIVE.llm;
+  return h('span',{class:'live-pill'+(on?'':' off'),title:LIVE.static?'기상청 실데이터(정적 캐시) · AI는 백엔드 실행 시 활성화':on?`백엔드 ${API_BASE||location.origin} 연결됨`:'백엔드 없음 — 내장 데이터·사전 매핑으로 동작'},
+    h('i',{class:LIVE.kma?'on':''}),'기상청 API',h('i',{class:LIVE.llm?'on':'',style:{marginLeft:'8px'}}),'AI'+(LIVE.llm&&LIVE.model?' ('+LIVE.model+')':''));}
+function resetAll(){S.rows=[];S.fileName=null;S.settings=JSON.parse(JSON.stringify(DEFAULT_SETTINGS));S.preds={};S.reportGenerated=false;S.tab='boq';render();toast('초기 상태로 되돌렸습니다.');}
+function kpi(l,v,unit,s){return h('div',{class:'kpi'},h('div',{class:'l'},l),h('div',{class:'v'},v,unit?h('small',{},unit):null),s?h('div',{class:'s'},s):null);}
+function pageTitle(t,d,...right){return h('div',{class:'page-title'},h('div',{},h('h1',{},t),h('p',{},d)),h('div',{class:'inline'},...right));}
+
+/* --- 탭 1: 내역서 --- */
+function loadSample(){LIVE.mapped=null;S.narrative=null;S.rows=SAMPLE_BOQ.map(r=>mapRow(r,S.settings));S.fileName='샘플_내역서_'+S.site.name.split(' ')[0]+'.xlsx (내장)';S.reportGenerated=false;render();toast(`내역서 ${S.rows.length}행을 읽어 표준품셈 매핑을 수행했습니다.`);}
+function parseWorkbook(buf,name){
+  if(!window.XLSX){toast('엑셀 파서를 불러오지 못했습니다(오프라인). 샘플 데이터를 사용합니다.');loadSample();return;}
+  const wb=XLSX.read(buf,{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];const aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+  // 헤더 인식: 키워드 우선순위 순으로 찾고, 이미 배정된 열은 제외 (예: '공종구분'이 품명으로 잡히지 않게)
+  const KEY={group:['공종구분','대공종','공종명칭','공사구분','구분'],name:['품명','공종명','명칭','품목','항목명','항목','내역','공종'],spec:['규격','사양'],unit:['단위'],qty:['수량','물량']};
+  let hi=-1,map={};
+  for(let i=0;i<Math.min(aoa.length,30);i++){const cells=aoa[i].map(c=>String(c).replace(/\s/g,''));const m={};const used=new Set();
+    for(const[k,ks]of Object.entries(KEY)){let idx=-1;for(const x of ks){idx=cells.findIndex((c,ci)=>!used.has(ci)&&c&&(c===x||c.includes(x)));if(idx>=0)break;}if(idx>=0){m[k]=idx;used.add(idx);}}
+    if(m.name!=null&&m.qty!=null){hi=i;map=m;break;}}
+  if(hi<0){toast('헤더(품명·수량)를 찾지 못했습니다. 첫 시트의 컬럼명을 확인하세요.');return;}
+  const rows=[];let no=0;
+  for(let i=hi+1;i<aoa.length;i++){const r=aoa[i];const name=String(r[map.name]||'').trim();const qty=parseFloat(String(r[map.qty]).replace(/,/g,''));if(!name||!isFinite(qty)||qty<=0)continue;if(/합계|소계|계$/.test(name))continue;
+    rows.push({no:++no,group:map.group!=null?String(r[map.group]||'').trim():'',name,spec:map.spec!=null?String(r[map.spec]||'').trim():'',unit:map.unit!=null?String(r[map.unit]||'').trim():'',qty});}
+  if(!rows.length){toast('유효한 내역 행이 없습니다.');return;}
+  // 공종구분 빈칸은 위 행 값 승계(병합셀 대응)
+  let g='';rows.forEach(r=>{if(r.group)g=r.group;else r.group=g||'기타';});
+  LIVE.mapped=null;S.narrative=null;S.rows=rows.map(r=>mapRow(r,S.settings));S.fileName=name;S.reportGenerated=false;S.preds={};render();
+  toast(`'${name}' ${rows.length}행 파싱 완료 (헤더 ${hi+1}행 자동 인식)`);
+}
+function handleFile(file){if(!file)return;const rd=new FileReader();rd.onload=e=>parseWorkbook(new Uint8Array(e.target.result),file.name);rd.readAsArrayBuffer(file);}
+function viewBoq(D){
+  const wrap=h('div',{});
+  wrap.append(pageTitle('내역서 업로드 및 공종명 자동 매핑','엑셀 내역서를 올리면 품명을 표준품셈 표준 명칭에 자동 대조하고, 신뢰도에 따라 자동 확정 / 검토 필요 / 미매칭으로 분류합니다.',
+    S.rows.length?h('button',{class:'btn btn-outline',onclick:()=>{S.rows=[];S.fileName=null;S.reportGenerated=false;render();}},'다른 내역서 업로드'):null));
+  if(!S.rows.length){
+    const input=h('input',{type:'file',accept:'.xlsx,.xls,.csv',class:'hidden',onchange:e=>handleFile(e.target.files[0])});
+    const dz=h('div',{class:'dropzone',ondragover:e=>{e.preventDefault();dz.classList.add('drag');},ondragleave:()=>dz.classList.remove('drag'),ondrop:e=>{e.preventDefault();dz.classList.remove('drag');handleFile(e.dataTransfer.files[0]);}},
+      h('div',{style:{fontSize:'34px',marginBottom:'6px'}},'📄'),h('h3',{},'내역서 엑셀 파일을 여기에 끌어다 놓으세요'),h('p',{},'xlsx · xls · csv — 첫 시트에서 품명·규격·단위·수량 컬럼을 자동 인식합니다 (양식이 달라도 헤더 행을 스스로 찾습니다)'),
+      h('div',{class:'inline',style:{justifyContent:'center'}},h('button',{class:'btn btn-primary',onclick:()=>input.click()},'파일 선택'),h('button',{class:'btn btn-outline',onclick:loadSample},'샘플 내역서로 시작 (24행)'),h('a',{class:'btn btn-ghost',href:'sample-boq.xlsx',download:'샘플_내역서_공공청사.xlsx'},'샘플 xlsx 내려받기')),input);
+    wrap.append(h('div',{class:'card'},dz),
+      h('div',{class:'grid3'},
+        h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title'},'① 표준품셈 대조'),h('p',{class:'small',style:{marginTop:'6px'}},'현장마다 다르게 적힌 품명(흙깎기·토사절취·절토…)을 동의어 사전과 문자열 유사도로 대조해 표준 명칭 후보 3개와 신뢰도를 제시합니다. 실 시스템에서는 벡터 검색 + LLM 문맥 보정이 이 단계를 대체합니다.')),
+        h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title'},'② 신뢰도 3단계 분류'),h('p',{class:'small',style:{marginTop:'6px'}},`신뢰도 ${S.settings.thresholds.auto}% 이상 자동 확정, ${S.settings.thresholds.review}% 이상 검토 필요, 그 미만은 미매칭으로 분리합니다. 임계값은 설정에서 조정합니다.`)),
+        h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title'},'③ 실무자 보정 → 사전 학습'),h('p',{class:'small',style:{marginTop:'6px'}},'실무자가 후보를 고르거나 직접 지정하면 이력이 기록되고, 같은 표기는 다음 내역서부터 자동 매핑됩니다.'))));
+    return wrap;
+  }
+  const auto=D.rows.filter(r=>r.status==='auto'||r.manual).length;
+  wrap.append(h('div',{class:'grid4',style:{marginBottom:'16px'}},
+    kpi('내역 행 수',fmt(D.rows.length),'행',S.fileName),kpi('자동 확정',fmt(auto),'건',`정합률 ${Math.round(auto/D.rows.length*100)}%`),
+    kpi('검토 필요',fmt(D.review.length),'건','후보 중 선택 필요'),kpi('미매칭',fmt(D.unmapped.length),'건','표준품셈에 없거나 단위 불일치')));
+  const tbl=h('table',{},h('thead',{},h('tr',{},h('th',{},'No'),h('th',{},'공종구분'),h('th',{},'원본 품명 / 규격'),h('th',{class:'num'},'수량'),h('th',{},'표준품셈 매핑'),h('th',{},'신뢰도'),h('th',{},'근거'),h('th',{},'상태'))),
+    h('tbody',{},...D.rows.map(r=>{const std=r.mapped?stdBy(r.mapped):null;const cls=r.score>=S.settings.thresholds.auto?'':r.score>=S.settings.thresholds.review?'w':'c';
+      return h('tr',{class:'click',onclick:()=>{S.modal={type:'map',row:r};render();}},h('td',{class:'mono'},r.no),h('td',{},r.group),h('td',{},h('b',{},r.name),r.spec?h('div',{class:'tag-src'},r.spec):null),h('td',{class:'num'},fmt(r.qty),' ',r.unit),
+        h('td',{},std?h('span',{},std.name,h('div',{class:'tag-src'},std.code,' · ',std.unit,' ',fmt1(std.prod),'/일'))  :h('span',{style:{color:'var(--muted)'}},'— 미매칭')),
+        h('td',{},h('span',{class:'simbar '+cls},h('i',{style:{width:r.score+'%'}})),r.score,'%'),h('td',{class:'small'},r.manual?'실무자 지정':r.ai?h('span',{},h('span',{class:'pill pill-info',style:{marginRight:'4px'}},'AI'),r.ai.reason||'문맥 보정'):(r.cands[0].why||'')),
+        h('td',{},r.manual?h('span',{class:'pill pill-info'},'수동 확정'):r.status==='auto'?h('span',{class:'pill pill-good'},'자동 확정'):r.status==='review'?h('span',{class:'pill pill-warn'},'검토 필요'):h('span',{class:'pill pill-crit'},'미매칭')));})));
+  wrap.append(h('div',{class:'card'},h('div',{class:'card-head'},h('div',{},h('div',{class:'card-title'},'매핑 결과',LIVE.mapped?h('span',{class:'pill pill-info',style:{marginLeft:'8px'}},`AI 보정 적용 · ${LIVE.mapped.model}`):null),h('div',{class:'card-desc'},LIVE.mapped?`1차 사전·유사도 매핑 후 LLM이 품명·규격·단위·공종구분 문맥으로 재판정했습니다 (변경 ${LIVE.mapped.changed}건). 행을 클릭해 직접 확정할 수 있습니다.`:'1차 사전·유사도 매핑 결과입니다. 행을 클릭하면 후보 목록과 근거를 보고 직접 확정할 수 있습니다.')),
+      h('div',{class:'inline'},LIVE.llm?h('button',{class:'btn btn-accent btn-sm',disabled:!!LIVE.mapping,onclick:runAiMapping},LIVE.mapping?h('span',{class:'spin'}):null,LIVE.mapping?' AI 문맥 보정 중…':'AI 문맥 보정 실행 (LLM)'):h('span',{class:'demo-badge',title:'백엔드(server/app.py)를 실행하면 LLM 문맥 보정이 활성화됩니다'},'AI 보정: 백엔드 미연결'),D.review.length?h('button',{class:'btn btn-outline btn-sm',onclick:()=>{D.review.forEach(r=>{r.manual=true;r.status='auto';});render();toast('검토 필요 항목을 1순위 후보로 일괄 확정했습니다.');}},'검토 필요 → 1순위 후보로 일괄 확정'):null,
+        h('button',{class:'btn btn-primary btn-sm',onclick:()=>{S.tab='work';render();}},'다음: 작업일수 산정 →'))),h('div',{class:'tbl-wrap'},tbl)));
+  if(D.unmapped.length)wrap.append(h('div',{class:'note warn'},`미매칭 ${D.unmapped.length}건은 작업일수 산정에서 제외됩니다. 실무자가 표준품셈 항목을 지정하거나(행 클릭) 별도 일수를 입력하면 반영됩니다. 예: "현장 정리(식)"처럼 표준품셈에 생산성 기준이 없는 항목은 정리기간으로 흡수합니다.`));
+  return wrap;
+}
+
+/* --- 탭 2: 작업일수 --- */
+function viewWork(D){
+  const wrap=h('div',{});
+  wrap.append(pageTitle('작업일수 산정','매핑된 공종별로 수량 ÷ (표준품셈 1일 생산성 × 투입조)로 순작업일수를 계산하고, 검측·양생 등 간접작업일과 도심지·소규모 보정을 가산합니다.'));
+  if(!S.rows.length){wrap.append(h('div',{class:'card'},h('div',{class:'note'},'먼저 내역서를 업로드하세요.'),h('div',{style:{marginTop:'10px'}},h('button',{class:'btn btn-primary',onclick:loadSample},'샘플 내역서로 시작'))));return wrap;}
+  const total=D.net+D.ind+D.adj;
+  wrap.append(h('div',{class:'grid4',style:{marginBottom:'16px'}},kpi('순작업일수 합계',fmt(D.net),'일','공종별 합산(병행 전)'),kpi('간접작업일수',fmt(D.ind),'일',`검측 ${S.settings.indirect.inspectionPerActivity}일/공종 + 양생 ${S.settings.indirect.curing}일`),kpi('보정일수',fmt(D.adj),'일',`${S.site.urban?'도심지 '+S.settings.adjust.urban+'%':''}${S.site.urban&&S.site.small?' + ':''}${S.site.small?'소규모 '+S.settings.adjust.small+'%':''}`||'보정 없음'),kpi('작업일수 합계',fmt(total),'일','공정 병행 전 단순 합계')));
+  wrap.append(h('div',{class:'formula',style:{marginBottom:'16px'}},'순작업일수 = ⌈ 수량 ÷ (표준품셈 1일 생산성 × 투입조 수) ⌉   ·   공종 작업일수 = 순작업일수 + 검측(간접) + 보정(도심지·소규모 %)'));
+  const tbl=h('table',{},h('thead',{},h('tr',{},h('th',{},'공종구분'),h('th',{},'품명 → 표준품셈'),h('th',{class:'num'},'수량'),h('th',{class:'num'},'1일 생산성'),h('th',{},'표준 조 편성'),h('th',{class:'num'},'투입조'),h('th',{class:'num'},'순작업일수'),h('th',{},'근거'))),
+    h('tbody',{},...D.rows.filter(r=>r.mapped).map(r=>{const wd=workdays(r);const s=wd.std;
+      const crew=h('input',{type:'number',min:1,max:6,value:r.crews||1,style:{width:'58px'},onchange:e=>{r.crews=Math.max(1,parseInt(e.target.value)||1);S.reportGenerated=false;render();}});
+      return h('tr',{},h('td',{},r.group),h('td',{},h('b',{},r.name),h('div',{class:'tag-src'},'→ ',s.name)),h('td',{class:'num'},fmt(r.qty),' ',r.unit),h('td',{class:'num'},fmt1(s.prod),' ',s.unit,'/일'),h('td',{class:'small'},s.crew),h('td',{class:'num'},crew),h('td',{class:'num'},h('b',{},fmt(wd.days)),'일',h('div',{class:'tag-src'},fmt1(wd.raw),' → 올림')),h('td',{class:'small'},s.ref));})));
+  wrap.append(h('div',{class:'card'},h('div',{class:'card-head'},h('div',{},h('div',{class:'card-title'},'공종별 순작업일수'),h('div',{class:'card-desc'},'투입조 수를 바꾸면 순작업일수·공정표·보고서가 즉시 다시 계산됩니다.')),h('button',{class:'btn btn-primary btn-sm',onclick:()=>{S.tab='wx';render();}},'다음: 기상·비작업일수 →')),h('div',{class:'tbl-wrap'},tbl)));
+  wrap.append(h('div',{class:'card'},h('div',{class:'card-title',style:{marginBottom:'10px'}},'공정(액티비티) 단위 집계'),h('div',{class:'tbl-wrap'},h('table',{},h('thead',{},h('tr',{},h('th',{},'공정'),h('th',{},'포함 항목'),h('th',{class:'num'},'순작업'),h('th',{class:'num'},'간접'),h('th',{class:'num'},'보정'),h('th',{class:'num'},'공정 작업일수'))),
+    h('tbody',{},...D.acts.map(a=>h('tr',{},h('td',{},h('b',{},a.key)),h('td',{class:'small'},a.items.length?a.items.map(i=>i.name).join(', '):a.note),h('td',{class:'num'},a.net),h('td',{class:'num'},a.indirect),h('td',{class:'num'},a.adj),h('td',{class:'num'},h('b',{},a.dur)))),
+      h('tr',{},h('td',{colspan:2},h('b',{},'합계')),h('td',{class:'num'},h('b',{},D.net)),h('td',{class:'num'},h('b',{},D.ind)),h('td',{class:'num'},h('b',{},D.adj)),h('td',{class:'num'},h('b',{},total))))))));
+  return wrap;
+}
+
+/* --- 탭 3: 기상 --- */
+function barChart(data,series,opts={}){ // data:[{label,...}], series:[{key,name,color}]
+  const W=720,H=opts.h||260,pl=36,pr=8,pt=12,pb=26;const iw=W-pl-pr,ih=H-pt-pb;const n=data.length;
+  const rawMax=Math.max(1,...data.map(d=>series.reduce((a,s)=>a+(d[s.key]||0),0)));const stepN=rawMax>40?10:rawMax>16?5:rawMax>8?2:1;const maxv=Math.ceil(rawMax*1.08/stepN)*stepN;const step=iw/n;const bw=Math.min(36,step*0.62);
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const ticks=4;for(let i=0;i<=ticks;i++){const y=pt+ih-ih*i/ticks;const l=document.createElementNS(svg.namespaceURI,'line');l.setAttribute('x1',pl);l.setAttribute('x2',W-pr);l.setAttribute('y1',y);l.setAttribute('y2',y);l.setAttribute('class','grid');svg.append(l);const t=document.createElementNS(svg.namespaceURI,'text');t.setAttribute('x',pl-6);t.setAttribute('y',y+4);t.setAttribute('text-anchor','end');t.setAttribute('class','axis');t.textContent=fmt1(Math.round(maxv*i/ticks*10)/10);svg.append(t);}
+  const tip=h('div',{class:'tooltip'});
+  data.forEach((d,i)=>{let y0=pt+ih;const x=pl+step*i+(step-bw)/2;
+    series.forEach((s,si)=>{const v=d[s.key]||0;if(v<=0)return;const hh=ih*v/maxv;const r=document.createElementNS(svg.namespaceURI,'rect');r.setAttribute('x',x);r.setAttribute('y',y0-hh);r.setAttribute('width',bw);r.setAttribute('height',Math.max(0,hh-(si?2:0)));r.setAttribute('fill',s.color);if(si===series.length-1||series.slice(si+1).every(t=>!(d[t.key]>0))){r.setAttribute('rx',4);}
+      r.addEventListener('mousemove',ev=>{const b=svg.getBoundingClientRect();tip.style.left=(ev.clientX-b.left)+'px';tip.style.top=(ev.clientY-b.top-8)+'px';tip.textContent=`${d.label} · ${s.name} ${fmt1(v)}일 (합계 ${fmt1(series.reduce((a,t)=>a+(d[t.key]||0),0))}일)`;tip.classList.add('on');});r.addEventListener('mouseleave',()=>tip.classList.remove('on'));svg.append(r);y0-=hh;});
+    const t=document.createElementNS(svg.namespaceURI,'text');t.setAttribute('x',x+bw/2);t.setAttribute('y',H-8);t.setAttribute('text-anchor','middle');t.setAttribute('class','axis');t.textContent=d.label;svg.append(t);
+    if(opts.labels){const tot=series.reduce((a,s)=>a+(d[s.key]||0),0);if(tot>0){const tl=document.createElementNS(svg.namespaceURI,'text');tl.setAttribute('x',x+bw/2);tl.setAttribute('y',y0-4);tl.setAttribute('text-anchor','middle');tl.setAttribute('class','axis');tl.setAttribute('fill','#52514e');tl.textContent=fmt1(tot);svg.append(tl);}}
+  });
+  const box=h('div',{class:'chart'},svg,tip);if(series.length>1)box.append(h('div',{class:'legend'},...series.map(s=>h('span',{},h('i',{style:{background:s.color}}),s.name))));return box;
+}
+function viewWx(D){
+  const wrap=h('div',{});const nw=D.nw;const st=S.settings;
+  wrap.append(pageTitle('기상 데이터 분석 및 비작업일수 산출',`${S.site.region} 기준 기상청 ${S.site.station} 지점 최근 10년(2016~2025) 일별 자료에 작업 제한 룰을 적용해 월별 비작업일수를 계산하고, 휴일과 겹치는 날은 이중 계산하지 않습니다.`));
+  const rulesOn=st.rules.filter(r=>r.enabled);
+  wrap.append(h('div',{class:'grid4',style:{marginBottom:'16px'}},kpi('분석 일수',fmt(nw.days),'일',LIVE.wxLoaded[S.site.id]?'기상청 ASOS 실데이터 10년':'10년 × 365일 일별 자료(내장)'),kpi('연평균 기상 비작업일',fmt1(nw.annualWx),'일',st.holiday.dedupe?'휴일 중복 제외 후':'휴일 중복 포함'),kpi('휴일과 겹친 기상 비작업일',fmt1(nw.wxOnHoliday/10),'일/년',st.holiday.dedupe?'이중 계산에서 제외됨':'현재 포함 중'),kpi('연평균 휴일',fmt1(nw.holTotal/10),'일',[st.holiday.sunday?'일요일':null,st.holiday.saturday?'토요일':null,st.holiday.public?'법정공휴일':null].filter(Boolean).join('·'))));
+  const monthData=nw.monthly.map(m=>{const o={label:m.m+'월'};rulesOn.forEach(r=>o[r.id]=m.byRule[r.id]);return o;});
+  const colors={rain:'#2a78d6',heat:'#eb6834',wind:'#1baf7a',snow:'#4a3aa7',cold:'#e87ba4'};
+  const chart=barChart(monthData,rulesOn.map(r=>({key:r.id,name:r.label+' 기준',color:colors[r.id]})),{labels:true});
+  const rulesBox=h('div',{},...st.rules.map(r=>h('div',{class:'rule'},
+    h('label',{class:'switch'},h('input',{type:'checkbox',checked:r.enabled,onchange:e=>{r.enabled=e.target.checked;S.reportGenerated=false;render();}})),
+    h('div',{},h('div',{class:'name'},r.label),h('div',{class:'desc'},r.desc),h('div',{class:'tag-src'},r.src)),
+    h('span',{class:'small'},r.op==='>='?'≥':'≤'),h('input',{type:'number',step:r.field==='rain'?1:0.5,value:r.value,onchange:e=>{r.value=parseFloat(e.target.value);S.reportGenerated=false;render();}}),h('span',{class:'small'},r.unit))));
+  const holBox=h('div',{class:'inline',style:{gap:'16px',marginTop:'12px'}},...[['sunday','일요일 휴무'],['saturday','토요일 휴무'],['public','법정공휴일'],['dedupe','휴일 중복 제외']].map(([k,l])=>h('label',{class:'switch'},h('input',{type:'checkbox',checked:st.holiday[k],onchange:e=>{st.holiday[k]=e.target.checked;S.reportGenerated=false;render();}}),l)));
+  wrap.append(h('div',{class:'grid-side'},
+    h('div',{},h('div',{class:'card',style:{margin:'0 0 16px'}},h('div',{class:'card-head'},h('div',{},h('div',{class:'card-title'},'월별 평균 기상 비작업일수 (10년 평균)'),h('div',{class:'card-desc'},'기준별로 쌓아 표시. 같은 날 두 기준이 동시에 걸리면 비작업일은 1일로만 셉니다.'))),chart),
+      h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title',style:{marginBottom:'10px'}},'월별 집계표'),h('div',{class:'tbl-wrap'},h('table',{},h('thead',{},h('tr',{},h('th',{},'월'),...rulesOn.map(r=>h('th',{class:'num'},r.label)),h('th',{class:'num'},'휴일 겹침'),h('th',{class:'num'},'기상 비작업'),h('th',{class:'num'},'휴일'),h('th',{class:'num'},'월 비작업 합계'))),
+        h('tbody',{},...nw.monthly.map(m=>h('tr',{},h('td',{},m.m,'월'),...rulesOn.map(r=>h('td',{class:'num'},fmt1(m.byRule[r.id]))),h('td',{class:'num small'},fmt1(m.overlap)),h('td',{class:'num'},h('b',{},fmt1(m.wx))),h('td',{class:'num'},fmt1(m.hol)),h('td',{class:'num'},h('b',{},fmt1(m.wx+m.hol))))),
+          h('tr',{},h('td',{},h('b',{},'연간')),...rulesOn.map(r=>h('td',{class:'num'},h('b',{},fmt1(nw.monthly.reduce((a,m)=>a+m.byRule[r.id],0))))),h('td',{class:'num small'},fmt1(nw.wxOnHoliday/10)),h('td',{class:'num'},h('b',{},fmt1(nw.annualWx))),h('td',{class:'num'},h('b',{},fmt1(nw.holTotal/10))),h('td',{class:'num'},h('b',{},fmt1(nw.annualWx+nw.holTotal/10))))))))),
+    h('div',{},h('div',{class:'card',style:{margin:'0 0 16px'}},h('div',{class:'card-title'},'작업 제한 룰 엔진'),h('div',{class:'card-desc',style:{marginBottom:'6px'}},'값을 바꾸면 차트·표·보고서가 즉시 재계산됩니다. 기준값은 코드가 아닌 설정으로 저장됩니다.'),rulesBox,h('div',{style:{marginTop:'12px',fontWeight:700,fontSize:'13px'}},'휴일 처리'),holBox),
+      h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title'},'데이터 출처 및 처리',LIVE.wxLoaded[S.site.id]?h('span',{class:'pill pill-good',style:{marginLeft:'8px'}},'실데이터'):LIVE.wxLoading?h('span',{class:'pill pill-warn',style:{marginLeft:'8px'}},'수신 중…'):h('span',{class:'pill pill-gray',style:{marginLeft:'8px'}},'내장 데이터')),LIVE.wxError?h('div',{class:'note crit',style:{margin:'8px 0'}},'기상청 API 오류: ',LIVE.wxError):null,h('div',{class:'kv',style:{marginTop:'8px'}},h('b',{},'수집'),h('span',{},'공공데이터포털 기상청 ASOS 일자료 API (지점 ',S.site.station,')',LIVE.wxLoaded[S.site.id]?(LIVE.wxLoaded[S.site.id].static?` — 정적 캐시 ${fmt(LIVE.wxLoaded[S.site.id].n)}일 (2016~2025 수집본)`:` — 수신 ${fmt(LIVE.wxLoaded[S.site.id].n)}일, ${fmt(LIVE.wxLoaded[S.site.id].ms)}ms`):''),h('b',{},'항목'),h('span',{},'일강수량·최고/최저기온·습도·최대풍속·신적설'),h('b',{},'체감온도'),h('span',{},'기상청 여름철 체감온도식(습구온도 기반)으로 일별 계산'),h('b',{},'기간'),h('span',{},'2016.01.01 ~ 2025.12.31 (3,653일)'),h('b',{},'데모'),h('span',{},LIVE.wxLoaded[S.site.id]?(LIVE.static?'기상청 실데이터 사용 중 (정적 캐시 — 백엔드 없이 동작)':'백엔드 연결 — 기상청 실데이터 사용 중 (서버 캐시)'):'백엔드 미연결 — 동일 구조·통계 특성의 내장 데이터로 오프라인 시연'))))));
+  wrap.append(h('div',{class:'inline',style:{justifyContent:'flex-end'}},h('button',{class:'btn btn-primary',onclick:()=>{S.tab='cpm';render();}},'다음: 공정표(CPM) →')));
+  return wrap;
+}
+
+/* --- 탭 4: CPM --- */
+function viewCpm(D){
+  const wrap=h('div',{});
+  wrap.append(pageTitle('공정표 및 주공정선(CPM)','공정별 작업일수와 선후행 관계로 Forward/Backward Pass를 수행해 여유일수(Float)와 주공정선(Critical Path)을 도출하고, 휴일·기상 비작업일을 반영해 실제 달력 공기로 환산합니다.'));
+  if(!S.rows.length){wrap.append(h('div',{class:'card'},h('div',{class:'note'},'먼저 내역서를 업로드하세요.')));return wrap;}
+  if(D.err){wrap.append(h('div',{class:'note crit'},D.err));return wrap;}
+  const {order,total}=D.cp;const cal=D.cal;const cps=order.filter(a=>a.critical);
+  wrap.append(h('div',{class:'grid4',style:{marginBottom:'16px'}},kpi('주공정 작업일수',fmt(total),'일','병행 반영 순수 작업일'),kpi('주공정선',cps.length,'개 공정',cps.map(a=>a.key).join(' → ')),kpi('달력 공사기간',fmt(cal.total),'일',`${kdate(cal.start)} ~ ${kdate(cal.end)}`),kpi('계획 공기 대비',(S.site.plan-cal.total>=0?'+':'')+fmt(S.site.plan-cal.total),'일',`계획 ${S.site.plan}일`)));
+  // gantt
+  const startPct=a=>a.es/total*100,widthPct=a=>a.dur/total*100;
+  const gantt=h('div',{class:'gantt'},h('div',{class:'gantt-head'},h('div',{},'공정 (작업일 기준)'),h('div',{class:'gantt-ticks'},...[0,.2,.4,.6,.8,1].map(f=>h('span',{},Math.round(total*f),'일')))),
+    ...order.map(a=>h('div',{class:'gantt-row'},h('div',{class:'gantt-label'},a.key,h('small',{},`선행: ${a.pred.length?a.pred.join(', '):'없음'}`)),
+      h('div',{class:'gantt-track'},h('div',{class:'gantt-bar'+(a.critical?' cp':''),style:{left:startPct(a)+'%',width:widthPct(a)+'%'},title:`${a.key} ES ${a.es} / EF ${a.ef} / LS ${a.ls} / LF ${a.lf} / Float ${a.float}`,onclick:()=>{S.modal={type:'act',act:a};render();}},a.dur,'일'),
+        a.float>0?h('div',{class:'gantt-float',style:{left:(a.ef/total*100)+'%',width:(a.float/total*100)+'%'},title:`여유 ${a.float}일`}):null))));
+  wrap.append(h('div',{class:'card'},h('div',{class:'card-head'},h('div',{},h('div',{class:'card-title'},'간트차트 (작업일 기준)'),h('div',{class:'card-desc'},'막대를 클릭하면 선후행 관계를 편집할 수 있습니다. 주황 = 주공정선(여유 0일), 빗금 = 여유일수.')),h('div',{class:'legend'},h('span',{},h('i',{style:{background:'var(--accent)'}}),'주공정선'),h('span',{},h('i',{style:{background:'var(--s1)'}}),'여유 있는 공정'),h('span',{},h('i',{style:{background:'repeating-linear-gradient(135deg,#cfd4dc 0,#cfd4dc 3px,transparent 3px,transparent 6px)'}}),'Float'))),gantt));
+  wrap.append(h('div',{class:'grid2'},
+    h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title',style:{marginBottom:'10px'}},'CPM 계산표'),h('div',{class:'tbl-wrap'},h('table',{},h('thead',{},h('tr',{},h('th',{},'공정'),h('th',{},'선행'),h('th',{class:'num'},'기간'),h('th',{class:'num'},'ES'),h('th',{class:'num'},'EF'),h('th',{class:'num'},'LS'),h('th',{class:'num'},'LF'),h('th',{class:'num'},'Float'),h('th',{},'구분'))),
+      h('tbody',{},...order.map(a=>h('tr',{class:'click',onclick:()=>{S.modal={type:'act',act:a};render();}},h('td',{},h('b',{},a.key)),h('td',{class:'small'},a.pred.join(', ')||'—'),h('td',{class:'num'},a.dur),h('td',{class:'num'},a.es),h('td',{class:'num'},a.ef),h('td',{class:'num'},a.ls),h('td',{class:'num'},a.lf),h('td',{class:'num'},a.float),h('td',{},a.critical?h('span',{class:'pill pill-cp'},'주공정'):h('span',{class:'pill pill-gray'},'일반')))))))),
+    h('div',{class:'card',style:{margin:0}},h('div',{class:'card-head'},h('div',{},h('div',{class:'card-title'},'달력 환산'),h('div',{class:'card-desc'},'착수일부터 휴일·월별 예상 기상 비작업일을 건너뛰며 작업일을 배치합니다.')),h('div',{class:'field'},h('label',{},'착수일'),h('input',{type:'date',value:S.site.start,onchange:e=>{S.site.start=e.target.value;S.reportGenerated=false;render();}}))),
+      h('div',{class:'formula',style:{marginBottom:'10px'}},`공사기간 ${cal.total}일 = 준비 ${cal.prep} + 작업 ${cal.work} + 휴일 ${cal.hol} + 기상 비작업 ${cal.wx} + 정리 ${cal.clean}`),
+      renderCalendar(cal))));
+  wrap.append(h('div',{class:'inline',style:{justifyContent:'flex-end',marginTop:'16px'}},h('button',{class:'btn btn-accent',onclick:()=>{S.tab='report';S.reportGenerated=true;render();toast('산정 결과를 바탕으로 검토보고서 초안을 생성했습니다.');}},'검토보고서 초안 생성 →')));
+  return wrap;
+}
+function renderCalendar(cal){
+  const months=[];let cur=new Date(cal.start.getFullYear(),cal.start.getMonth(),1);while(cur<=cal.end){months.push(new Date(cur));cur=new Date(cur.getFullYear(),cur.getMonth()+1,1);}
+  S.calMonth=Math.min(S.calMonth,months.length-1);const mo=months[S.calMonth];const byDate={};cal.days.forEach(d=>byDate[ymd(d.date)]=d);
+  const dim=new Date(mo.getFullYear(),mo.getMonth()+1,0).getDate();const first=mo.getDay();const cells=[];
+  ['일','월','화','수','목','금','토'].forEach(w=>cells.push(h('div',{class:'h'},w)));for(let i=0;i<first;i++)cells.push(h('div',{class:'d out'}));
+  for(let d=1;d<=dim;d++){const k=ymd(new Date(mo.getFullYear(),mo.getMonth(),d));const e=byDate[k];const cls=e?({prep:'prep',hol:'hol',wx:'wx',work:'work',clean:'prep'})[e.kind]:'out';cells.push(h('div',{class:'d '+cls,title:e?`${k} ${e.label}`:k},d));}
+  const stat=k=>cal.days.filter(d=>d.kind===k&&d.date.getMonth()===mo.getMonth()&&d.date.getFullYear()===mo.getFullYear()).length;
+  return h('div',{},h('div',{class:'inline',style:{justifyContent:'space-between',marginBottom:'8px'}},h('button',{class:'btn btn-outline btn-sm',disabled:S.calMonth===0,onclick:()=>{S.calMonth--;render();}},'‹ 이전'),h('b',{},`${mo.getFullYear()}년 ${mo.getMonth()+1}월`,h('span',{class:'small',style:{marginLeft:'8px'}},`작업 ${stat('work')} · 휴일 ${stat('hol')} · 기상 ${stat('wx')}`)),h('button',{class:'btn btn-outline btn-sm',disabled:S.calMonth===months.length-1,onclick:()=>{S.calMonth++;render();}},'다음 ›')),
+    h('div',{class:'calendar'},...cells),h('div',{class:'legend'},h('span',{},h('i',{style:{background:'#dbe8f8'}}),'작업일'),h('span',{},h('i',{style:{background:'#eef0f3'}}),'휴일'),h('span',{},h('i',{style:{background:'#fde1d3'}}),'기상 비작업(예상)'),h('span',{},h('i',{style:{background:'#fff5db'}}),'준비·정리기간')));
+}
+
+/* --- 탭 5: 보고서 --- */
+function viewReport(D){
+  const wrap=h('div',{});
+  wrap.append(pageTitle('공사기간 적정성 검토 보고서 (초안)','산정 근거·기상 조건·공정 분석 결과가 인용된 보고서 초안입니다. 모든 수치는 앞 단계 계산값에서 가져오며, 서술 문장은 실 시스템에서 LLM이 생성합니다.'));
+  if(!S.rows.length){wrap.append(h('div',{class:'card'},h('div',{class:'note'},'먼저 내역서를 업로드하고 공정표까지 진행하세요.')));return wrap;}
+  if(!S.reportGenerated){wrap.append(h('div',{class:'card',style:{textAlign:'center',padding:'50px 20px'}},h('div',{style:{fontSize:'34px'}},'📝'),h('h3',{style:{margin:'8px 0 4px'}},'아직 생성된 보고서가 없습니다'),h('p',{class:'small',style:{marginBottom:'14px'}},'현재 산정 결과로 초안을 생성합니다. 이후 값이 바뀌면 재생성이 필요하다고 표시됩니다.'),h('button',{class:'btn btn-accent',onclick:()=>{S.reportGenerated=true;render();toast('검토보고서 초안을 생성했습니다.');}},'보고서 초안 생성')));return wrap;}
+  const {cal,cp,nw,acts}=D;const total=D.net+D.ind+D.adj;const plan=S.site.plan;const diff=plan-cal.total;const ratio=plan/cal.total;
+  const verdict=ratio>=1.0?{t:'적정',c:'var(--good)',bg:'var(--good-bg)',d:`계획 공기가 산정 공기보다 ${diff}일(${Math.round((ratio-1)*100)}%) 여유가 있어 적정한 수준으로 판단됩니다.`}:ratio>=0.9?{t:'검토 필요',c:'#7a4b00',bg:'var(--warn-bg)',d:`계획 공기가 산정 공기보다 ${-diff}일 부족합니다. 투입조 증원 또는 공정 병행으로 회복 가능한 범위(10% 이내)입니다.`}:{t:'부족',c:'var(--crit)',bg:'var(--crit-bg)',d:`계획 공기가 산정 공기보다 ${-diff}일(${Math.round((1-ratio)*100)}%) 부족하여 공기 연장 또는 투입 계획 재검토가 필요합니다.`};
+  const cps=cp.order.filter(a=>a.critical);const auto=D.rows.filter(r=>r.status==='auto'||r.manual).length;const rulesOn=S.settings.rules.filter(r=>r.enabled);
+  const peak=[...nw.monthly].sort((a,b)=>b.wx-a.wx).slice(0,3);
+  const narKey=[S.site.id,cal.total,cp.total,D.net,D.rows.length,D.mapped.length,Math.round(nw.annualWx*10),plan].join('-');
+  const nar=(S.narrative&&S.narrative.key===narKey)?S.narrative:null;
+  const summaryForAI={site:S.site.name,region:S.site.region,station:S.site.station,file:S.fileName,rows:D.rows.length,mapped:D.mapped.length,autoRate:Math.round(auto/D.rows.length*100)+'%',unmapped:D.unmapped.map(r=>r.name),rules:rulesOn.map(r=>`${r.label} ${r.op} ${r.value}${r.unit}`),annualWx:fmt1(nw.annualWx),wxOnHoliday:fmt1(nw.wxOnHoliday/10),peakMonths:peak.map(m=>`${m.m}월 ${fmt1(m.wx)}일`),netDays:D.net,indirect:D.ind,adjust:D.adj,cpDays:cp.total,criticalPath:cps.map(a=>a.key),calendar:{start:kdate(cal.start),end:kdate(cal.end),total:cal.total,prep:cal.prep,work:cal.work,holiday:cal.hol,weather:cal.wx,cleanup:cal.clean},planDays:plan,diffDays:diff,ratio:Math.round(ratio*100)+'%',verdict:verdict.t};
+  const aiBox=(label,fallbackNodes,text)=>h('div',{class:'ai'},h('div',{class:'lbl'},text?`AI 서술 (${S.narrative.model}) · 검토자 확인 필요`:'템플릿 서술 · 검토자 확인 필요'),text?h('p',{},text):fallbackNodes);
+  const workMonths={};cal.days.forEach(d=>{const k=`${d.date.getFullYear()}.${d.date.getMonth()+1}`;workMonths[k]=workMonths[k]||{work:0,wx:0,hol:0};if(workMonths[k][d.kind]!=null)workMonths[k][d.kind]++;});
+  const rep=h('div',{class:'report'},
+    h('h2',{},'공사기간 적정성 검토 보고서'),h('div',{class:'meta'},S.site.name,' · 검토일 ',kdate(new Date()),' · 문서번호 CPR-',ymd(new Date()).replace(/-/g,''),'-01'),
+    h('div',{class:'verdict',style:{borderColor:verdict.c,background:verdict.bg}},h('div',{class:'big',style:{color:verdict.c}},verdict.t),h('div',{},h('b',{},`산정 공사기간 ${cal.total}일 vs 계획 공기 ${plan}일 (${diff>=0?'+':''}${diff}일)`),h('div',{class:'small'},verdict.d))),
+    h('h3',{},'1. 검토 개요'),h('table',{},h('tbody',{},h('tr',{},h('th',{},'현장'),h('td',{},S.site.name),h('th',{},'현장 위치'),h('td',{},S.site.region)),h('tr',{},h('th',{},'검토 대상'),h('td',{},S.fileName,` (${D.rows.length}개 항목)`),h('th',{},'착수 예정일'),h('td',{},kdate(cal.start))),h('tr',{},h('th',{},'현장 특성'),h('td',{},[S.site.urban?'도심지':null,S.site.small?'소규모':null].filter(Boolean).join(', ')||'일반'),h('th',{},'기상 지점'),h('td',{},S.site.station,' (2016~2025)')))),
+    aiBox('overview',h('p',{},`본 검토는 발주 내역서 ${D.rows.length}개 항목 중 표준품셈 대조가 완료된 ${D.mapped.length}개 항목(정합률 ${Math.round(auto/D.rows.length*100)}%)을 대상으로 순작업일수를 산출하고, ${S.site.region} 인근 기상청 ${S.site.station} 지점의 최근 10년 일별 기상자료에 ${rulesOn.map(r=>r.label).join('·')} 기준을 적용하여 비작업일수를 산정한 뒤, 공정 간 선후행 관계를 반영한 CPM 분석으로 주공정선을 도출하여 총 공사기간을 산정하였습니다.`),nar&&nar.overview),
+    h('h3',{},'2. 공종 매핑 결과'),h('p',{},`내역서 품명 ${D.rows.length}건을 건설공사 표준품셈 표준 명칭과 대조한 결과 자동 확정 ${auto}건, 검토 필요 ${D.review.length}건, 미매칭 ${D.unmapped.length}건입니다.`),
+    D.unmapped.length?h('p',{},'미매칭 항목: ',D.unmapped.map(r=>`${r.name}(${r.unit})`).join(', '),' — 표준품셈에 해당 생산성 기준이 없거나 단위가 불일치하여 산정에서 제외되었으며, 정리기간 또는 별도 실적 기준으로 반영이 필요합니다.'):null,
+    h('h3',{},'3. 공종별 작업일수 산정'),h('table',{},h('thead',{},h('tr',{},h('th',{},'공종'),h('th',{},'적용 표준품셈'),h('th',{class:'num'},'수량'),h('th',{class:'num'},'1일 생산성'),h('th',{class:'num'},'투입조'),h('th',{class:'num'},'순작업일'))),h('tbody',{},...D.rows.filter(r=>r.mapped).map(r=>{const w=workdays(r);return h('tr',{},h('td',{},r.name),h('td',{},w.std.name,h('div',{class:'tag-src'},w.std.ref)),h('td',{class:'num'},fmt(r.qty),' ',r.unit),h('td',{class:'num'},fmt1(w.std.prod),' ',w.std.unit),h('td',{class:'num'},r.crews||1),h('td',{class:'num'},w.days));}))),
+    h('p',{},`순작업일수 합계 ${D.net}일에 검측 등 간접작업일 ${D.ind}일, ${S.site.urban||S.site.small?'현장 특성('+[S.site.urban?'도심지 '+S.settings.adjust.urban+'%':null,S.site.small?'소규모 '+S.settings.adjust.small+'%':null].filter(Boolean).join(', ')+') 보정 '+D.adj+'일':'보정 0일'}을 가산하여 공정별 작업일수 합계는 ${total}일입니다.`),
+    h('h3',{},'4. 기상 조건 분석 및 비작업일수'),nar&&nar.weather?aiBox('weather',null,nar.weather):null,h('p',{},`${S.site.station} 지점 최근 10년 일별 자료(${fmt(nw.days)}일)에 ${rulesOn.map(r=>`${r.label}(${r.field==='rain'?'일강수량':r.field==='feels'?'최고 체감온도':r.field==='wind'?'최대풍속':r.field==='snow'?'신적설':'최저기온'} ${r.op==='>='?'≥':'≤'} ${r.value}${r.unit})`).join(', ')} 기준을 적용한 결과, 연평균 기상 비작업일수는 ${fmt1(nw.annualWx)}일이며 휴일과 중복되는 연평균 ${fmt1(nw.wxOnHoliday/10)}일은 ${S.settings.holiday.dedupe?'이중 계산에서 제외하였습니다':'포함되어 있습니다'}. 비작업일이 집중되는 시기는 ${peak.map(m=>m.m+'월('+fmt1(m.wx)+'일)').join(', ')}입니다.`),
+    h('table',{},h('thead',{},h('tr',{},h('th',{},'구분'),...nw.monthly.map(m=>h('th',{class:'num'},m.m,'월')),h('th',{class:'num'},'연간'))),h('tbody',{},h('tr',{},h('td',{},'기상 비작업일'),...nw.monthly.map(m=>h('td',{class:'num'},fmt1(m.wx))),h('td',{class:'num'},h('b',{},fmt1(nw.annualWx)))),h('tr',{},h('td',{},'휴일'),...nw.monthly.map(m=>h('td',{class:'num'},fmt1(m.hol))),h('td',{class:'num'},h('b',{},fmt1(nw.holTotal/10)))))),
+    h('h3',{},'5. 공정 분석 (CPM)'),h('p',{},`${cp.order.length}개 공정의 선후행 관계를 기준으로 분석한 결과 주공정선은 ${cps.map(a=>a.key).join(' → ')}이며, 주공정 작업일수는 ${cp.total}일입니다. 주공정선에 포함된 공정은 여유일수가 0일로 지연 시 전체 공기가 그대로 연장됩니다.`),
+    h('table',{},h('thead',{},h('tr',{},h('th',{},'공정'),h('th',{},'선행 공정'),h('th',{class:'num'},'작업일'),h('th',{class:'num'},'ES'),h('th',{class:'num'},'LF'),h('th',{class:'num'},'여유'),h('th',{},'주공정'))),h('tbody',{},...cp.order.map(a=>h('tr',{},h('td',{},a.key),h('td',{},a.pred.join(', ')||'—'),h('td',{class:'num'},a.dur),h('td',{class:'num'},a.es),h('td',{class:'num'},a.lf),h('td',{class:'num'},a.float),h('td',{},a.critical?'●':''))))),
+    h('h3',{},'6. 공사기간 산정 총괄'),h('table',{},h('thead',{},h('tr',{},h('th',{},'구분'),h('th',{class:'num'},'일수'),h('th',{},'산정 근거'))),h('tbody',{},h('tr',{},h('td',{},'준비기간'),h('td',{class:'num'},cal.prep),h('td',{},'설정값 (현장 규모 기준)')),h('tr',{},h('td',{},'작업일수 (주공정)'),h('td',{class:'num'},cal.work),h('td',{},'CPM 주공정 작업일 = 순작업 + 간접 + 보정')),h('tr',{},h('td',{},'휴일'),h('td',{class:'num'},cal.hol),h('td',{},'공사기간 내 ',[S.settings.holiday.sunday?'일요일':null,S.settings.holiday.saturday?'토요일':null,S.settings.holiday.public?'법정공휴일':null].filter(Boolean).join('·'))),h('tr',{},h('td',{},'기상 비작업일'),h('td',{class:'num'},cal.wx),h('td',{},'월별 10년 평균 기상 비작업일 (휴일 중복 제외)')),h('tr',{},h('td',{},'정리기간'),h('td',{class:'num'},cal.clean),h('td',{},'설정값')),h('tr',{},h('td',{},h('b',{},'합계 (달력일)')),h('td',{class:'num'},h('b',{},cal.total)),h('td',{},h('b',{},kdate(cal.start),' ~ ',kdate(cal.end)))))),
+    h('h3',{},'7. 적정성 검토 의견'),nar&&nar.opinion?aiBox('opinion',null,nar.opinion):h('div',{class:'ai'},h('div',{class:'lbl'},'템플릿 서술 · 검토자 확인 필요'),h('p',{},`계획 공기 ${plan}일은 산정 공사기간 ${cal.total}일 대비 ${diff>=0?diff+'일 여유':(-diff)+'일 부족'}(${Math.round(ratio*100)}%)으로 「${verdict.t}」으로 판단됩니다. ${verdict.d}`),h('p',{},`주공정선상의 ${cps[0]?cps[0].key:''}${cps.length>1?' 등 '+cps.length+'개 공정':''}은 여유일수가 없으므로 착수 시점의 자재·장비 확보와 ${peak[0].m}월 전후의 기상 비작업일 집중 구간에 대한 대비가 공기 준수의 핵심 관리 항목입니다.`),
+      D.unmapped.length?h('p',{},`표준품셈 미매칭 ${D.unmapped.length}건은 산정에서 제외되어 있으므로, 실무자가 해당 항목의 작업일수를 확정한 뒤 재산정이 필요합니다.`):null),
+    h('h3',{},'8. 산정 근거 및 유의사항'),h('ul',{},h('li',{},'작업일수: 건설공사 표준품셈 1일 생산성 기준, 투입조 수는 표준 조 편성 기준 (표 3 참조)'),h('li',{},'비작업일수: 국토교통부 「공공 건설공사의 공사기간 산정기준」 기후조건 항목을 준용하며, 임계값은 설정에서 조정 가능 (현재 ',rulesOn.map(r=>`${r.label} ${r.value}${r.unit}`).join(', '),')'),h('li',{},'기상자료: 기상청 ASOS 일자료, 지점 ',S.site.station,', 2016~2025 (공공데이터포털 API)'),h('li',{},'공정 선후행 관계는 표준 템플릿을 기준으로 하며 실무자 편집값이 우선합니다'),h('li',{},'본 문서는 자동 산정 초안이며, 최종 검토 의견은 검토자 확인 후 확정됩니다')),
+    h('div',{class:'sig'},'작성: 공사기간 산정 콘솔 (자동 초안) · 검토자: ____________ (인)'));
+  wrap.append(h('div',{class:'rep-toolbar no-print'},LIVE.llm?h('button',{class:'btn btn-accent',disabled:!!LIVE.narrating,onclick:()=>runNarrative(summaryForAI,narKey)},LIVE.narrating?h('span',{class:'spin'}):null,LIVE.narrating?' AI 서술 생성 중…':nar?'AI 서술 다시 생성':'AI 서술 초안 생성 (LLM)'):h('span',{class:'demo-badge'},'AI 서술: 백엔드 미연결 (템플릿 문장)'),h('button',{class:'btn btn-primary',onclick:()=>window.print()},'PDF로 저장 / 인쇄'),h('button',{class:'btn btn-outline',onclick:()=>{const blob=new Blob([JSON.stringify({site:S.site,settings:S.settings,rows:D.rows.map(r=>({no:r.no,name:r.name,unit:r.unit,qty:r.qty,mapped:r.mapped,score:r.score,crews:r.crews})),activities:cp.order.map(a=>({key:a.key,dur:a.dur,pred:a.pred,es:a.es,ef:a.ef,ls:a.ls,lf:a.lf,float:a.float,critical:a.critical})),nonWorking:nw.monthly,calendar:{start:ymd(cal.start),end:ymd(cal.end),total:cal.total,prep:cal.prep,work:cal.work,hol:cal.hol,wx:cal.wx,clean:cal.clean},plan,verdict:verdict.t},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='산정결과.json';a.click();}},'산정 데이터(JSON) 내보내기'),h('button',{class:'btn btn-outline',onclick:()=>{S.reportGenerated=true;render();toast('최신 산정값으로 다시 생성했습니다.');}},'최신 값으로 재생성')),rep);
+  return wrap;
+}
+
+/* --- 표준품셈 DB --- */
+function viewStd(D){
+  const wrap=h('div',{});wrap.append(pageTitle('표준품셈 검색 DB','정제된 표준품셈 항목(공종·단위·1일 생산성·조 편성·출처)을 검색합니다. 실 시스템에서는 표준품셈 PDF·엑셀을 정제해 벡터 DB로 구축하고 의미 기반 검색(RAG)을 제공합니다.'));
+  const q=S.stdQuery;const probe={name:q,spec:'',unit:''};
+  const list=q?STD.map(s=>({s,sc:scoreItem(probe,s)})).sort((a,b)=>b.sc.score-a.sc.score):STD.map(s=>({s,sc:null}));
+  const input=h('input',{type:'text',placeholder:'현장 표기로 검색해 보세요 (예: 흙깎기, 되메움, 레미콘, 유로폼)',value:q,style:{flex:1},oninput:e=>{S.stdQuery=e.target.value;const body=$('#std-list');body.innerHTML='';renderStdList(body);}});
+  const body=h('div',{id:'std-list'});
+  function renderStdList(el){const q2=S.stdQuery;const lst=q2?STD.map(s=>({s,sc:scoreItem({name:q2,spec:'',unit:''},s)})).sort((a,b)=>b.sc.rank-a.sc.rank).slice(0,8):STD.map(s=>({s,sc:null}));
+    lst.forEach(({s,sc})=>el.append(h('div',{class:'std-item'},h('div',{},h('div',{class:'t'},s.name,' ',h('span',{class:'pill pill-gray'},s.code)),h('div',{class:'m'},s.cat,' · ',s.unit,' · 1일 ',fmt1(s.prod),s.unit,' · ',s.crew,' · 기본 투입 ',s.nc||1,'조'),h('div',{class:'tag-src'},s.ref,' · 동의어: ',s.syn.join(', '))),sc?h('div',{class:'right'},h('span',{class:'simbar '+(sc.score>=85?'':sc.score>=60?'w':'c')},h('i',{style:{width:sc.score+'%'}})),h('b',{},sc.score,'%'),h('div',{class:'tag-src'},sc.why)):null)));}
+  renderStdList(body);
+  wrap.append(h('div',{class:'card'},h('div',{class:'inline',style:{marginBottom:'14px'}},input,h('span',{class:'small'},STD.length,'개 항목 (데모 요약본)')),body));
+  return wrap;
+}
+
+/* --- 설정 --- */
+function viewSet(D){
+  const st=S.settings;const wrap=h('div',{});
+  wrap.append(pageTitle('설정','산정 기준값을 코드 수정 없이 화면에서 조정합니다. 유지보수 시 기준이 바뀌어도 개발자 없이 대응할 수 있도록 분리한 부분입니다.'));
+  const num=(obj,key,min,max,step=1)=>h('input',{type:'number',min,max,step,value:obj[key],onchange:e=>{obj[key]=parseFloat(e.target.value);if(key==='auto'||key==='review'){S.rows=S.rows.map(r=>r.manual?r:mapRow(r,S.settings));}S.reportGenerated=false;render();}});
+  wrap.append(h('div',{class:'grid2'},
+    h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title'},'매핑 신뢰도 임계값'),h('div',{class:'kv',style:{marginTop:'10px'}},h('b',{},'자동 확정 (%)'),num(st.thresholds,'auto',50,100),h('b',{},'검토 필요 (%)'),num(st.thresholds,'review',30,99)),h('p',{class:'small',style:{marginTop:'8px'}},'값을 낮추면 자동 확정이 늘고 검토 필요가 줄어듭니다. 초기 운영기에는 높게 두고 실무자 보정 이력이 쌓이면 낮추는 것을 권장합니다.')),
+    h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title'},'간접작업일 · 보정률'),h('div',{class:'kv',style:{marginTop:'10px'}},h('b',{},'검측 (일/공정)'),num(st.indirect,'inspectionPerActivity',0,5),h('b',{},'콘크리트 양생 (일)'),num(st.indirect,'curing',0,14),h('b',{},'도심지 보정 (%)'),num(st.adjust,'urban',0,30),h('b',{},'소규모 보정 (%)'),num(st.adjust,'small',0,30))),
+    h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title'},'준비·정리기간'),h('div',{class:'kv',style:{marginTop:'10px'}},h('b',{},'준비기간 (달력일)'),num(st.period,'prep',0,60),h('b',{},'정리기간 (달력일)'),num(st.period,'cleanup',0,60)),h('p',{class:'small',style:{marginTop:'8px'}},'국토부 산정기준: 공사기간 = 준비기간 + 비작업일수 + 작업일수 + 정리기간')),
+    h('div',{class:'card',style:{margin:0}},h('div',{class:'card-title'},'현장 조건'),h('div',{class:'inline',style:{marginTop:'10px',gap:'16px'}},h('label',{class:'switch'},h('input',{type:'checkbox',checked:S.site.urban,onchange:e=>{S.site.urban=e.target.checked;S.reportGenerated=false;render();}}),'도심지 현장'),h('label',{class:'switch'},h('input',{type:'checkbox',checked:S.site.small,onchange:e=>{S.site.small=e.target.checked;S.reportGenerated=false;render();}}),'소규모 현장')),h('div',{class:'kv',style:{marginTop:'10px'}},h('b',{},'계획 공기 (일)'),h('input',{type:'number',value:S.site.plan,onchange:e=>{S.site.plan=parseInt(e.target.value)||0;S.reportGenerated=false;render();}}),h('b',{},'착수일'),h('input',{type:'date',value:S.site.start,onchange:e=>{S.site.start=e.target.value;S.reportGenerated=false;render();}})))));
+  wrap.append(h('div',{class:'card',style:{marginTop:'16px'}},h('div',{class:'card-title'},'작업 제한 룰'),h('p',{class:'small'},'기상·비작업일수 탭에서도 같은 값을 편집합니다.'),h('div',{class:'tbl-wrap',style:{marginTop:'8px'}},h('table',{},h('thead',{},h('tr',{},h('th',{},'사용'),h('th',{},'룰'),h('th',{},'조건'),h('th',{},'출처'))),h('tbody',{},...st.rules.map(r=>h('tr',{},h('td',{},r.enabled?'✓':'—'),h('td',{},h('b',{},r.label)),h('td',{class:'mono'},`${r.field} ${r.op} ${r.value} ${r.unit}`),h('td',{class:'small'},r.src)))))),
+    h('div',{class:'inline',style:{marginTop:'12px'}},h('button',{class:'btn btn-outline btn-sm',onclick:()=>{const blob=new Blob([JSON.stringify(S.settings,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='settings.json';a.click();}},'설정 내보내기(JSON)'),h('button',{class:'btn btn-outline btn-sm',onclick:()=>{S.settings=JSON.parse(JSON.stringify(DEFAULT_SETTINGS));S.rows=S.rows.map(r=>r.manual?r:mapRow(r,S.settings));S.reportGenerated=false;render();toast('기본값으로 되돌렸습니다.');}},'기본값 복원'))));
+  return wrap;
+}
+
+/* --- 모달 --- */
+function renderModal(D){
+  const close=()=>{S.modal=null;render();};
+  const box=h('div',{class:'modal',onclick:e=>e.stopPropagation()});
+  if(S.modal==='about'){
+    box.append(h('h3',{},'데모 범위 안내'),h('div',{class:'sub'},'이 데모에서 실제로 동작하는 것과, 실 시스템에서 확장되는 것을 구분해 안내드립니다.'),
+      h('table',{},h('thead',{},h('tr',{},h('th',{},'기능'),h('th',{},'데모에서 동작'),h('th',{},'실 시스템'))),h('tbody',{},
+        ...[['내역서 업로드·파싱','엑셀 실제 파싱, 헤더 자동 인식, 병합셀 승계','동일 + 서버 저장·이력'],['공종명 매핑',LIVE.llm?'사전·유사도 1차 매핑 + LLM 문맥 보정(실동작)':'동의어 사전 + 문자열 유사도 + 단위 정합 → 신뢰도 3단계. 백엔드 실행 시 LLM 문맥 보정','벡터 검색(pgvector) + LLM 문맥 보정, 보정 이력 학습'],['표준품셈 DB','요약본 23개 항목','표준품셈 PDF·엑셀 정제 후 전체 구축'],['기상 데이터',LIVE.kma?(LIVE.static?'기상청 ASOS API 실데이터 (2016~2025 수집본, 정적 캐시)':'기상청 ASOS API 실데이터 (백엔드 수집·캐시)'):'10년 일별 데이터를 내장(오프라인 시연). 백엔드 실행 시 기상청 API 실데이터','공공데이터포털 기상청 API 수집·캐시 + 최근접 지점 자동 선택'],['비작업일수 룰 엔진','실제 계산 (임계값 즉시 반영, 휴일 중복 제외)','동일'],['작업일수·CPM','실제 계산 (투입조·선후행 편집 즉시 반영)','동일 + 선후행 템플릿 관리'],['보고서',LIVE.llm?'계산값 + LLM 서술 초안(실동작), 브라우저 PDF 인쇄':'계산값 템플릿 서술, 브라우저 PDF 인쇄. 백엔드 실행 시 LLM 서술','LLM 서술 생성(근거 인용 강제), DOCX/HWP 서버 출력'],['다중 현장·권한·이력','현장 2개 전환만','현장 관리, 검토 이력, 승인 흐름']].map(r=>h('tr',{},h('td',{},h('b',{},r[0])),h('td',{},r[1]),h('td',{},r[2]))))),
+      h('div',{class:'inline',style:{justifyContent:'flex-end',marginTop:'14px'}},h('button',{class:'btn btn-primary',onclick:close},'닫기')));
+  }else if(S.modal.type==='map'){
+    const r=S.modal.row;
+    box.append(h('h3',{},'공종 매핑 확정 — ',r.name),h('div',{class:'sub'},`규격 ${r.spec||'—'} · 수량 ${fmt(r.qty)} ${r.unit} · 공종구분 ${r.group}`),
+      h('div',{style:{fontWeight:700,marginBottom:'8px'}},'표준품셈 후보 (신뢰도순)'),
+      ...r.cands.map(c=>h('div',{class:'cand'+(r.mapped===c.std.code?' sel':''),onclick:()=>{r.mapped=c.std.code;r.score=c.score;r.manual=true;r.status='auto';r.crews=c.std.nc||1;S.reportGenerated=false;S.modal=null;render();toast(`'${r.name}' → ${c.std.name} 로 확정. 동일 표기는 다음부터 자동 매핑됩니다.`);}},h('div',{},h('div',{class:'t'},c.std.name,' ',h('span',{class:'pill pill-gray'},c.std.code)),h('div',{class:'m'},c.std.cat,' · ',c.std.unit,' · 1일 ',fmt1(c.std.prod),c.std.unit,' · ',c.why)),h('div',{class:'right'},h('b',{},c.score,'%')))),
+      h('div',{style:{fontWeight:700,margin:'14px 0 6px'}},'직접 지정'),
+      (()=>{const sel=h('select',{style:{width:'100%'}},h('option',{value:''},'표준품셈 항목 선택…'),...STD.map(s=>h('option',{value:s.code},`${s.code} ${s.name} (${s.unit})`)));sel.onchange=()=>{if(!sel.value)return;const s=stdBy(sel.value);r.mapped=s.code;r.score=100;r.manual=true;r.status='auto';r.crews=s.nc||1;S.reportGenerated=false;S.modal=null;render();toast(`'${r.name}' → ${s.name} 로 직접 지정했습니다.`);};return sel;})(),
+      h('div',{class:'inline',style:{justifyContent:'space-between',marginTop:'14px'}},h('button',{class:'btn btn-outline',onclick:()=>{r.mapped=null;r.manual=false;r.status='unmapped';S.reportGenerated=false;S.modal=null;render();toast('산정 제외(미매칭)로 표시했습니다.');}},'산정에서 제외'),h('button',{class:'btn btn-primary',onclick:close},'닫기')));
+  }else if(S.modal.type==='act'){
+    const a=S.modal.act;const others=D.acts.filter(x=>x.key!==a.key);const cur=new Set(a.pred);
+    box.append(h('h3',{},a.key),h('div',{class:'sub'},`작업일 ${a.dur}일 (순작업 ${a.net} + 간접 ${a.indirect} + 보정 ${a.adj}) · ES ${a.es} / EF ${a.ef} / LS ${a.ls} / LF ${a.lf} · 여유 ${a.float}일 ${a.critical?'· 주공정선':''}`),
+      h('div',{style:{fontWeight:700,marginBottom:'8px'}},'선행 공정 선택'),
+      h('div',{class:'inline',style:{gap:'8px 14px'}},...others.map(o=>h('label',{class:'switch'},h('input',{type:'checkbox',checked:cur.has(o.key),onchange:e=>{if(e.target.checked)cur.add(o.key);else cur.delete(o.key);}}),o.key))),
+      a.items.length?h('div',{style:{marginTop:'14px'}},h('div',{style:{fontWeight:700,marginBottom:'6px'}},'포함 항목'),h('table',{},h('tbody',{},...a.items.map(i=>h('tr',{},h('td',{},i.name),h('td',{class:'num'},fmt(i.qty),' ',i.unit),h('td',{class:'num'},i.wd.days,'일')))))):null,
+      h('div',{class:'inline',style:{justifyContent:'flex-end',marginTop:'14px'}},h('button',{class:'btn btn-outline',onclick:close},'취소'),h('button',{class:'btn btn-primary',onclick:()=>{S.preds[a.key]=[...cur];S.reportGenerated=false;S.modal=null;try{render();toast('선후행 관계를 반영해 주공정선을 다시 계산했습니다.');}catch(e){delete S.preds[a.key];render();toast('순환 참조가 생겨 되돌렸습니다.');}}},'적용 및 재계산')));
+  }
+  return h('div',{class:'overlay',onclick:close},box);
+}
+render();probeLive();
+</script>
+</body>
+</html>
