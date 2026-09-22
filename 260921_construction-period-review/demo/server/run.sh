@@ -3,6 +3,6 @@
 # 기상청 실데이터를 쓰려면 공공데이터포털 인증키를 환경변수로 넘긴다:
 #   KMA_SERVICE_KEY='...' ./run.sh
 cd "$(dirname "$0")"
-python3 -c "import fastapi, uvicorn, httpx" 2>/dev/null || pip3 install fastapi uvicorn httpx
+python3 -c "import fastapi, uvicorn, httpx, numpy, docx" 2>/dev/null || pip3 install fastapi uvicorn httpx numpy python-docx
 [ -f .env ] && set -a && . ./.env && set +a
 exec python3 app.py

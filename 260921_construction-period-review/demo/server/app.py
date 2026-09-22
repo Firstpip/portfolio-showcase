@@ -24,6 +24,9 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from fastapi.responses import Response
+from vector_index import VectorIndex
+from docx_report import build_docx
 
 HERE = Path(__file__).resolve().parent
 DEMO_DIR = HERE.parent
@@ -304,12 +307,56 @@ def delete_review(rid: int):
     return {"ok": True}
 
 
+# ───────────────────────── 5. 벡터 검색 · DOCX ─────────────────────────
+VIDX = VectorIndex()
+
+
+class IndexReq(BaseModel):
+    items: list[dict]
+
+
+@app.post("/api/index")
+def build_index(req: IndexReq):
+    t0 = time.time(); rebuilt = VIDX.build(req.items)
+    return {"items": len(VIDX.items), "rebuilt": rebuilt, "embedder": VIDX.embedder.name, "dim": int(VIDX.mat.shape[1]) if VIDX.mat is not None else 0, "elapsed_ms": int((time.time() - t0) * 1000)}
+
+
+@app.get("/api/search")
+def search(q: str, unit: str = "", k: int = 8, spec: str = ""):
+    if VIDX.mat is None: raise HTTPException(409, "인덱스 미구축 — POST /api/index 먼저")
+    return {"query": q, "embedder": VIDX.embedder.name, "results": VIDX.search(q, unit or None, k, spec)}
+
+
+class SearchBatch(BaseModel):
+    rows: list[dict]   # [{no, name, spec, unit}]
+    k: int = 6
+
+
+@app.post("/api/search/batch")
+def search_batch(req: SearchBatch):
+    if VIDX.mat is None: raise HTTPException(409, "인덱스 미구축 — POST /api/index 먼저")
+    return {"embedder": VIDX.embedder.name, "results": {str(r.get("no")): VIDX.search(r.get("name", ""), r.get("unit") or None, req.k, r.get("spec", "")) for r in req.rows}}
+
+
+class DocxReq(BaseModel):
+    report: dict
+
+
+@app.post("/api/report/docx")
+def report_docx(req: DocxReq):
+    data = build_docx(req.report)
+    from urllib.parse import quote
+    name = (req.report.get("filename") or "report") + ".docx"
+    return Response(content=data, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    headers={"Content-Disposition": f"attachment; filename=\"report.docx\"; filename*=UTF-8''{quote(name)}"})
+
+
 @app.get("/api/health")
 def health():
     cached = sorted({p.name.split("_")[1] for p in CACHE.glob("asos_*.json")})
     with db() as c:
         n = c.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
-    return {"ok": True, "kma": bool(KMA_KEY), "kma_cached_stations": cached, "llm": claude_available(), "llm_model": LLM_MODEL, "db": True, "reviews": n}
+    return {"ok": True, "kma": bool(KMA_KEY), "kma_cached_stations": cached, "llm": claude_available(), "llm_model": LLM_MODEL, "db": True, "reviews": n, "vector": VIDX.embedder.name, "vector_items": len(VIDX.items), "docx": True}
 
 
 app.mount("/", StaticFiles(directory=str(DEMO_DIR), html=True), name="demo")

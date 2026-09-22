@@ -5,7 +5,7 @@
 | 모드 | 실행 방법 | 기상 데이터 | 공종명 매핑 | 보고서 서술 |
 |---|---|---|---|---|
 | 오프라인 | `index.html` 을 브라우저로 연다 | 내장 10년 시뮬레이션 | 동의어 사전 + 유사도 | 템플릿 문장 |
-| 실연동 | `server/run.sh` 실행 후 http://127.0.0.1:8765 | 기상청 ASOS API (키 필요) | 1차 사전·유사도 + **LLM 문맥 보정** | **LLM 서술 초안** |
+| 실연동 | `server/run.sh` 실행 후 http://127.0.0.1:8765 | 기상청 ASOS API (키 필요) | 1차 사전·유사도 + **벡터 검색 후보** + **LLM 문맥 보정** | **LLM 서술 초안** + **Word(.docx) 양식** + **서버 검토 이력** |
 
 헤더 우측 배지(기상청 API / AI)에 초록 점이 켜지면 실연동 상태다. 백엔드가 없으면 자동으로 오프라인 모드로 동작한다.
 
@@ -39,6 +39,12 @@ cp .env.example .env     # KMA_SERVICE_KEY 채우기 (없으면 기상만 내장
 | GET | `/api/reviews/{id}?version=N` | 상세 + 버전 목록 + 해당 버전 payload |
 | PATCH | `/api/reviews/{id}/status?status=draft\|reviewing\|approved` | 상태 변경 |
 | DELETE | `/api/reviews/{id}` | 삭제(버전 포함) |
+| POST | `/api/index` | 표준품셈 항목 벡터 인덱스 구축 `{items:[{code,name,cat,unit,syn,part}]}` (프런트가 로드 직후 자동 호출) |
+| GET | `/api/search?q=&unit=&k=` | 벡터 검색(코사인) 상위 k |
+| POST | `/api/search/batch` | `{rows:[{no,name,spec,unit}],k}` → 행별 후보 |
+| POST | `/api/report/docx` | 보고서 데이터 → Word(.docx) 파일 |
+
+벡터 인덱스(`server/vector_index.py`)는 기본적으로 문자 n-gram 해시드 TF-IDF(외부 모델 불필요)이며 `OPENAI_API_KEY`가 있으면 `text-embedding-3-small`로 자동 전환된다. DOCX는 `server/docx_report.py`(python-docx).
 
 검토 저장소는 `server/reviews.db`(SQLite, git 제외)이고 스키마는 `server/schema.sql`이다. 실 시스템은 같은 스키마를 PostgreSQL로 옮긴다.
 
