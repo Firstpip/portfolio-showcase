@@ -70,4 +70,6 @@ python3 server/pumsem_extract.py          # data/pumsem2026.pdf → data/standar
 
 ## 샘플 내역서
 
-`sample-boq.xlsx` — 24행. 헤더가 4행에 있고 공종구분이 병합셀처럼 비어 있는 형태라 파서의 헤더 탐지·승계를 함께 보여준다.
+`sample-boq-road.xlsx` — 토목(도로 확포장) 24행. 현장 ②(구미)와 짝.
+
+`sample-boq.xlsx` — 건축(공공청사) 24행. 헤더가 4행에 있고 공종구분이 병합셀처럼 비어 있는 형태라 파서의 헤더 탐지·승계를 함께 보여준다.

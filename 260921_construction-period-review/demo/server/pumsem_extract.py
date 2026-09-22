@@ -224,6 +224,64 @@ def crew_str(crew):
     return ' + '.join(parts)
 
 
+PREF = [  # 변형 라벨 선호 순서 — 표준 조건을 대표값으로 (라벨 정규식, 우선순위)
+    (r'보\s*통(?!암)', 1), (r'type\s*-?\s*[ⅠI1](?![ⅠI\d-])', 1), (r'[ⅠI]\s*-\s*1', 1), (r'일\s*반', 1), (r'평\s*지', 1), (r'3\.6\s*m\s*이하', 1), (r'10\s*m\s*이하', 1), (r'2\.5\s*m\s*이하', 1),
+    (r'토\s*사|보통토사', 1), (r'철근구조물|철근콘크리트', 2), (r'중\s*규\s*모', 2), (r'0\.5\s*B', 1), (r'한면', 1), (r'바\s*닥', 2), (r'설\s*치', 2), (r'8\s*~\s*12', 1),
+]
+BAD = [r'제물치장', r'매우복잡', r'복\s*잡', r'경\s*암', r'보통암', r'연\s*암', r'풍화암', r'해\s*체', r'대\s*규\s*모', r'소\s*규\s*모']
+
+
+def _clean(c):
+    return re.sub(r'\s+', '', str(c or '')).replace('\n', '')
+
+
+def table_labels(page, values):
+    """pdfplumber 표에서 values 수열이 있는 행을 찾아 같은 열의 상단 라벨을 돌려준다"""
+    try:
+        tables = page.extract_tables()
+    except Exception:
+        return None
+    want = [f"{v:g}" for v in values if v is not None]
+    for t in tables:
+        for ri, row in enumerate(t):
+            cells = [_clean(c).replace(',', '') for c in row]
+            # values 가 연속된 열에 있는지
+            for start in range(len(cells)):
+                seg = cells[start:start + len(want)]
+                if len(seg) < min(2, len(want)): continue
+                ok = 0; bad = False
+                for x, w in zip(seg, want):
+                    if not x: continue  # pdfplumber 가 마지막 열을 비우는 경우 허용
+                    if re.fullmatch(r'-?\d+(\.\d+)?', x) and float(x) == float(w): ok += 1
+                    else: bad = True; break
+                if not bad and ok >= min(2, len(want)) and seg[0]:
+                    labels = []
+                    for ci in range(start, start + len(want)):
+                        if ci >= len(t[0]): labels.append(''); continue
+                        lab = ''
+                        for rj in range(ri - 1, -1, -1):
+                            c = _clean(t[rj][ci]) if ci < len(t[rj]) else ''
+                            if c and not re.fullmatch(r'-?\d+(\.\d+)?', c) and c not in ('구분', '단위', '수량') and not c.startswith('시공량') and not c.startswith('수량('):
+                                lab = c; break
+                        labels.append(lab)
+                    if any(labels): return labels
+    return None
+
+
+def choose_variant(labels, values):
+    """선호 라벨 → 해당 열, 없으면 첫 열"""
+    best = None
+    for i, lab in enumerate(labels):
+        if values[i] is None: continue
+        lab_n = lab.lower()
+        if any(re.search(b, lab_n) for b in BAD): continue
+        for pat, pr in PREF:
+            if re.search(pat, lab_n):
+                if best is None or pr < best[0]: best = (pr, i)
+                break
+    return best[1] if best else next((i for i, v in enumerate(values) if v is not None), 0)
+
+
 def run(pdf_path, out_js, out_report):
     lines = load_lines(pdf_path)
     sections = split_blocks(lines)
@@ -251,7 +309,7 @@ def run(pdf_path, out_js, out_report):
                 report['perunit_ok'] += 1
             else:
                 report['skipped'] += 1; continue
-            if unit in (None, '?') or not (r['prod'] and r['prod'] > 0) or s['chapter'].replace(' ','') == '적용기준':
+            if unit in (None, '?') or not (r['prod'] and 0.5 <= r['prod'] <= 20000) or s['chapter'].replace(' ','') == '적용기준':
                 report['skipped'] += 1; continue
             seen_codes[s['code'] + s['part']] += 1
             suffix = '' if seen_codes[s['code'] + s['part']] == 1 else f"-{seen_codes[s['code'] + s['part']]}"
@@ -263,6 +321,22 @@ def run(pdf_path, out_js, out_report):
                           'ref': f"2026 건설공사 표준품셈 {sec} (원문 p.{b['page']-56}) · {basis}", 'syn': [], 'scope': infer_scope(cat, name),
                           'src': 'official', 'auto': True, 'pdf': b['page'], 'sec': sec, 'part': s['part'], 'values': (r.get('values') or [r['prod']])[:6], 'vlabel': (r.get('label') or '')[:60]})
             report['by_part'][s['part']] += 1
+    # 변형 라벨 복원 + 표준 조건 선택 (검수 자동화)
+    pdf = pdfplumber.open(str(pdf_path)); changed = []
+    for it in items:
+        vals = it.get('values') or []
+        if len([v for v in vals if v is not None]) < 2: continue
+        labels = table_labels(pdf.pages[it['pdf'] - 1], vals)
+        if not labels: continue
+        it['vlabels'] = labels
+        idx = choose_variant(labels, vals)
+        if idx and vals[idx] and vals[idx] != it['prod']:
+            changed.append({'code': it['code'], 'name': it['name'], 'from': it['prod'], 'to': vals[idx], 'label': labels[idx], 'labels': labels, 'values': vals, 'pdf': it['pdf']})
+            it['prod'] = vals[idx]; it['vsel'] = labels[idx]
+            it['crew'] = re.sub(r'\(일당 [^)]*\)', f"(일당 {vals[idx]:g}{it['unit']} · {labels[idx]})", it['crew'], count=1)
+        elif idx == 0 or vals[idx] == it['prod']:
+            it['vsel'] = labels[idx] if idx < len(labels) else ''
+    report['variant_changed'] = changed
     report['items'] = len(items)
     report['by_part'] = dict(report['by_part'])
     js = "/* 자동 생성: server/pumsem_extract.py — 「2026년 적용 건설공사 표준품셈」 원문(data/pumsem2026.pdf)에서 추출.\n   (일당) 표는 시공량 그대로, (단위당) 품 표는 조 편성 환산. 검수 전 자동 추출값이므로 화면에 '자동추출'로 표시한다. */\n"
