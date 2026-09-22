@@ -34,9 +34,11 @@ cp .env.example .env     # KMA_SERVICE_KEY 채우기 (없으면 기상만 내장
 | POST | `/api/map` | `{rows:[{no,name,spec,unit,qty,group,candidates}], standards:[…]}` → `{results:{no:{code,confidence,reason}}}` |
 | POST | `/api/narrative` | `{summary:{…}}` → `{overview, weather, opinion}` |
 
-## 표준품셈 확장
+## 표준품셈
 
-`data/standards.js`에 105개 요약 항목이 있고, 화면의 표준품셈 탭에서 엑셀(코드·명칭·공종·단위·생산성·투입조·조편성·근거·동의어·적용범위)을 올리면 항목이 추가되어 매핑에 즉시 반영된다. 업로드 양식은 화면에서 내려받는다.
+`data/pumsem2026.pdf`는 국토교통부 공고 「2026년 적용 건설공사 표준품셈」 원문(CODIL 배포본, 982p, 정오표 1차 반영)이고 `data/pumsem2026_index.json`은 그 절(節) 코드 → PDF 페이지 색인이다. `data/standards.js`의 106개 항목 중 `src:'official'` 40개는 원문의 일당 시공량(예: 강관비계 비계공3+보통인부1 = 55㎡/일) 또는 품(인/단위)을 조 편성으로 환산한 값이며 `sec`·`pdf`로 원문 위치를 가리킨다(화면의 '공식 2026' 배지 → 원문 페이지). 나머지 `src:'rep'`는 원문 대조 전 대표값이다.
+
+`data/standards.js`에 106개 요약 항목이 있고, 화면의 표준품셈 탭에서 엑셀(코드·명칭·공종·단위·생산성·투입조·조편성·근거·동의어·적용범위)을 올리면 항목이 추가되어 매핑에 즉시 반영된다. 업로드 양식은 화면에서 내려받는다.
 
 ## 샘플 내역서
 
