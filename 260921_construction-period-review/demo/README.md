@@ -20,9 +20,10 @@ cp .env.example .env     # KMA_SERVICE_KEY 채우기 (없으면 기상만 내장
 
 - **AI(LLM)**: 별도 API 키 없이 이 PC의 Claude Code CLI(`claude -p`)를 서브프로세스로 호출한다. 모델은 `DEMO_LLM_MODEL`(기본 sonnet). 빈 작업 폴더에서 도구를 끄고 호출하므로 호출당 컨텍스트가 작다.
   - AI 문맥 보정(24행): 약 30~60초. AI 서술 초안: 약 20~40초. 미팅에서는 버튼을 누르고 설명을 이어가면 된다.
+- **정적 배포본에 포함된 실데이터**: 주요 24개 지점(`data/asos_<지점>.json`, `data/stations.js`의 `ASOS_STATIC`)은 서버 없이도 실데이터로 동작한다. 그 외 지점은 백엔드가 API로 받아 캐시한다.
 - **기상청 API**: 공공데이터포털에서 「기상청_지상(종관, ASOS) 일자료 조회서비스」 활용신청 → 마이페이지의 **Decoding 인증키**를 `KMA_SERVICE_KEY` 에 넣는다. 승인은 보통 즉시 처리된다.
   - 최초 1회 지점별 10년치(약 3,650일)를 받아 `server/cache/asos_<지점>_<연도>.json` 에 캐시한다. 이후에는 키가 없어도 캐시로 동작한다.
-  - 지점: 대구 143, 구미 279 (`index.html` 의 `SITES[].stn`).
+  - 지점 목록·좌표: `data/stations.js` (74개). 현장 편집에서 시도/좌표로 최근접 지점을 고른다.
 
 ## API
 
@@ -32,6 +33,10 @@ cp .env.example .env     # KMA_SERVICE_KEY 채우기 (없으면 기상만 내장
 | GET | `/api/weather?station=143&start=2016&end=2025` | ASOS 일자료 → `{y,m,d,rain,tmax,tmin,hum,wind,snow,feels}[]` |
 | POST | `/api/map` | `{rows:[{no,name,spec,unit,qty,group,candidates}], standards:[…]}` → `{results:{no:{code,confidence,reason}}}` |
 | POST | `/api/narrative` | `{summary:{…}}` → `{overview, weather, opinion}` |
+
+## 표준품셈 확장
+
+`data/standards.js`에 105개 요약 항목이 있고, 화면의 표준품셈 탭에서 엑셀(코드·명칭·공종·단위·생산성·투입조·조편성·근거·동의어·적용범위)을 올리면 항목이 추가되어 매핑에 즉시 반영된다. 업로드 양식은 화면에서 내려받는다.
 
 ## 샘플 내역서
 
