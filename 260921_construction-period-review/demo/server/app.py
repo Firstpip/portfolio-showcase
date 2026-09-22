@@ -15,7 +15,7 @@
 LLM 호출은 Claude Code CLI(`claude -p`)를 서브프로세스로 쓴다 — 별도 API 키 불필요.
 비용 절감: 빈 작업 폴더(cwd=server/.claude-empty)에서 도구를 끄고 sonnet 으로 호출한다.
 """
-import json, os, re, subprocess, math, time
+import json, os, re, subprocess, math, time, sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -223,10 +223,93 @@ def narrative(req: NarrativeReq):
     return {"model": LLM_MODEL, **{k: str(data.get(k, "")) for k in ("overview", "weather", "opinion")}}
 
 
+# ───────────────────────── 4. 검토 저장소 (SQLite) ─────────────────────────
+DB_PATH = Path(os.environ.get("DEMO_DB", HERE / "reviews.db"))
+def db():
+    con = sqlite3.connect(DB_PATH); con.row_factory = sqlite3.Row; con.execute("PRAGMA foreign_keys=ON"); return con
+with db() as _c:
+    _c.executescript((HERE / "schema.sql").read_text(encoding="utf-8"))
+
+
+class ReviewIn(BaseModel):
+    site_name: str
+    region: str = ""
+    station: str = ""
+    file_name: str = ""
+    note: str = ""
+    author: str = ""
+    summary: dict = {}
+    payload: dict
+
+
+def row_review(r):
+    d = dict(r); d["summary"] = json.loads(d.get("summary") or "{}"); return d
+
+
+@app.get("/api/reviews")
+def list_reviews():
+    with db() as c:
+        rows = c.execute("SELECT id, site_name, region, station, file_name, status, latest_version, summary, created_at, updated_at FROM reviews ORDER BY updated_at DESC").fetchall()
+    return {"reviews": [row_review(r) for r in rows]}
+
+
+@app.post("/api/reviews")
+def create_review(body: ReviewIn):
+    with db() as c:
+        cur = c.execute("INSERT INTO reviews(site_name, region, station, file_name, latest_version, summary) VALUES(?,?,?,?,1,?)",
+                        (body.site_name, body.region, body.station, body.file_name, json.dumps(body.summary, ensure_ascii=False)))
+        rid = cur.lastrowid
+        c.execute("INSERT INTO review_versions(review_id, version, note, author, summary, payload) VALUES(?,?,?,?,?,?)",
+                  (rid, 1, body.note or "최초 저장", body.author, json.dumps(body.summary, ensure_ascii=False), json.dumps(body.payload, ensure_ascii=False)))
+    return {"id": rid, "version": 1}
+
+
+@app.put("/api/reviews/{rid}")
+def save_version(rid: int, body: ReviewIn):
+    with db() as c:
+        r = c.execute("SELECT latest_version FROM reviews WHERE id=?", (rid,)).fetchone()
+        if not r: raise HTTPException(404, "검토 건 없음")
+        v = r["latest_version"] + 1
+        c.execute("INSERT INTO review_versions(review_id, version, note, author, summary, payload) VALUES(?,?,?,?,?,?)",
+                  (rid, v, body.note or f"버전 {v}", body.author, json.dumps(body.summary, ensure_ascii=False), json.dumps(body.payload, ensure_ascii=False)))
+        c.execute("UPDATE reviews SET latest_version=?, summary=?, site_name=?, region=?, station=?, file_name=?, updated_at=datetime('now','localtime') WHERE id=?",
+                  (v, json.dumps(body.summary, ensure_ascii=False), body.site_name, body.region, body.station, body.file_name, rid))
+    return {"id": rid, "version": v}
+
+
+@app.patch("/api/reviews/{rid}/status")
+def set_status(rid: int, status: str = Query(...)):
+    if status not in ("draft", "reviewing", "approved"): raise HTTPException(400, "status")
+    with db() as c:
+        c.execute("UPDATE reviews SET status=?, updated_at=datetime('now','localtime') WHERE id=?", (status, rid))
+    return {"id": rid, "status": status}
+
+
+@app.get("/api/reviews/{rid}")
+def get_review(rid: int, version: int | None = None):
+    with db() as c:
+        r = c.execute("SELECT * FROM reviews WHERE id=?", (rid,)).fetchone()
+        if not r: raise HTTPException(404, "검토 건 없음")
+        v = c.execute("SELECT * FROM review_versions WHERE review_id=? AND version=?", (rid, version or r["latest_version"])).fetchone()
+        vers = c.execute("SELECT id, version, note, author, summary, created_at FROM review_versions WHERE review_id=? ORDER BY version DESC", (rid,)).fetchall()
+    d = row_review(r); d["payload"] = json.loads(v["payload"]) if v else None; d["version"] = v["version"] if v else None
+    d["versions"] = [dict(x, summary=json.loads(x["summary"] or "{}")) for x in vers]
+    return d
+
+
+@app.delete("/api/reviews/{rid}")
+def delete_review(rid: int):
+    with db() as c:
+        c.execute("DELETE FROM reviews WHERE id=?", (rid,))
+    return {"ok": True}
+
+
 @app.get("/api/health")
 def health():
     cached = sorted({p.name.split("_")[1] for p in CACHE.glob("asos_*.json")})
-    return {"ok": True, "kma": bool(KMA_KEY), "kma_cached_stations": cached, "llm": claude_available(), "llm_model": LLM_MODEL}
+    with db() as c:
+        n = c.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
+    return {"ok": True, "kma": bool(KMA_KEY), "kma_cached_stations": cached, "llm": claude_available(), "llm_model": LLM_MODEL, "db": True, "reviews": n}
 
 
 app.mount("/", StaticFiles(directory=str(DEMO_DIR), html=True), name="demo")

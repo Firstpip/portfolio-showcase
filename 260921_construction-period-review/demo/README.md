@@ -33,6 +33,14 @@ cp .env.example .env     # KMA_SERVICE_KEY 채우기 (없으면 기상만 내장
 | GET | `/api/weather?station=143&start=2016&end=2025` | ASOS 일자료 → `{y,m,d,rain,tmax,tmin,hum,wind,snow,feels}[]` |
 | POST | `/api/map` | `{rows:[{no,name,spec,unit,qty,group,candidates}], standards:[…]}` → `{results:{no:{code,confidence,reason}}}` |
 | POST | `/api/narrative` | `{summary:{…}}` → `{overview, weather, opinion}` |
+| GET | `/api/reviews` | 검토 건 목록(최신 요약 포함) |
+| POST | `/api/reviews` | 검토 건 등록 `{site_name, region, station, file_name, note, summary, payload}` → `{id, version:1}` |
+| PUT | `/api/reviews/{id}` | 새 버전 저장 → `{id, version}` |
+| GET | `/api/reviews/{id}?version=N` | 상세 + 버전 목록 + 해당 버전 payload |
+| PATCH | `/api/reviews/{id}/status?status=draft\|reviewing\|approved` | 상태 변경 |
+| DELETE | `/api/reviews/{id}` | 삭제(버전 포함) |
+
+검토 저장소는 `server/reviews.db`(SQLite, git 제외)이고 스키마는 `server/schema.sql`이다. 실 시스템은 같은 스키마를 PostgreSQL로 옮긴다.
 
 ## 품 할증 (표준품셈 1-4절)
 
