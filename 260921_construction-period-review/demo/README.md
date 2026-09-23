@@ -25,6 +25,10 @@ cp .env.example .env     # KMA_SERVICE_KEY 채우기 (없으면 기상만 내장
   - 최초 1회 지점별 10년치(약 3,650일)를 받아 `server/cache/asos_<지점>_<연도>.json` 에 캐시한다. 이후에는 키가 없어도 캐시로 동작한다.
   - 지점 목록·좌표: `data/stations.js` (74개). 현장 편집에서 시도/좌표로 최근접 지점을 고른다.
 
+## 공정표 엑셀 내보내기
+
+공정표 탭 「공정표 엑셀 내보내기」는 SheetJS로 3개 시트(공정표 CPM 표 · 월별 간트(■ 주공정/□ 일반) · 산정 총괄·근거)를 만든다(`exportScheduleXlsx`). 발주사 공정표 양식이 확보되면 이 함수만 양식에 맞춘다.
+
 ## Docker 배포 (`Dockerfile` · `docker-compose.yml` · `deploy/OPERATIONS.md`)
 
 ```bash

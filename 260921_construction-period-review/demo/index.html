@@ -745,9 +745,26 @@ function viewCpm(D){
       h('div',{class:'formula',style:{marginBottom:'10px'}},`공사기간 ${cal.total}일 = 준비 ${cal.prep} + 주공정 작업 ${cal.work} + 휴일 ${cal.hol} + 기상 비작업 ${cal.wx}${cal.gap?' + 대기 '+cal.gap:''} + 정리 ${cal.clean}`),
       renderCalendar(cal))));
   const fcard=formulaCard(D);if(fcard)wrap.append(fcard);
-  wrap.append(h('div',{class:'inline',style:{justifyContent:'flex-end',marginTop:'16px'}},h('button',{class:'btn btn-accent',onclick:()=>{S.tab='report';S.reportGenerated=true;render();toast('산정 결과를 바탕으로 검토보고서 초안을 생성했습니다.');}},'검토보고서 초안 생성 →')));
+  wrap.append(h('div',{class:'inline',style:{justifyContent:'flex-end',marginTop:'16px'}},h('button',{class:'btn btn-outline',onclick:()=>exportScheduleXlsx(D)},'공정표 엑셀 내보내기'),h('button',{class:'btn btn-accent',onclick:()=>{S.tab='report';S.reportGenerated=true;render();toast('산정 결과를 바탕으로 검토보고서 초안을 생성했습니다.');}},'검토보고서 초안 생성 →')));
   return wrap;
 }
+/* 공정표 엑셀 내보내기 — 시트 1 공정표(CPM), 시트 2 월별 간트(달력일 기준 ■), 시트 3 산정 총괄·근거. 발주사 공정표 양식이 확보되면 이 함수만 양식에 맞춘다 */
+function exportScheduleXlsx(D){
+  const {order,total}=D.cp;const cal=D.cal;const site=S.site;
+  const rows1=[['공정','선행 공정','작업일','ES','EF','LS','LF','여유','착수','완료','주공정','기상 적용 범위']];
+  order.forEach(a=>rows1.push([a.key,a.pred.map(p=>p.split(' › ').pop()).join(', '),a.dur,a.es,a.ef,a.ls,a.lf,a.float,ymd(a.startDate),ymd(a.endDate),a.critical?'●':'',SCOPES[a.scope]||'일반']));
+  const months=[];let cur=new Date(cal.start.getFullYear(),cal.start.getMonth(),1);while(cur<=cal.end){months.push(new Date(cur));cur=new Date(cur.getFullYear(),cur.getMonth()+1,1);}
+  const rows2=[['공정','착수','완료',...months.map(m=>`${m.getFullYear()}.${String(m.getMonth()+1).padStart(2,'0')}`)]];
+  order.forEach(a=>{const cells=months.map(m=>{const mEnd=new Date(m.getFullYear(),m.getMonth()+1,0);if(a.endDate<m||a.startDate>mEnd)return '';const s0=a.startDate>m?a.startDate:m,e0=a.endDate<mEnd?a.endDate:mEnd;const days=Math.round((e0-s0)/86400000)+1;const dim=mEnd.getDate();return (a.critical?'■':'□').repeat(Math.max(1,Math.round(days/dim*4)));});rows2.push([a.key,ymd(a.startDate),ymd(a.endDate),...cells]);});
+  const rules=S.settings.rules.filter(r=>r.enabled).map(r=>`${r.label} ${r.op==='>='?'≥':'≤'} ${r.value}${r.unit} (${r.scopes.map(x=>SCOPES[x]).join('·')})`).join('; ');
+  const rows3=[['구분','일수','근거'],['준비기간',cal.prep,prepTypeLabel()?'국토부 2024 가이드라인 유형별 준비기간(예시) — '+prepTypeLabel():'설정값'],['작업일수 (주공정)',cal.work,'CPM 주공정 작업일 = 순작업(할증 반영) + 간접 + 보정'],['휴일',cal.hol,'주공정 구간 내 '+[S.settings.holiday.sunday?'일요일':null,S.settings.holiday.saturday?'토요일':null,S.settings.holiday.public?'법정·임시공휴일':null].filter(Boolean).join('·')],['기상 비작업일',cal.wx,'기상청 '+stationLabel(site.stn)+' 2016~2025 일별 자료, 룰: '+rules],...(cal.gap?[['대기',cal.gap,'선행 공정 완료 대기']]:[]),['정리기간',cal.clean,'설정값 (국토부 기준: 준공 전 1개월 범위)'],['합계 (달력일)',cal.total,`${ymd(cal.start)} ~ ${ymd(cal.end)}`],['계획 공기',site.plan,'현장 설정값'],[],['현장',site.name,site.region||''],['품 할증',ALL_SCOPES.map(sc=>`${SCOPES[sc]} +${hzRate(site,sc).rate}%`).join(', '),'표준품셈 공통 1-4절'],['공정 단위',S.settings.granularity==='item'?'단위 공종(행)':'공종구분','선후행: 표준 템플릿 + 실무자 편집'],['작성',ymd(new Date()),'공사기간 산정 콘솔 (자동 산출 초안)']];
+  const wb=XLSX.utils.book_new();const mk=(rows,widths)=>{const ws=XLSX.utils.aoa_to_sheet(rows);ws['!cols']=widths.map(w=>({wch:w}));return ws;};
+  XLSX.utils.book_append_sheet(wb,mk(rows1,[34,26,8,6,6,6,6,6,12,12,6,12]),'공정표(CPM)');
+  XLSX.utils.book_append_sheet(wb,mk(rows2,[34,12,12,...months.map(()=>9)]),'월별 간트');
+  XLSX.utils.book_append_sheet(wb,mk(rows3,[18,14,80]),'산정 총괄·근거');
+  const name=`공정표_${site.name.replace(/\s+/g,'_')}_${ymd(new Date())}.xlsx`;XLSX.writeFile(wb,name);toast('공정표 엑셀을 내려받았습니다: '+name);
+}
+
 function renderCalendar(cal){
   const months=[];let cur=new Date(cal.start.getFullYear(),cal.start.getMonth(),1);while(cur<=cal.end){months.push(new Date(cur));cur=new Date(cur.getFullYear(),cur.getMonth()+1,1);}
   S.calMonth=Math.max(0,Math.min(S.calMonth,months.length-1));const mo=months[S.calMonth];
