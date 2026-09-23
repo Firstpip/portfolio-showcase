@@ -200,6 +200,7 @@ tr.click:hover td{background:#f8fafc}
 .seg{display:inline-flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden}
 .seg button{padding:6px 12px;font-size:12px;font-weight:700;color:var(--ink2);background:#fff}
 .seg button.on{background:var(--brand);color:#fff}
+tr.cur td{background:#f3f7fd}
 </style>
 </head>
 <body>
@@ -503,7 +504,7 @@ async function apiJ(path,opt){const r=await fetch(API_BASE+path,{headers:{'Conte
 async function saveReview(note){const sum=reviewSummary();if(!sum){toast('저장할 산정 결과가 없습니다. 내역서를 올리고 공정표까지 진행하세요.');return;}
   const body={site_name:S.site.name,region:S.site.region||'',station:stationLabel(S.site.stn),file_name:S.fileName||'',note:note||'',summary:sum,payload:reviewPayload()};
   try{let res;if(S.reviewId){res=await apiJ(`/api/reviews/${S.reviewId}`,{method:'PUT',body:JSON.stringify(body)});}else{res=await apiJ('/api/reviews',{method:'POST',body:JSON.stringify(body)});S.reviewId=res.id;}
-    S.reviewVersion=res.version;persist();toast(`검토 건 #${res.id} 버전 ${res.version} 저장 완료`);if(S.modal&&S.modal.type==='reviews')openReviews();}
+    S.reviewVersion=res.version;persist();LIVE.reviewsList=null;toast(`검토 건 #${res.id} 버전 ${res.version} 저장 완료`);if(S.modal&&S.modal.type==='reviews')openReviews();}
   catch(e){toast('저장 실패: '+e.message);}}
 async function openReviews(){try{const j=await apiJ('/api/reviews');S.modal={type:'reviews',list:j.reviews,detail:null};render();}catch(e){toast('이력 조회 실패: '+e.message);}}
 async function openReviewDetail(id){try{const d=await apiJ(`/api/reviews/${id}`);S.modal={type:'reviews',list:S.modal.list,detail:d,cmp:null};render();}catch(e){toast('조회 실패: '+e.message);}}
@@ -513,7 +514,7 @@ async function setReviewStatus(id,status){try{await apiJ(`/api/reviews/${id}/sta
 /* ---------- 10. 상태 · 저장 ---------- */
 const S={tab:'boq',reviewId:null,reviewVersion:null,sites:JSON.parse(JSON.stringify(DEFAULT_SITES)),siteId:'s1',rows:[],fileName:null,settings:JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),preds:{},extraStd:[],modal:null,reportGenerated:false,narrative:null,stdQuery:'',calMonth:0,wxScope:'earth',get site(){return this.sites.find(s=>s.id===this.siteId)||this.sites[0];}};
 const LS_KEY='cpr-demo-v2';
-function persist(){try{localStorage.setItem(LS_KEY,JSON.stringify({sites:S.sites,siteId:S.siteId,rows:S.rows,fileName:S.fileName,settings:S.settings,preds:S.preds,extraStd:S.extraStd,reviewId:S.reviewId,reviewVersion:S.reviewVersion,savedAt:new Date().toISOString()}));}catch(e){}}
+function persist(){try{stashWork();localStorage.setItem(LS_KEY,JSON.stringify({sites:S.sites,siteId:S.siteId,rows:S.rows,fileName:S.fileName,settings:S.settings,preds:S.preds,extraStd:S.extraStd,reviewId:S.reviewId,reviewVersion:S.reviewVersion,savedAt:new Date().toISOString()}));}catch(e){}}
 function restore(){try{const j=JSON.parse(localStorage.getItem(LS_KEY)||'null');if(!j)return false;Object.assign(S,{sites:j.sites||S.sites,siteId:j.siteId||S.siteId,rows:j.rows||[],fileName:j.fileName||null,settings:{...JSON.parse(JSON.stringify(DEFAULT_SETTINGS)),...j.settings},preds:j.preds||{},extraStd:j.extraStd||[],reviewId:j.reviewId||null,reviewVersion:j.reviewVersion||null});S.settings.rules=DEFAULT_SETTINGS.rules.map(d=>({...d,...(S.settings.rules.find(r=>r.id===d.id)||{})}));if(!S.sites.find(s=>s.id===S.siteId))S.siteId=S.sites[0].id;return !!(j.rows&&j.rows.length);}catch(e){return false;}}
 function exportProject(){download(`공기산정_${S.site.name.replace(/\s+/g,'_')}_${ymd(new Date())}.json`,JSON.stringify({version:2,sites:S.sites,siteId:S.siteId,rows:S.rows,fileName:S.fileName,settings:S.settings,preds:S.preds,extraStd:S.extraStd},null,2),'application/json');}
 function importProject(file){if(!file)return;const rd=new FileReader();rd.onload=e=>{try{const j=JSON.parse(e.target.result);if(!j.sites||!j.settings)throw new Error('format');Object.assign(S,{sites:j.sites,siteId:j.siteId,rows:j.rows||[],fileName:j.fileName,settings:j.settings,preds:j.preds||{},extraStd:j.extraStd||[]});S.reportGenerated=false;S.narrative=null;persist();render();loadWeather(S.site.stn);toast('프로젝트 파일을 불러왔습니다.');}catch(err){toast('불러오기 실패: 파일 형식이 다릅니다.');}};rd.readAsText(file);}
@@ -522,22 +523,27 @@ function derived(){
   const acts=rows.length?buildActivities(rows,S.settings,S.preds,S.site):[];let cp={order:[],total:0},err=null;try{cp=cpm(acts);}catch(e){err=e.message;}
   const net=acts.reduce((a,b)=>a+(b.net||0),0),ind=acts.reduce((a,b)=>a+(b.indirect||0),0),adj=acts.reduce((a,b)=>a+(b.adj||0),0);
   let cal=null;if(rows.length&&!err)cal=scheduleCalendar(cp.order,S.site,S.settings);
+  if(cal){const plan=S.site.plan,total=cal.total,ratio=plan/total;S.site.last={date:ymd(new Date()),file:S.fileName,rows:rows.length,mapped:mapped.length,unmapped:rows.length-mapped.length,total,plan,diff:plan-total,verdict:ratio>=1?'적정':ratio>=0.9?'검토 필요':'부족',cp:cp.total,start:ymd(cal.start),end:ymd(cal.end),reviewId:S.reviewId||null};}
   return {rows,mapped,acts,cp,err,net,ind,adj,cal,unmapped:rows.filter(r=>!r.mapped&&r.manualDays==null),review:rows.filter(r=>r.status==='review'&&!r.manual)};
 }
 
+/* 현장 전환 — 현장별 작업(내역서·매핑·선후행·보고서 상태)을 각 현장에 보관해, 여러 검토 건을 오가며 처리한다 */
+function stashWork(){const st=S.site;if(!st)return;st.work={rows:S.rows,fileName:S.fileName,preds:S.preds,reportGenerated:S.reportGenerated,narrative:S.narrative,reviewId:S.reviewId,reviewVersion:S.reviewVersion};}
+function switchSite(id){if(id===S.siteId)return;stashWork();S.siteId=id;const w=S.site.work||{};S.rows=w.rows||[];S.fileName=w.fileName||null;S.preds=w.preds||{};S.reportGenerated=!!w.reportGenerated;S.narrative=w.narrative||null;S.reviewId=w.reviewId||null;S.reviewVersion=w.reviewVersion||null;LIVE.mapped=null;S.calMonth=0;persist();render();loadWeather(S.site.stn);}
+
 /* ---------- 11. 렌더 ---------- */
-const TABS=[{id:'boq',n:1,l:'내역서·공종 매핑'},{id:'work',n:2,l:'작업일수 산정'},{id:'wx',n:3,l:'기상·비작업일수'},{id:'cpm',n:4,l:'공정표(CPM)'},{id:'report',n:5,l:'검토보고서'},{id:'std',n:'DB',l:'표준품셈',util:true},{id:'set',n:'⚙',l:'설정',util:true}];
+const TABS=[{id:'sites',n:'⌂',l:'현장 목록'},{id:'boq',n:1,l:'내역서·공종 매핑'},{id:'work',n:2,l:'작업일수 산정'},{id:'wx',n:3,l:'기상·비작업일수'},{id:'cpm',n:4,l:'공정표(CPM)'},{id:'report',n:5,l:'검토보고서'},{id:'std',n:'DB',l:'표준품셈',util:true},{id:'set',n:'⚙',l:'설정',util:true}];
 function render(){
   const app=$('#app');app.innerHTML='';const D=derived();
-  const done={boq:S.rows.length>0,work:S.rows.length>0,wx:true,cpm:S.rows.length>0,report:S.reportGenerated};
+  const done={sites:false,boq:S.rows.length>0,work:S.rows.length>0,wx:true,cpm:S.rows.length>0,report:S.reportGenerated};
   const fileIn=h('input',{type:'file',accept:'.json',class:'hidden',onchange:e=>importProject(e.target.files[0])});
   app.append(
     h('header',{class:'app-header'},
       h('div',{class:'brand'},h('div',{class:'mark'},'公'),'공사기간 산정 콘솔',h('span',{class:'tag'},'시연 데모')),
-      h('div',{class:'site'},'현장',(()=>{const sel=h('select',{onchange:e=>{if(e.target.value==='__new'){S.modal={type:'site',site:null};render();return;}S.siteId=e.target.value;S.calMonth=0;S.reportGenerated=false;S.narrative=null;persist();render();loadWeather(S.site.stn);}},...S.sites.map(s=>h('option',{value:s.id,selected:s.id===S.siteId},s.name)),h('option',{value:'__new'},'＋ 현장 추가…'));return sel;})(),h('button',{class:'hbtn',style:{padding:'4px 8px'},title:'현장 정보 편집',onclick:()=>{S.modal={type:'site',site:S.site};render();}},'편집')),
+      h('div',{class:'site'},'현장',(()=>{const sel=h('select',{onchange:e=>{if(e.target.value==='__new'){S.modal={type:'site',site:null};render();return;}switchSite(e.target.value);}},...S.sites.map(s=>h('option',{value:s.id,selected:s.id===S.siteId},s.name)),h('option',{value:'__new'},'＋ 현장 추가…'));return sel;})(),h('button',{class:'hbtn',style:{padding:'4px 8px'},title:'현장 정보 편집',onclick:()=>{S.modal={type:'site',site:S.site};render();}},'편집')),
       h('div',{class:'header-right'},h('span',{class:'hide-m',style:{opacity:.8}},'기상 지점 ',stationLabel(S.site.stn)),liveBadge(),LIVE.backend?h('button',{class:'hbtn',style:{background:'rgba(235,104,52,.85)'},onclick:()=>saveReview(),title:S.reviewId?`검토 건 #${S.reviewId} 새 버전으로 저장`:'서버 DB에 검토 건 등록'},S.reviewId?`서버 저장 (#${S.reviewId} 새 버전)`:'서버 저장'):null,LIVE.backend?h('button',{class:'hbtn',onclick:openReviews,title:'서버에 저장된 검토 건 목록·버전 비교'},'검토 이력'+(LIVE.dbCount?` (${LIVE.dbCount})`:'')):null,h('button',{class:'hbtn',onclick:exportProject,title:'현재 작업을 JSON 파일로 저장'},'파일 저장'),h('button',{class:'hbtn',onclick:()=>fileIn.click(),title:'JSON 파일 불러오기'},'불러오기'),fileIn,h('button',{class:'hbtn',onclick:()=>{S.modal='about';render();}},'데모 범위'),h('button',{class:'hbtn',onclick:resetAll},'초기화'))),
     h('nav',{class:'stepbar'},...TABS.map(t=>h('button',{class:'step'+(S.tab===t.id?' active':'')+(done[t.id]&&S.tab!==t.id&&!t.util?' done':'')+(t.util?' util':''),style:t.util&&t.id==='set'?{marginLeft:0}:{},onclick:()=>{S.tab=t.id;render();}},h('span',{class:'n'},done[t.id]&&!t.util?'✓':t.n),t.l))),
-    h('main',{class:'content'},({boq:viewBoq,work:viewWork,wx:viewWx,cpm:viewCpm,report:viewReport,std:viewStd,set:viewSet})[S.tab](D)),
+    h('main',{class:'content'},({sites:viewSites,boq:viewBoq,work:viewWork,wx:viewWx,cpm:viewCpm,report:viewReport,std:viewStd,set:viewSet})[S.tab](D)),
   );
   if(S.modal)app.append(renderModal(D));
 }
@@ -551,7 +557,7 @@ function pageTitle(t,d,...right){return h('div',{class:'page-title'},h('div',{},
 function invalidate(){S.reportGenerated=false;S.narrative=null;persist();render();}
 
 /* --- 탭 1: 내역서 --- */
-function loadSample(kind){const road=kind==='road';LIVE.mapped=null;S.narrative=null;S.reviewId=null;S.reviewVersion=null;S.rows=(road?SAMPLE_BOQ_ROAD:SAMPLE_BOQ).map(r=>mapRow(r,S.settings));S.fileName=road?'샘플_내역서_도로확포장.xlsx (내장)':'샘플_내역서_공공청사.xlsx (내장)';S.preds={};S.reportGenerated=false;if(road&&S.siteId!=='s2'&&S.sites.find(s=>s.id==='s2')){S.siteId='s2';}if(!road&&S.siteId==='s2'&&S.sites.find(s=>s.id==='s1'))S.siteId='s1';S.calMonth=0;persist();render();loadWeather(S.site.stn);toast(`내역서 ${S.rows.length}행을 읽어 표준품셈 매핑을 수행했습니다.`);}
+function loadSample(kind){const road=kind==='road';stashWork();/* 현재 현장 작업 보관 후 샘플 현장으로 전환 */if(road&&S.siteId!=='s2'&&S.sites.find(s=>s.id==='s2'))S.siteId='s2';if(!road&&S.siteId==='s2'&&S.sites.find(s=>s.id==='s1'))S.siteId='s1';LIVE.mapped=null;S.narrative=null;S.reviewId=null;S.reviewVersion=null;S.rows=(road?SAMPLE_BOQ_ROAD:SAMPLE_BOQ).map(r=>mapRow(r,S.settings));S.fileName=road?'샘플_내역서_도로확포장.xlsx (내장)':'샘플_내역서_공공청사.xlsx (내장)';S.preds={};S.reportGenerated=false;S.calMonth=0;persist();render();loadWeather(S.site.stn);toast(`내역서 ${S.rows.length}행을 읽어 표준품셈 매핑을 수행했습니다.`);}
 function parseWorkbook(buf,name){
   if(!window.XLSX){toast('엑셀 파서를 불러오지 못했습니다(오프라인). 샘플 데이터를 사용합니다.');loadSample();return;}
   const wb=XLSX.read(buf,{type:'array'});
@@ -573,6 +579,32 @@ function parseWorkbook(buf,name){
 }
 function handleFile(file){if(!file)return;const rd=new FileReader();rd.onload=e=>parseWorkbook(new Uint8Array(e.target.result),file.name);rd.readAsArrayBuffer(file);}
 function statusPill(r){if(r.manual)return h('span',{class:'pill pill-info'},'수동 확정');if(r.manualDays!=null&&!r.mapped)return h('span',{class:'pill pill-info'},'일수 직접 입력');if(r.status==='auto')return h('span',{class:'pill pill-good'},'자동 확정');if(r.status==='review')return h('span',{class:'pill pill-warn'},'검토 필요');return h('span',{class:'pill pill-crit'},'미매칭');}
+/* --- 탭 0: 현장 목록 (다건 검토 현황) --- */
+function viewSites(D){
+  const wrap=h('div',{});const sites=S.sites;const reviews=LIVE.reviewsList||[];
+  if(LIVE.backend&&!LIVE.reviewsList&&!LIVE.reviewsLoading){LIVE.reviewsLoading=true;apiJ('/api/reviews').then(j=>{LIVE.reviewsList=j.reviews;LIVE.reviewsLoading=false;if(S.tab==='sites')render();}).catch(()=>{LIVE.reviewsLoading=false;LIVE.reviewsList=[];});}
+  const byName=n=>reviews.filter(r=>r.site_name===n);
+  const statusPill=st=>st==='approved'?h('span',{class:'pill pill-good'},'승인'):st==='reviewing'?h('span',{class:'pill pill-warn'},'검토중'):st==='draft'?h('span',{class:'pill pill-gray'},'초안'):h('span',{class:'pill pill-gray'},'미저장');
+  const vPill=v=>v==='적정'?h('span',{class:'pill pill-good'},v):v==='검토 필요'?h('span',{class:'pill pill-warn'},v):v==='부족'?h('span',{class:'pill pill-crit'},v):h('span',{class:'small'},'—');
+  const calc=sites.filter(s=>s.last).length;const month=ymd(new Date()).slice(0,7);const savedThisMonth=reviews.filter(r=>(r.updated_at||'').slice(0,7)===month).length;
+  wrap.append(pageTitle('현장 목록 — 검토 건 현황','여러 현장의 검토 건을 한 표에서 봅니다. 현장을 열면 그 현장의 내역서·매핑·공정표·보고서 상태가 그대로 복원되고, 서버 저장 검토 건은 상태(초안·검토중·승인)와 버전이 함께 표시됩니다.',h('button',{class:'btn btn-primary',onclick:()=>{S.modal={type:'site',site:null};render();}},'＋ 현장 추가')));
+  wrap.append(h('div',{class:'grid4',style:{marginBottom:'16px'}},kpi('등록 현장',sites.length,'개','현장별 기상 지점·조건 보관'),kpi('산정 완료',calc,'건',`${sites.length-calc}건 내역서 대기`),kpi('서버 검토 건',LIVE.backend?reviews.length:'—',LIVE.backend?'건':'',LIVE.backend?`승인 ${reviews.filter(r=>r.status==='approved').length} · 검토중 ${reviews.filter(r=>r.status==='reviewing').length}`:'백엔드 실행 시 표시'),kpi('이번 달 저장',LIVE.backend?savedThisMonth:'—',LIVE.backend?'건':'',month)));
+  const rowsEl=sites.map(st=>{const l=st.last;const rv=byName(st.name);const latest=rv[0];const cur=st.id===S.siteId;
+    return h('tr',{class:'click'+(cur?' cur':''),onclick:()=>{if(!cur)switchSite(st.id);S.tab=st.last?'cpm':'boq';render();}},
+      h('td',{},h('b',{},st.name),cur?h('span',{class:'pill pill-info',style:{marginLeft:'6px'}},'현재'):null,h('div',{class:'tag-src'},st.region||'—',' · ',stationLabel(st.stn),wxSource(st.stn)!=='sim'?' · 실데이터':'')),
+      h('td',{class:'small'},kdate(parseDate(st.start)),h('div',{class:'tag-src'},'계획 ',st.plan,'일',st.hz&&Object.values(st.hz).some(v=>v&&v!=='none')?' · 할증 적용':'')),
+      h('td',{},l?[h('div',{},l.file||'—'),h('div',{class:'tag-src'},`${l.rows}행 · 매핑 ${l.mapped} · 미매칭 ${l.unmapped} · ${l.date}`)]:h('span',{class:'small',style:{color:'var(--muted)'}},'내역서 없음')),
+      h('td',{class:'num'},l?[h('b',{},fmt(l.total)),'일',h('div',{class:'tag-src'},`주공정 ${l.cp}일 · ${l.diff>=0?'+':''}${l.diff}일`)]:'—'),
+      h('td',{},l?vPill(l.verdict):'—'),
+      h('td',{},latest?[statusPill(latest.status),h('div',{class:'tag-src'},`#${latest.id} v${latest.latest_version} · ${(latest.updated_at||'').slice(0,16)}`)]:statusPill(null)),
+      h('td',{},h('div',{class:'inline',style:{gap:'4px'}},h('button',{class:'btn btn-outline btn-sm',onclick:e=>{e.stopPropagation();if(!cur)switchSite(st.id);S.tab='boq';render();}},'열기'),h('button',{class:'btn btn-outline btn-sm',onclick:e=>{e.stopPropagation();S.modal={type:'site',site:st};render();}},'편집'))));});
+  wrap.append(h('div',{class:'card'},h('div',{class:'card-title',style:{marginBottom:'8px'}},'현장별 검토 현황'),h('div',{class:'tbl-wrap'},h('table',{},h('thead',{},h('tr',{},h('th',{},'현장'),h('th',{},'착수 · 계획'),h('th',{},'내역서 · 매핑'),h('th',{class:'num'},'산정 공기'),h('th',{},'판정'),h('th',{},'서버 상태'),h('th',{},''))),h('tbody',{},...rowsEl)))));
+  if(LIVE.backend)wrap.append(h('div',{class:'card'},h('div',{class:'card-head'},h('div',{},h('div',{class:'card-title'},'서버 저장 검토 건 (SQLite · 버전 이력)'),h('div',{class:'card-desc'},'현장명이 같은 건이 위 표에 연결됩니다. 열기는 해당 버전의 화면 상태 전체를 복원합니다.')),h('button',{class:'btn btn-outline btn-sm',onclick:openReviews},'이력·버전 비교')),
+    reviews.length?h('div',{class:'tbl-wrap'},h('table',{},h('thead',{},h('tr',{},h('th',{},'#'),h('th',{},'현장'),h('th',{},'내역서'),h('th',{},'상태'),h('th',{class:'num'},'버전'),h('th',{class:'num'},'산정 공기'),h('th',{},'판정'),h('th',{},'갱신'),h('th',{},''))),h('tbody',{},...reviews.map(r=>{const sm=r.summary||{};return h('tr',{},h('td',{},r.id),h('td',{},h('b',{},r.site_name),h('div',{class:'tag-src'},r.region||'')),h('td',{class:'small'},r.file_name||'—'),h('td',{},statusPill(r.status)),h('td',{class:'num'},r.latest_version),h('td',{class:'num'},sm.total!=null?[fmt(sm.total),'일']:'—'),h('td',{},vPill(sm.verdict)),h('td',{class:'small'},(r.updated_at||'').slice(0,16)),h('td',{},h('button',{class:'btn btn-outline btn-sm',onclick:()=>loadReviewVersion(r.id)},'열기')));})))):h('p',{class:'small'},LIVE.reviewsLoading?'불러오는 중…':'저장된 검토 건이 없습니다. 공정표까지 진행한 뒤 상단 「서버 저장」을 누르면 여기에 쌓입니다.')));
+  else wrap.append(h('div',{class:'note'},'서버 저장 검토 건(상태·버전 이력)은 백엔드(server/run.sh) 실행 시 이 화면에 함께 표시됩니다. 지금은 브라우저에 보관된 현장별 작업만 보입니다.'));
+  return wrap;
+}
+
 function viewBoq(D){
   const wrap=h('div',{});
   wrap.append(pageTitle('내역서 업로드 및 공종명 자동 매핑','엑셀 내역서를 올리면 품명을 표준품셈 표준 명칭에 자동 대조하고, 신뢰도에 따라 자동 확정 / 검토 필요 / 미매칭으로 분류합니다. 실연동 시 LLM이 문맥으로 재판정합니다.',
