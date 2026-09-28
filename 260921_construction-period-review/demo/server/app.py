@@ -145,7 +145,44 @@ def extract_json(text: str) -> Any:
     i, j = s.find("{"), s.rfind("}")
     if i < 0:
         i, j = s.find("["), s.rfind("]")
-    return json.loads(s[i:j + 1])
+    # strict=False: 문자열 안의 줄바꿈·탭을 허용한다 (LLM 이 문단을 줄바꿈으로 나눠 쓰는 경우)
+    return json.loads(s[i:j + 1], strict=False)
+
+
+LLM_FAIL_LOG = HERE / "llm-failures.log"
+def _log_llm_failure(kind: str, attempt: int, detail: str) -> None:
+    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{kind}] 시도 {attempt}: {detail[:600]}"
+    print(line, flush=True)
+    try:
+        with open(LLM_FAIL_LOG, "a", encoding="utf-8") as f:
+            f.write(line.replace("\n", " ") + "\n")
+    except OSError:
+        pass
+
+
+def call_claude_json(prompt: str, kind: str, required: tuple = (), attempts: int = 2) -> Any:
+    """LLM 을 호출해 JSON 을 받는다. 호출 실패·빈 응답·파싱 실패·필수 키 누락이면 한 번 더 시도한다.
+    시연 중 일시 오류(네트워크·형식 어긋남)로 화면에 실패가 뜨는 것을 막기 위한 재시도."""
+    last = ""
+    for n in range(1, attempts + 1):
+        try:
+            text = call_claude(prompt if n == 1 else prompt + "\n\n(주의: 앞선 응답이 올바른 JSON 이 아니었습니다. 설명 없이 JSON 객체 하나만 출력하세요.)")
+        except HTTPException as e:
+            last = f"호출 실패: {e.detail}"
+            _log_llm_failure(kind, n, last)
+            if e.status_code in (503, 504):  # CLI 없음·시간 초과는 재시도해도 같다
+                raise
+            continue
+        try:
+            data = extract_json(text)
+            missing = [k for k in required if not (isinstance(data, dict) and data.get(k))]
+            if missing:
+                raise ValueError(f"필수 키 누락 {missing}")
+            return data
+        except Exception as e:
+            last = f"파싱 실패({e}): {text[:300]}"
+            _log_llm_failure(kind, n, last)
+    raise HTTPException(502, f"LLM 응답을 {attempts}회 시도했지만 사용할 수 없습니다 — {last[:300]}")
 
 
 class MapRow(BaseModel):
@@ -185,11 +222,7 @@ def map_rows(req: MapReq):
 - 반드시 아래 JSON 만 출력하세요. 설명 문장 금지.
 
 {{"results":[{{"no":1,"code":"T-01","confidence":95,"reason":"..."}}]}}"""
-    text = call_claude(prompt)
-    try:
-        data = extract_json(text)
-    except Exception:
-        raise HTTPException(502, f"LLM 출력 파싱 실패: {text[:300]}")
+    data = call_claude_json(prompt, "map", required=("results",))
     valid = {s["code"] for s in req.standards}
     results = {}
     for it in data.get("results", []):
@@ -218,11 +251,7 @@ def narrative(req: NarrativeReq):
 - 반드시 아래 JSON 만 출력. 마크다운·설명 금지.
 
 {{"overview":"...","weather":"...","opinion":"..."}}"""
-    text = call_claude(prompt)
-    try:
-        data = extract_json(text)
-    except Exception:
-        raise HTTPException(502, f"LLM 출력 파싱 실패: {text[:300]}")
+    data = call_claude_json(prompt, "narrative", required=("overview", "weather", "opinion"))
     return {"model": LLM_MODEL, **{k: str(data.get(k, "")) for k in ("overview", "weather", "opinion")}}
 
 
