@@ -200,11 +200,14 @@ class MapReq(BaseModel):
     standards: list[dict]         # 전체 표준품셈 요약 [{code,name,cat,unit}]
 
 
-@app.post("/api/map")
-def map_rows(req: MapReq):
-    std_lines = "\n".join(f"- {s['code']} | {s['name']} | {s['cat']} | 단위 {s['unit']}" for s in req.standards)
+MAP_CHUNK = int(os.environ.get("DEMO_MAP_CHUNK", "20"))       # 한 번의 LLM 호출에 넣는 내역 행 수
+MAP_WORKERS = int(os.environ.get("DEMO_MAP_WORKERS", "3"))    # 동시에 돌리는 호출 수
+
+
+def _map_chunk(rows: list, standards: list) -> dict:
+    std_lines = "\n".join(f"- {s['code']} | {s['name']} | {s['cat']} | 단위 {s['unit']}" for s in standards)
     row_lines = []
-    for r in req.rows:
+    for r in rows:
         cands = ", ".join(f"{c['code']}({c.get('score', 0)}%)" for c in r.candidates)
         row_lines.append(f"{r.no}. 품명「{r.name}」 규격「{r.spec}」 단위 {r.unit} 수량 {r.qty} 공종구분 {r.group} / 1차 후보: {cands}")
     prompt = f"""당신은 건설공사 표준품셈 대조 전문가입니다. 건설 내역서의 품명(현장마다 표기가 다름)을 아래 표준품셈 항목 중 하나로 매핑하세요.
@@ -223,14 +226,44 @@ def map_rows(req: MapReq):
 
 {{"results":[{{"no":1,"code":"T-01","confidence":95,"reason":"..."}}]}}"""
     data = call_claude_json(prompt, "map", required=("results",))
-    valid = {s["code"] for s in req.standards}
-    results = {}
+    valid = {s["code"] for s in standards}
+    out = {}
     for it in data.get("results", []):
         code = it.get("code")
-        results[str(it.get("no"))] = {"code": code if code in valid else None,
-                                      "confidence": max(0, min(100, int(it.get("confidence", 0) or 0))),
-                                      "reason": str(it.get("reason", ""))[:80]}
-    return {"model": LLM_MODEL, "results": results}
+        out[str(it.get("no"))] = {"code": code if code in valid else None,
+                                  "confidence": max(0, min(100, int(it.get("confidence", 0) or 0))),
+                                  "reason": str(it.get("reason", ""))[:80]}
+    return out
+
+
+@app.post("/api/map")
+def map_rows(req: MapReq):
+    """내역 행이 많으면 묶음으로 나눠 동시에 판정한다 — 한 번에 보내면 응답 시간 제한(150초)을 넘는다(실측: 45행 134초, 97행 초과)."""
+    t0 = time.time()
+    rows = req.rows
+    if len(rows) <= MAP_CHUNK + 6:
+        return {"model": LLM_MODEL, "results": _map_chunk(rows, req.standards), "chunks": 1, "failed_rows": [], "elapsed_s": round(time.time() - t0, 1)}
+    from concurrent.futures import ThreadPoolExecutor
+    by_code = {s["code"]: s for s in req.standards}
+    chunks = [rows[i:i + MAP_CHUNK] for i in range(0, len(rows), MAP_CHUNK)]
+
+    def run(chunk):
+        codes = {c["code"] for r in chunk for c in r.candidates}
+        stds = [by_code[c] for c in by_code if c in codes] or req.standards
+        try:
+            return _map_chunk(chunk, stds), None
+        except HTTPException as e:
+            return {}, str(e.detail)[:200]
+
+    results, failed, errors = {}, [], []
+    with ThreadPoolExecutor(max_workers=max(1, MAP_WORKERS)) as ex:
+        for chunk, (res, err) in zip(chunks, ex.map(run, chunks)):
+            results.update(res)
+            if err:
+                failed += [r.no for r in chunk]; errors.append(err)
+    if not results:
+        raise HTTPException(502, f"AI 판정이 모든 묶음에서 실패했습니다 — {errors[0] if errors else ''}")
+    return {"model": LLM_MODEL, "results": results, "chunks": len(chunks), "failed_rows": failed, "errors": errors[:3], "elapsed_s": round(time.time() - t0, 1)}
 
 
 class NarrativeReq(BaseModel):
