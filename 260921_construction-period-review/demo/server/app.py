@@ -347,7 +347,7 @@ class IndexReq(BaseModel):
 @app.post("/api/index")
 def build_index(req: IndexReq):
     t0 = time.time(); rebuilt = VIDX.build(req.items)
-    return {"items": len(VIDX.items), "rebuilt": rebuilt, "embedder": VIDX.embedder.name, "dim": int(VIDX.mat.shape[1]) if VIDX.mat is not None else 0, "elapsed_ms": int((time.time() - t0) * 1000)}
+    return {**VIDX.info(), "rebuilt": rebuilt, "elapsed_ms": int((time.time() - t0) * 1000)}
 
 
 @app.get("/api/search")

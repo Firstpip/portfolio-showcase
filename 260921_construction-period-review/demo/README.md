@@ -61,7 +61,7 @@ docker compose up -d --build         # → http://<서버>:8765
 | POST | `/api/search/batch` | `{rows:[{no,name,spec,unit}],k}` → 행별 후보 |
 | POST | `/api/report/docx` | 보고서 데이터 → Word(.docx) 파일 |
 
-벡터 인덱스(`server/vector_index.py`)는 기본적으로 문자 n-gram 해시드 TF-IDF(외부 모델 불필요)이며 `OPENAI_API_KEY`가 있으면 `text-embedding-3-small`로 자동 전환된다. DOCX는 `server/docx_report.py`(python-docx).
+벡터 인덱스(`server/vector_index.py`)는 다국어 문장 임베딩(multilingual-e5-small, 양자화 ONNX 384차원) 60% 와 문자 n-gram 40% 를 결합한다. 모델은 `bash server/get-model.sh` 로 받으며, 없으면 문자 n-gram 방식으로 자동 대체된다(`DEMO_EMBEDDER=hybrid|e5|hashed|openai`). 문장 임베딩은 `server/vectors.db`(SQLite)에 저장해 재기동 시 다시 계산하지 않는다. 평가: `python3 server/eval_vector.py <data.json>` — 시연 내역서 59행 상위 5 후보 적중 59/59(n-gram 단독 57/59), 풀어 쓴 표기 33개 29/33(n-gram 단독 20/33). DOCX는 `server/docx_report.py`(python-docx).
 
 검토 저장소는 `server/reviews.db`(SQLite, git 제외)이고 스키마는 `server/schema.sql`이다. 실 시스템은 같은 스키마를 PostgreSQL로 옮긴다.
 
