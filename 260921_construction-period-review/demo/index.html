@@ -559,24 +559,37 @@ function invalidate(){S.reportGenerated=false;S.narrative=null;persist();render(
 
 /* --- 탭 1: 내역서 --- */
 function loadSample(kind){const road=kind==='road';stashWork();/* 현재 현장 작업 보관 후 샘플 현장으로 전환 */if(road&&S.siteId!=='s2'&&S.sites.find(s=>s.id==='s2'))S.siteId='s2';if(!road&&S.siteId==='s2'&&S.sites.find(s=>s.id==='s1'))S.siteId='s1';LIVE.mapped=null;S.narrative=null;S.reviewId=null;S.reviewVersion=null;S.rows=(road?SAMPLE_BOQ_ROAD:SAMPLE_BOQ).map(r=>mapRow(r,S.settings));S.fileName=road?'샘플_내역서_도로확포장.xlsx (내장)':'샘플_내역서_공공청사.xlsx (내장)';S.preds={};S.reportGenerated=false;S.calMonth=0;persist();render();loadWeather(S.site.stn);toast(`내역서 ${S.rows.length}행을 읽어 표준품셈 매핑을 수행했습니다.`);}
+const COL_KEY={group:['공종구분','대공종','공종명칭','공사구분','구분'],name:['품명','공종명','명칭','품목','항목명','항목','내역','공종','공정명','작업명'],spec:['규격','사양'],unit:['단위'],qty:['수량','물량']};
+const COL_LABEL={name:'품명 (필수)',qty:'수량 (필수)',spec:'규격',unit:'단위',group:'공종구분'};
+let LAST_WB=null; /* 마지막으로 읽은 엑셀 — 열 직접 지정에 사용 (브라우저 메모리에만 보관) */
+function detectCols(row){const cells=(row||[]).map(c=>String(c).replace(/\s/g,''));const m={};const used=new Set();
+  for(const[k,ks]of Object.entries(COL_KEY)){let idx=-1;for(const x of ks){idx=cells.findIndex((c,ci)=>!used.has(ci)&&c&&(c===x||c.includes(x)));if(idx>=0)break;}if(idx>=0){m[k]=idx;used.add(idx);}}
+  return m;}
+function extractRows(aoa,hi,map){const rows=[];let no=0;
+  for(let i=hi+1;i<aoa.length;i++){const r=aoa[i]||[];const name=String(r[map.name]??'').trim();const qty=parseFloat(String(r[map.qty]??'').replace(/,/g,''));if(!name||!isFinite(qty)||qty<=0)continue;if(/합계|소계|계$/.test(name))continue;
+    rows.push({no:++no,group:map.group!=null?String(r[map.group]??'').trim():'',name,spec:map.spec!=null?String(r[map.spec]??'').trim():'',unit:map.unit!=null?String(r[map.unit]??'').trim():'',qty});}
+  let g='';rows.forEach(r=>{if(r.group)g=r.group;else r.group=g||'기타';});
+  return rows;}
+function importRows(aoa,hi,map,sheet,name,manual){
+  const rows=extractRows(aoa,hi,map);
+  if(!rows.length){toast(manual?'지정한 열에서 유효한 내역 행(품명 + 0보다 큰 수량)을 찾지 못했습니다. 열과 헤더 행을 다시 확인하세요.':'유효한 내역 행이 없습니다.');return false;}
+  LIVE.mapped=null;S.narrative=null;S.reviewId=null;S.reviewVersion=null;S.rows=rows.map(r=>mapRow(r,S.settings));S.fileName=name;S.reportGenerated=false;S.preds={};S.modal=null;persist();render();
+  toast(`'${name}' [${sheet}] ${rows.length}행 파싱 완료 (헤더 ${hi+1}행 ${manual?'직접 지정':'자동 인식'})`);return true;
+}
+function guessHeaderRow(aoa){let best=0,bs=-1;for(let i=0;i<Math.min(aoa.length,40);i++){const r=aoa[i]||[];const txt=r.filter(c=>{const v=String(c).trim();return v&&isNaN(parseFloat(v.replace(/,/g,'')));}).length;const hit=Object.keys(detectCols(r)).length;const sc=txt+hit*3;if(sc>bs){bs=sc;best=i;}}return best;}
+function openColModal(reason){if(!LAST_WB){toast('먼저 엑셀 파일을 올려 주세요.');return;}
+  let si=0;LAST_WB.sheets.forEach((sh,i)=>{if(sh.aoa.length>LAST_WB.sheets[si].aoa.length)si=i;});
+  const hi=guessHeaderRow(LAST_WB.sheets[si].aoa);
+  S.modal={type:'cols',reason:reason||'',si,hi,map:detectCols(LAST_WB.sheets[si].aoa[hi])};render();}
 function parseWorkbook(buf,name){
   if(!window.XLSX){toast('엑셀 파서를 불러오지 못했습니다(오프라인). 샘플 데이터를 사용합니다.');loadSample();return;}
   const wb=XLSX.read(buf,{type:'array'});
-  const KEY={group:['공종구분','대공종','공종명칭','공사구분','구분'],name:['품명','공종명','명칭','품목','항목명','항목','내역','공종','공정명','작업명'],spec:['규격','사양'],unit:['단위'],qty:['수량','물량']};
+  const sheets=wb.SheetNames.map(sn=>({name:sn,aoa:XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:''})}));
+  LAST_WB={name,sheets};
   let best=null;
-  for(const sn of wb.SheetNames){const aoa=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,defval:''});
-    for(let i=0;i<Math.min(aoa.length,40);i++){const cells=aoa[i].map(c=>String(c).replace(/\s/g,''));const m={};const used=new Set();
-      for(const[k,ks]of Object.entries(KEY)){let idx=-1;for(const x of ks){idx=cells.findIndex((c,ci)=>!used.has(ci)&&c&&(c===x||c.includes(x)));if(idx>=0)break;}if(idx>=0){m[k]=idx;used.add(idx);}}
-      if(m.name!=null&&m.qty!=null){best={sheet:sn,aoa,hi:i,map:m};break;}}
-    if(best)break;}
-  if(!best){toast('헤더(품명·수량)를 찾지 못했습니다. 시트의 컬럼명을 확인하세요.');return;}
-  const {aoa,hi,map,sheet}=best;const rows=[];let no=0;
-  for(let i=hi+1;i<aoa.length;i++){const r=aoa[i];const name=String(r[map.name]||'').trim();const qty=parseFloat(String(r[map.qty]).replace(/,/g,''));if(!name||!isFinite(qty)||qty<=0)continue;if(/합계|소계|계$/.test(name))continue;
-    rows.push({no:++no,group:map.group!=null?String(r[map.group]||'').trim():'',name,spec:map.spec!=null?String(r[map.spec]||'').trim():'',unit:map.unit!=null?String(r[map.unit]||'').trim():'',qty});}
-  if(!rows.length){toast('유효한 내역 행이 없습니다.');return;}
-  let g='';rows.forEach(r=>{if(r.group)g=r.group;else r.group=g||'기타';});
-  LIVE.mapped=null;S.narrative=null;S.reviewId=null;S.reviewVersion=null;S.rows=rows.map(r=>mapRow(r,S.settings));S.fileName=name;S.reportGenerated=false;S.preds={};persist();render();
-  toast(`'${name}' [${sheet}] ${rows.length}행 파싱 완료 (헤더 ${hi+1}행 자동 인식)`);
+  for(const sh of sheets){for(let i=0;i<Math.min(sh.aoa.length,40);i++){const m=detectCols(sh.aoa[i]);if(m.name!=null&&m.qty!=null){best={sheet:sh.name,aoa:sh.aoa,hi:i,map:m};break;}}if(best)break;}
+  if(!best){toast('헤더(품명·수량)를 자동으로 찾지 못했습니다. 열을 직접 지정해 주세요.');openColModal('헤더(품명·수량)를 자동으로 찾지 못했습니다. 아래에서 시트·헤더 행·열을 직접 지정하면 그대로 읽습니다.');return;}
+  if(!importRows(best.aoa,best.hi,best.map,best.sheet,name,false))openColModal('헤더는 찾았지만 유효한 내역 행이 없습니다. 열 지정을 확인해 주세요.');
 }
 function handleFile(file){if(!file)return;const rd=new FileReader();rd.onload=e=>parseWorkbook(new Uint8Array(e.target.result),file.name);rd.readAsArrayBuffer(file);}
 function statusPill(r){if(r.manual)return h('span',{class:'pill pill-info'},'수동 확정');if(r.manualDays!=null&&!r.mapped)return h('span',{class:'pill pill-info'},'일수 직접 입력');if(r.status==='auto')return h('span',{class:'pill pill-good'},'자동 확정');if(r.status==='review')return h('span',{class:'pill pill-warn'},'검토 필요');return h('span',{class:'pill pill-crit'},'미매칭');}
@@ -609,6 +622,7 @@ function viewSites(D){
 function viewBoq(D){
   const wrap=h('div',{});
   wrap.append(pageTitle('내역서 업로드 및 공종명 자동 매핑','엑셀 내역서를 올리면 품명을 표준품셈 표준 명칭에 자동 대조하고, 신뢰도에 따라 자동 확정 / 검토 필요 / 미매칭으로 분류합니다. 실연동 시 LLM이 문맥으로 재판정합니다.',
+    S.rows.length&&LAST_WB&&LAST_WB.name===S.fileName?h('button',{class:'btn btn-outline',onclick:()=>openColModal('자동 인식 결과가 맞지 않으면 열을 다시 지정할 수 있습니다.')},'열 직접 지정'):null,
     S.rows.length?h('button',{class:'btn btn-outline',onclick:()=>{S.rows=[];S.fileName=null;S.reportGenerated=false;persist();render();}},'다른 내역서 업로드'):null));
   if(!S.rows.length){
     const input=h('input',{type:'file',accept:'.xlsx,.xls,.csv',class:'hidden',onchange:e=>handleFile(e.target.files[0])});
@@ -937,7 +951,7 @@ function renderModal(D){
   if(S.modal==='about'){const src=wxSource(S.site.stn);
     box.append(h('h3',{},'데모 범위 안내'),h('div',{class:'sub'},'이 데모에서 실제로 동작하는 것과, 실 시스템에서 확장되는 것을 구분해 안내드립니다.'),
       h('table',{},h('thead',{},h('tr',{},h('th',{},'기능'),h('th',{},'데모에서 동작'),h('th',{},'실 시스템'))),h('tbody',{},
-        ...[['내역서 업로드·파싱','엑셀 실제 파싱(모든 시트), 헤더 자동 인식, 병합셀 승계','동일 + 서버 저장·내역서 버전 이력'],['공종명 매핑',LIVE.llm?`사전·유사도 1차 매핑 + 벡터 검색 후보(${LIVE.vector||'—'}) + LLM 문맥 보정(실동작)`:'동의어 사전 + 문자열 유사도 + 단위 정합 → 신뢰도 3단계. 백엔드 실행 시 벡터 검색 + LLM 문맥 보정','pgvector 적재(동일 벡터 인터페이스), 외부 임베딩 모델 교체, 실무자 보정 이력 학습'],['표준품셈 DB',`${fmt(stdCounts().all)}개 항목 — 검수 공식 ${stdCounts().official} + 원문 자동 추출 ${fmt(stdCounts().auto)}(정제 파이프라인 실동작) + 대표값 ${stdCounts().rep}, 엑셀 업로드로 확장`,'자동 추출 항목 검수·변형(높이·규격) 선택 로직, 벡터 검색'],['기상 데이터',src!=='sim'?'기상청 ASOS API 실데이터 (2016~2025)':'이 지점은 시뮬레이션. 백엔드 실행 시 기상청 API 수집',`전국 ${(window.ASOS_STATIONS||[]).length}개 지점, 현장 좌표 기준 최근접 지점 자동 선택`],['비작업일수 룰 엔진','실제 계산 — 작업 종류별 적용 범위, 임계값 즉시 반영, 휴일·임시공휴일 중복 제외','동일 + 기준 개정 이력 관리'],['품 할증','표준품셈 1-4절(도심지·지세·고소·층수·작업시간·야간·작업환경) 요율을 현장 조건으로 지정하면 중복가산식으로 시공량에 자동 반영','동일 + 공종별 개별 할증 조건'],['작업일수·CPM','실제 계산 — 투입조·선후행 편집, 공종구분/단위 공종 단위, 공정별 달력 배치','동일 + 공정 템플릿 관리, MS Project/엑셀 내보내기'],['보고서',LIVE.llm?'계산값 + LLM 서술(수치 검증 표시), PDF·Word(.docx 양식, python-docx)':'계산값 템플릿 서술, PDF·간이 .doc. 백엔드 실행 시 LLM 서술 + .docx 양식','귀사 보고서 양식 반영, HWP 출력, 서술 톤 템플릿'],['국토부 산정기준','2019 훈령·2024 가이드라인 원문 값 적재 — 유형별 준비기간, 정리기간 상한, 비작업일수 산식(A+B−C·주40시간 하한) 검산, 부록3 지역별 비작업일수 대조(2개 지점), 부록4 1일 작업량 '+(window.STD_GUIDE||[]).length+'항목, 부록5 산정공식 18종 ±20% 검토','부록 3 전 지점·부록 4 전 항목 적재, 기준 개정 시 버전 관리'],['저장·이력',LIVE.backend?'서버 DB(SQLite) 검토 건 등록·버전 이력·상태(초안/검토중/승인)·버전 비교(실동작) + 브라우저 자동 저장':'브라우저 자동 저장 + JSON 파일. 백엔드 실행 시 서버 DB 검토 이력·버전 비교','PostgreSQL 동일 스키마, 사용자·권한, 승인 워크플로우']].map(r=>h('tr',{},h('td',{},h('b',{},r[0])),h('td',{},r[1]),h('td',{},r[2]))))),
+        ...[['내역서 업로드·파싱','엑셀 실제 파싱(모든 시트), 헤더 자동 인식, 인식 실패 시 열 직접 지정, 병합셀 승계','동일 + 서버 저장·내역서 버전 이력'],['공종명 매핑',LIVE.llm?`사전·유사도 1차 매핑 + 벡터 검색 후보(${LIVE.vector||'—'}) + LLM 문맥 보정(실동작)`:'동의어 사전 + 문자열 유사도 + 단위 정합 → 신뢰도 3단계. 백엔드 실행 시 벡터 검색 + LLM 문맥 보정','pgvector 적재(동일 벡터 인터페이스), 외부 임베딩 모델 교체, 실무자 보정 이력 학습'],['표준품셈 DB',`${fmt(stdCounts().all)}개 항목 — 검수 공식 ${stdCounts().official} + 원문 자동 추출 ${fmt(stdCounts().auto)}(정제 파이프라인 실동작) + 대표값 ${stdCounts().rep}, 엑셀 업로드로 확장`,'자동 추출 항목 검수·변형(높이·규격) 선택 로직, 벡터 검색'],['기상 데이터',src!=='sim'?'기상청 ASOS API 실데이터 (2016~2025)':'이 지점은 시뮬레이션. 백엔드 실행 시 기상청 API 수집',`전국 ${(window.ASOS_STATIONS||[]).length}개 지점, 현장 좌표 기준 최근접 지점 자동 선택`],['비작업일수 룰 엔진','실제 계산 — 작업 종류별 적용 범위, 임계값 즉시 반영, 휴일·임시공휴일 중복 제외','동일 + 기준 개정 이력 관리'],['품 할증','표준품셈 1-4절(도심지·지세·고소·층수·작업시간·야간·작업환경) 요율을 현장 조건으로 지정하면 중복가산식으로 시공량에 자동 반영','동일 + 공종별 개별 할증 조건'],['작업일수·CPM','실제 계산 — 투입조·선후행 편집, 공종구분/단위 공종 단위, 공정별 달력 배치','동일 + 공정 템플릿 관리, MS Project/엑셀 내보내기'],['보고서',LIVE.llm?'계산값 + LLM 서술(수치 검증 표시), PDF·Word(.docx 양식, python-docx)':'계산값 템플릿 서술, PDF·간이 .doc. 백엔드 실행 시 LLM 서술 + .docx 양식','귀사 보고서 양식 반영, HWP 출력, 서술 톤 템플릿'],['국토부 산정기준','2019 훈령·2024 가이드라인 원문 값 적재 — 유형별 준비기간, 정리기간 상한, 비작업일수 산식(A+B−C·주40시간 하한) 검산, 부록3 지역별 비작업일수 대조(2개 지점), 부록4 1일 작업량 '+(window.STD_GUIDE||[]).length+'항목, 부록5 산정공식 18종 ±20% 검토','부록 3 전 지점·부록 4 전 항목 적재, 기준 개정 시 버전 관리'],['저장·이력',LIVE.backend?'서버 DB(SQLite) 검토 건 등록·버전 이력·상태(초안/검토중/승인)·버전 비교(실동작) + 브라우저 자동 저장':'브라우저 자동 저장 + JSON 파일. 백엔드 실행 시 서버 DB 검토 이력·버전 비교','PostgreSQL 동일 스키마, 사용자·권한, 승인 워크플로우']].map(r=>h('tr',{},h('td',{},h('b',{},r[0])),h('td',{},r[1]),h('td',{},r[2]))))),
       h('div',{class:'inline',style:{justifyContent:'flex-end',marginTop:'14px'}},h('button',{class:'btn btn-primary',onclick:close},'닫기')));
   }else if(S.modal.type==='map'){
     const r=S.modal.row;const cands=candidatesFor(r,5);
@@ -951,6 +965,27 @@ function renderModal(D){
       h('div',{style:{fontWeight:700,margin:'14px 0 6px'}},'표준품셈에 없는 항목 — 작업일수 직접 입력'),
       h('div',{class:'inline'},daysIn,h('span',{class:'small'},'일 (이 항목은 공종구분 기준 공정에 포함되며 기상 영향은 일반 범위로 적용)'),h('button',{class:'btn btn-outline btn-sm',onclick:()=>{const v=parseFloat(daysIn.value);if(!(v>0)){toast('일수를 입력하세요.');return;}r.mapped=null;r.manual=false;r.manualDays=v;r.status='unmapped';r.score=0;S.modal=null;invalidate();toast(`'${r.name}' 작업일수 ${v}일을 직접 반영했습니다.`);}},'반영')),
       h('div',{class:'inline',style:{justifyContent:'space-between',marginTop:'14px'}},h('button',{class:'btn btn-outline',onclick:()=>{r.mapped=null;r.manual=false;r.manualDays=null;r.status='unmapped';S.modal=null;invalidate();toast('산정 제외(미매칭)로 표시했습니다.');}},'산정에서 제외'),h('button',{class:'btn btn-primary',onclick:close},'닫기')));
+  }else if(S.modal.type==='cols'){
+    const m=S.modal;const wbk=LAST_WB;const sh=wbk.sheets[m.si];const aoa=sh.aoa;const hdr=aoa[m.hi]||[];
+    const ncol=Math.min(40,Math.max(1,...aoa.slice(0,60).map(r=>(r||[]).length)));
+    const colName=i=>{let n=i,t='';do{t=String.fromCharCode(65+n%26)+t;n=Math.floor(n/26)-1;}while(n>=0);return t;};
+    const clip=(v,n=18)=>{const t=String(v??'').replace(/\s+/g,' ').trim();return t.length>n?t.slice(0,n)+'…':t;};
+    const ready=m.map.name!=null&&m.map.qty!=null;const cnt=ready?extractRows(aoa,m.hi,m.map).length:0;
+    const roleOf=ci=>Object.keys(COL_LABEL).find(k=>m.map[k]===ci);
+    const colSel=k=>h('label',{class:'field',style:{minWidth:'150px',flex:'1'}},h('span',{class:'small',style:{fontWeight:700}},COL_LABEL[k]),
+      h('select',{'data-col':k,onchange:e=>{const v=e.target.value;if(v==='')delete m.map[k];else{const ci=parseInt(v);for(const o of Object.keys(m.map))if(o!==k&&m.map[o]===ci)delete m.map[o];m.map[k]=ci;}render();}},
+        h('option',{value:''},k==='name'||k==='qty'?'열 선택…':'(없음)'),...Array.from({length:ncol},(_,ci)=>h('option',{value:ci,selected:m.map[k]===ci},`${colName(ci)}열 · ${clip(hdr[ci])||'(빈 칸)'}`))));
+    const pv=aoa.slice(m.hi,m.hi+7);const showCols=Math.min(ncol,14);
+    box.append(h('h3',{},'열 직접 지정 — ',wbk.name),h('div',{class:'sub'},m.reason||'내역서의 어느 열이 품명·수량인지 직접 지정합니다. 양식이 달라도 이 지정만 하면 읽을 수 있습니다.'),
+      h('div',{class:'inline',style:{gap:'10px 14px',alignItems:'flex-end',marginBottom:'10px'}},
+        h('label',{class:'field'},h('span',{class:'small',style:{fontWeight:700}},'시트'),h('select',{'data-col':'sheet',onchange:e=>{m.si=parseInt(e.target.value);m.hi=guessHeaderRow(wbk.sheets[m.si].aoa);m.map=detectCols(wbk.sheets[m.si].aoa[m.hi]);render();}},...wbk.sheets.map((x,i)=>h('option',{value:i,selected:i===m.si},`${x.name} (${x.aoa.length}행)`)))),
+        h('label',{class:'field'},h('span',{class:'small',style:{fontWeight:700}},'헤더(제목) 행'),h('select',{'data-col':'hi',onchange:e=>{m.hi=parseInt(e.target.value);m.map=detectCols(aoa[m.hi]);render();}},...Array.from({length:Math.min(aoa.length,40)},(_,i)=>h('option',{value:i,selected:i===m.hi},`${i+1}행 · ${clip((aoa[i]||[]).filter(c=>String(c).trim()).slice(0,3).join(' / '),26)||'(빈 행)'}`))))),
+      h('div',{class:'inline',style:{gap:'10px 14px',alignItems:'flex-end'}},...['name','qty','spec','unit','group'].map(colSel)),
+      h('div',{style:{fontWeight:700,margin:'14px 0 6px'}},'미리보기 ',h('span',{class:'small',style:{fontWeight:400}},`헤더 ${m.hi+1}행부터 7행 · 지정한 열은 색으로 표시`)),
+      h('div',{class:'tbl-wrap',style:{maxHeight:'230px',overflow:'auto'}},h('table',{},h('thead',{},h('tr',{},h('th',{},'행'),...Array.from({length:showCols},(_,ci)=>{const r=roleOf(ci);return h('th',{style:r?{background:'var(--info-bg)',color:'var(--brand)'}:{}},colName(ci),r?h('div',{class:'small'},COL_LABEL[r].replace(' (필수)','')):null);}))),
+        h('tbody',{},...pv.map((r,ri)=>h('tr',{style:ri===0?{fontWeight:700}:{}},h('td',{class:'mono'},m.hi+ri+1),...Array.from({length:showCols},(_,ci)=>h('td',{style:roleOf(ci)?{background:'var(--info-bg)'}:{}},clip((r||[])[ci],16)))))))),
+      h('div',{class:'note',style:{marginTop:'10px'}},ready?`이 지정으로 읽으면 내역 ${cnt}행이 인식됩니다 (품명이 있고 수량이 0보다 큰 행, 소계·합계 제외).`:'품명 열과 수량 열은 반드시 지정해야 합니다.'),
+      h('div',{class:'inline',style:{justifyContent:'flex-end',marginTop:'14px'}},h('button',{class:'btn btn-outline',onclick:close},'취소'),h('button',{class:'btn btn-primary',disabled:!ready||!cnt,onclick:()=>importRows(aoa,m.hi,m.map,sh.name,wbk.name,true)},'이 지정으로 읽기')));
   }else if(S.modal.type==='act'){
     const a=S.modal.act;const groups=[...new Set(D.acts.map(x=>x.group))].filter(g=>g!==a.group);const cur=new Set(S.preds[a.group]||DEFAULT_PRED[a.group]||[]);
     box.append(h('h3',{},a.key),h('div',{class:'sub'},`작업일 ${a.dur}일 (순작업 ${a.net} + 간접 ${a.indirect} + 보정 ${a.adj}) · ES ${a.es} / EF ${a.ef} / LS ${a.ls} / LF ${a.lf} · 여유 ${a.float}일 ${a.critical?'· 주공정선':''} · ${kdate(a.startDate)} ~ ${kdate(a.endDate)} · 기상 범위 ${SCOPES[a.scope]}`),
