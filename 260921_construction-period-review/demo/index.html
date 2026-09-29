@@ -784,7 +784,10 @@ function formulaCard(D,compact){const F=M_.formulas;if(!F)return null;const site
 function prepTypeLabel(){const t=S.settings.period.prepType;const x=t&&M_.prep&&M_.prep.types.find(y=>y.id===t);return x?`${x.label} ${x.days}일`:null;}
 
 function viewWx(D){
-  const wrap=h('div',{});const st=S.settings;const stn=S.site.stn;const scope=S.wxScope;const nw=nonWorking(stn,st,scope);const src=wxSource(stn);
+  const wrap=h('div',{});const st=S.settings;const stn=S.site.stn;
+  /* 적용 중인 룰이 없는 범위(예: 실내마감)는 그림·집계표가 비므로 선택 대상에서 뺀다 */
+  const scopeHasRule=sc=>st.rules.some(r=>r.enabled&&r.scopes.includes(sc));
+  const scope=scopeHasRule(S.wxScope)?S.wxScope:(ALL_SCOPES.find(scopeHasRule)||S.wxScope);const nw=nonWorking(stn,st,scope);const src=wxSource(stn);
   wrap.append(pageTitle('기상 데이터 분석 및 비작업일수 산출',`${S.site.region||S.site.name} 기준 기상청 ${stationLabel(stn)} 지점 최근 10년(2016~2025) 일별 자료에 작업 제한 룰을 적용해 월별 비작업일수를 계산합니다. 룰은 작업 종류(토공·콘크리트·고소·실내)별로 적용 범위가 다르며, 휴일과 겹치는 날은 이중 계산하지 않습니다.`));
   const rulesOn=st.rules.filter(r=>r.enabled&&r.scopes.includes(scope));
   const srcLabel=src==='api'?'기상청 실데이터':src==='static'?'기상청 실데이터(캐시)':'시뮬레이션 데이터';
@@ -793,15 +796,15 @@ function viewWx(D){
   const monthData=nw.monthly.map(m=>{const o={label:m.m+'월'};rulesOn.forEach(r=>o[r.id]=m.byRule[r.id]);return o;});
   const colors={rain:'#2a78d6',heat:'#eb6834',wind:'#1baf7a',snow:'#4a3aa7',cold:'#e87ba4'};
   const chart=barChart(monthData,rulesOn.map(r=>({key:r.id,name:r.label+' 기준',color:colors[r.id]})),{labels:true});
-  const scopeSeg=h('div',{class:'seg'},...ALL_SCOPES.map(sc=>h('button',{class:sc===scope?'on':'',onclick:()=>{S.wxScope=sc;render();}},SCOPES[sc])));
+  const scopeSeg=h('div',{class:'seg'},...ALL_SCOPES.filter(scopeHasRule).map(sc=>h('button',{class:sc===scope?'on':'',onclick:()=>{S.wxScope=sc;render();}},SCOPES[sc])));
   const rulesBox=h('div',{},...st.rules.map(r=>h('div',{class:'rule'},
     h('label',{class:'switch'},h('input',{type:'checkbox',checked:r.enabled,onchange:e=>{r.enabled=e.target.checked;invalidate();}})),
     h('div',{},h('div',{class:'name'},r.label),h('div',{class:'desc'},r.desc),h('div',{class:'tag-src'},r.src),h('div',{class:'scope-chips'},...ALL_SCOPES.map(sc=>h('span',{class:'chip'+(r.scopes.includes(sc)?' on':''),onclick:()=>{r.scopes=r.scopes.includes(sc)?r.scopes.filter(x=>x!==sc):[...r.scopes,sc];invalidate();}},SCOPES[sc])))),
     h('span',{class:'small'},r.op==='>='?'≥':'≤'),h('input',{type:'number',step:r.field==='rain'?1:0.5,value:r.value,'aria-label':r.label+' 기준값',onchange:e=>{const v=parseFloat(e.target.value);const R=RULE_RANGE[r.id]||[-100,1000];if(!isFinite(v)||v<R[0]||v>R[1]){toast(`${r.label} 기준은 ${R[0]}~${R[1]}${r.unit} 사이로 입력하세요. 이전 값으로 되돌렸습니다.`);render();return;}r.value=v;invalidate();}}),h('span',{class:'small'},r.unit))));
   const holBox=h('div',{class:'inline',style:{gap:'16px',marginTop:'12px'}},...[['sunday','일요일 휴무'],['saturday','토요일 휴무'],['public','법정·임시공휴일'],['dedupe','휴일 중복 제외']].map(([k,l])=>h('label',{class:'switch'},h('input',{type:'checkbox',checked:st.holiday[k],onchange:e=>{st.holiday[k]=e.target.checked;invalidate();}}),l)));
-  const scopeSummary=h('table',{},h('thead',{},h('tr',{},h('th',{},'적용 범위'),h('th',{},'적용 룰'),h('th',{class:'num'},'연평균 비작업일'))),h('tbody',{},...ALL_SCOPES.map(sc=>{const n=nonWorking(stn,st,sc);return h('tr',{class:'click',onclick:()=>{S.wxScope=sc;render();}},h('td',{},h('b',{},SCOPES[sc])),h('td',{class:'small'},st.rules.filter(r=>r.enabled&&r.scopes.includes(sc)).map(r=>r.label).join('·')||'—'),h('td',{class:'num'},h('b',{},fmt1(n.annualWx)),'일'));})));
+  const scopeSummary=h('table',{},h('thead',{},h('tr',{},h('th',{},'적용 범위'),h('th',{},'적용 룰'),h('th',{class:'num'},'연평균 비작업일'))),h('tbody',{},...ALL_SCOPES.map(sc=>{const n=nonWorking(stn,st,sc);const has=scopeHasRule(sc);return h('tr',has?{class:'click',onclick:()=>{S.wxScope=sc;render();}}:{},h('td',{},h('b',{},SCOPES[sc])),h('td',{class:'small'},st.rules.filter(r=>r.enabled&&r.scopes.includes(sc)).map(r=>r.label).join('·')||'날씨 기준 없음 (휴일만 적용)'),h('td',{class:'num'},h('b',{},fmt1(n.annualWx)),'일'));})));
   wrap.append(h('div',{class:'grid-side'},
-    h('div',{},h('div',{class:'card',style:{margin:'0 0 16px'}},h('div',{class:'card-head'},h('div',{},h('div',{class:'card-title'},'월별 평균 기상 비작업일수 (10년 평균)'),h('div',{class:'card-desc'},'기준별로 쌓아 표시. 같은 날 두 기준이 동시에 걸리면 비작업일은 1일로만 셉니다.')),scopeSeg),chart),
+    h('div',{},h('div',{class:'card',style:{margin:'0 0 16px'}},h('div',{class:'card-head'},h('div',{},h('div',{class:'card-title'},'월별 평균 기상 비작업일수 (10년 평균)'),h('div',{class:'card-desc'},'기준별로 쌓아 표시. 같은 날 두 기준이 동시에 걸리면 비작업일은 1일로만 셉니다.')),scopeSeg),rulesOn.length?chart:h('div',{class:'note'},'적용 중인 날씨 기준이 없습니다. 오른쪽 룰 엔진에서 기준을 켜면 월별 일수가 표시됩니다.')),
       h('div',{class:'card',style:{margin:'0 0 16px'}},h('div',{class:'card-title',style:{marginBottom:'10px'}},'월별 집계표 — ',SCOPES[scope]),h('div',{class:'tbl-wrap'},h('table',{},h('thead',{},h('tr',{},h('th',{},'월'),...rulesOn.map(r=>h('th',{class:'num'},r.label)),h('th',{class:'num'},'휴일 겹침'),h('th',{class:'num'},'기상 비작업'),h('th',{class:'num'},'휴일'),h('th',{class:'num'},'월 비작업 합계'))),
         h('tbody',{},...nw.monthly.map(m=>h('tr',{},h('td',{},m.m,'월'),...rulesOn.map(r=>h('td',{class:'num'},fmt1(m.byRule[r.id]))),h('td',{class:'num small'},fmt1(m.overlap)),h('td',{class:'num'},h('b',{},fmt1(m.wx))),h('td',{class:'num'},fmt1(m.hol)),h('td',{class:'num'},h('b',{},fmt1(m.wx+m.hol))))),
           h('tr',{},h('td',{},h('b',{},'연간')),...rulesOn.map(r=>h('td',{class:'num'},h('b',{},fmt1(nw.monthly.reduce((a,m)=>a+m.byRule[r.id],0))))),h('td',{class:'num small'},fmt1(nw.wxOnHoliday/nw.years)),h('td',{class:'num'},h('b',{},fmt1(nw.annualWx))),h('td',{class:'num'},h('b',{},fmt1(nw.holTotal/nw.years))),h('td',{class:'num'},h('b',{},fmt1(nw.annualWx+nw.holTotal/nw.years)))))))),
