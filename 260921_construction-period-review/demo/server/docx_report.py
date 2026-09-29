@@ -120,7 +120,7 @@ def build_docx(d: dict) -> bytes:
     mo = d.get('molit') or {}
     if mo:
         _h(doc, '7. 국토부 공사기간 산정기준 대조')
-        _p(doc, f"국토교통부 「공공 건설공사의 공사기간 산정기준」(2019 훈령) 및 「2024년 적정 공사기간 확보를 위한 가이드라인」의 산식과 참고값으로 본 산정을 검산한 결과입니다. 비작업일수 산식(A+B−C, 주 40시간 하한 {'적용' if mo.get('nw_floor') else '미적용'})으로 계산한 토공·옥외 기준 연간 비작업일수는 {mo.get('nw_formula_annual')}일이며, 본 산정의 일별 배치 기준 {mo.get('nw_ours_annual')}일입니다.")
+        _p(doc, f"국토교통부 「공공 건설공사의 공사기간 산정기준」(국토교통부고시 제2024-1021호) 및 「2026년 적정 공사기간 확보를 위한 가이드라인」의 산식과 참고값으로 본 산정을 검산한 결과입니다. 비작업일수 산식(A+B−C, 주 40시간 하한 {'적용' if mo.get('nw_floor') else '미적용'})으로 계산한 토공·옥외 기준 연간 비작업일수는 {mo.get('nw_formula_annual')}일이며, 본 산정의 일별 배치 기준 {mo.get('nw_ours_annual')}일입니다.")
         rows = mo.get('nw_rows') or []
         if rows:
             _table(doc, ['구분(토공·옥외)'] + [f"{r['m']}월" for r in rows] + ['연간'],
@@ -128,7 +128,7 @@ def build_docx(d: dict) -> bytes:
                     ['본 산정'] + [f"{r['ours']}" for r in rows] + [mo.get('nw_ours_annual')]], num_cols=tuple(range(1, 14)))
         reg = mo.get('regional')
         if reg and reg.get('rows'):
-            _p(doc, f"가이드라인 부록 3 지역별 비작업일수({reg.get('station')} 지점, 2014~2023)와의 조건별 대조:", 9)
+            _p(doc, f"가이드라인 부록 3 지역별 비작업일수({reg.get('station')} 지점, 2015~2024)와의 조건별 대조:", 9)
             _table(doc, ['조건', '부록 3 연간', '본 산정 연간', '차이'], [[r['cond'], r['official'], r['ours'], f"{r['ours'] - r['official']:+.1f}"] for r in reg['rows']], [8, 3, 3, 3], num_cols=(1, 2, 3))
         fm = mo.get('formula')
         if fm:

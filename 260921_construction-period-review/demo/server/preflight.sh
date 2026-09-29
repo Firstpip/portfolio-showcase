@@ -22,7 +22,7 @@ if curl -s -m 6 -o /dev/null https://api.anthropic.com 2>/dev/null; then ok "인
 
 echo "[2] 파일"
 MISS=0
-for f in ../index.html ../vendor/xlsx.full.min.js ../data/pumsem2026.pdf ../data/gosi_period_2019.pdf ../data/guide_period_2024.pdf reviews.baseline.db app.py vector_index.py; do [ -s "$f" ] || { bad "없음: $f"; MISS=1; }; done
+for f in ../index.html ../vendor/xlsx.full.min.js ../data/pumsem2026.pdf ../data/gosi_2024-1021.html ../data/guide_period_2026.pdf reviews.baseline.db app.py vector_index.py; do [ -s "$f" ] || { bad "없음: $f"; MISS=1; }; done
 [ $MISS = 0 ] && ok "데모·원문 PDF·기준 DB"
 if [ -s models/e5-small/model_quantized.onnx ] && [ -s models/e5-small/tokenizer.json ]; then ok "문장 임베딩 모델"; else warn "문장 임베딩 모델 없음 — bash get-model.sh (없어도 문자 방식으로 동작)"; fi
 DM=0; for f in sample-boq.xlsx sample-boq-road.xlsx sample-boq-format2.xlsx sample-boq-format3.xlsx sample-std-add.xlsx; do cmp -s "$HOME/Desktop/시연파일/$f" "../$f" || DM=1; done
