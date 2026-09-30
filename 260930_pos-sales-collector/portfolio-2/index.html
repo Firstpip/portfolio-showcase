@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>멀티 POS 수집 정책·Adapter 확장 콘솔 — 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P2 — 메인 1 · 서브 2 · 나머지 무채색 (gen-color-tokens.js 산출, hue 0°, light) ── */
+:root{
+  /* 메인 — 브랜드 마크·primary CTA(화면당 1)·활성 nav·링크·주 차트·포커스. 앵커 m800 = plan primary */
+  --m50:#eeeeee;
+  --m100:#eeeeee;
+  --m200:#eeeeee;
+  --m300:#dedede;
+  --m400:#bcbcbc;
+  --m500:#939393;
+  --m600:#666666;
+  --m700:#3b3b3b;
+  --m800:#101010;
+  --m900:#0d0d0d;
+  /* 무채색 — 배경(n0~n2)·테두리/비활성(n3~n5)·아이콘/보조텍스트(n6~n8)·본문/다크필(n9~n10). 아바타·태그·아이콘박스·KPI배경·보조 차트는 전부 여기 */
+  --n0:#f4f4f4;
+  --n1:#ffffff;
+  --n2:#f0efef;
+  --n3:#e6e5e5;
+  --n4:#d7d5d5;
+  --n5:#bab5b5;
+  --n6:#989090;
+  --n7:#7a7171;
+  --n8:#5a5353;
+  --n9:#3a3636;
+  --n10:#101010;
+  /* 서브 — 상태 의미가 있을 때만. 배지=bg+text, 점/셀/바=solid */
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b; /* 성공/진행/정상/상승 */
+  --s3:#d48d11; --s3-bg:#f6f1ea; --s3-text:#8b6118; /* 경고/주의 */
+}
+/* ⚠ s2(오류/위험/실패/하락/환불) — 메인 hue 0°와 0° 겹침 → 제거, 해당 상태는 무채색(n9/n10 필 + 아이콘)으로 표현 */
+/* ⚠ primary #101010가 거의 무채색(채도 0%) — 메인 램프가 회색 계열이 된다. 브랜드 포인트가 필요하면 plan primary를 유채색으로 */
+
+/* ── 상태 레이어 P2 — 모양은 페이지가, 상태는 여기서 (gen-component-kit.js 산출, 색은 토큰만) ── */
+/* state-layer elevation=flat theme=light */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{filter:brightness(.94);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #ffffff;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--n10);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;min-height:100%;background:var(--n0);color:var(--n10);font-family:'Pretendard',-apple-system,'Apple SD Gothic Neo',sans-serif;font-size:14px;line-height:1.5;letter-spacing:-.01em;-webkit-font-smoothing:antialiased}
+#root{width:100%;min-height:100vh}
+button{font-family:inherit;font-size:inherit;letter-spacing:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select,textarea{font-family:inherit;font-size:14px;letter-spacing:inherit;color:var(--n10)}
+a{color:inherit;text-decoration:none}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:ui-monospace,'SF Mono',Menlo,monospace;letter-spacing:0}
+i.ph{font-size:16px;line-height:1;flex:none}
+
+/* 좌측 사이드바 */
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:260px;background:var(--n1);border-right:1px solid var(--n3);display:flex;flex-direction:column;z-index:20;overflow:auto}
+.sidebar-brand{height:64px;display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid var(--n3);flex:none}
+.logo{width:32px;height:32px;border-radius:8px;background:var(--m800);color:var(--n1);display:grid;place-items:center}
+.logo i.ph{font-size:18px}
+.ws{display:flex;flex-direction:column;line-height:1.25}
+.ws b{font-size:14px;font-weight:600}.ws span{font-size:12px;color:var(--n7)}
+.sidebar-cmdk-hint{margin:16px 16px 8px;height:36px;display:flex;align-items:center;gap:8px;padding:0 12px;border-radius:8px;border:1px solid var(--n4);color:var(--n7);background:var(--n0);width:calc(100% - 32px);text-align:left;transition:border-color .12s}
+.sidebar-cmdk-hint:hover{border-color:var(--n8)}
+.sidebar-cmdk-hint span{flex:1}
+.kbd{display:inline-flex;align-items:center;height:20px;padding:0 6px;border-radius:6px;border:1px solid var(--n4);background:var(--n1);font-size:12px;color:var(--n8);font-family:inherit}
+.sidebar-nav{display:flex;flex-direction:column;gap:2px;padding:8px}
+.sidebar-link{position:relative;display:flex;align-items:center;gap:12px;height:36px;padding:0 12px;border-radius:8px;color:var(--n8);font-weight:500;cursor:pointer;transition:background .1s,color .1s}
+.sidebar-link:hover{background:var(--n2);color:var(--n10)}
+.sidebar-link.active{background:var(--n2);color:var(--n10);font-weight:600}
+.sidebar-link.active::before{content:"";position:absolute;left:-8px;top:8px;bottom:8px;width:4px;border-radius:0 4px 4px 0;background:var(--m800)}
+.sidebar-section{padding:8px}
+.sidebar-section-title{padding:8px 12px;font-size:12px;color:var(--n7);font-weight:600}
+.sidebar-link.grp.active{background:none;font-weight:700;color:var(--n10)}
+.sidebar-link.grp.active::before{display:none}
+.sidebar-link.grp.active::after{content:"";margin-left:auto;width:6px;height:6px;border-radius:50%;background:var(--m800)}
+.sidebar-link .cnt{margin-left:auto;font-size:12px;color:var(--n7)}
+.sidebar-user{margin-top:auto;padding:16px;border-top:1px solid var(--n3);display:flex;align-items:center;gap:12px}
+.avatar{width:32px;height:32px;border-radius:50%;background:var(--n2);color:var(--n8);display:grid;place-items:center;font-weight:600}
+
+/* 메인 */
+.main{margin-left:260px;width:calc(100% - 260px);min-height:100vh;flex:1;min-width:0}
+.topbar{position:sticky;top:0;z-index:15;height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:var(--n0);border-bottom:1px solid var(--n3)}
+.breadcrumb{display:flex;align-items:center;gap:8px;color:var(--n7)}
+.breadcrumb a{cursor:pointer}.breadcrumb a:hover{color:var(--n10)}
+.breadcrumb .divider{color:var(--n5)}
+.breadcrumb b{color:var(--n10);font-weight:600}
+.topbar-actions{display:flex;align-items:center;gap:8px}
+.btn-cmdk{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:9999px;border:1px solid var(--n4);background:var(--n1);color:var(--n8);transition:border-color .12s}
+.btn-cmdk:hover{border-color:var(--n8)}
+.content{padding:24px;animation:fadeUp .3s ease-out}
+.page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-bottom:24px}
+.page-title{font-size:32px;line-height:1.15;font-weight:600;letter-spacing:-.02em}
+.sub{font-size:12px;color:var(--n7)}
+.h20{font-size:20px;font-weight:600;line-height:1.3;letter-spacing:-.01em}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;padding:0 16px;border-radius:9999px;font-weight:600;white-space:nowrap;transition:background .12s,border-color .12s,filter .12s}
+.btn.primary{background:var(--m800);color:var(--n1)}
+.btn.primary:hover{background:var(--m700)}
+.btn.ghost{background:var(--n1);border:1px solid var(--n4);color:var(--n10)}
+.btn.ghost:hover{border-color:var(--n8)}
+.btn.sm{height:28px;padding:0 12px;font-size:12px}
+.card{background:var(--n1);border:1px solid var(--n3);border-radius:12px;padding:16px}
+.card-head{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:16px}
+.card-title{font-size:14px;font-weight:600}
+.badge{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 10px;border-radius:9999px;font-size:12px;font-weight:600;background:var(--n2);color:var(--n8);white-space:nowrap}
+.badge.ok{background:var(--s1-bg);color:var(--s1-text)}
+.badge.warn{background:var(--s3-bg);color:var(--s3-text)}
+.badge.dark{background:var(--n10);color:var(--n1)}
+.badge.line{background:var(--n1);border:1px solid var(--n4)}
+.seg{display:inline-flex;padding:2px;border-radius:9999px;background:var(--n2)}
+.seg button{height:28px;padding:0 12px;border-radius:9999px;font-weight:500;color:var(--n8);transition:background .12s}
+.seg button.on{background:var(--n1);color:var(--n10);font-weight:600;box-shadow:rgba(36,36,36,.08) 0 1px 3px}
+
+/* 인사이트 보드 */
+.board{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;margin-bottom:16px;align-items:start}
+.hero-viz{padding:16px 16px 8px;position:relative}
+.legend{display:flex;gap:16px;align-items:center;font-size:12px;color:var(--n8);flex-wrap:wrap}
+.legend i.sw{display:inline-block;width:12px;height:12px;border-radius:4px;margin-right:6px;vertical-align:-2px}
+.kpi-side{display:flex;flex-direction:column;gap:12px}
+.kpi{padding:12px 16px;border-radius:12px;border:1px solid var(--n3);background:var(--n1)}
+.kpi .l{font-size:12px;color:var(--n7)}
+.kpi .v{font-size:20px;font-weight:600;letter-spacing:-.01em;margin-top:2px}
+.kpi .v small{font-size:12px;color:var(--n7);font-weight:500;margin-left:4px}
+.form{display:flex;flex-direction:column;gap:12px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:12px;font-weight:600;color:var(--n8);display:flex;justify-content:space-between}
+.field input[type=number],.field input[type=text],.field select,.field textarea{height:36px;padding:0 12px;border-radius:8px;border:1px solid var(--n4);background:var(--n1)}
+.field textarea{height:72px;padding:8px 12px;resize:none}
+input[type=range]{accent-color:var(--m800);width:100%;height:20px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.widgets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--n2)}
+.row:last-child{border-bottom:0}
+.tl{position:relative;padding-left:20px}
+.tl::before{content:"";position:absolute;left:4px;top:6px;bottom:6px;width:1px;background:var(--n4)}
+.tl-i{position:relative;padding-bottom:12px;font-size:12px;color:var(--n8)}
+.tl-i::before{content:"";position:absolute;left:-20px;top:4px;width:9px;height:9px;border-radius:50%;background:var(--n1);border:2px solid var(--n6)}
+.tl-i.new::before{background:var(--m800);border-color:var(--m800)}
+.tl-i b{color:var(--n10)}
+.track{height:6px;border-radius:6px;background:var(--n2);overflow:hidden}
+.fill{height:100%;border-radius:6px;background:var(--n6);transform-origin:left;animation:growX .7s ease-out both}
+.fill.main{background:var(--m800)}
+
+/* 표 */
+.tbl{width:100%;border-collapse:separate;border-spacing:0}
+.tbl th{font-size:12px;font-weight:600;color:var(--n7);text-align:left;padding:8px 12px;border-bottom:1px solid var(--n3);white-space:nowrap}
+.tbl td{padding:8px 12px;border-bottom:1px solid var(--n2);height:40px;white-space:nowrap}
+.tbl th.r,.tbl td.r{text-align:right}
+.tbl tr.rw{cursor:pointer;transition:background .1s}
+.tbl tr.rw:hover td{background:var(--n0)}
+.tbl tr.sel td{background:var(--n2)}
+.tbl tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--m800)}
+.split{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:16px;align-items:start}
+.code{padding:12px 16px;border-radius:8px;background:var(--n10);color:var(--n3);font-size:12px;line-height:1.7;overflow:auto;white-space:pre}
+.code .k{color:var(--n1);font-weight:700}
+.sel-map{height:28px;padding:0 8px;border-radius:8px;border:1px solid var(--n4);background:var(--n1);font-size:12px}
+.sel-map.bad{border-color:var(--n10);border-style:dashed}
+
+/* 큐 보드 */
+.qcols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.qcol{background:var(--n2);border-radius:12px;padding:8px;min-height:260px}
+.qcol h4{font-size:12px;font-weight:600;color:var(--n8);padding:8px;display:flex;justify-content:space-between}
+.qcard{width:100%;text-align:left;background:var(--n1);border:1px solid var(--n3);border-radius:8px;padding:12px;margin-bottom:8px;display:block;transition:border-color .12s,transform .12s;animation:fadeUp .25s ease-out both}
+.qcard:hover{border-color:var(--n7)}
+.qcard.on{border-color:var(--m800);box-shadow:0 0 0 1px var(--m800)}
+.qcard .t{font-weight:600;margin-bottom:2px}
+.diff{width:100%;border-collapse:collapse;font-size:12px}
+.diff td,.diff th{padding:8px;border-bottom:1px solid var(--n2);text-align:left}
+.diff th{color:var(--n7);font-weight:600}
+.diff .old{color:var(--n6);text-decoration:line-through}
+.diff .new{font-weight:700}
+.ver{display:flex;gap:8px;margin:12px 0}
+.ver span{flex:1;padding:8px;border-radius:8px;border:1px solid var(--n3);font-size:12px;text-align:center;color:var(--n8)}
+.ver span.now{border-color:var(--m800);background:var(--n2);color:var(--n10);font-weight:600}
+
+.ck{display:inline-flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer}
+.ck input{accent-color:var(--m800);width:16px;height:16px}
+.doc{border:1px solid var(--n3);border-radius:12px;background:var(--n1);margin-bottom:8px;overflow:hidden}
+.doc-h{width:100%;display:flex;align-items:center;gap:12px;padding:12px 16px;text-align:left;transition:background .1s}
+.doc-h:hover{background:var(--n0)}
+.method{display:inline-flex;align-items:center;justify-content:center;width:52px;height:22px;border-radius:6px;font-size:12px;font-weight:700;background:var(--n2);color:var(--n10)}
+.method.post{background:var(--n10);color:var(--n1)}
+.doc-b{padding:0 16px 16px;animation:fadeUp .2s ease-out}
+
+.overlay{position:fixed;inset:0;z-index:80;background:rgba(16,16,16,.4);display:flex;align-items:center;justify-content:center;animation:fadeIn .15s ease-out}
+.overlay.top{align-items:flex-start;padding-top:12vh}
+.modal{width:min(480px,92vw);max-height:88vh;overflow:auto;background:var(--n1);border-radius:12px;padding:24px;box-shadow:rgba(36,36,36,.2) 0 16px 48px;animation:popIn .2s ease-out}
+.modal h3{font-size:20px;font-weight:600}
+.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
+.cmdk-modal{width:min(560px,92vw);background:var(--n1);border-radius:12px;overflow:hidden;box-shadow:rgba(36,36,36,.25) 0 16px 48px;animation:popIn .18s ease-out}
+.cmdk-input{width:100%;height:52px;padding:0 20px;border:0;border-bottom:1px solid var(--n3);font-size:14px;outline:0!important;box-shadow:none!important}
+.cmdk-results{max-height:340px;overflow:auto;padding:8px}
+.cmdk-group-title{padding:8px 12px;font-size:12px;color:var(--n7);font-weight:600}
+.cmdk-item{display:flex;align-items:center;gap:12px;width:100%;padding:8px 12px;border-radius:8px;text-align:left}
+.cmdk-item.on,.cmdk-item:hover{background:var(--n2)}
+.cmdk-item .kbd{margin-left:auto}
+.toast{position:fixed;right:24px;bottom:24px;z-index:100;display:flex;align-items:center;gap:8px;padding:12px 16px;border-radius:12px;background:var(--n10);color:var(--n1);box-shadow:rgba(36,36,36,.25) 0 8px 24px;animation:slideIn .25s ease-out}
+.secret{display:flex;align-items:center;gap:8px;padding:12px;border-radius:8px;background:var(--n2);margin-top:12px;font-size:12px;word-break:break-all}
+.empty{padding:32px;text-align:center;color:var(--n7)}
+
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes popIn{from{opacity:0;transform:scale(.97) translateY(4px)}to{opacity:1;transform:none}}
+@keyframes slideIn{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
+@keyframes growX{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes draw{from{stroke-dashoffset:1200}to{stroke-dashoffset:0}}
+@keyframes areaIn{from{opacity:0}to{opacity:1}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.draw{stroke-dasharray:1200;animation:draw 1.2s ease-out both}
+.area-in{animation:areaIn .9s ease-out both}
+.blink{animation:blink 1.6s ease-in-out infinite}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useMemo,useEffect,useRef}=React;
+const P=({n,style})=><i className={'ph ph-'+n} style={style}/>;
+const DS={card:{borderRadius:12},input:{borderRadius:8},pill:{borderRadius:9999}};
+const fmt=n=>Math.round(n).toLocaleString('ko-KR');
+const pad=n=>String(n).padStart(2,'0');
+
+const GROUPS={all:{n:'전체 매장',stores:7},cap:{n:'수도권 직영',stores:3},yn:{n:'영남권 가맹',stores:2},cc:{n:'충청권 가맹',stores:2}};
+const POL0={all:{interval:5,rows:200,ps:17,pe:21,pct:50},cap:{interval:3,rows:300,ps:11,pe:14,pct:60},yn:{interval:10,rows:150,ps:17,pe:21,pct:40},cc:{interval:10,rows:150,ps:18,pe:21,pct:40}};
+const ACT=[2,1,1,1,1,2,4,7,10,14,22,38,44,30,18,20,32,52,60,55,42,28,14,6];
+const STORE_NAMES=['강남역점','홍대입구점','판교점','성수점','해운대점','서면점','둔산점'];
+const GROUP_STORES={all:[0,1,2,3,4,5,6],cap:[0,1,2],yn:[4,5],cc:[6,3]};
+const ADAPTERS0=[
+ {id:'a1',name:'Firebird 3.x 표준',kind:'Firebird 3.0',ver:'1.4.0',state:'active',stores:4,auth:'Srp'},
+ {id:'a2',name:'Firebird 2.5 호환',kind:'Firebird 2.5',ver:'1.3.2',state:'active',stores:3,auth:'Legacy_Auth'},
+ {id:'a3',name:'MSSQL 표준',kind:'SQL Server',ver:'0.9.0',state:'hold',stores:0,auth:'SQL 인증'},
+ {id:'a4',name:'SQLite 파일형',kind:'SQLite 3',ver:'0.6.1',state:'hold',stores:0,auth:'파일 접근'},
+];
+const COMMON=['order_no','ordered_at','order_amount','discount_amount','paid_amount','payment_method','is_canceled','updated_at','menu_code','qty','(사용 안 함)'];
+const SRC=[['ORDER_HDR.ORD_NO','주문번호'],['ORDER_HDR.ORD_DT','주문일시'],['ORDER_HDR.TOT_AMT','주문금액'],['ORDER_HDR.DC_AMT','할인금액'],['ORDER_HDR.PAY_AMT','실제 결제금액'],['ORDER_PAY.PAY_KIND','결제수단'],['ORDER_HDR.CNL_YN','취소 여부'],['ORDER_HDR.UPD_DT','변경일시']];
+const MAP0={
+ a1:['order_no','ordered_at','order_amount','discount_amount','paid_amount','payment_method','is_canceled','updated_at'],
+ a2:['order_no','ordered_at','order_amount','discount_amount','paid_amount','payment_method','is_canceled','updated_at'],
+ a3:['order_no','ordered_at','order_amount','','paid_amount','','is_canceled','updated_at'],
+ a4:['order_no','ordered_at','order_amount','','','','',''],
+};
+const Q0=[
+ {id:'q1',store:'해운대점',order:'T-0929-5211',reason:'네트워크 연결 없음',att:0,state:'wait',next:'연결 복구 후'},
+ {id:'q2',store:'해운대점',order:'T-0929-5208',reason:'네트워크 연결 없음',att:0,state:'wait',next:'연결 복구 후'},
+ {id:'q3',store:'서면점',order:'T-0929-6032',reason:'서버 응답 지연(504)',att:2,state:'retry',next:'21:16'},
+ {id:'q4',store:'둔산점',order:'T-0929-7019',reason:'서버 응답 지연(504)',att:1,state:'retry',next:'21:15'},
+ {id:'q5',store:'성수점',order:'T-0929-4044',reason:'검증 실패: 필수 필드 누락',att:5,state:'fail',next:'수동 확인'},
+ {id:'q6',store:'강남역점',order:'T-0929-1141',reason:'버전 충돌: 더 새 변경이 이미 반영됨',att:3,state:'fail',next:'수동 확인'},
+];
+const DIFFS={
+ q1:[['payment_method','카드','간편결제'],['paid_amount','23,800','23,800']],
+ q2:[['is_canceled','N','Y'],['paid_amount','9,900','0']],
+ q3:[['order_amount','33,900','35,900'],['paid_amount','33,900','35,900']],
+ q4:[['discount_amount','0','1,000'],['paid_amount','12,900','11,900']],
+ q5:[['payment_method','카드','(비어 있음)'],['updated_at','20:41','20:58']],
+ q6:[['is_canceled','N','Y'],['paid_amount','9,900','0']],
+};
+const KEYS0=[
+ {id:'k1',name:'구매·발주 시스템 연동',prefix:'pk_live_8f3a…c1d2',scopes:['sales:read','orders:read'],created:'09-12',used:'방금',state:'active'},
+ {id:'k2',name:'재고 비교 배치',prefix:'pk_live_51be…0a77',scopes:['sales:read','reconcile:request'],created:'09-18',used:'12분 전',state:'active'},
+ {id:'k3',name:'테스트 (샌드박스)',prefix:'pk_test_a02c…9e10',scopes:['sales:read'],created:'08-30',used:'3일 전',state:'revoked'},
+];
+const LOGS=[
+ ['21:14:52','구매·발주 시스템 연동','GET','/v1/sales/daily',200],['21:14:31','재고 비교 배치','POST','/v1/reconcile/requests',202],['21:13:09','구매·발주 시스템 연동','GET','/v1/orders/T-0929-1141',200],
+ ['21:11:47','재고 비교 배치','GET','/v1/sales/daily',200],['21:09:20','테스트 (샌드박스)','GET','/v1/sales/daily',401],['21:07:55','구매·발주 시스템 연동','GET','/v1/orders/T-0929-9999',404],
+ ['21:04:12','재고 비교 배치','POST','/v1/reconcile/requests',429],['21:02:03','구매·발주 시스템 연동','GET','/v1/sales/daily',200],['20:58:40','재고 비교 배치','GET','/v1/sales/daily',500],['20:55:18','구매·발주 시스템 연동','GET','/v1/orders/T-0929-2210',200],
+];
+const ENDPOINTS=[
+ ['GET','/v1/sales/daily','매장·영업일별 판매 합계 조회','sales:read','curl -H "Authorization: Bearer $KEY" \\\n  "https://api.sample-hq.kr/v1/sales/daily?store=S01&from=2025-09-27&to=2025-09-29"','{\n  "store": "S01",\n  "days": [\n    { "biz_date": "2025-09-29", "orders": 418, "paid_amount": 6420000 }\n  ]\n}'],
+ ['GET','/v1/orders/{orderNo}','주문 상세와 변경 이력 조회','orders:read','curl -H "Authorization: Bearer $KEY" \\\n  "https://api.sample-hq.kr/v1/orders/T-0929-1141"','{\n  "order_no": "T-0929-1141",\n  "status": "PAID",\n  "versions": 2,\n  "items": [ { "menu_code": "M014", "qty": 1 } ]\n}'],
+ ['POST','/v1/reconcile/requests','매장·영업일 재수집 요청 등록','reconcile:request','curl -X POST -H "Authorization: Bearer $KEY" \\\n  -d \'{"store":"S05","biz_date":"2025-09-29","range_days":1}\' \\\n  https://api.sample-hq.kr/v1/reconcile/requests','{\n  "request_id": "rc_20250929_0031",\n  "state": "accepted"\n}'],
+];
+const SCREENS=[['main','수집 부하 예산·정책','gauge'],['adapters','Adapter 플러그인 관리','plugs-connected'],['queue','변경 이력·재전송 큐','clock-counter-clockwise'],['api','외부 연동 API 관리','key']];
+
+function computeChart(p,gsz){
+  const gf=Math.pow(gsz/7,.25)*1.0;
+  return ACT.map((a,h)=>{
+    const load=a*(5/p.interval)*(p.rows/200)*gf;
+    const peak=h>=p.ps&&h<p.pe;
+    const cap=peak?100*p.pct/100:100;
+    return {h,load,cap,peak,over:load>cap};
+  });
+}
+
+function App(){
+  const [screen,setScreen]=useState('main');
+  const [group,setGroup]=useState('all');
+  const [pol,setPol]=useState(POL0);
+  const [hist,setHist]=useState([{t:'09-26 18:20',tx:'영남권 가맹 수집 주기 5분 → 10분',u:'관리자'},{t:'09-22 10:05',tx:'수도권 직영 피크 허용량 70% → 60%',u:'관리자'},{t:'09-15 09:40',tx:'전체 매장 기본 정책 생성',u:'관리자'}]);
+  const [cmdk,setCmdk]=useState(false);
+  const [cq,setCq]=useState('');
+  const [cIdx,setCIdx]=useState(0);
+  const [toast,setToast]=useState(null);
+  const [busy,setBusy]=useState(false);
+  const [hoverH,setHoverH]=useState(null);
+  const [adapters,setAdapters]=useState(ADAPTERS0);
+  const [selA,setSelA]=useState('a1');
+  const [maps,setMaps]=useState(MAP0);
+  const [vres,setVres]=useState({});
+  const [modal,setModal]=useState(null);
+  const [queue,setQueue]=useState(Q0);
+  const [selQ,setSelQ]=useState('q2');
+  const [keys,setKeys]=useState(KEYS0);
+  const [apiTab,setApiTab]=useState('keys');
+  const [logKey,setLogKey]=useState('전체');
+  const [logSt,setLogSt]=useState('all');
+  const [selLog,setSelLog]=useState(0);
+  const [openDoc,setOpenDoc]=useState(0);
+  const [newKey,setNewKey]=useState(null);
+  const [form,setForm]=useState({name:'',kind:'Firebird 3.0',scopes:{'sales:read':true,'orders:read':false,'reconcile:request':false}});
+
+  useEffect(()=>{if(!toast)return;const id=setTimeout(()=>setToast(null),2600);return()=>clearTimeout(id)},[toast]);
+  useEffect(()=>{
+    const h=e=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();setCmdk(o=>!o);setCq('');setCIdx(0)}else if(e.key==='Escape'){setCmdk(false);setModal(null)}};
+    window.addEventListener('keydown',h);return()=>window.removeEventListener('keydown',h);
+  },[]);
+  const say=m=>setToast(m);
+  const p=pol[group];
+  const setP=(k,v)=>setPol(o=>({...o,[group]:{...o[group],[k]:v}}));
+  const chart=useMemo(()=>computeChart(p,GROUPS[group].stores),[p,group]);
+  const overN=chart.filter(c=>c.over).length;
+  const avgLoad=Math.round(chart.reduce((a,c)=>a+c.load,0)/24);
+  const nextT=(()=>{let m=21*60+14+p.interval;return pad(Math.floor(m/60)%24)+':'+pad(m%60)})();
+  const go=(s)=>{setScreen(s);setCmdk(false)};
+  const save=()=>{setBusy(true);setTimeout(()=>{setBusy(false);setHist(h=>[{t:'09-29 21:14',tx:GROUPS[group].n+' 정책 저장 · 주기 '+p.interval+'분, 피크 '+pad(p.ps)+'~'+pad(p.pe)+'시 허용량 '+p.pct+'%',u:'관리자',n:true},...h]);say('정책이 저장되었습니다')},1000)};
+
+  const cmds=[
+    ...SCREENS.map(([id,l,ic])=>({g:'화면 이동',l,ic,run:()=>go(id)})),
+    {g:'작업',l:'새 Adapter 초안 추가',ic:'plus',run:()=>{setCmdk(false);setScreen('adapters');setModal('adapter')}},
+    {g:'작업',l:'API 키 발급',ic:'key',run:()=>{setCmdk(false);setScreen('api');setApiTab('keys');setModal('key')}},
+    {g:'작업',l:'실패 건 수동 재전송',ic:'arrows-clockwise',run:()=>{setCmdk(false);setScreen('queue')}},
+  ].filter(c=>!cq||c.l.toLowerCase().includes(cq.toLowerCase()));
+
+  /* ── 화면 1: 수집 부하 예산·정책 ── */
+  const W=720,H=280,L=40,B=32,T=12,R=8;
+  const xs=h=>L+(h+.5)*((W-L-R)/24);const ys=v=>T+(H-T-B)*(1-Math.min(v,120)/120);
+  const loadPath=chart.map((c,i)=>(i?'L':'M')+xs(c.h)+' '+ys(c.load)).join(' ');
+  const areaPath=loadPath+' L'+xs(23)+' '+ys(0)+' L'+xs(0)+' '+ys(0)+' Z';
+  const capPath=chart.map((c,i)=>{const x0=L+c.h*((W-L-R)/24),x1=x0+((W-L-R)/24);return (i?'L':'M')+x0+' '+ys(c.cap)+' L'+x1+' '+ys(c.cap)}).join(' ');
+  const hh=hoverH!==null?chart[hoverH]:null;
+  const fixAt=(()=>{for(let i=p.interval;i<=30;i++){if(computeChart({...p,interval:i},GROUPS[group].stores).every(c=>!c.over))return i}return null})();
+  const Main=()=>(<>
+    <div className="page-head"><div><div className="sub" style={{marginBottom:4}}>{GROUPS[group].n} · 매장 {GROUPS[group].stores}곳</div><h1 className="page-title">수집 부하 예산·정책</h1></div>
+      <div style={{display:'flex',gap:8}}><button className="btn ghost" onClick={()=>{setPol(o=>({...o,[group]:POL0[group]}));say('기본값으로 되돌렸습니다')}}><P n="arrow-counter-clockwise"/>기본값으로 되돌리기</button><button className="btn primary" data-loading={busy?'true':'false'} onClick={save}><P n="check"/>{busy?'저장 중':'정책 저장하기'}</button></div></div>
+    <div className="board">
+      <div className="card hero-viz" style={DS.card}>
+        <div className="card-head" style={{marginBottom:8}}><div><div className="h20">시간대별 수집 부하 예산</div><div className="sub">허용 한도와 예상 조회 부하를 겹쳐 확인합니다. 값은 상대 지수입니다.</div></div>
+          <span className={'badge '+(overN?'warn':'ok')}><P n={overN?'warning':'check-circle'}/>{overN?'한도 초과 '+overN+'개 시간대':'모든 시간대 한도 이내'}</span></div>
+        <svg viewBox={'0 0 '+W+' '+H} width="100%" role="img" aria-label="시간대별 수집 부하 차트" onMouseLeave={()=>setHoverH(null)}>
+          {[0,30,60,90].map(v=><g key={v}><line x1={L} x2={W-R} y1={ys(v)} y2={ys(v)} style={{stroke:'var(--n3)'}}/><text x={L-8} y={ys(v)+4} textAnchor="end" style={{fontSize:11,fill:'var(--n7)'}}>{v}</text></g>)}
+          {chart.filter(c=>c.peak).map(c=><rect key={c.h} x={L+c.h*((W-L-R)/24)} y={T} width={(W-L-R)/24} height={H-T-B} style={{fill:'var(--n2)'}}/>)}
+          <path key={'a'+p.interval+p.rows+group} className="area-in" d={areaPath} style={{fill:'var(--n3)',opacity:.85}}/>
+          <path key={'l'+p.interval+p.rows+group} className="draw" d={loadPath} fill="none" style={{stroke:'var(--n7)',strokeWidth:2}} strokeLinejoin="round"/>
+          <path className="draw" d={capPath} fill="none" style={{stroke:'var(--m800)',strokeWidth:2.5}}/>
+          {chart.filter(c=>c.over).map(c=><g key={c.h}><circle cx={xs(c.h)} cy={ys(c.load)} r="6" style={{fill:'var(--n1)',stroke:'var(--n10)',strokeWidth:2.5}} className="blink"/></g>)}
+          {[0,3,6,9,12,15,18,21].map(h=><text key={h} x={xs(h)} y={H-10} textAnchor="middle" style={{fontSize:11,fill:'var(--n7)'}}>{pad(h)}시</text>)}
+          {hh&&<g><line x1={xs(hh.h)} x2={xs(hh.h)} y1={T} y2={H-B} style={{stroke:'var(--n10)',strokeDasharray:'3 3'}}/></g>}
+          {chart.map(c=><rect key={'h'+c.h} x={L+c.h*((W-L-R)/24)} y={T} width={(W-L-R)/24} height={H-T-B} style={{fill:'transparent'}} onMouseEnter={()=>setHoverH(c.h)}/>)}
+        </svg>
+        <div style={{height:28,display:'flex',alignItems:'center',gap:16}} className="legend">
+          <span><i className="sw" style={{background:'var(--m800)'}}/>허용 한도</span><span><i className="sw" style={{background:'var(--n3)',border:'1px solid var(--n6)'}}/>예상 조회 부하</span><span><i className="sw" style={{background:'var(--n2)',border:'1px solid var(--n4)'}}/>영업 피크 구간</span>
+          <span className="num" style={{marginLeft:'auto',color:'var(--n10)',fontWeight:600}}>{hh?pad(hh.h)+'시 · 부하 '+Math.round(hh.load)+' / 한도 '+Math.round(hh.cap):'차트 위에 마우스를 올려 보세요'}</span>
+        </div>
+        <div style={{borderTop:'1px solid var(--n3)',marginTop:12,paddingTop:12}}>
+          {overN?<><div className="card-title" style={{marginBottom:8}}>한도를 넘는 시간대</div>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{chart.filter(c=>c.over).map(c=><span key={c.h} className="badge line num">{pad(c.h)}시 · 부하 {Math.round(c.load)} &gt; 한도 {Math.round(c.cap)}</span>)}</div>
+            <div className="sub" style={{marginTop:8}}>{fixAt?'수집 주기를 '+fixAt+'분으로 늘리거나 1회 조회 건수를 줄이면 모든 시간대가 한도 이내로 들어옵니다.':'수집 주기 상한(30분)으로도 해소되지 않아 피크 허용량 조정이 필요합니다.'}</div>
+            {fixAt&&<button className="btn ghost sm" style={{marginTop:8}} onClick={()=>setP('interval',fixAt)}><P n="lightning"/>수집 주기 {fixAt}분으로 적용하기</button>}</>
+          :<div style={{display:'flex',alignItems:'center',gap:8,color:'var(--s1-text)',fontWeight:600}}><P n="shield-check"/>피크 시간대 POS 업무에 영향을 주지 않는 수집 스케줄입니다.</div>}
+        </div>
+      </div>
+      <div className="kpi-side">
+        <div className="card"><div className="card-head" style={{marginBottom:12}}><div className="card-title">정책 편집</div><span className="badge line">{GROUPS[group].n}</span></div>
+          <div className="form">
+            <div className="field"><label>수집 주기 <span className="num">{p.interval}분</span></label><input type="range" min="1" max="30" value={p.interval} onChange={e=>setP('interval',+e.target.value)}/></div>
+            <div className="field"><label>1회 조회 건수 상한 <span className="num">{p.rows}건</span></label><input type="range" min="50" max="500" step="50" value={p.rows} onChange={e=>setP('rows',+e.target.value)}/></div>
+            <div className="field"><label>피크 시간대 허용량 <span className="num">{p.pct}%</span></label><input type="range" min="10" max="100" step="10" value={p.pct} onChange={e=>setP('pct',+e.target.value)}/></div>
+            <div className="two"><div className="field"><label>피크 시작</label><select value={p.ps} onChange={e=>setP('ps',Math.min(+e.target.value,p.pe-1))}>{Array.from({length:23},(_,i)=><option key={i} value={i}>{pad(i)}시</option>)}</select></div>
+            <div className="field"><label>피크 종료</label><select value={p.pe} onChange={e=>setP('pe',Math.max(+e.target.value,p.ps+1))}>{Array.from({length:24},(_,i)=>i+1).map(i=><option key={i} value={i}>{pad(i%24)}시</option>)}</select></div></div>
+          </div></div>
+        <div className="kpi"><div className="l">적용 대상 매장</div><div className="v num">{GROUPS[group].stores}<small>곳</small></div></div>
+        <div className="kpi"><div className="l">다음 수집 예정</div><div className="v num">{nextT}<small>이후 {p.interval}분 간격</small></div></div>
+        <div className="kpi"><div className="l">평균 조회 부하 지수</div><div className="v num">{avgLoad}<small>/ 100</small></div></div>
+      </div>
+    </div>
+    <div className="widgets">
+      <div className="card"><div className="card-head"><div className="card-title">그룹별 수집 주기</div><span className="sub">짧을수록 진한 막대</span></div>
+        {Object.entries(GROUPS).filter(([k])=>k!=='all').map(([k,g])=><div className="row" key={k}><div style={{flex:1}}><div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}><span>{g.n}</span><b className="num">{pol[k].interval}분</b></div><div className="track"><div className={'fill'+(k===group?' main':'')} style={{width:(100-pol[k].interval*2.6)+'%'}}/></div></div></div>)}
+      </div>
+      <div className="card"><div className="card-head"><div className="card-title">적용 대상 미리보기</div><span className="sub">분할 수집 오프셋</span></div>
+        {GROUP_STORES[group].map((si,i)=>{const m=21*60+14+p.interval+Math.round(i*p.interval/GROUP_STORES[group].length);return <div className="row" key={si}><span>{STORE_NAMES[si]}</span><span className="num" style={{color:'var(--n8)'}}>{pad(Math.floor(m/60)%24)}:{pad(m%60)} 수집 예정</span></div>})}
+      </div>
+      <div className="card"><div className="card-head"><div className="card-title">정책 변경 이력</div></div>
+        <div className="tl">{hist.slice(0,5).map((h,i)=><div key={i} className={'tl-i'+(h.n?' new':'')}><b className="num">{h.t}</b> · {h.tx}</div>)}</div>
+      </div>
+    </div>
+  </>);
+
+  /* ── 화면 2: Adapter ── */
+  const ad=adapters.find(a=>a.id===selA);
+  const mp=maps[selA]||[];
+  const unm=mp.filter(x=>!x).length;
+  const validate=()=>{setBusy(true);setTimeout(()=>{setBusy(false);setVres(v=>({...v,[selA]:{ok:mp.filter(x=>x).length,bad:unm}}));say('매핑 검증이 끝났습니다')},1100)};
+  const Adapters=()=>(<>
+    <div className="page-head"><div><div className="sub" style={{marginBottom:4}}>Agent 코어는 그대로, Adapter만 추가하는 구조</div><h1 className="page-title">Adapter 플러그인 관리</h1></div>
+      <button className="btn primary" onClick={()=>setModal('adapter')}><P n="plus"/>새 Adapter 초안 추가</button></div>
+    <div className="split">
+      <div className="card" style={{padding:8}}>
+        <table className="tbl"><thead><tr><th>이름</th><th>DB 종류</th><th>버전</th><th>상태</th><th className="r">적용 매장</th></tr></thead>
+        <tbody>{adapters.map(a=><tr key={a.id} className={'rw'+(a.id===selA?' sel':'')} onClick={()=>setSelA(a.id)}><td style={{fontWeight:600}}>{a.name}</td><td>{a.kind}</td><td className="mono">v{a.ver}</td><td><span className={'badge '+(a.state==='active'?'ok':'')}>{a.state==='active'?'활성':'보류'}</span></td><td className="r num">{a.stores}곳</td></tr>)}</tbody></table>
+        <div style={{padding:'16px 12px 8px'}}><div className="card-title" style={{marginBottom:8}}>Adapter 계약</div>
+<div className="code mono"><span className="k">interface</span> PosAdapter {'{'}{'\n'}  kind: 'firebird' | 'mssql' | 'sqlite';{'\n'}  connect(cfg: StoreConn): Promise&lt;Session&gt;;      <span style={{color:'var(--n6)'}}>// 읽기 전용 세션</span>{'\n'}  fetchChanged(since: Checkpoint): AsyncIterable&lt;RawOrder&gt;;{'\n'}  fetchDailyTotal(bizDate: string): Promise&lt;number&gt;;{'\n'}{'}'}</div></div>
+      </div>
+      <div className="card" key={selA} style={{animation:'fadeUp .2s ease-out'}}>
+        <div className="card-head" style={{marginBottom:12}}><div><div className="h20">{ad.name}</div><div className="sub">인증 {ad.auth} · v{ad.ver}</div></div><span className={'badge '+(ad.state==='active'?'ok':'')}>{ad.state==='active'?'활성':'보류'}</span></div>
+        <div className="card-title" style={{marginBottom:8}}>필드 매핑</div>
+        <table className="tbl"><thead><tr><th>원천 필드</th><th>공통 스키마</th></tr></thead>
+        <tbody>{SRC.map(([s,l],i)=><tr key={s}><td><div className="mono" style={{fontSize:12}}>{s}</div><div className="sub">{l}</div></td><td><select className={'sel-map'+(mp[i]?'':' bad')} value={mp[i]||''} onChange={e=>{const v=e.target.value;setMaps(m=>({...m,[selA]:m[selA].map((x,j)=>j===i?v:x)}));setVres(r=>({...r,[selA]:null}))}}><option value="">미매핑</option>{COMMON.map(c=><option key={c} value={c}>{c}</option>)}</select></td></tr>)}</tbody></table>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginTop:12,gap:8}}>
+          <span className="sub">{vres[selA]?'통과 '+vres[selA].ok+' · 미매핑 '+vres[selA].bad:unm?'미매핑 '+unm+'개 — 검증 전':'검증 전'}</span>
+          <div style={{display:'flex',gap:8}}><button className="btn ghost sm" data-loading={busy?'true':'false'} onClick={validate}>{busy?'검증 중':'매핑 검증하기'}</button>
+          <button className="btn primary sm" disabled={ad.state==='hold'&&unm>0} onClick={()=>{setAdapters(a=>a.map(x=>x.id===selA?{...x,state:x.state==='active'?'hold':'active'}:x));say(ad.state==='active'?'보류 상태로 전환되었습니다':'Adapter가 활성화되었습니다')}}>{ad.state==='active'?'보류로 전환하기':'활성화하기'}</button></div></div>
+        {ad.state==='hold'&&unm>0&&<p className="sub" style={{marginTop:8}}>미매핑 필드를 모두 지정하면 활성화할 수 있습니다.</p>}
+      </div>
+    </div>
+  </>);
+
+  /* ── 화면 3: 변경 이력·재전송 큐 ── */
+  const QS=[['wait','대기'],['retry','재시도'],['fail','실패']];
+  const cq0=queue.find(q=>q.id===selQ)||queue[0];
+  const dif=DIFFS[cq0.id]||DIFFS.q1;
+  const resend=()=>{setBusy(true);setTimeout(()=>{setBusy(false);setQueue(q=>q.map(x=>x.id===cq0.id?{...x,state:'wait',att:0,next:'다음 수집 주기'}:x));say(cq0.order+' 수동 재전송이 요청되었습니다')},1000)};
+  const Queue=()=>(<>
+    <div className="page-head"><div><div className="sub" style={{marginBottom:4}}>추가 전용 이력 + Upsert 최신 상태</div><h1 className="page-title">변경 이력·재전송 큐</h1></div>
+      <div style={{display:'flex',gap:8,alignItems:'center'}}><span className="badge line">대기 {queue.filter(q=>q.state==='wait').length}</span><span className="badge line">재시도 {queue.filter(q=>q.state==='retry').length}</span><span className="badge dark">실패 {queue.filter(q=>q.state==='fail').length}</span></div></div>
+    <div className="split" style={{gridTemplateColumns:'minmax(0,1fr) 420px'}}>
+      <div className="qcols">{QS.map(([k,l])=><div className="qcol" key={k}><h4><span>{l}</span><span className="num">{queue.filter(q=>q.state===k).length}</span></h4>
+        {queue.filter(q=>q.state===k).map((q,i)=><button key={q.id} className={'qcard'+(q.id===cq0.id?' on':'')} style={{animationDelay:(i*50)+'ms'}} onClick={()=>setSelQ(q.id)}><div className="t">{q.store}</div><div className="mono" style={{fontSize:12,color:'var(--n8)'}}>{q.order}</div><div className="sub" style={{marginTop:6}}>{q.reason}</div><div className="sub" style={{marginTop:2}}>시도 {q.att}회 · {q.next}</div></button>)}
+        {!queue.filter(q=>q.state===k).length&&<div className="empty" style={{padding:16}}>비어 있음</div>}</div>)}</div>
+      <div className="card" style={{padding:8,gridColumn:1}}><div className="card-head" style={{margin:'8px 8px 8px'}}><div className="card-title">최근 변경 이력</div><span className="sub">주문 단위 · 최신 상태는 Upsert 뷰로 조회</span></div>
+        <table className="tbl"><thead><tr><th>시각</th><th>매장</th><th>주문</th><th>변경 내용</th><th className="r">버전</th></tr></thead>
+        <tbody>{[['21:10','해운대점','T-0929-5208','취소 처리','v2'],['21:04','성수점','T-0929-4044','결제수단 비어 있음','v2'],['20:58','서면점','T-0929-6032','주문금액 수정','v2'],['20:52','둔산점','T-0929-7019','할인 적용','v2'],['20:41','강남역점','T-0929-1141','전체 취소','v3']].map((r,i)=><tr key={i} className="rw" onClick={()=>{const f=queue.find(q=>q.order===r[2]);if(f)setSelQ(f.id)}}><td className="num">{r[0]}</td><td>{r[1]}</td><td className="mono" style={{fontSize:12}}>{r[2]}</td><td>{r[3]}</td><td className="r mono">{r[4]}</td></tr>)}</tbody></table></div>
+      <div className="card" key={cq0.id} style={{animation:'fadeUp .2s ease-out',gridRow:'span 2'}}>
+        <div className="card-head" style={{marginBottom:8}}><div><div className="h20 mono" style={{fontSize:20}}>{cq0.order}</div><div className="sub">{cq0.store} · {cq0.reason}</div></div><span className={'badge '+(cq0.state==='fail'?'dark':'')}>{QS.find(x=>x[0]===cq0.state)[1]}</span></div>
+        <div className="ver"><span>v1 신규</span><span className="now">v2 변경 (최신)</span><span style={{color:'var(--n6)'}}>v3 대기</span></div>
+        <table className="diff"><thead><tr><th>필드</th><th>변경 전</th><th>변경 후</th></tr></thead><tbody>{dif.map(([f,a,b])=><tr key={f}><td className="mono">{f}</td><td className="old">{a}</td><td className="new">{b}</td></tr>)}</tbody></table>
+        <div className="sub" style={{marginTop:12}}>순서가 뒤바뀐 건은 버전 번호를 기준으로 판정하여 최신 상태를 덮어쓰지 않습니다.</div>
+        <div className="actions"><button className="btn primary" data-loading={busy?'true':'false'} disabled={cq0.state!=='fail'} onClick={resend}>{busy?'요청 중':'수동 재전송 요청하기'}</button></div>
+        {cq0.state!=='fail'&&<p className="sub" style={{textAlign:'right',marginTop:8}}>실패 상태의 건만 수동으로 재전송할 수 있습니다.</p>}
+      </div>
+    </div>
+  </>);
+
+  /* ── 화면 4: 외부 연동 API ── */
+  const fl=LOGS.filter(l=>(logKey==='전체'||l[1]===logKey)&&(logSt==='all'||(logSt==='ok'&&l[4]<300)||(logSt==='err'&&l[4]>=400)));
+  const lg=fl[selLog]||fl[0];
+  const issue=()=>{
+    const scopes=Object.entries(form.scopes).filter(([,v])=>v).map(([k])=>k);
+    if(!form.name.trim()||!scopes.length)return;
+    const sec='pk_live_'+Array.from({length:24},(_,i)=>'0123456789abcdef'[(i*7+form.name.length*3+i*i)%16]).join('');
+    setKeys(k=>[{id:'k'+(k.length+1),name:form.name.trim(),prefix:sec.slice(0,12)+'…'+sec.slice(-4),scopes,created:'09-29',used:'사용 전',state:'active'},...k]);
+    setNewKey(sec);
+  };
+  const Api=()=>(<>
+    <div className="page-head"><div><div className="sub" style={{marginBottom:4}}>구매·발주 등 사내 시스템이 판매 데이터를 조회하는 REST API</div><h1 className="page-title">외부 연동 API 관리</h1></div>
+      <div style={{display:'flex',gap:8,alignItems:'center'}}><div className="seg">{[['keys','키 관리'],['logs','호출 로그'],['docs','엔드포인트 문서']].map(([k,l])=><button key={k} className={apiTab===k?'on':''} onClick={()=>setApiTab(k)}>{l}</button>)}</div>
+      <button className="btn primary" onClick={()=>{setNewKey(null);setForm(f=>({...f,name:''}));setModal('key')}}><P n="plus"/>API 키 발급하기</button></div></div>
+    {apiTab==='keys'&&<div className="widgets" style={{marginBottom:16}}>
+      <div className="kpi"><div className="l">오늘 호출</div><div className="v num">{LOGS.length*38}<small>건</small></div></div>
+      <div className="kpi"><div className="l">오류 응답 (4xx·5xx)</div><div className="v num">{LOGS.filter(l=>l[4]>=400).length*3}<small>건</small></div></div>
+      <div className="kpi"><div className="l">사용 중인 키</div><div className="v num">{keys.filter(k=>k.state==='active').length}<small>개</small></div></div>
+    </div>}
+    {apiTab==='keys'&&<div className="card" style={{padding:8}}><table className="tbl"><thead><tr><th>이름</th><th>키</th><th>접근 범위</th><th>발급일</th><th>마지막 사용</th><th>상태</th><th/></tr></thead>
+      <tbody>{keys.map(k=><tr key={k.id}><td style={{fontWeight:600}}>{k.name}</td><td className="mono" style={{fontSize:12}}>{k.prefix}</td><td><div style={{display:'flex',gap:4}}>{k.scopes.map(s=><span key={s} className="badge line">{s}</span>)}</div></td><td className="num">{k.created}</td><td>{k.used}</td><td><span className={'badge '+(k.state==='active'?'ok':'dark')}>{k.state==='active'?'사용 중':'폐기됨'}</span></td>
+        <td className="r"><button className="btn ghost sm" disabled={k.state!=='active'} onClick={()=>setModal({revoke:k.id})}>폐기하기</button></td></tr>)}</tbody></table></div>}
+    {apiTab==='logs'&&<div className="split" style={{gridTemplateColumns:'minmax(0,1fr) 380px'}}>
+      <div className="card" style={{padding:8}}>
+        <div style={{display:'flex',gap:8,padding:8,alignItems:'center'}}><select className="sel-map" style={{height:32}} value={logKey} onChange={e=>{setLogKey(e.target.value);setSelLog(0)}}><option>전체</option>{keys.map(k=><option key={k.id}>{k.name}</option>)}</select>
+        <div className="seg">{[['all','전체'],['ok','성공'],['err','오류']].map(([k,l])=><button key={k} className={logSt===k?'on':''} onClick={()=>{setLogSt(k);setSelLog(0)}}>{l}</button>)}</div></div>
+        <table className="tbl"><thead><tr><th>시각</th><th>키</th><th>요청</th><th className="r">응답</th></tr></thead>
+        <tbody>{fl.map((l,i)=><tr key={i} className={'rw'+(lg===l?' sel':'')} onClick={()=>setSelLog(i)}><td className="num">{l[0]}</td><td style={{maxWidth:140,overflow:'hidden',textOverflow:'ellipsis'}}>{l[1]}</td><td><span className={'method'+(l[2]==='POST'?' post':'')} style={{marginRight:8}}>{l[2]}</span><span className="mono" style={{fontSize:12}}>{l[3]}</span></td><td className="r"><span className={'badge '+(l[4]<300?'ok':l[4]===429?'warn':'dark')}>{l[4]}</span></td></tr>)}</tbody></table>
+        {!fl.length&&<div className="empty">조건에 맞는 호출이 없습니다</div>}
+      </div>
+      <div className="card">{lg?<><div className="card-title" style={{marginBottom:8}}>요청·응답 상세</div>
+        <div className="code mono">{lg[2]+' '+lg[3]+'\nAuthorization: Bearer pk_live_••••'}</div>
+        <div className="code mono" style={{marginTop:8}}>{lg[4]<300?'HTTP '+lg[4]+'\n{ "ok": true }':lg[4]===401?'HTTP 401\n{ "error": "invalid_key", "hint": "폐기된 키입니다" }':lg[4]===404?'HTTP 404\n{ "error": "order_not_found" }':lg[4]===429?'HTTP 429\n{ "error": "rate_limited", "retry_after": 30 }':'HTTP 500\n{ "error": "upstream_timeout" }'}</div>
+        <p className="sub" style={{marginTop:8}}>키·엔드포인트·상태 코드 단위로 필터링해 원인을 확인합니다.</p></>:<div className="empty">호출을 선택하면 상세가 표시됩니다</div>}</div>
+    </div>}
+    {apiTab==='docs'&&<div>{ENDPOINTS.map(([m,u,d,sc,rq,rs],i)=><div className="doc" key={u}>
+      <button className="doc-h" onClick={()=>setOpenDoc(openDoc===i?-1:i)}><span className={'method'+(m==='POST'?' post':'')}>{m}</span><span className="mono" style={{fontWeight:600}}>{u}</span><span className="sub" style={{flex:1}}>{d}</span><span className="badge line">{sc}</span><P n={openDoc===i?'caret-down':'caret-right'}/></button>
+      {openDoc===i&&<div className="doc-b"><div className="sub" style={{margin:'0 0 6px'}}>요청 예제</div><div className="code mono">{rq}</div><div className="sub" style={{margin:'12px 0 6px'}}>응답 예제</div><div className="code mono">{rs}</div></div>}</div>)}</div>}
+  </>);
+
+  return (
+    <div data-archetype="linear-sidebar-cmdk" style={{width:'100%',minHeight:'100vh',display:'flex'}}>
+      <aside className="sidebar" data-sidebar style={{width:260}}>
+        <div className="sidebar-brand"><span className="logo"><P n="database"/></span><span className="ws"><b>POS 수집 콘솔</b><span>샘플 프랜차이즈 본사</span></span></div>
+        <button className="sidebar-cmdk-hint" data-cmdk-trigger onClick={()=>{setCmdk(true);setCq('');setCIdx(0)}}><P n="magnifying-glass"/><span>명령 검색</span><kbd className="kbd">⌘K</kbd></button>
+        <nav className="sidebar-nav">
+          <a role="button" tabIndex={0} className={'sidebar-link'+(screen==='main'?' active':'')} onClick={()=>setScreen('main')} onKeyDown={e=>e.key==='Enter'&&setScreen('main')}><P n="gauge"/>수집 부하 예산·정책</a>
+          <a role="button" tabIndex={0} className={'sidebar-link'+(screen==='adapters'?' active':'')} onClick={()=>setScreen('adapters')} onKeyDown={e=>e.key==='Enter'&&setScreen('adapters')}><P n="plugs-connected"/>Adapter 플러그인 관리</a>
+          <a role="button" tabIndex={0} className={'sidebar-link'+(screen==='queue'?' active':'')} onClick={()=>setScreen('queue')} onKeyDown={e=>e.key==='Enter'&&setScreen('queue')}><P n="clock-counter-clockwise"/>변경 이력·재전송 큐</a>
+          <a role="button" tabIndex={0} className={'sidebar-link'+(screen==='api'?' active':'')} onClick={()=>setScreen('api')} onKeyDown={e=>e.key==='Enter'&&setScreen('api')}><P n="key"/>외부 연동 API 관리</a>
+        </nav>
+        <div className="sidebar-section"><div className="sidebar-section-title">매장 그룹</div>
+          {Object.entries(GROUPS).map(([k,g])=><a key={k} role="button" tabIndex={0} className={'sidebar-link grp'+(group===k?' active':'')} onClick={()=>{setGroup(k);setScreen('main')}} onKeyDown={e=>e.key==='Enter'&&(setGroup(k),setScreen('main'))}><P n="stack"/>{g.n}</a>)}
+        </div>
+        <div className="sidebar-user"><span className="avatar">관</span><span className="ws"><b>관리자</b><span>본사 운영팀</span></span></div>
+      </aside>
+      <main className="main">
+        <header className="topbar">
+          <nav className="breadcrumb"><a onClick={()=>setScreen('main')}>POS 수집 콘솔</a><span className="divider">/</span><a onClick={()=>setScreen('main')}>{GROUPS[group].n}</a><span className="divider">/</span><b>{SCREENS.find(s=>s[0]===screen)[1]}</b></nav>
+          <div className="topbar-actions"><button className="btn-cmdk" onClick={()=>{setCmdk(true);setCq('');setCIdx(0)}}><P n="command"/>K</button></div>
+        </header>
+        <div className="content" key={screen+(screen==='main'?group:'')}>{screen==='main'&&Main()}{screen==='adapters'&&Adapters()}{screen==='queue'&&Queue()}{screen==='api'&&Api()}</div>
+      </main>
+
+      {cmdk&&<div className="overlay top" data-cmdk onClick={()=>setCmdk(false)}><div className="cmdk-modal" onClick={e=>e.stopPropagation()}>
+        <input className="cmdk-input" autoFocus placeholder="명령 또는 화면 이름을 입력하세요" value={cq} onChange={e=>{setCq(e.target.value);setCIdx(0)}} onKeyDown={e=>{if(e.key==='ArrowDown'){e.preventDefault();setCIdx(i=>Math.min(i+1,cmds.length-1))}else if(e.key==='ArrowUp'){e.preventDefault();setCIdx(i=>Math.max(i-1,0))}else if(e.key==='Enter'&&cmds[cIdx])cmds[cIdx].run()}}/>
+        <div className="cmdk-results">{['화면 이동','작업'].map(g=>{const its=cmds.filter(c=>c.g===g);return its.length?<div key={g}><div className="cmdk-group-title">{g}</div>{its.map(c=><button key={c.l} className={'cmdk-item'+(cmds[cIdx]===c?' on':'')} onClick={c.run}><P n={c.ic}/>{c.l}<span className="kbd">⏎</span></button>)}</div>:null})}{!cmds.length&&<div className="empty">일치하는 명령이 없습니다</div>}</div>
+      </div></div>}
+
+      {modal==='adapter'&&<div className="overlay" onClick={()=>setModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}><h3>새 Adapter 초안 추가</h3><p className="sub" style={{marginTop:4}}>초안은 보류 상태로 등록되며 매핑 검증 후 활성화합니다.</p>
+        <div className="form" style={{marginTop:16}}><div className="field"><label>Adapter 이름</label><input type="text" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="예: MySQL 표준"/></div>
+        <div className="field"><label>DB 종류</label><select value={form.kind} onChange={e=>setForm(f=>({...f,kind:e.target.value}))}><option>MySQL 8</option><option>SQL Server</option><option>SQLite 3</option><option>Firebird 3.0</option></select></div></div>
+        <div className="actions"><button className="btn ghost" onClick={()=>setModal(null)}>취소</button><button className="btn primary" disabled={!form.name.trim()} onClick={()=>{const id='a'+(adapters.length+1);setAdapters(a=>[...a,{id,name:form.name.trim(),kind:form.kind==='Firebird 3.0'?'MySQL 8':form.kind,ver:'0.1.0',state:'hold',stores:0,auth:'계정 인증'}]);setMaps(m=>({...m,[id]:SRC.map(()=> '')}));setSelA(id);setModal(null);setForm(f=>({...f,name:''}));say('Adapter 초안이 보류 상태로 추가되었습니다')}}>초안 추가하기</button></div></div></div>}
+
+      {modal==='key'&&<div className="overlay" onClick={()=>setModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}><h3>API 키 발급</h3>
+        {!newKey?<><div className="form" style={{marginTop:16}}><div className="field"><label>키 이름</label><input type="text" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="예: 구매 데이터 비교 배치"/></div>
+        <div className="field"><label>접근 범위</label>{Object.keys(form.scopes).map(s=><label className="ck" key={s} style={{fontWeight:500,fontSize:14,color:'var(--n10)'}}><input type="checkbox" checked={form.scopes[s]} onChange={e=>setForm(f=>({...f,scopes:{...f.scopes,[s]:e.target.checked}}))}/><span className="mono" style={{fontSize:12}}>{s}</span></label>)}</div></div>
+        <div className="actions"><button className="btn ghost" onClick={()=>setModal(null)}>취소</button><button className="btn primary" disabled={!form.name.trim()||!Object.values(form.scopes).some(Boolean)} onClick={issue}>키 발급하기</button></div></>
+        :<><p className="sub" style={{marginTop:4}}>이 키는 지금 한 번만 표시됩니다. 안전한 곳에 보관해 주십시오.</p><div className="secret mono"><span style={{flex:1}}>{newKey}</span><button className="btn ghost sm" onClick={()=>say('키가 복사되었습니다')}><P n="copy"/>복사하기</button></div>
+        <div className="actions"><button className="btn primary" onClick={()=>{setModal(null);setNewKey(null)}}>닫기</button></div></>}
+      </div></div>}
+
+      {modal&&modal.revoke&&<div className="overlay" onClick={()=>setModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}><h3>API 키를 폐기하시겠습니까?</h3><p className="sub" style={{marginTop:8}}>{keys.find(k=>k.id===modal.revoke).name} 키를 사용하는 연동은 즉시 401 응답을 받습니다.</p>
+        <div className="actions"><button className="btn ghost" onClick={()=>setModal(null)}>취소</button><button className="btn primary" onClick={()=>{setKeys(k=>k.map(x=>x.id===modal.revoke?{...x,state:'revoked'}:x));setModal(null);say('키가 폐기되었습니다')}}>폐기하기</button></div></div></div>}
+
+      {toast&&<div className="toast"><P n="check-circle"/>{toast}</div>}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

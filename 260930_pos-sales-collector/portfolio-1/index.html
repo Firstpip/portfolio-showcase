@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>프랜차이즈 POS 판매 데이터 통합 수집 관리 — 맞춤 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P1 — 메인 1 · 서브 2 · 나머지 무채색 (gen-color-tokens.js 산출, hue 22°, light) ── */
+:root{
+  /* 메인 — 브랜드 마크·primary CTA(화면당 1)·활성 nav·링크·주 차트·포커스. 앵커 m600 = plan primary */
+  --m50:#fff4ed;
+  --m100:#fee8db;
+  --m200:#fed2b8;
+  --m300:#fdb68c;
+  --m400:#fc975c;
+  --m500:#fb7a2e;
+  --m600:#fa5d00;
+  --m700:#cd4c00;
+  --m800:#a03c00;
+  --m900:#712a00;
+  /* 무채색 — 배경(n0~n2)·테두리/비활성(n3~n5)·아이콘/보조텍스트(n6~n8)·본문/다크필(n9~n10). 아바타·태그·아이콘박스·KPI배경·보조 차트는 전부 여기 */
+  --n0:#fff8f1;
+  --n1:#ffffff;
+  --n2:#f0f0ef;
+  --n3:#e6e5e5;
+  --n4:#d7d6d5;
+  --n5:#bab7b5;
+  --n6:#989390;
+  --n7:#7a7471;
+  --n8:#615f5c;
+  --n9:#3a3836;
+  --n10:#1d1e1c;
+  /* 서브 — 상태 의미가 있을 때만. 배지=bg+text, 점/셀/바=solid */
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b; /* 성공/진행/정상/상승 */
+  --s2:#cf3f3f; --s2-bg:#f9e7e7; --s2-text:#ad1f1f; /* 오류/위험/실패/하락/환불 */
+}
+/* ⚠ s3(경고/주의) — 메인 hue 22°와 16° 겹침 → 제거, 해당 상태는 무채색(n9/n10 필 + 아이콘)으로 표현 */
+
+/* ── 상태 레이어 P1 — 모양은 페이지가, 상태는 여기서 (gen-component-kit.js 산출, 색은 토큰만) ── */
+/* state-layer elevation=elevated theme=light */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{transform:scale(.98);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #ffffff;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--s2);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;min-height:100%;background:var(--n0);color:var(--n10);font-family:'Pretendard',-apple-system,'Apple SD Gothic Neo',sans-serif;font-size:14px;line-height:1.5;letter-spacing:.015em;-webkit-font-smoothing:antialiased}
+#root{width:100%;min-height:100vh}
+button{font-family:inherit;font-size:inherit;letter-spacing:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select{font-family:inherit;font-size:14px;letter-spacing:inherit;color:var(--n10)}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:ui-monospace,'SF Mono',Menlo,monospace;letter-spacing:0}
+
+/* 상단 글로벌 내비 */
+.app-header{position:sticky;top:0;z-index:40;height:64px;display:flex;align-items:center;gap:24px;padding:0 32px;background:var(--n0);border-bottom:1px solid var(--n3)}
+.brand{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:700;color:var(--m600);white-space:nowrap}
+.brand-mark{width:32px;height:32px;border-radius:12px;background:var(--m600);color:var(--n1);display:grid;place-items:center}
+.brand small{font-size:13px;font-weight:500;color:var(--n8);margin-left:4px}
+.project-switcher{position:relative}
+.ps-btn{display:flex;align-items:center;gap:8px;height:40px;padding:0 16px;border-radius:16px;background:var(--n1);border:1px solid var(--n4);font-weight:600;transition:border-color .15s,transform .15s}
+.ps-btn:hover{border-color:var(--n6)}
+.pop{position:absolute;top:calc(100% + 8px);left:0;min-width:200px;padding:8px;border-radius:16px;background:var(--n1);box-shadow:rgba(0,0,0,.14) 0 8px 28px;border:1px solid var(--n3);animation:fadeUp .18s ease-out;z-index:50}
+.pop.right{left:auto;right:0}
+.pop button{display:flex;width:100%;align-items:center;justify-content:space-between;padding:8px 12px;border-radius:12px;text-align:left;transition:background .12s}
+.pop button:hover{background:var(--n2)}
+.pop button.on{background:var(--m50);color:var(--m700);font-weight:600}
+.global-nav{display:flex;gap:4px;flex:1}
+.nav-link{height:40px;padding:0 16px;border-radius:16px;font-weight:500;color:var(--n8);transition:background .15s,color .15s}
+.nav-link:hover{background:var(--n2);color:var(--n10)}
+.nav-link.active{color:var(--m700);background:var(--m50);font-weight:600}
+.header-actions{display:flex;align-items:center;gap:8px;position:relative}
+.search{display:flex;align-items:center;gap:8px;height:40px;padding:0 16px;border-radius:16px;background:var(--n1);border:1px solid var(--n4);width:220px;color:var(--n7)}
+.search input{border:0;outline:0!important;box-shadow:none!important;background:none;width:100%}
+.icon-btn{width:40px;height:40px;border-radius:16px;display:grid;place-items:center;color:var(--n8);position:relative;transition:background .15s}
+.icon-btn:hover{background:var(--n2)}
+.dot-badge{position:absolute;top:8px;right:9px;width:8px;height:8px;border-radius:50%;background:var(--m600);border:2px solid var(--n0)}
+.avatar{width:36px;height:36px;border-radius:50%;background:var(--n2);color:var(--n8);display:grid;place-items:center;font-weight:600}
+
+/* 보조 탭 */
+.tab-bar{position:sticky;top:64px;z-index:30;display:flex;gap:8px;padding:0 32px;background:var(--n0);border-bottom:1px solid var(--n3)}
+.tab{position:relative;height:48px;padding:0 16px;font-weight:500;color:var(--n7);transition:color .15s}
+.tab:hover{color:var(--n10)}
+.tab[data-on="true"]{color:var(--n10);font-weight:700}
+.tab[data-on="true"]::after{content:"";position:absolute;left:16px;right:16px;bottom:-1px;height:2px;border-radius:2px;background:var(--m600);animation:tabIn .25s ease-out}
+.tab[data-alert="true"]::before{content:"";position:absolute;top:12px;right:6px;width:8px;height:8px;border-radius:50%;background:var(--n10)}
+
+.content{position:relative;max-width:1280px;margin:0 auto;padding:32px 32px 64px;animation:fadeUp .35s ease-out}
+.wash{position:absolute;left:0;right:0;top:0;height:320px;overflow:hidden;pointer-events:none;z-index:0}
+.wash i{position:absolute;border-radius:50%;filter:blur(64px);opacity:.34;animation:drift 14s ease-in-out infinite alternate}
+.wash i:nth-child(1){width:520px;height:220px;left:10%;top:-70px;background:var(--m300)}
+.wash i:nth-child(2){width:420px;height:200px;right:6%;top:-50px;background:var(--m100);animation-delay:-6s}
+.layer{position:relative;z-index:1}
+
+.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:24px}
+.eyebrow{font-size:13px;font-weight:600;text-transform:uppercase;color:var(--n7);margin-bottom:4px}
+.page-title{font-size:34px;line-height:1.2;font-weight:700;color:var(--n10)}
+.sub{font-size:13px;color:var(--n7)}
+.live{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--n8)}
+.live b{width:8px;height:8px;border-radius:50%;background:var(--s1);animation:pulseDot 1.8s ease-out infinite}
+
+.card{background:var(--n1);border-radius:20px;padding:24px;box-shadow:rgba(250,166,0,.22) 6px 4px 24px 0}
+.card.flat{box-shadow:rgba(0,0,0,.08) 0 1px 4px}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px}
+.card-title{font-size:18px;font-weight:700}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:44px;padding:0 20px;border-radius:16px;font-weight:600;white-space:nowrap;transition:background .15s,box-shadow .15s,transform .15s}
+.btn.primary{background:var(--m600);color:var(--n1);box-shadow:rgba(0,0,0,.2) 0 1px 4px}
+.btn.primary:hover{background:var(--m700)}
+.btn.ghost{background:var(--n1);border:1px solid var(--n4);color:var(--n9)}
+.btn.ghost:hover{border-color:var(--n7);background:var(--n2)}
+.card{transition:transform .2s}
+.grid3 .card:hover{transform:scale(1.01)}
+.btn.sm{height:36px;padding:0 16px;font-size:13px}
+.seg{display:inline-flex;padding:4px;border-radius:16px;background:var(--n2)}
+.seg button{height:36px;padding:0 16px;border-radius:12px;font-weight:500;color:var(--n8);transition:background .15s,color .15s}
+.seg button.on{background:var(--n1);color:var(--n10);font-weight:700;box-shadow:rgba(0,0,0,.12) 0 1px 3px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{height:36px;padding:0 16px;border-radius:999px;border:1px solid var(--n4);background:var(--n1);font-weight:500;color:var(--n8);transition:all .15s}
+.chip:hover{border-color:var(--n7)}
+.chip.on{border-color:var(--m600);background:var(--m50);color:var(--m700);font-weight:600}
+.filter-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px;flex-wrap:wrap}
+.filter-bar .left{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+
+/* 슬림 상태바 (status-strip) */
+.status-strip{display:flex;align-items:stretch;background:var(--n1);border-radius:20px;box-shadow:rgba(250,166,0,.22) 6px 4px 24px 0;margin-bottom:24px;overflow:hidden}
+.stat-item{flex:1;padding:16px 24px;display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--n3);min-width:0;text-align:left;transition:background .15s}
+.stat-item:last-child{border-right:0}
+button.stat-item:hover{background:var(--n0)}
+.stat-label{font-size:13px;color:var(--n7);display:flex;align-items:center;gap:8px}
+.stat-value{font-size:28px;line-height:1.2;font-weight:700;color:var(--n10)}
+.stat-value small{font-size:13px;font-weight:500;color:var(--n7);margin-left:4px}
+.stat-delta{font-size:13px;font-weight:600;color:var(--n8);display:flex;align-items:center;gap:4px}
+.stat-delta.down{color:var(--s2-text)}
+.stat-foot{font-size:13px;color:var(--n7)}
+
+.tower{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;margin-bottom:24px;align-items:start}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px;margin-bottom:24px}
+
+/* 히트맵 타임라인 */
+.hm{display:grid;grid-template-columns:96px repeat(14,minmax(0,1fr));gap:4px;align-items:center}
+.hm .rl{font-size:13px;color:var(--n8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;padding:4px 0;border-radius:8px}
+button.rl:hover{color:var(--m700);font-weight:600}
+.hm .hl{font-size:13px;color:var(--n6);text-align:center}
+.cell{height:28px;border-radius:8px;position:relative;transition:transform .12s;animation:cellIn .5s ease-out both}
+.cell:hover{transform:scale(1.12);z-index:2}
+.cell.l0{background:var(--n2)}.cell.l1{background:var(--n3)}.cell.l2{background:var(--n4)}.cell.l3{background:var(--n6)}.cell.l4{background:var(--n8)}.cell.l5{background:var(--n10)}
+.cell.gap{background:repeating-linear-gradient(135deg,var(--n2) 0 4px,var(--n4) 4px 5px);border:1px dashed var(--n6)}
+.cell.peak{outline:2px solid var(--m600);outline-offset:1px}
+.legend{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--n7);margin-top:16px;flex-wrap:wrap}
+.legend i{display:inline-block;width:16px;height:12px;border-radius:4px}
+
+/* 우선 대응 큐 */
+.rail-item{display:flex;gap:16px;width:100%;text-align:left;padding:16px;border-radius:16px;border:1px solid var(--n3);margin-bottom:8px;background:var(--n1);transition:border-color .15s,background .15s,transform .15s;animation:fadeUp .3s ease-out both}
+.rail-item:hover{border-color:var(--m600);background:var(--m50);transform:scale(1.02)}
+.rail-rank{width:28px;height:28px;flex:none;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;background:var(--n2);color:var(--n8)}
+.rail-item.hi .rail-rank{background:var(--s2);color:var(--n1)}
+.rail-t{font-weight:600;color:var(--n10)}
+.rail-d{font-size:13px;color:var(--n7);margin-top:4px}
+
+.badge{display:inline-flex;align-items:center;gap:8px;height:24px;padding:0 12px;border-radius:999px;font-size:13px;font-weight:600;white-space:nowrap;background:var(--n2);color:var(--n8)}
+.badge::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--n6)}
+.badge.ok{background:var(--s1-bg);color:var(--s1-text)}.badge.ok::before{background:var(--s1)}
+.badge.err{background:var(--s2-bg);color:var(--s2-text)}.badge.err::before{background:var(--s2)}
+.badge.dark{background:var(--n10);color:var(--n1)}.badge.dark::before{background:var(--n1)}
+.badge.nodot::before{display:none}
+
+/* 막대 목록 */
+.bars-h .row{display:grid;grid-template-columns:24px minmax(0,1fr) 88px;gap:16px;align-items:center;padding:8px 0}
+.bars-h .rk{font-size:13px;color:var(--n6);font-weight:700}
+.bars-h .nm{font-size:14px;font-weight:500;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.track{height:8px;border-radius:8px;background:var(--n2);overflow:hidden}
+.fill{height:100%;border-radius:8px;background:var(--n5);transform-origin:left;animation:growX .8s ease-out both}
+.fill.main{background:var(--m600)}
+.bars-h .val{text-align:right;font-weight:600}
+
+/* 표 */
+.tbl{width:100%;border-collapse:separate;border-spacing:0}
+.tbl th{font-size:13px;font-weight:600;color:var(--n7);text-align:left;padding:8px 16px;border-bottom:1px solid var(--n3);white-space:nowrap}
+.tbl th.r,.tbl td.r{text-align:right}
+.tbl td{padding:12px 16px;border-bottom:1px solid var(--n2);vertical-align:middle}
+.tbl tr.row{cursor:pointer;transition:background .12s}
+.tbl.tight td,.tbl.tight th{padding:12px 8px;white-space:nowrap}
+.tbl.tight td.mono{font-size:13px}
+.tbl tr.row:hover td{background:var(--n0)}
+.tbl tr.sel td{background:var(--m50)}
+.tbl tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--m600)}
+.th-btn{display:inline-flex;align-items:center;gap:4px;font-weight:600;color:inherit}
+.th-btn:hover{color:var(--n10)}
+.mini-bar{display:inline-block;height:8px;border-radius:8px;background:var(--n5);vertical-align:middle;animation:growX .7s ease-out both;transform-origin:left}
+.mini-bar.main{background:var(--m600)}
+.cmp-toggle{width:28px;height:28px;border-radius:8px;border:1px solid var(--n4);display:grid;place-items:center;color:transparent;background:var(--n1)}
+.cmp-toggle.on{background:var(--m600);border-color:var(--m600);color:var(--n1)}
+
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;animation:fadeUp .25s ease-out}
+.cmp-col{border-radius:16px;background:var(--n0);padding:16px}
+.cmp-col h4{font-size:14px;margin-bottom:8px}
+.cmp-row{display:flex;justify-content:space-between;font-size:13px;color:var(--n8);padding:4px 0}
+.cmp-row b{color:var(--n10)}
+.cmp-row b.win{color:var(--m700)}
+
+/* 주문 상세 (마스터-디테일) */
+.md{display:grid;grid-template-columns:200px minmax(0,1fr) 340px;gap:24px;align-items:start}
+.store-rail{display:flex;flex-direction:column;gap:4px}
+.store-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;text-align:left;padding:12px 16px;border-radius:16px;transition:background .15s}
+.store-btn:hover{background:var(--n2)}
+.store-btn.on{background:var(--m50);color:var(--m700);font-weight:700;box-shadow:inset 3px 0 0 var(--m600)}
+.store-btn small{font-size:13px;color:var(--n7)}
+.detail h3{font-size:18px}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:8px 16px;font-size:14px;margin:16px 0}
+.kv dt{color:var(--n7);font-size:13px}
+.line{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px dashed var(--n3)}
+.line.total{font-size:18px;font-weight:700;border-bottom:0;padding-top:16px}
+.tl{position:relative;padding-left:24px;margin-top:8px}
+.tl::before{content:"";position:absolute;left:5px;top:8px;bottom:8px;width:2px;background:var(--n3)}
+.tl-i{position:relative;padding:0 0 16px;font-size:13px;color:var(--n8)}
+.tl-i::before{content:"";position:absolute;left:-24px;top:4px;width:12px;height:12px;border-radius:50%;background:var(--n1);border:2px solid var(--n5)}
+.tl-i.chg::before{border-color:var(--m600);background:var(--m600)}
+.tl-i.bad::before{border-color:var(--s2);background:var(--s2)}
+.tl-i b{color:var(--n10)}
+.diff{display:inline-flex;align-items:center;gap:8px;margin-top:4px;padding:4px 12px;border-radius:12px;background:var(--n2);font-size:13px}
+.diff s{color:var(--n6)}
+.raw{margin-top:16px;padding:16px;border-radius:16px;background:var(--n10);color:var(--n3);font-size:13px;line-height:1.6;overflow:auto;max-height:220px;animation:fadeUp .2s ease-out}
+
+/* 드로어 */
+.overlay{position:fixed;inset:0;z-index:80;background:rgba(29,30,28,.38);display:flex;align-items:center;justify-content:center;animation:fadeIn .18s ease-out}
+.overlay.drawer{justify-content:flex-end;align-items:stretch}
+.modal{width:min(520px,92vw);max-height:88vh;overflow:auto;background:var(--n1);border-radius:20px;padding:32px;box-shadow:rgba(0,0,0,.2) 0 16px 48px;animation:popIn .22s ease-out}
+.drawer-panel{width:min(480px,94vw);height:100%;overflow:auto;background:var(--n1);padding:32px;animation:drawerIn .28s ease-out;box-shadow:rgba(0,0,0,.18) -8px 0 32px}
+.modal h3,.drawer-panel h3{font-size:18px}
+.field{display:flex;flex-direction:column;gap:8px;margin:16px 0}
+.field label{font-size:13px;font-weight:600;color:var(--n8)}
+.field input,.field select{height:44px;padding:0 16px;border-radius:16px;border:1px solid var(--n5);background:var(--n1)}
+.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:24px}
+.log{padding:16px;border-radius:16px;background:var(--n10);color:var(--n3);font-size:13px;line-height:1.7;overflow:auto}
+.log .e{color:var(--n1);font-weight:700}
+.toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);z-index:100;display:flex;align-items:center;gap:8px;padding:12px 24px;border-radius:16px;background:var(--n10);color:var(--n1);font-weight:500;box-shadow:rgba(0,0,0,.25) 0 8px 24px;animation:toastIn .25s ease-out}
+
+.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:24px}
+.sum-card{background:var(--n1);border-radius:20px;padding:16px 24px;box-shadow:rgba(0,0,0,.08) 0 1px 4px}
+.sum-card .stat-value{font-size:28px}
+.stepper{display:flex;gap:4px;margin-top:8px}
+.stepper i{flex:1;height:6px;border-radius:6px;background:var(--n3);transition:background .3s}
+.stepper i.done{background:var(--m600)}
+.stepper i.now{background:var(--m300);animation:pulseBar 1s ease-in-out infinite}
+.ck{width:20px;height:20px;border-radius:6px;border:1.5px solid var(--n5);display:grid;place-items:center;background:var(--n1);color:transparent;transition:all .12s}
+.ck.on{background:var(--m600);border-color:var(--m600);color:var(--n1)}
+.empty{padding:32px;text-align:center;color:var(--n7)}
+.empty svg{margin-bottom:8px;color:var(--n5)}
+
+@keyframes fadeUp{from{opacity:0;transform:translate(0,8px)}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes popIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+@keyframes drawerIn{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
+@keyframes toastIn{from{opacity:0;transform:translate(-50%,12px)}to{opacity:1;transform:translate(-50%,0)}}
+@keyframes pulseDot{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--s1) 45%,transparent)}70%{box-shadow:0 0 0 8px transparent}100%{box-shadow:0 0 0 0 transparent}}
+@keyframes pulseBar{0%,100%{opacity:1}50%{opacity:.45}}
+@keyframes growX{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes barGrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+@keyframes cellIn{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:none}}
+@keyframes drift{from{transform:translateX(-30px)}to{transform:translateX(40px)}}
+@keyframes tabIn{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+.bar{transform-box:fill-box;transform-origin:bottom;animation:barGrow .7s ease-out both}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useMemo,useEffect,useRef}=React;
+const LI=(window.lucide&&(window.lucide.icons||window.lucide))||{};
+function Icon({n,size=16,sw=1.7,style}){
+  const d=LI[n];
+  if(!d) return <span style={{display:'inline-block',width:size,height:size}}/>;
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" style={{flex:'none',...style}}>{d[2].map(([t,a],i)=>React.createElement(t,{key:i,...a}))}</svg>;
+}
+const DS={card:{borderRadius:20},button:{borderRadius:16},input:{borderRadius:16},tag:{borderRadius:999},image:{borderRadius:16},cell:{borderRadius:8}};
+const fmt=n=>Math.round(n).toLocaleString('ko-KR');
+const fmtM=n=>fmt(n/10000)+'만원';
+function useCount(target,dur=900){
+  const [v,setV]=useState(0);
+  useEffect(()=>{let raf,s=null,from=v;const step=t=>{if(s===null)s=t;const p=Math.min(1,(t-s)/dur);setV(from+(target-from)*(1-Math.pow(1-p,3)));if(p<1)raf=requestAnimationFrame(step)};raf=requestAnimationFrame(step);return()=>cancelAnimationFrame(raf)},[target]);
+  return v;
+}
+function Count({to,f=fmt}){const v=useCount(to);return <span className="num">{f(v)}</span>}
+
+/* ── 더미 데이터 ── */
+const STORES=[
+ {id:'S01',name:'강남역점',brand:'다온키친',pos:3,db:'Firebird 3.0',inst:true,st:'ok',ver:'2.4.0',last:1,q:0,sales:{d:6420000,w:41800000,m:172500000},ord:{d:418,w:2710,m:11180},cancel:1.8},
+ {id:'S02',name:'홍대입구점',brand:'다온키친',pos:2,db:'Firebird 3.0',inst:true,st:'ok',ver:'2.4.0',last:2,q:0,sales:{d:5180000,w:35200000,m:148900000},ord:{d:352,w:2390,m:10120},cancel:2.1},
+ {id:'S03',name:'판교점',brand:'다온키친',pos:2,db:'Firebird 3.0',inst:true,st:'ok',ver:'2.4.0',last:1,q:0,sales:{d:4760000,w:31900000,m:133200000},ord:{d:301,w:2010,m:8420},cancel:1.5},
+ {id:'S04',name:'성수점',brand:'모락국수',pos:2,db:'Firebird 2.5',inst:true,st:'ok',ver:'2.4.0',last:3,q:0,sales:{d:3980000,w:27600000,m:116400000},ord:{d:287,w:1960,m:8260},cancel:2.4},
+ {id:'S05',name:'해운대점',brand:'다온키친',pos:2,db:'Firebird 2.5',inst:true,st:'off',ver:'2.3.2',last:192,q:214,sales:{d:3610000,w:24800000,m:105700000},ord:{d:244,w:1690,m:7310},cancel:3.2},
+ {id:'S06',name:'서면점',brand:'모락국수',pos:1,db:'Firebird 2.5',inst:true,st:'upd',ver:'2.3.2',last:9,q:0,sales:{d:3120000,w:22300000,m:94800000},ord:{d:232,w:1610,m:6880},cancel:2.0},
+ {id:'S07',name:'둔산점',brand:'모락국수',pos:2,db:'Firebird 3.0',inst:true,st:'ok',ver:'2.4.0',last:2,q:0,sales:{d:2890000,w:20400000,m:88200000},ord:{d:219,w:1500,m:6530},cancel:1.9},
+ {id:'S08',name:'영통점',brand:'다온키친',pos:1,db:'확인 전',inst:false,st:'none',ver:'-',last:null,q:0,sales:{d:0,w:0,m:0},ord:{d:0,w:0,m:0},cancel:0},
+];
+const CH={all:{n:'전체',f:1},hall:{n:'홀',f:.46},dlv:{n:'배달',f:.34},take:{n:'포장',f:.2}};
+const PER={d:{n:'일',k:'d',x:1},w:{n:'주',k:'w',x:6.5},m:{n:'월',k:'m',x:28}};
+const HOURS=[10,11,12,13,14,15,16,17,18,19,20,21,22,23];
+const BASE=[3,6,12,14,8,4,5,9,13,14,11,7,4,2];
+function hourVals(s,si){
+  if(!s.inst) return HOURS.map(()=>null);
+  const tot=s.sales.d;const raw=BASE.map((b,i)=>b*(0.85+((si*7+i*3)%5)*0.06));
+  const sum=raw.reduce((a,b)=>a+b,0);
+  return raw.map((r,i)=>{ if(s.st==='off'&&HOURS[i]>=19) return -1; if(HOURS[i]>=22) return HOURS[i]===22&&s.id!=='S06'?r/sum*tot:0; return r/sum*tot;});
+}
+const MENU=[['다온 시그니처 정식',14900],['불고기 뚝배기',12900],['들기름 막국수',10900],['수제 돈까스',11900],['치즈 계란말이',8900],['탄산음료',2000],['공기밥 추가',1000],['된장찌개',9500]];
+const TOPMENU=[['다온 시그니처 정식',386,14900],['불고기 뚝배기',301,12900],['들기름 막국수',274,10900],['수제 돈까스',219,11900],['치즈 계란말이',187,8900]];
+const TREND={
+ d:{lab:['09/23','09/24','09/25','09/26','09/27','09/28','오늘'],cur:[2840,3010,3160,3390,4120,4560,2996],prev:[2610,2780,2950,3120,3860,4210,2870]},
+ w:{lab:['W32','W33','W34','W35','W36','W37','W38','이번 주'],cur:[15400,16200,17100,16800,18100,19200,20400,21400],prev:[14100,15300,16000,16100,16900,17600,18800,19300]},
+ m:{lab:['4월','5월','6월','7월','8월','9월'],cur:[61200,64800,70300,72900,77800,85970],prev:[57800,60100,64900,68400,71300,77800]},
+};
+function rng(seed){return()=>{seed=(seed*1664525+1013904223)%4294967296;return seed/4294967296}}
+function ordersFor(si){
+  const r=rng(si*97+11);const out=[];let t=21*60+14;
+  const pays=['카드','간편결제','현금','카드'];const chs=['홀','배달','포장','홀'];
+  for(let i=0;i<10;i++){
+    const n=1+Math.floor(r()*3);const items=[];
+    for(let k=0;k<n;k++){const m=MENU[Math.floor(r()*MENU.length)];items.push({name:m[0],price:m[1],qty:1+Math.floor(r()*2)})}
+    const total=items.reduce((a,b)=>a+b.price*b.qty,0);
+    const disc=r()<.25?1000:0;
+    t-=4+Math.floor(r()*9);
+    const hh=String(Math.floor(t/60)).padStart(2,'0'),mm=String(t%60).padStart(2,'0');
+    out.push({no:`T-0929-${si+1}${String(41-i*3).padStart(2,'0')}`,time:`${hh}:${mm}`,items,total,disc,pay:pays[i%4],ch:chs[Math.floor(r()*4)%3],status:i===3?'cancel':(i===6||i===8)?'mod':'ok',term:'POS-0'+(1+i%2)});
+  }
+  return out;
+}
+const HISTORY={
+ ok:o=>[{t:o.time,tx:'신규 주문 수집',cls:''}],
+ mod:o=>[{t:o.time,tx:'신규 주문 수집',cls:''},{t:addMin(o.time,17),tx:'결제수단 변경을 감지해 최신 상태로 갱신',cls:'chg',diff:['카드','간편결제']}],
+ cancel:o=>[{t:o.time,tx:'신규 주문 수집',cls:''},{t:addMin(o.time,9),tx:'전체 취소를 감지해 상태를 갱신',cls:'bad',diff:[fmt(o.total-o.disc)+'원','0원']}],
+};
+function addMin(t,m){const [h,mi]=t.split(':').map(Number);const x=h*60+mi+m;return String(Math.floor(x/60)%24).padStart(2,'0')+':'+String(x%60).padStart(2,'0')}
+const RECON0={
+ '09-29':[['S01',6420000,6420000],['S02',5180000,5180000],['S03',4760000,4760000],['S04',3980000,3980000],['S05',3742000,3610000],['S06',3120000,3120000],['S07',2890000,2762000]],
+ '09-28':[['S01',6980000,6980000],['S02',5640000,5640000],['S03',5120000,5120000],['S04',4310000,4310000],['S05',3890000,3845000],['S06',3350000,3350000],['S07',3010000,3010000]],
+ '09-27':[['S01',6120000,6120000],['S02',5010000,5010000],['S03',4530000,4530000],['S04',3760000,3760000],['S05',3520000,3520000],['S06',3060000,3060000],['S07',2740000,2740000]],
+};
+const STAGES=['요청 접수','Agent 응답','원천 재조회','재대사'];
+const ERRLOG={
+ S05:[['21:14:02','WARN','서버 전송 실패 — 네트워크 연결 없음, 로컬 큐에 적재'],['21:14:32','WARN','재전송 대기 (백오프 30초)'],['18:02:11','ERROR','서버 연결 끊김 감지 — 하트비트 응답 없음'],['18:02:11','INFO','수집은 계속, 214건 로컬 큐 보관 중']],
+ S06:[['21:05:44','INFO','업데이트 v2.4.0 대기 — 영업 종료 후 자동 적용 예정'],['20:58:20','INFO','체크포인트 저장: 주문 T-0929-6017']],
+ S08:[['-','INFO','Agent 설치 기록 없음 — 설치 안내 필요']],
+ D:[['21:12:40','INFO','증분 수집 완료: 신규 6건, 변경 1건'],['21:12:40','INFO','체크포인트 저장'],['21:10:40','INFO','증분 수집 완료: 신규 4건, 변경 0건']],
+};
+const HIST={
+ S05:['18:02 연결 끊김 감지','18:02 로컬 큐 적재 시작','14:31 재부팅 후 서비스 자동 실행 · 수집 재개'],
+ S06:['20:40 v2.4.0 배포 대기 등록','09-28 재부팅 후 서비스 자동 실행 · 수집 재개'],
+ S08:['설치 대기 — 원격 설치 일정 협의 필요'],
+ D:['09-29 09:58 서비스 자동 시작','09-28 재부팅 후 서비스 자동 실행 · 수집 재개'],
+};
+const STMAP={ok:['정상 수집','ok'],off:['연결 끊김','err'],upd:['업데이트 대기','dark'],none:['미설치','']};
+
+/* ── 앱 ── */
+function App(){
+  const [tab,setTab]=useState('main');
+  const [brand,setBrand]=useState('전체 브랜드');
+  const [psOpen,setPsOpen]=useState(false);
+  const [bell,setBell]=useState(false);
+  const [q,setQ]=useState('');
+  const [per,setPer]=useState('d');
+  const [ch,setCh]=useState('all');
+  const [sortK,setSortK]=useState('sales');
+  const [cmp,setCmp]=useState([]);
+  const [stores,setStores]=useState(STORES);
+  const [selStore,setSelStore]=useState('S01');
+  const [selOrder,setSelOrder]=useState(0);
+  const [ordFilter,setOrdFilter]=useState('all');
+  const [raw,setRaw]=useState(false);
+  const [drawer,setDrawer]=useState(null);
+  const [modal,setModal]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [recon,setRecon]=useState(()=>{const o={};Object.keys(RECON0).forEach(d=>o[d]=RECON0[d].map(([s,a,b])=>({s,src:a,cen:b,run:null})));return o});
+  const [rday,setRday]=useState('09-29');
+  const [rsel,setRsel]=useState([]);
+  const [tick,setTick]=useState(0);
+  const [busy,setBusy]=useState(false);
+  const [ver,setVer]=useState('2.4.0');
+
+  useEffect(()=>{const id=setInterval(()=>setTick(t=>t+1),6000);return()=>clearInterval(id)},[]);
+  useEffect(()=>{if(!toast)return;const id=setTimeout(()=>setToast(null),2600);return()=>clearTimeout(id)},[toast]);
+  const say=(m)=>setToast(m);
+
+  const fs=useMemo(()=>stores.filter(s=>(brand==='전체 브랜드'||s.brand===brand)&&(!q||s.name.includes(q))),[stores,brand,q]);
+  const chf=CH[ch].f;
+  const val=(s,k)=>s.sales[k]*chf;
+  const totalD=fs.reduce((a,s)=>a+val(s,'d'),0)+tick*38000;
+  const ordD=Math.round(fs.reduce((a,s)=>a+s.ord.d,0)*chf)+tick*2;
+  const okN=fs.filter(s=>s.inst&&s.st==='ok').length, instN=fs.filter(s=>s.inst).length;
+  const rows=recon[rday];
+  const diffAll=Object.values(recon).flat().filter(r=>r.src!==r.cen&&r.run===null);
+  const diffToday=recon['09-29'].filter(r=>r.src!==r.cen);
+
+  const queue=useMemo(()=>{
+    const it=[];
+    stores.filter(s=>s.st==='off').forEach(s=>it.push({k:'a'+s.id,hi:true,t:s.name+' Agent 연결 끊김',d:'마지막 수집 3시간 12분 전 · 로컬 큐 '+s.q+'건 보관 중',to:'agents',store:s.id}));
+    recon['09-29'].filter(r=>r.src!==r.cen&&r.run===null).forEach(r=>{const s=stores.find(x=>x.id===r.s);it.push({k:'r'+r.s,hi:true,t:s.name+' 대사 차이 '+fmt(r.cen-r.src)+'원',d:'09-29 영업일 · POS 원천 대비 중앙 집계 부족',to:'reconcile',store:r.s})});
+    stores.filter(s=>s.st==='upd').forEach(s=>it.push({k:'u'+s.id,hi:false,t:s.name+' 업데이트 대기',d:'v'+s.ver+' → v'+ver+' · 영업 종료 후 적용',to:'agents',store:s.id}));
+    stores.filter(s=>!s.inst).forEach(s=>it.push({k:'n'+s.id,hi:false,t:s.name+' Agent 미설치',d:'원격 설치 일정 확인 필요',to:'agents',store:s.id}));
+    return it;
+  },[stores,recon,ver]);
+
+  const goStoreOrders=(id)=>{if(!stores.find(s=>s.id===id).inst){say('설치 전 매장은 수집된 주문이 없습니다');return}setSelStore(id);setSelOrder(0);setOrdFilter('all');setRaw(false);setTab('orders')};
+  const requestRecollect=(days)=>{
+    const targets=rsel.length?rsel:[];
+    setModal(null);
+    setRecon(r=>{const c={...r};c[rday]=c[rday].map(x=>targets.includes(x.s)?{...x,run:0}:x);return c});
+    setRsel([]);
+    say(targets.length+'개 매장의 재수집이 요청되었습니다');
+    targets.forEach(id=>{
+      [1,2,3,4].forEach((st,i)=>setTimeout(()=>{
+        setRecon(r=>{const c={...r};c[rday]=c[rday].map(x=>x.s===id?(st===4?{...x,cen:x.src,run:null,done:true}:{...x,run:st}):x);return c});
+        if(st===4&&i===3)setToast(stores.find(s=>s.id===id).name+' 재대사가 완료되어 일치로 확인되었습니다');
+      },1300*(i+1)));
+    });
+  };
+  const deploy=()=>{
+    setBusy(true);
+    setTimeout(()=>{
+      setStores(ss=>ss.map(s=>s.st==='upd'?{...s,st:'ok',ver}:s));
+      setBusy(false);setModal(null);say('업데이트 배포가 완료되었습니다. 연결이 끊긴 매장은 복구 후 자동 적용됩니다');
+    },1400);
+  };
+  const forceRecollect=(s)=>{
+    setBusy(true);
+    setTimeout(()=>{setBusy(false);setDrawer(null);say(s.name+' 최근 1일 재수집이 요청되었습니다')},1200);
+  };
+
+
+  /* 화면: 판매현황 대시보드 */
+  const sorted=[...fs].sort((a,b)=>sortK==='sales'?val(b,PER[per].k)-val(a,PER[per].k):sortK==='ord'?b.ord[PER[per].k]-a.ord[PER[per].k]:a.name.localeCompare(b.name,'ko'));
+  const maxSales=Math.max(1,...fs.map(s=>val(s,PER[per].k)));
+  const tr=TREND[per];const trMax=Math.max(...tr.cur,...tr.prev)*1.1;
+  const [hoverBar,setHoverBar]=useState(null);
+  const menuMax=TOPMENU[0][1]*TOPMENU[0][2];
+  const heat=fs.map(s=>({s,v:hourVals(s,STORES.findIndex(x=>x.id===s.id))}));
+  const hmax=Math.max(1,...heat.flatMap(h=>h.v.filter(x=>x>0)));
+  const lvl=v=>v===null?'l0':v<0?'gap':(v/hmax<.06?'l0':v/hmax<.2?'l1':v/hmax<.4?'l2':v/hmax<.62?'l3':v/hmax<.85?'l4':'l5');
+  const cmpS=cmp.map(id=>stores.find(s=>s.id===id));
+
+  const Main=()=>(
+    <div className="layer">
+      <div className="page-head">
+        <div><div className="eyebrow">Sales Command</div><h1 className="page-title">전 매장 판매현황</h1><p className="sub" style={{marginTop:4}}>{brand} · 매장 {fs.length}곳 · 오늘 21:14 기준</p></div>
+        <span className="live"><b/>수집 진행 중 · 6초마다 갱신</span>
+      </div>
+      <div className="filter-bar">
+        <div className="left">
+          <div className="seg" role="group" aria-label="기간">{Object.entries(PER).map(([k,v])=><button key={k} className={per===k?'on':''} onClick={()=>setPer(k)}>{v.n}</button>)}</div>
+          <div className="chips">{Object.entries(CH).map(([k,v])=><button key={k} className={'chip'+(ch===k?' on':'')} onClick={()=>setCh(k)}>{v.n}</button>)}</div>
+        </div>
+        <button className="btn ghost sm" onClick={()=>setModal({t:'export'})}><Icon n="Download" size={16}/>매출 내려받기</button>
+      </div>
+
+      <div className="status-strip">
+        <div className="stat-item"><div className="stat-label">오늘 매출</div><div className="stat-value"><Count to={totalD} f={v=>fmt(v/10000)}/><small>만원</small></div><div className="stat-delta"><Icon n="TrendingUp" size={14} sw={2.2}/> 전주 동요일 대비 상승</div></div>
+        <div className="stat-item"><div className="stat-label">주문 건수</div><div className="stat-value"><Count to={ordD}/><small>건</small></div><div className="stat-foot">취소·수정 반영 후</div></div>
+        <button className="stat-item" onClick={()=>setTab('agents')}><div className="stat-label">Agent 연결</div><div className="stat-value">{okN}<small>/ {instN}개 정상</small></div><div className="stat-foot">이상 {instN-okN}곳 확인 필요</div></button>
+        <div className="stat-item"><div className="stat-label">마지막 수집</div><div className="stat-value">{tick%2?'방금':'1분'}<small>{tick%2?'':'전'}</small></div><div className="stat-foot">증분 수집 · 체크포인트 기준</div></div>
+        <button className="stat-item" onClick={()=>setTab('reconcile')}><div className="stat-label">대사 차이</div><div className="stat-value">{diffToday.length}<small>건</small></div><div className="stat-foot">09-29 영업일</div></button>
+      </div>
+
+      <div className="tower">
+        <div className="card" style={{...DS.card,position:'relative'}}>
+          <div className="card-head"><div><div className="card-title">매장 × 시간대 수집 타임라인</div><div className="sub">진한 칸일수록 해당 시간대 매출 비중이 높습니다. 사선 칸은 수집 공백입니다.</div></div></div>
+          <div style={{position:'relative'}}>
+            <div className="hm">
+              <span/>{HOURS.map(h=><span key={h} className="hl num">{h}</span>)}
+              {heat.map(({s,v})=>{const mx=Math.max(...v.filter(x=>x>0),0);return <React.Fragment key={s.id}>
+                <button className="rl" onClick={()=>goStoreOrders(s.id)} title={s.name+' 주문 목록으로 이동'}>{s.name}</button>
+                {v.map((x,i)=><div key={i} className={'cell '+lvl(x)+(x>0&&x===mx?' peak':'')} style={{animationDelay:(i*25)+'ms'}} title={x===null?'미설치':x<0?'수집 공백':HOURS[i]+'시 · '+fmtM(x*chf)}/>)}
+              </React.Fragment>})}
+            </div>
+            {!fs.length&&<div className="empty">조건에 맞는 매장이 없습니다. 검색어를 지우면 전체 매장이 표시됩니다.</div>}
+          </div>
+          <div className="legend"><span>낮음</span><i style={{background:'var(--n2)'}}/><i style={{background:'var(--n4)'}}/><i style={{background:'var(--n6)'}}/><i style={{background:'var(--n8)'}}/><i style={{background:'var(--n10)'}}/><span>높음</span><span style={{marginLeft:16,display:'inline-flex',alignItems:'center',gap:8}}><i style={{background:'var(--n4)',outline:'2px solid var(--m600)',outlineOffset:1}}/>매장별 피크</span></div>
+        </div>
+
+        <div>
+          <div className="card-head"><div className="card-title">우선 대응 큐</div><span className="badge dark nodot">{queue.length}건</span></div>
+          {queue.map((it,i)=><button key={it.k} className={'rail-item'+(it.hi?' hi':'')} style={{animationDelay:(i*60)+'ms'}} onClick={()=>{if(it.to==='agents'){setTab('agents');setDrawer(it.store)}else{setTab('reconcile');setRday('09-29')}}}>
+            <span className="rail-rank">{i+1}</span>
+            <span><div className="rail-t">{it.t}</div><div className="rail-d">{it.d}</div></span>
+          </button>)}
+          {!queue.length&&<div className="card empty"><Icon n="CheckCheck" size={32}/><div>대응이 필요한 항목이 없습니다</div></div>}
+        </div>
+      </div>
+
+      <div className="grid3">
+        <div className="card">
+          <div className="card-head"><div className="card-title">매출 추이</div><span className="sub">단위 만원 · 회색은 직전 동기간</span></div>
+          <div style={{height:24,fontSize:13,color:'var(--n8)'}} className="num">{hoverBar!==null?tr.lab[hoverBar]+' · '+fmt(tr.cur[hoverBar]*chf)+'만원':'막대를 올리면 값이 표시됩니다'}</div>
+          <svg viewBox="0 0 420 210" width="100%" height="210" role="img" aria-label="매출 추이 막대 차트">
+            {[0,1,2,3].map(i=><line key={i} x1="0" x2="420" y1={20+i*46} y2={20+i*46} style={{stroke:'var(--n3)'}} strokeWidth="1"/>)}
+            {tr.cur.map((v,i)=>{const w=420/tr.cur.length;const bw=Math.min(26,w/2-6);const h=v*chf/trMax/chf*164;const hp=tr.prev[i]/trMax*164;
+              return <g key={per+i} onMouseEnter={()=>setHoverBar(i)} onMouseLeave={()=>setHoverBar(null)} style={{cursor:'default'}}>
+                <rect className="bar" x={i*w+w/2-bw-2} y={184-hp} width={bw} height={hp} rx="6" style={{fill:'var(--n4)',animationDelay:(i*50)+'ms'}}/>
+                <rect className="bar" x={i*w+w/2+2} y={184-h} width={bw} height={h} rx="6" style={{fill:'var(--m600)',animationDelay:(i*50+60)+'ms'}}/>
+                <text x={i*w+w/2} y="204" textAnchor="middle" style={{fontSize:11,fill:'var(--n7)'}}>{tr.lab[i]}</text>
+              </g>})}
+          </svg>
+        </div>
+        <div className="card" style={DS.card}>
+          <div className="card-head"><div className="card-title">메뉴별 판매량 TOP5</div><span className="sub">{PER[per].n} 기준</span></div>
+          <div className="bars-h">{TOPMENU.map(([n,qn,p],i)=><div className="row" key={n}>
+            <span className="rk">{i+1}</span>
+            <span><div className="nm">{n}</div><div className="track"><div className={'fill'+(i===0?' main':'')} style={{width:(qn*p/menuMax*100)+'%',animationDelay:(i*80)+'ms'}}/></div></span>
+            <span className="val num">{fmt(qn*PER[per].x*chf)}<span className="sub"> 개</span></span>
+          </div>)}</div>
+        </div>
+        <div className="card">
+          <div className="card-head"><div className="card-title">주문 채널 구성</div><span className="sub">수집 가능한 매장 기준</span></div>
+          <div style={{display:'flex',alignItems:'center',gap:24}}>
+            <svg viewBox="0 0 120 120" width="132" height="132" role="img" aria-label="채널 구성 도넛">
+              <circle cx="60" cy="60" r="44" fill="none" style={{stroke:'var(--n2)'}} strokeWidth="18"/>
+              {[[46,'m700',0],[34,'m400',46],[20,'m200',80]].map(([p,c,o],i)=><circle key={c} cx="60" cy="60" r="44" fill="none" style={{stroke:'var(--'+c+')',transformOrigin:'60px 60px',transform:'rotate('+(-90+o*3.6)+'deg)',transition:'stroke-dasharray .8s'}} strokeWidth="18" strokeDasharray={(p*2.7646-2)+' 999'}/>)}
+              <text x="60" y="58" textAnchor="middle" style={{fontSize:18,fontWeight:700,fill:'var(--n10)'}}>3</text><text x="60" y="74" textAnchor="middle" style={{fontSize:11,fill:'var(--n7)'}}>채널</text>
+            </svg>
+            <div style={{flex:1}}>{[['홀',46,'m700'],['배달',34,'m400'],['포장',20,'m200']].map(([n,p,c])=><div key={n} style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0'}}><i style={{width:12,height:12,borderRadius:4,background:'var(--'+c+')'}}/><span style={{flex:1}}>{n}</span><b className="num">{p}%</b></div>)}</div>
+          </div>
+          <p className="sub" style={{marginTop:16}}>POS가 채널 구분값을 제공하지 않는 매장은 '미분류'로 정규화하는 규칙을 적용할 예정입니다.</p>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div><div className="card-title">매장별 판매현황 비교</div><div className="sub">행을 누르면 해당 매장의 주문 목록으로 이동합니다. 비교 체크로 두 매장을 나란히 볼 수 있습니다.</div></div>
+          <div className="seg">{[['sales','매출순'],['ord','주문순'],['name','이름순']].map(([k,l])=><button key={k} className={sortK===k?'on':''} onClick={()=>setSortK(k)}>{l}</button>)}</div></div>
+        {cmpS.length===2&&<div className="cmp">{cmpS.map((s,i)=>{const o=cmpS[1-i];const better=(a,b)=>a>b?'win':'';return <div className="cmp-col" key={s.id}><h4>{s.name}</h4>
+          <div className="cmp-row"><span>{PER[per].n} 매출</span><b className={'num '+better(val(s,PER[per].k),val(o,PER[per].k))}>{fmtM(val(s,PER[per].k))}</b></div>
+          <div className="cmp-row"><span>주문 건수</span><b className={'num '+better(s.ord[PER[per].k],o.ord[PER[per].k])}>{fmt(s.ord[PER[per].k]*chf)}건</b></div>
+          <div className="cmp-row"><span>객단가</span><b className={'num '+better(s.sales.d/(s.ord.d||1),o.sales.d/(o.ord.d||1))}>{fmt(s.sales.d/(s.ord.d||1))}원</b></div>
+          <div className="cmp-row"><span>취소율</span><b className={'num '+(s.cancel<o.cancel?'win':'')}>{s.cancel}%</b></div></div>})}</div>}
+        <table className="tbl"><thead><tr><th style={{width:56}}>비교</th><th>매장</th><th>브랜드</th><th className="r">{PER[per].n} 매출</th><th style={{width:200}}>비중</th><th className="r">주문</th><th>수집 상태</th></tr></thead>
+        <tbody>{sorted.map(s=>{const v=val(s,PER[per].k);const on=cmp.includes(s.id);return <tr key={s.id} className="row" onClick={()=>goStoreOrders(s.id)}>
+          <td onClick={e=>e.stopPropagation()}><button className={'cmp-toggle'+(on?' on':'')} aria-label={s.name+' 비교 선택'} onClick={()=>setCmp(c=>on?c.filter(x=>x!==s.id):[...c.slice(-1),s.id])}><Icon n="Check" size={16} sw={2.4}/></button></td>
+          <td style={{fontWeight:600}}>{s.name}</td><td style={{color:'var(--n8)'}}>{s.brand}</td>
+          <td className="r num" style={{fontWeight:600}}>{v?fmtM(v):'수집 전'}</td>
+          <td><span className={'mini-bar'+(v===maxSales?' main':'')} style={{width:Math.max(4,v/maxSales*170)}}/></td>
+          <td className="r num">{fmt(s.ord[PER[per].k]*chf)}건</td>
+          <td><span className={'badge '+STMAP[s.st][1]}>{STMAP[s.st][0]}</span></td></tr>})}</tbody></table>
+      </div>
+    </div>
+  );
+
+  /* 화면: 주문 상세 조회 */
+  const sIdx=STORES.findIndex(s=>s.id===selStore);
+  const cur=stores.find(s=>s.id===selStore);
+  const allOrd=useMemo(()=>ordersFor(Math.max(0,sIdx)),[sIdx]);
+  const ords=allOrd.filter(o=>ordFilter==='all'||(ordFilter==='ok'&&o.status==='ok')||(ordFilter==='cancel'&&o.status==='cancel')||(ordFilter==='mod'&&o.status==='mod'));
+  const od=ords[selOrder]||ords[0];
+  const OBADGE={ok:['정상','ok'],cancel:['취소','err'],mod:['수정됨','dark']};
+  const Orders=()=>(
+    <div className="layer">
+      <div className="page-head"><div><div className="eyebrow">Order Detail</div><h1 className="page-title">{cur.name} 주문 상세</h1><p className="sub" style={{marginTop:4}}>주문 원천과 변경 이력을 함께 확인합니다 · 09-29 영업일</p></div>
+        <div className="seg">{[['all','전체'],['ok','정상'],['cancel','취소·환불'],['mod','수정됨']].map(([k,l])=><button key={k} className={ordFilter===k?'on':''} onClick={()=>{setOrdFilter(k);setSelOrder(0)}}>{l}</button>)}</div></div>
+      <div className="md">
+        <div className="card flat" style={{padding:16}}>
+          <div className="card-title" style={{padding:'8px 16px 16px',fontSize:14}}>매장</div>
+          <div className="store-rail">{fs.filter(s=>s.inst).map(s=><button key={s.id} className={'store-btn'+(s.id===selStore?' on':'')} onClick={()=>{setSelStore(s.id);setSelOrder(0);setRaw(false)}}><span>{s.name}</span><small className="num">{fmt(s.ord.d*chf)}건</small></button>)}</div>
+        </div>
+        <div className="card" style={{padding:16}}>
+          <table className="tbl tight"><thead><tr><th>주문번호</th><th>시각</th><th>채널</th><th>메뉴</th><th className="r">결제금액</th><th>상태</th></tr></thead>
+          <tbody>{ords.map((o,i)=><tr key={o.no} className={'row'+(od&&o.no===od.no?' sel':'')} onClick={()=>{setSelOrder(i);setRaw(false)}}>
+            <td className="mono">{o.no}</td><td className="num">{o.time}</td><td>{o.ch}</td>
+            <td style={{maxWidth:130,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{o.items[0].name}{o.items.length>1?' 외 '+(o.items.length-1):''}</td>
+            <td className="r num" style={{fontWeight:600,textDecoration:o.status==='cancel'?'line-through':'none',color:o.status==='cancel'?'var(--n6)':'inherit'}}>{fmt(o.total-o.disc)}원</td>
+            <td><span className={'badge '+OBADGE[o.status][1]}>{OBADGE[o.status][0]}</span></td></tr>)}</tbody></table>
+          {!ords.length&&<div className="empty"><Icon n="SearchX" size={32}/><div>해당 상태의 주문이 아직 없습니다</div></div>}
+        </div>
+        <div className="card detail" key={od?od.no:'none'} style={{animation:'fadeUp .25s ease-out'}}>
+          {od?<>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><h3 className="mono">{od.no}</h3><span className={'badge '+OBADGE[od.status][1]}>{OBADGE[od.status][0]}</span></div>
+            <dl className="kv"><dt>매장</dt><dd>{cur.name} · {od.term}</dd><dt>주문 일시</dt><dd className="num">09-29 {od.time}</dd><dt>채널</dt><dd>{od.ch}</dd></dl>
+            <div style={{fontWeight:700,marginBottom:8}}>주문 메뉴</div>
+            {od.items.map((it,i)=><div className="line" key={i}><span>{it.name} × {it.qty}</span><span className="num">{fmt(it.price*it.qty)}원</span></div>)}
+            <div className="line"><span style={{color:'var(--n7)'}}>할인</span><span className="num">-{fmt(od.disc)}원</span></div>
+            <div className="line total"><span>결제 금액</span><span className="num">{od.status==='cancel'?'0':fmt(od.total-od.disc)}원</span></div>
+            <div style={{fontWeight:700,margin:'16px 0 8px'}}>결제 정보</div>
+            {od.pay==='카드'&&od.items.length>1?<><div className="line"><span>카드</span><span className="num">{fmt(Math.round((od.total-od.disc)*.7/100)*100)}원</span></div><div className="line"><span>현금</span><span className="num">{fmt((od.total-od.disc)-Math.round((od.total-od.disc)*.7/100)*100)}원</span></div></>:<div className="line"><span>{od.status==='mod'?'간편결제':od.pay}</span><span className="num">{fmt(od.total-od.disc)}원</span></div>}
+            <div style={{fontWeight:700,margin:'16px 0 8px'}}>변경 이력</div>
+            <div className="tl">{HISTORY[od.status](od).map((h,i)=><div key={i} className={'tl-i '+h.cls}><b className="num">{h.t}</b> · {h.tx}{h.diff&&<div className="diff"><s>{h.diff[0]}</s><Icon n="ArrowRight" size={14}/><b>{h.diff[1]}</b></div>}</div>)}</div>
+            <button className="btn ghost sm" style={{width:'100%'}} onClick={()=>setRaw(r=>!r)}><Icon n="Database" size={16}/>{raw?'원천 데이터 닫기':'POS 원천 데이터 보기'}</button>
+            {raw&&<pre className="raw mono">{JSON.stringify({source:'firebird',order_no:od.no,store:cur.id,terminal:od.term,updated_at:'2025-09-29T'+od.time+':00',status:od.status==='cancel'?'CANCELED':'PAID',items:od.items.map(i=>({n:i.name,q:i.qty,p:i.price})),hash:'e3b0c442…'},null,1)}</pre>}
+          </>:<div className="empty"><Icon n="ReceiptText" size={32}/><div>주문을 선택하면 상세가 표시됩니다</div></div>}
+        </div>
+      </div>
+    </div>
+  );
+
+  /* 화면: Agent 모니터링 */
+  const dstore=drawer?stores.find(s=>s.id===drawer):null;
+  const updN=stores.filter(s=>s.st==='upd').length;
+  const agentAlert=!!(updN+stores.filter(s=>s.st==='off').length);
+  const Agents=()=>(
+    <div className="layer">
+      <div className="page-head"><div><div className="eyebrow">Agent Fleet</div><h1 className="page-title">Agent 운영 모니터링</h1><p className="sub" style={{marginTop:4}}>설치 여부·연결 상태·마지막 수집 시각·버전·오류를 매장 단위로 관리합니다</p></div>
+        <div style={{display:'flex',gap:8}}><button className="btn ghost" onClick={()=>setModal({t:'install'})}><Icon n="PackagePlus" size={16}/>설치 안내 보내기</button><button className="btn primary" disabled={!updN} onClick={()=>setModal({t:'deploy'})}><Icon n="Rocket" size={16}/>업데이트 배포하기</button></div></div>
+      <div className="summary">
+        <div className="sum-card"><div className="stat-label">설치 완료</div><div className="stat-value">{stores.filter(s=>s.inst).length}<small>/ {stores.length}곳</small></div></div>
+        <div className="sum-card"><div className="stat-label">정상 수집</div><div className="stat-value">{stores.filter(s=>s.st==='ok').length}<small>곳</small></div></div>
+        <div className="sum-card"><div className="stat-label">연결 끊김</div><div className="stat-value">{stores.filter(s=>s.st==='off').length}<small>곳</small></div></div>
+        <div className="sum-card"><div className="stat-label">업데이트 대기</div><div className="stat-value">{updN}<small>곳</small></div></div>
+      </div>
+      <div className="card" style={{padding:16}}>
+        <table className="tbl"><thead><tr><th>매장</th><th>POS 단말</th><th>DB 환경</th><th>상태</th><th>마지막 수집</th><th>버전</th><th className="r">로컬 큐</th></tr></thead>
+        <tbody>{fs.map(s=><tr key={s.id} className={'row'+(drawer===s.id?' sel':'')} onClick={()=>setDrawer(s.id)}>
+          <td style={{fontWeight:600}}>{s.name}</td><td className="num">{s.pos}대</td><td>{s.db}</td>
+          <td><span className={'badge '+STMAP[s.st][1]}>{STMAP[s.st][0]}</span></td>
+          <td className="num">{s.last===null?'-':s.last>=60?Math.floor(s.last/60)+'시간 '+(s.last%60)+'분 전':s.last+'분 전'}</td>
+          <td className="mono">{s.ver==='-'?'-':'v'+s.ver}</td><td className="r num">{s.q?fmt(s.q)+'건':'0건'}</td></tr>)}</tbody></table>
+      </div>
+    </div>
+  );
+
+  /* 화면: 정합성 대사 */
+  const runList=Object.entries(recon).flatMap(([d,list])=>list.filter(r=>r.run!==null||r.done).map(r=>({d,...r})));
+  const selectable=rows.filter(r=>r.src!==r.cen&&r.run===null).map(r=>r.s);
+  const Reconcile=()=>(
+    <div className="layer">
+      <div className="page-head"><div><div className="eyebrow">Reconciliation</div><h1 className="page-title">정합성 대사·재수집</h1><p className="sub" style={{marginTop:4}}>영업일별 POS 원천 매출과 중앙 집계를 비교하고 차이가 있으면 재수집합니다</p></div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}><div className="seg">{Object.keys(recon).map(d=><button key={d} className={rday===d?'on':''} onClick={()=>{setRday(d);setRsel([])}}>{d}</button>)}</div>
+        <button className="btn primary" disabled={!rsel.length} onClick={()=>setModal({t:'recollect'})}><Icon n="RefreshCw" size={16}/>선택 건 재수집 요청하기</button></div></div>
+      <div className="tower" style={{gridTemplateColumns:'minmax(0,1fr) 340px'}}>
+        <div className="card" style={{padding:16}}>
+          <table className="tbl"><thead><tr><th style={{width:48}}><button className={'ck'+(selectable.length&&rsel.length===selectable.length?' on':'')} aria-label="차이 건 전체 선택" onClick={()=>setRsel(rsel.length===selectable.length?[]:selectable)}><Icon n="Check" size={14} sw={2.6}/></button></th><th>매장</th><th className="r">POS 원천</th><th className="r">중앙 집계</th><th className="r">차이</th><th>대사 상태</th></tr></thead>
+          <tbody>{rows.map(r=>{const s=stores.find(x=>x.id===r.s);const d=r.cen-r.src;const can=d!==0&&r.run===null;const on=rsel.includes(r.s);
+            return <tr key={r.s} className={'row'+(on?' sel':'')} onClick={()=>can&&setRsel(x=>on?x.filter(i=>i!==r.s):[...x,r.s])}>
+            <td><button className={'ck'+(on?' on':'')} disabled={!can} aria-label={s.name+' 선택'} onClick={e=>{e.stopPropagation();setRsel(x=>on?x.filter(i=>i!==r.s):[...x,r.s])}}><Icon n="Check" size={14} sw={2.6}/></button></td>
+            <td style={{fontWeight:600}}>{s.name}</td><td className="r num">{fmt(r.src)}원</td><td className="r num">{fmt(r.cen)}원</td>
+            <td className="r num" style={{fontWeight:700,color:d?'var(--s2-text)':'var(--n7)'}}>{d?fmt(d)+'원':'0원'}</td>
+            <td>{r.run!==null?<span className="badge dark">{STAGES[Math.min(r.run,3)]} 중</span>:d?<span className="badge err">차이 발생</span>:<span className="badge ok">일치</span>}</td></tr>})}</tbody></table>
+          <p className="sub" style={{padding:'16px 16px 8px'}}>영업일 마감 뒤에 발생한 취소·정정도 다음 대사 때 원천과 다시 비교됩니다. 미설치 매장은 대사 대상에서 제외됩니다.</p>
+        </div>
+        <div>
+          <div className="card-head"><div className="card-title">재수집 요청 큐</div><span className="badge dark nodot">{runList.length}건</span></div>
+          {runList.map(r=>{const s=stores.find(x=>x.id===r.s);return <div className="card flat" key={r.d+r.s} style={{padding:16,marginBottom:8,animation:'fadeUp .25s ease-out'}}>
+            <div style={{display:'flex',justifyContent:'space-between'}}><b>{s.name}</b><span className="sub">{r.d} 영업일</span></div>
+            <div className="stepper">{STAGES.map((_,i)=><i key={i} className={r.run===null?'done':i<r.run?'done':i===r.run?'now':''}/>)}</div>
+            <div className="sub" style={{marginTop:8}}>{r.run===null?'재대사 완료 · 일치로 확인되었습니다':STAGES[Math.min(r.run,3)]+' 단계 진행 중'}</div></div>})}
+          {!runList.length&&<div className="card empty"><Icon n="ListChecks" size={32}/><div>요청된 재수집이 없습니다.<br/>차이 발생 건을 선택하면 요청할 수 있습니다</div></div>}
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div data-archetype="topbar-analytics" style={{width:'100%',minHeight:'100vh'}}>
+      <header className="app-header">
+        <div className="brand"><span className="brand-mark"><Icon n="ChartColumn" size={18} sw={2}/></span>POS 허브<small>본사 관리</small></div>
+        <div className="project-switcher">
+          <button className="ps-btn" onClick={()=>{setPsOpen(o=>!o);setBell(false)}}><Icon n="Store" size={16}/>{brand}<Icon n="ChevronDown" size={16}/></button>
+          {psOpen&&<div className="pop">{['전체 브랜드','다온키친','모락국수'].map(b=><button key={b} className={brand===b?'on':''} onClick={()=>{setBrand(b);setPsOpen(false)}}>{b}{brand===b&&<Icon n="Check" size={16}/>}</button>)}</div>}
+        </div>
+        <nav className="global-nav">
+          <button className="nav-link active" onClick={()=>setTab('main')}>운영 현황</button>
+          <button className="nav-link" onClick={()=>setModal({t:'stores'})}>매장 기준정보</button>
+          <button className="nav-link" onClick={()=>{setTab('agents');setModal({t:'deploy'})}}>배포 관리</button>
+        </nav>
+        <div className="header-actions">
+          <label className="search"><Icon n="Search" size={16}/><input placeholder="매장 검색" value={q} onChange={e=>setQ(e.target.value)}/></label>
+          <button className="icon-btn" aria-label="알림" onClick={()=>{setBell(b=>!b);setPsOpen(false)}}><Icon n="Bell" size={18}/><span className="dot-badge"/></button>
+          {bell&&<div className="pop right" style={{width:320}}>
+            {queue.slice(0,3).map(it=><button key={it.k} onClick={()=>{setBell(false);if(it.to==='agents'){setTab('agents');setDrawer(it.store)}else setTab('reconcile')}}><span><b style={{display:'block'}}>{it.t}</b><span className="sub">{it.d}</span></span></button>)}
+            {!queue.length&&<div className="empty">새 알림이 없습니다</div>}
+          </div>}
+          <span className="avatar">관</span>
+        </div>
+      </header>
+      <nav className="tab-bar" role="tablist">
+        <button className="tab" role="tab" aria-selected={tab==='main'} data-on={tab==='main'} onClick={()=>setTab('main')}>판매현황 대시보드</button>
+        <button className="tab" role="tab" aria-selected={tab==='orders'} data-on={tab==='orders'} onClick={()=>setTab('orders')}>주문 상세 조회</button>
+        <button className="tab" role="tab" aria-selected={tab==='agents'} data-on={tab==='agents'} data-alert={agentAlert} title="Agent 모니터링" onClick={()=>setTab('agents')}>Agent 모니터링</button>
+        <button className="tab" role="tab" aria-selected={tab==='reconcile'} data-on={tab==='reconcile'} data-alert={!!diffAll.length} title="정합성 대사·재수집" onClick={()=>setTab('reconcile')}>정합성 대사·재수집</button>
+      </nav>
+      <main className="content" key={tab}>
+        <div className="wash" aria-hidden="true"><i/><i/></div>
+        {tab==='main'&&Main()}{tab==='orders'&&Orders()}{tab==='agents'&&Agents()}{tab==='reconcile'&&Reconcile()}
+      </main>
+
+      {dstore&&<div className="overlay drawer" onClick={()=>setDrawer(null)}><div className="drawer-panel" onClick={e=>e.stopPropagation()}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}><div><h3>{dstore.name} Agent</h3><p className="sub">{dstore.brand} · POS {dstore.pos}대 · {dstore.db}</p></div><button className="icon-btn" aria-label="닫기" onClick={()=>setDrawer(null)}><Icon n="X" size={18}/></button></div>
+        <div style={{margin:'16px 0'}}><span className={'badge '+STMAP[dstore.st][1]}>{STMAP[dstore.st][0]}</span></div>
+        <dl className="kv"><dt>Agent 버전</dt><dd className="mono">{dstore.ver==='-'?'-':'v'+dstore.ver}</dd><dt>마지막 수집</dt><dd className="num">{dstore.last===null?'-':dstore.last>=60?'3시간 12분 전':dstore.last+'분 전'}</dd><dt>로컬 큐</dt><dd className="num">{dstore.q} 건 보관</dd><dt>체크포인트</dt><dd className="mono">{dstore.inst?'T-0929-'+dstore.id.slice(2)+'017':'-'}</dd></dl>
+        <div style={{fontWeight:700,margin:'16px 0 8px'}}>상태 이력</div>
+        <div className="tl">{(HIST[dstore.id]||HIST.D).map((h,i)=><div key={i} className={'tl-i'+(i===0&&dstore.st==='off'?' bad':'')}>{h}</div>)}</div>
+        <div style={{fontWeight:700,margin:'8px 0'}}>오류·이벤트 로그</div>
+        <div className="log mono">{(ERRLOG[dstore.id]||ERRLOG.D).map((l,i)=><div key={i}>{l[0]} <span className={l[1]==='ERROR'?'e':''}>{l[1]}</span> {l[2]}</div>)}</div>
+        <div className="actions"><button className="btn ghost" onClick={()=>setDrawer(null)}>닫기</button>
+          <button className="btn primary" data-loading={busy?'true':'false'} disabled={!dstore.inst} onClick={()=>forceRecollect(dstore)}>{busy?'요청 중':'최근 1일 재수집하기'}</button></div>
+      </div></div>}
+
+      {modal&&<div className="overlay" onClick={()=>setModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+        {modal.t==='recollect'&&<><h3>재수집 요청</h3><p className="sub" style={{marginTop:4}}>{rsel.map(id=>stores.find(s=>s.id===id).name).join(', ')} · {rday} 영업일</p>
+          <div className="field"><label>재수집 범위</label><select defaultValue="1"><option value="1">최근 1일</option><option value="3">최근 3일</option><option value="7">최근 7일</option></select></div>
+          <div className="field"><label>요청 사유</label><input defaultValue="대사 차이 발생"/></div>
+          <p className="sub">요청은 매장 Agent에 전달되며 원천 재조회 후 자동으로 재대사됩니다.</p>
+          <div className="actions"><button className="btn ghost" onClick={()=>setModal(null)}>취소</button><button className="btn primary" onClick={()=>requestRecollect()}>재수집 요청하기</button></div></>}
+        {modal.t==='deploy'&&<><h3>Agent 업데이트 배포</h3>
+          <div className="field"><label>배포 대상 버전</label><select value={ver} onChange={e=>setVer(e.target.value)}><option value="2.4.0">v2.4.0 (안정)</option><option value="2.4.1">v2.4.1 (점검 중)</option></select></div>
+          <div style={{fontWeight:700,margin:'16px 0 8px'}}>적용 대상</div>
+          {stores.filter(s=>s.st==='upd'||s.st==='off').map(s=><div className="line" key={s.id}><span>{s.name} <span className="sub">v{s.ver}</span></span><span className={'badge '+(s.st==='off'?'err':'dark')}>{s.st==='off'?'연결 복구 후 적용':'영업 종료 후 적용'}</span></div>)}
+          <div className="actions"><button className="btn ghost" onClick={()=>setModal(null)}>취소</button><button className="btn primary" data-loading={busy?'true':'false'} onClick={deploy}>{busy?'배포 중':'배포하기'}</button></div></>}
+        {modal.t==='install'&&<><h3>설치 안내 보내기</h3><p className="sub" style={{marginTop:4}}>영통점 (미설치)</p>
+          <div className="field"><label>담당자 이메일</label><input placeholder="manager@sample-store.kr"/></div>
+          <div className="field"><label>설치 방식</label><select><option>원격 설치 지원</option><option>설치 파일 링크 전달</option></select></div>
+          <div className="actions"><button className="btn ghost" onClick={()=>setModal(null)}>취소</button><button className="btn primary" onClick={()=>{setModal(null);say('설치 안내가 발송되었습니다')}}>안내 보내기</button></div></>}
+        {modal.t==='stores'&&<><h3>매장 기준정보</h3><p className="sub" style={{marginTop:4}}>브랜드·매장·POS 단말 식별 기준</p>
+          <div style={{marginTop:16}}>{stores.map(s=><div className="line" key={s.id}><span><b>{s.name}</b> <span className="sub">{s.brand}</span></span><span className="sub num">{s.id} · 단말 {s.pos}대</span></div>)}</div>
+          <div className="actions"><button className="btn primary" onClick={()=>setModal(null)}>닫기</button></div></>}
+        {modal.t==='export'&&<><h3>매출 내려받기</h3>
+          <div className="field"><label>파일 형식</label><select><option>엑셀 (.xlsx)</option><option>CSV (.csv)</option></select></div>
+          <div className="field"><label>범위</label><input readOnly value={brand+' · '+PER[per].n+' 단위 · '+CH[ch].n}/></div>
+          <div className="actions"><button className="btn ghost" onClick={()=>setModal(null)}>취소</button><button className="btn primary" data-loading={busy?'true':'false'} onClick={()=>{setBusy(true);setTimeout(()=>{setBusy(false);setModal(null);say('파일이 준비되었습니다')},1200)}}>{busy?'생성 중':'파일 만들기'}</button></div></>}
+      </div></div>}
+      {toast&&<div className="toast"><Icon n="CircleCheck" size={18}/>{toast}</div>}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
