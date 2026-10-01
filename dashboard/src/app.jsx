@@ -473,7 +473,6 @@ const leadLabel = (m) => m >= 1440 ? `${m/1440}일 전` : m >= 60 ? `${m/60}시�
 
 // ─── Hash routing ───
 const SORT_KEYS = ['created_at','meeting_at','budget','title','status'];
-const DATE_RANGES = ['all','7d','30d','90d'];
 // 표 화면의 필터 상태를 해시 쿼리로 읽고 쓴다 — 새로고침·뒤로가기·링크 공유에서 보존 (2026-09-20)
 function parseTableQuery() {
   const h = (window.location.hash || '').replace(/^#/, '');
@@ -481,23 +480,20 @@ function parseTableQuery() {
   if (qi < 0) return null;
   const sp = new URLSearchParams(h.slice(qi + 1));
   const f = sp.get('f') || 'all';
-  const d = sp.get('d') || 'all';
   const [sk, so] = (sp.get('s') || '').split(':');
   return {
     filter: (f === 'all' || STATUS_ORDER.includes(f)) ? f : 'all',
     search: sp.get('q') || '',
     memberFilter: sp.get('m') || '',
-    dateRange: DATE_RANGES.includes(d) ? d : 'all',
     sortKey: SORT_KEYS.includes(sk) ? sk : 'created_at',
     sortOrder: so === 'asc' ? 'asc' : 'desc',
   };
 }
-function buildTableHash({ filter, search, memberFilter, dateRange, sortKey, sortOrder }) {
+function buildTableHash({ filter, search, memberFilter, sortKey, sortOrder }) {
   const sp = new URLSearchParams();
   if (filter && filter !== 'all') sp.set('f', filter);
   if (search) sp.set('q', search);
   if (memberFilter) sp.set('m', memberFilter);
-  if (dateRange && dateRange !== 'all') sp.set('d', dateRange);
   if (sortKey !== 'created_at' || sortOrder !== 'desc') sp.set('s', `${sortKey}:${sortOrder}`);
   const q = sp.toString();
   return q ? `#table?${q}` : '';
@@ -3557,12 +3553,12 @@ function EmptyState({ icon, title, hint, primary, secondary }) {
 
 // ─── ProjectTable ───
 const PAGE_SIZE = 30;
-function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, sortOrder, onSort, onBatchDelete, onMemoSave, memberFilter, teamMembers, milestones, milestonesSetupNeeded, onQuickApplyTemplate, onOpenProject, onAddNew, onResetFilters }) {
+function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, onSort, onBatchDelete, onMemoSave, memberFilter, teamMembers, milestones, milestonesSetupNeeded, onQuickApplyTemplate, onOpenProject, onAddNew, onResetFilters }) {
   const [selected, setSelected] = useState(new Set());
   const [page, setPage] = useState(1);
   const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s=new Set(prev); s.has(slug)?s.delete(slug):s.add(slug); return s; }); };
   // 필터/검색/정렬 변경 시 1페이지로 자동 리셋 (빈 페이지 노출 방지)
-  useEffect(() => { setPage(1); setSelected(new Set()); }, [filter, search, dateRange, memberFilter, sortKey, sortOrder]);
+  useEffect(() => { setPage(1); setSelected(new Set()); }, [filter, search, memberFilter, sortKey, sortOrder]);
   const isMobile = useMediaQuery(MOBILE_MQ);
   // 실시간 삭제 등으로 목록에서 사라진 슬러그는 선택에서도 제거
   useEffect(() => { setSelected(prev => { const live = new Set((data||[]).map(d => d.slug)); const next = new Set([...prev].filter(s => live.has(s))); return next.size === prev.size ? prev : next; }); }, [data]);
@@ -3577,20 +3573,12 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
       const q = search.toLowerCase();
       list = list.filter(d => (d.title||'').toLowerCase().includes(q) || (d.slug||'').toLowerCase().includes(q) || (d.memo||'').toLowerCase().includes(q));
     }
-    if (dateRange && dateRange !== 'all') {
-      const days = parseInt(dateRange);
-      if (days > 0) {
-        const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-days);
-        const cutoffStr = cutoff.toISOString().split('T')[0];
-        list = list.filter(d => (d.created_at||'') >= cutoffStr);
-      }
-    }
     if (memberFilter) {
       // 현재 필터의 담당 역할(assignRolesFor) 중 하나라도 해당 행에 적용되고 그 담당이 선택값과 일치하면 통과
       list = list.filter(d => assignRolesFor(filter).some(role => roleAppliesToRow(role, d) && d[role.field]===memberFilter));
     }
     return list;
-  }, [data, filter, search, dateRange, memberFilter]);
+  }, [data, filter, search, memberFilter]);
 
   // 2) urgency/stale 마킹 (필터 결과만 변할 때 재계산)
   const enriched = useMemo(() => {
@@ -3659,7 +3647,7 @@ function ProjectTable({ data, filter, search, dateRange, onRowClick, sortKey, so
         hint="위시켓에서 가져온 견적 요청이나 직접 입력한 프로젝트를 한 곳에서 관리할 수 있어요."
         primary={onAddNew ? { label:'＋ 프로젝트 등록', onClick:onAddNew } : null}
       />
-    ) : (search.trim() || memberFilter || (dateRange && dateRange !== 'all') || filter !== 'all') ? (
+    ) : (search.trim() || memberFilter || filter !== 'all') ? (
       <EmptyState
         icon="🔍"
         title="조건에 일치하는 프로젝트가 없습니다"
@@ -3981,7 +3969,7 @@ function App({ session }) {
       const q = parseTableQuery();
       if (q && parseHash().name === 'table') {
         setFilter(q.filter); setSearch(q.search); setMemberFilter(q.memberFilter);
-        setDateRange(q.dateRange); setSortKey(q.sortKey); setSortOrder(q.sortOrder);
+        setSortKey(q.sortKey); setSortOrder(q.sortOrder);
       }
     };
     window.addEventListener('hashchange', h);
@@ -4020,7 +4008,6 @@ function App({ session }) {
   }, [isMobile, filter, memberFilter, search, data]);
   const [sortKey, setSortKey]             = useState(initialQuery?.sortKey || 'created_at');
   const [sortOrder, setSortOrder]         = useState(initialQuery?.sortOrder || 'desc');
-  const [dateRange, setDateRange]         = useState(initialQuery?.dateRange || 'all');
   const [showStats, setShowStats]         = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const { toasts, toast, dismissToast } = useToast();
@@ -4171,10 +4158,10 @@ function App({ session }) {
   // 필터 상태 → 해시 동기화. replaceState 라 히스토리가 쌓이지 않고 hashchange 도 발생하지 않는다.
   useEffect(() => {
     if (route.name !== 'table') return;
-    const next = buildTableHash({ filter, search, memberFilter, dateRange, sortKey, sortOrder });
+    const next = buildTableHash({ filter, search, memberFilter, sortKey, sortOrder });
     const cur = window.location.hash || '';
     if (cur !== next) window.history.replaceState(null, '', next || window.location.pathname + window.location.search);
-  }, [route.name, filter, search, memberFilter, dateRange, sortKey, sortOrder]);
+  }, [route.name, filter, search, memberFilter, sortKey, sortOrder]);
 
   // 미팅 시각 경과 자동 전환 — 페이지 로드뿐 아니라 열어둔 탭에서도 1분 주기로 확인해 RPC 호출 (2026-09-18)
   const [meetingTick, setMeetingTick] = useState(() => Date.now());
@@ -5086,7 +5073,7 @@ function App({ session }) {
             </div>
           )}
           {staleCount>0 && (
-            <div onClick={() => { setFilter('applied'); setSortKey('created_at'); setSortOrder('asc'); setDateRange('all'); }} style={{ flexShrink:0, padding:'0.5rem 0.8rem', borderRadius:8, background:'var(--surface-danger-soft)', border:'1px solid var(--surface-danger-mid)', fontSize:'0.8rem', color:'var(--red)', cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}>
+            <div onClick={() => { setFilter('applied'); setSortKey('created_at'); setSortOrder('asc'); }} style={{ flexShrink:0, padding:'0.5rem 0.8rem', borderRadius:8, background:'var(--surface-danger-soft)', border:'1px solid var(--surface-danger-mid)', fontSize:'0.8rem', color:'var(--red)', cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}>
               ⏰ 30일+ 무응답 {staleCount}건
             </div>
           )}
@@ -5144,24 +5131,13 @@ function App({ session }) {
           </div>
           );
         })()}
-        {/* 기간 필터 — 우측 정렬, 항상 표시 (모바일에선 담당 행 아래 줄로 내려감) */}
-        <div style={{ marginLeft:'auto', display:'flex', gap:3 }}>
-          {[{key:'all',label:'전체'},{key:'7d',label:'7일'},{key:'30d',label:'30일'},{key:'90d',label:'90일'}].map(d => (
-            <button key={d.key} onClick={() => setDateRange(d.key)} style={{
-              padding:'0.3rem 0.55rem', borderRadius:6, border:'none', cursor:'pointer',
-              fontSize:'0.8rem', fontWeight:dateRange===d.key?600:400,
-              background:dateRange===d.key?'var(--surface2)':'transparent',
-              color:dateRange===d.key?'var(--text)':'var(--text2)',
-            }}>{d.label}</button>
-          ))}
-        </div>
       </div>
       </div>
 
       {/* 테이블 */}
       <div className="fade-in delay-2" style={{ marginBottom:'1.75rem' }}>
         <ProjectTable
-          data={data} filter={filter} search={search} dateRange={dateRange}
+          data={data} filter={filter} search={search}
           onRowClick={handleRowClick} sortKey={sortKey} sortOrder={sortOrder} onSort={handleSort}
           onBatchDelete={handleBatchDelete} onMemoSave={handleMemoSave}
           memberFilter={memberFilter} teamMembers={teamMembers}
@@ -5170,7 +5146,7 @@ function App({ session }) {
           onQuickApplyTemplate={handleCreateMilestonesFromTemplate}
           onOpenProject={(slug) => navigate({ name:'project', slug })}
           onAddNew={() => setShowQuickAdd(true)}
-          onResetFilters={() => { setFilter('all'); setSearch(''); setDateRange('all'); setMemberFilter(''); }}
+          onResetFilters={() => { setFilter('all'); setSearch(''); setMemberFilter(''); }}
         />
       </div>
 
