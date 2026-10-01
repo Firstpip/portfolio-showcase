@@ -3856,6 +3856,18 @@ function App({ session }) {
   const [teamSetupNeeded, setTeamSetupNeeded] = useState(false);
   const [milestones, setMilestones]       = useState({}); // { [slug]: Milestone[] }
   const [milestonesSetupNeeded, setMilestonesSetupNeeded] = useState(false);
+  // 미팅→수주 전환율 — 삭제된 프로젝트(감사 로그 스냅샷)까지 포함한 서버 집계. null 이면 로드 전/실패 → 라이브 계산으로 대체.
+  const [convStats, setConvStats] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    // row 수가 바뀔 때(등록/삭제/복원) 다시 집계 — 삭제 직후 감사 로그 스냅샷이 분모로 들어와야 숫자가 안 튄다
+    supabase.rpc('meeting_conversion_stats').then(({ data: s, error }) => {
+      if (!alive) return;
+      if (error || !s || typeof s !== 'object') { if (error) console.warn('meeting_conversion_stats 실패 — 라이브 계산으로 대체:', error.message); setConvStats(null); return; }
+      setConvStats(s);
+    });
+    return () => { alive = false; };
+  }, [data?.length]);
   const [route, setRoute]                 = useState(() => parseHash());
   useEffect(() => {
     const h = () => {
@@ -4774,9 +4786,17 @@ function App({ session }) {
   const wonCount = data.filter(d => SECURED_STATUSES.includes(d.current_status)).length;
   // 전환율은 위시켓 건만 — 직거래는 미팅 없이 수주로 갈 수 있어 분자만 부풀린다. 수주대금(wonCount)은 직거래 포함.
   const wkData = data.filter(d => !isDirectContract(d));
-  const wkWonCount = wkData.filter(d => SECURED_STATUSES.includes(d.current_status)).length;
-  const meetingReachedCount = wkData.filter(d => MEETING_REACHED_STATUSES.includes(d.current_status)).length;
+  // 서버 집계(convStats)가 있으면 그것을 쓴다 — 미팅 후 미선정으로 자동정리된 row 가 분모에서 빠지는 생존자 편향 제거
+  // (실측 2026-10-01: 라이브만 86.7% → 삭제분 포함 60.9%). 없으면 라이브 row 로 대체(status 기준, 편향 있음).
+  const liveWon = wkData.filter(d => SECURED_STATUSES.includes(d.current_status)).length;
+  const liveReached = wkData.filter(d => MEETING_REACHED_STATUSES.includes(d.current_status)).length;
+  const wkWonCount = convStats ? convStats.secured : liveWon;
+  const meetingReachedCount = convStats ? convStats.reached : liveReached;
   const winRate = meetingReachedCount > 0 ? ((wkWonCount/meetingReachedCount)*100).toFixed(1) : '0.0';
+  const convSince = convStats?.since ? kstDateStr(new Date(convStats.since)) : null;
+  const convTitle = convStats
+    ? `'미팅 완료' 이상을 한 번이라도 거친 건 대비 수주(계약 논의 중 이상) 비율.\n미선정으로 삭제된 건도 삭제 직전 이력으로 집계 (삭제분 ${convStats.reached_deleted}건 중 수주 ${convStats.secured_deleted}건, 삭제된 '계약 논의 중'은 실패로 봄).\n직계약 제외 · ${convSince} 이후 삭제분부터 (그 이전 삭제 기록 없음).`
+    : `'미팅 완료' 이후 단계에 도달한 건 대비 수주 성공 비율.\n아직 미팅 전인 '미팅 예정'은 분모에서 제외됩니다.\n※ 삭제분 집계를 불러오지 못해 살아있는 건만 계산 — 실제보다 높게 나올 수 있습니다.`;
 
   const now = new Date();
   // 이번 주(한국 시간, 일요일 시작) 남은 미팅 — 이미 끝난 미팅·지난 시각은 제외 (2026-09-20)
@@ -5055,10 +5075,10 @@ function App({ session }) {
         const numStyle = (color) => ({ fontWeight:700, fontSize:'0.95rem', color });
         return (
           <div className="fade-in delay-2" style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:'1rem' }}>
-            <div style={kpiStyle} title="'미팅 완료' 이후 단계에 도달한 건 대비 수주 성공 비율.&#10;아직 미팅 전인 '미팅 예정'은 분모에서 제외됩니다.&#10;※ 미선정으로 삭제된 건은 집계에 남지 않아 실제보다 높게 나올 수 있습니다.">
+            <div style={kpiStyle} title={convTitle}>
               <span style={{ color:'var(--text2)' }}>미팅 → 수주 전환율</span>
               <span style={numStyle('var(--green)')}>{winRate}%</span>
-              <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>({wkWonCount}/{meetingReachedCount})</span>
+              <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>({wkWonCount}/{meetingReachedCount}{convStats ? '' : ' · 라이브만'})</span>
             </div>
             {wonBudgetTotal > 0 && (
               <div style={kpiStyle} title="위시켓 수수료(지원가 500만 이하 25% / 초과 20%) 차감 후 실지급 대금 합산 (부가세 제외)">
@@ -5100,7 +5120,7 @@ function App({ session }) {
               return (
                 <div style={{ display:'flex', gap:'0.75rem', flexWrap:'wrap', marginTop:'0.75rem', marginBottom:'1rem' }}>
                   <StatCard title="총 프로젝트" value={data.length} sub={`생성 ${counts.generated||0} / 지원 ${appliedOrBeyond}`} delay={1} />
-                  <StatCard title="미팅 → 수주 전환율" value={`${winRate}%`} sub={`${wkWonCount} / ${meetingReachedCount} · 미팅 완료 이후 · 위시켓 건`} color="var(--green)" delay={1} />
+                  <StatCard title="미팅 → 수주 전환율" value={`${winRate}%`} sub={convStats ? `${wkWonCount} / ${meetingReachedCount} · 삭제분 ${convStats.reached_deleted}건 포함 · 위시켓 건` : `${wkWonCount} / ${meetingReachedCount} · 라이브만 · 위시켓 건`} color="var(--green)" delay={1} />
                   <StatCard title="수주대금" value={wonBudgetStr} sub={`${wonCount}건 합산 · 수수료 차감 (부가세 제외)`} color="var(--green)" delay={1} />
                   <StatCard title="진행 중" value={SECURED_STATUSES.reduce((s,k)=>s+(counts[k]||0),0)}
                     sub={SECURED_STATUSES.map(k=>counts[k]>0?`${STATUS_META[k].label} ${counts[k]}`:'').filter(Boolean).join(' · ')||'없음'} color="var(--accent2)" delay={1} />
