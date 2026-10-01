@@ -889,53 +889,6 @@ function StatCard({ title, value, sub, color, delay }) {
   );
 }
 
-// ─── Funnel ───
-function Funnel({ data }) {
-  // 지원 단계는 30일+ 무응답 자동 삭제로 카운트 편향이 큼 → 퍼널에서 제외.
-  // 미팅 단계부터는 자동 삭제 영향 없어 전환율 신뢰 가능.
-  const stages = [
-    { key:'interview',    label:'미팅', color:'var(--yellow)' },
-    { key:'meeting_done', label:'미팅 완료', color:'var(--blue)' },
-    { key:'won',          label:'계약 논의 중', color:'var(--green)' },
-  ];
-  const ORDER = ['interview','meeting_done','won'];
-  // 직거래는 미팅 없이 계약으로 갈 수 있어 미팅 전환율 퍼널을 왜곡한다 → 위시켓 건만 (2026-10-01)
-  const wk = data.filter(d => !isDirectContract(d));
-  const counts = stages.map(s => {
-    const idx = ORDER.indexOf(s.key);
-    return { ...s, count: wk.filter(d => {
-      // post-won 단계도 수주 성공으로 카운트
-      const effectiveStatus = POST_WON.includes(d.current_status) ? 'won' : d.current_status;
-      return ORDER.indexOf(effectiveStatus) >= idx;
-    }).length };
-  });
-  const maxCount = Math.max(...counts.map(c => c.count), 1);
-  return (
-    <div style={{ background:'var(--surface)', borderRadius:12, padding:'1.5rem', border:'1px solid var(--border)' }}>
-      <div style={{ display:'flex', alignItems:'baseline', gap:8, marginBottom:'1.25rem', flexWrap:'wrap' }}>
-        <h3 style={{ fontSize:'1rem', fontWeight:600 }}>수주 퍼널</h3>
-        <span style={{ fontSize:'0.75rem', color:'var(--text2)', opacity:0.7 }}>* 지원 단계는 30일+ 무응답 자동 삭제로 표시하지 않음</span>
-      </div>
-      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-        {counts.map((s,i) => {
-          const pct = maxCount > 0 ? (s.count/maxCount)*100 : 0;
-          const convRate = i > 0 && counts[i-1].count > 0 ? ((s.count/counts[i-1].count)*100).toFixed(0)+'%' : null;
-          return (
-            <div key={s.key} style={{ display:'flex', alignItems:'center', gap:12 }}>
-              <div style={{ width:92, fontSize:'0.85rem', color:'var(--text2)', textAlign:'right', flexShrink:0 }}>{s.label}</div>
-              <div style={{ flex:1, background:'var(--surface2)', borderRadius:6, height:32, overflow:'hidden' }}>
-                <div style={{ width:`${Math.max(pct,3)}%`, height:'100%', background:s.color, borderRadius:6, transition:'width 0.8s ease-out', display:'flex', alignItems:'center', paddingLeft:10 }}>
-                  <span style={{ fontSize:'0.85rem', fontWeight:600, color:'#fff', textShadow:'0 1px 2px rgba(0,0,0,0.3)' }}>{s.count}</span>
-                </div>
-              </div>
-              {convRate && <div style={{ width:40, fontSize:'0.8rem', color:'var(--text2)', flexShrink:0 }}>{convRate}</div>}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 // ─── MonthlyChart ───
 function MonthlyChart({ data, convStats }) {
@@ -5193,7 +5146,7 @@ function App({ session }) {
           color:'var(--text2)', cursor:'pointer', fontSize:'0.85rem', fontWeight:500, padding:'0.4rem 0',
         }}>
           <span style={{ transition:'transform 0.2s', transform:showStats?'rotate(90deg)':'rotate(0)', display:'inline-block' }}>&#9654;</span>
-          상세 통계 {showStats?'':'(퍼널 · 월별 추이 · 예산 분석)'}
+          상세 통계 {showStats?'':'(월별 수주 · 예산 구간별 전환율)'}
         </button>
         {showStats && (
           <div style={{ animation:'fadeIn 0.25s ease-out' }}>
