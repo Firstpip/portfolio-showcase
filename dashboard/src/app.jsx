@@ -53,6 +53,9 @@ const isDirectContract = (p) => p.direct_contract === true || !p.wishket_url;
 const projectNet = (p) => { const bn = parseBudgetNum(p.budget); return isDirectContract(p) ? bn : contractNet(bn); };
 // 우리 쇼케이스 배포 링크 패턴 — [1]=slug, [2]=portfolio-N (배포까지 삭제 버튼 노출 판별용)
 const SHOWCASE_LINK_RE = /^https?:\/\/firstpip\.github\.io\/portfolio-showcase\/([^/]+)\/(portfolio-\d+)\/?$/i;
+// 위시켓 공고 URL — 자동정리·cascade·중복 보호가 전부 이 URL 의 공고 id 로 매칭하므로, 위시켓 건(직계약 아님)으로
+// 등록할 땐 id 가 뽑히는 형식이어야 한다. (wishket-portfolio-system extractProjectId 와 같은 패턴)
+const WISHKET_PROJECT_URL_RE = /wishket\.com\/project\/(?:view\/)?\d+/i;
 // 담당 컬럼·담당 필터·멤버 바의 단일 소스. 필터별로 노출/매칭할 담당 역할을 정의한다.
 // role.statuses 가 있으면 해당 행 상태에서만 그 역할이 적용됨('전체' 뷰의 행별 구분용).
 // - '전체'        : PM(수주 후 건) + 미팅 주(미팅예정 건만)
@@ -2817,6 +2820,10 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                     <input type="checkbox" checked={editDirect} onChange={e => { setEditDirect(e.target.checked); setDirectChanged(e.target.checked!==(project.direct_contract===true)); }} style={{ width:16, height:16, cursor:'pointer', accentColor:'var(--green)' }} />
                     직계약 <span style={{ fontSize:'0.78rem', color:'var(--text2)' }}>(위시켓 외 직접 계약 — URL은 유지하되 수수료 미적용)</span>
                   </label>
+                  {/* 해제 + URL 없음은 저장 불가 — 저장돼도 !wishket_url 로 직거래 취급돼 체크박스만 꺼진 표시 불일치가 생긴다 (2026-10-01) */}
+                  {!editDirect && !editUrl.trim() && (
+                    <div style={{ fontSize:'0.75rem', color:'var(--red)', marginTop:6 }}>⚠ 위시켓 공고 URL 없이 직계약을 해제할 수 없습니다. 위시켓 건이면 URL을 입력하세요.</div>
+                  )}
                 </div>
                 <div>
                   <div style={labelS}>메모</div>
@@ -2926,7 +2933,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                   if (linksChanged) fields.portfolio_links = editLinks;
                   onFieldSave(project, fields);
                   setInfoChanged(false); setDateChanged(false); setStartDateChanged(false); setDeadlineChanged(false); setUrlChanged(false); setMemoChanged(false); setLinksChanged(false); setDirectChanged(false);
-                }} disabled={saving} style={{ ...saveBtnS(true), width:'100%', marginTop:10 }}>
+                }} disabled={saving || (!editDirect && !editUrl.trim())} style={{ ...saveBtnS(true), width:'100%', marginTop:10, ...((!editDirect && !editUrl.trim()) ? { opacity:0.5, cursor:'not-allowed' } : {}) }}>
                   {saving ? '저장 중...' : '저장'}
                 </button>
               )}
@@ -5161,7 +5168,14 @@ function QuickAddModal({ onClose, onAdd, saving }) {
   const [url, setUrl]     = useState('');
   const [title, setTitle] = useState('');
   const [budget, setBudget] = useState('');
-  const [direct, setDirect] = useState(false);           // 직계약 — URL 이 없으면 자동으로 직거래 취급(isDirectContract), URL 을 참고로 넣을 때만 의미
+  // 직계약 — 기본 체크(빠른 등록은 주로 직거래용). 해제하면 위시켓 건이므로 공고 URL 이 필수가 된다.
+  // 위시켓 공고 URL 을 입력하면 자동으로 해제(사용자가 체크를 직접 만진 뒤엔 건드리지 않음) — 위시켓 건을
+  // 직계약으로 잘못 등록하면 자동정리 영구 보호·수수료 미적용·통계 제외가 한꺼번에 어긋나므로. (2026-10-01)
+  const [direct, setDirect] = useState(true);
+  const [directTouched, setDirectTouched] = useState(false);
+  const isWishketUrl = WISHKET_PROJECT_URL_RE.test(url);
+  const urlInvalid = !direct && !isWishketUrl;   // 위시켓 건인데 공고 id 가 뽑히는 URL 이 아님
+  const handleUrlChange = (v) => { setUrl(v); if (!directTouched && WISHKET_PROJECT_URL_RE.test(v)) setDirect(false); };
   const [manualSlug, setManualSlug] = useState(false);   // 직접 수정 모드
   const [slugBody, setSlugBody] = useState('');          // 직접 수정 모드의 본문
   const [slugErr, setSlugErr] = useState('');
@@ -5214,18 +5228,18 @@ function QuickAddModal({ onClose, onAdd, saving }) {
       slug,
       title: title.trim(),
       budget: budgetVal,
-      wishket_url: url||null,
-      direct_contract: direct || !url,
+      wishket_url: url.trim()||null,
+      direct_contract: direct,
       current_status: 'applied',
       // created_at은 DB DEFAULT now()로 시각까지 자동 기록 (오버라이드 금지 — 정렬 정밀도 보존)
       updated_at: today,
-      history: [{ status:'applied', date:today, note:'대시보드에서 등록' }],
+      history: [{ status:'applied', date:today, note:`대시보드에서 등록 (${direct ? '직계약' : '위시켓'})` }],
     });
     onClose();
   };
 
   const inputS = { width:'100%', padding:'0.55rem 0.75rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.85rem', outline:'none' };
-  const canSubmit = slugValid && title.trim() && !saving;
+  const canSubmit = slugValid && title.trim() && !urlInvalid && !saving;
   const focusOn  = e => e.target.style.borderColor='var(--accent)';
   const focusOff = e => e.target.style.borderColor='var(--border)';
 
@@ -5249,14 +5263,31 @@ function QuickAddModal({ onClose, onAdd, saving }) {
               style={inputS} onFocus={focusOn} onBlur={focusOff} />
           </div>
           <div>
-            <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>위시켓 공고 URL (선택)</div>
-            <input type="url" value={url} onChange={e => setUrl(e.target.value)}
-              placeholder="https://www.wishket.com/project/123456/"
-              style={inputS} onFocus={focusOn} onBlur={focusOff} />
-            <label style={{ display:'flex', alignItems:'center', gap:6, marginTop:6, fontSize:'0.8rem', color:'var(--text2)', cursor: url ? 'pointer' : 'default' }}>
-              <input type="checkbox" checked={direct || !url} disabled={!url} onChange={e => setDirect(e.target.checked)} style={{ width:14, height:14, accentColor:'var(--green)' }} />
-              직계약 — 위시켓 수수료 미적용, '지원 완료'에서 미팅 없이 계약 논의 중으로 바로 전환 가능{!url && ' (URL 없음 → 자동)'}
+            <label style={{ display:'flex', alignItems:'flex-start', gap:8, fontSize:'0.85rem', color:'var(--text)', cursor:'pointer' }}>
+              <input type="checkbox" checked={direct} onChange={e => { setDirect(e.target.checked); setDirectTouched(true); }} style={{ width:16, height:16, cursor:'pointer', accentColor:'var(--green)', flexShrink:0, marginTop:2 }} />
+              <span>
+                <span style={{ fontWeight:500, whiteSpace:'nowrap' }}>직계약</span>
+                <span style={{ display:'block', fontSize:'0.75rem', color:'var(--text2)', marginTop:2, lineHeight:1.45 }}>위시켓 외 직접 계약 — 수수료 미적용, 미팅 없이 '계약 논의 중'으로 전환 가능. 해제하면 위시켓 공고 URL이 필수입니다.</span>
+              </span>
             </label>
+          </div>
+          <div>
+            <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:5, fontWeight:500 }}>
+              위시켓 공고 URL {direct ? '(선택 · 참고용)' : <span style={{ color:'var(--red)' }}>*</span>}
+            </div>
+            <input type="url" value={url} onChange={e => handleUrlChange(e.target.value)}
+              placeholder="https://www.wishket.com/project/123456/"
+              style={{ ...inputS, borderColor: urlInvalid && url ? 'var(--red)' : undefined }} onFocus={focusOn} onBlur={focusOff} />
+            {urlInvalid && (
+              <div style={{ fontSize:'0.75rem', color:'var(--red)', marginTop:5 }}>
+                ⚠ 위시켓 건은 공고 번호가 있는 URL(wishket.com/project/번호)이 필요합니다 — 자동정리·중복 보호가 이 번호로 매칭됩니다. 위시켓 밖 계약이면 '직계약'을 체크하세요.
+              </div>
+            )}
+            {direct && isWishketUrl && (
+              <div style={{ fontSize:'0.75rem', color:'var(--yellow)', marginTop:5 }}>
+                ⚠ 위시켓 공고 URL인데 직계약으로 등록합니다 — 수수료 미적용·지원종료 자동정리 제외. 위시켓을 통한 계약이면 체크를 해제하세요.
+              </div>
+            )}
           </div>
           <div>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:5 }}>
