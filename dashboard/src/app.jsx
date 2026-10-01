@@ -741,8 +741,7 @@ async function loadCapturePrompt() {
 function capturePromptHeader(project, version) {
   const lines = [];
   if (project) lines.push(`[워크룸 프로젝트] ${project.title} (워크룸 슬러그: ${project.slug})`);
-  lines.push(`완료되면 tar.gz 를 ${CAPTURE_OWNER}에게 보내고, 메일 제목에 ${project ? '위 워크룸 슬러그를' : '프로젝트명을'} 적어 주세요.`);
-  lines.push('20MB 가 넘으면 메일 첨부 대신 Google Drive 링크로 보내 주세요.');
+  lines.push(`완료되면 tar.gz 를 ${CAPTURE_OWNER}에게 사내 메신저로 보내 주세요.`);
   lines.push(`(프롬프트 버전 ${version} · 아래 본문은 수정하지 말고 그대로 쓰세요)`);
   return lines.join('\n') + '\n\n';
 }
@@ -2910,7 +2909,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                     <div style={labelS}>납품 포트폴리오 제작</div>
                     <CapturePromptButton project={project} onAppendHistory={onAppendHistory} />
                     <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginTop:6, lineHeight:1.5 }}>
-                      납품한 레포에서 Claude Code 를 열고 붙여넣으면 캡처 묶음(tar.gz)이 만들어집니다. 결과물은 {CAPTURE_OWNER}에게 보내 주세요.
+                      납품한 레포에서 Claude Code 를 열고 붙여넣으면 캡처 묶음(tar.gz)이 만들어집니다. 결과물은 {CAPTURE_OWNER}에게 사내 메신저로 보내 주세요.
                     </div>
                   </div>
                 )}
