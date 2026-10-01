@@ -89,6 +89,11 @@ const TRANSITION_TARGETS = {
   delivered:        ['maintenance_free','maintenance_paid'],
   settled:     [],
 };
+// 직거래(위시켓 외) 프로젝트는 미팅 없이 계약까지 가는 경우가 있어 '지원 완료'에서 미팅 완료·계약 논의 중으로
+// 바로 갈 수 있다. 위시켓 건은 미팅을 거쳐야 계약이 성립하므로 기본 표를 그대로 쓴다 (2026-10-01).
+// '미팅 예정' 진입의 미팅 일시 필수 가드(handleSave)는 직거래에도 그대로 적용된다.
+const DIRECT_APPLIED_TARGETS = ['interview','meeting_done','won'];
+const transitionTargetsFor = (p) => (p.current_status === 'applied' && isDirectContract(p)) ? DIRECT_APPLIED_TARGETS : (TRANSITION_TARGETS[p.current_status] || []);
 const MEETING_TYPES = [
   { key: 'video',    label: '화상', emoji: '💻' },
   { key: 'inperson', label: '대면', emoji: '🏢' },
@@ -817,9 +822,11 @@ function Funnel({ data }) {
     { key:'won',          label:'계약 논의 중', color:'var(--green)' },
   ];
   const ORDER = ['interview','meeting_done','won'];
+  // 직거래는 미팅 없이 계약으로 갈 수 있어 미팅 전환율 퍼널을 왜곡한다 → 위시켓 건만 (2026-10-01)
+  const wk = data.filter(d => !isDirectContract(d));
   const counts = stages.map(s => {
     const idx = ORDER.indexOf(s.key);
-    return { ...s, count: data.filter(d => {
+    return { ...s, count: wk.filter(d => {
       // post-won 단계도 수주 성공으로 카운트
       const effectiveStatus = POST_WON.includes(d.current_status) ? 'won' : d.current_status;
       return ORDER.indexOf(effectiveStatus) >= idx;
@@ -2595,7 +2602,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   }, [anyDirty, onOpenProjectView, onClose, onRequestConfirm, project]);
 
   if (!project) return null;
-  const targets = TRANSITION_TARGETS[project.current_status]||[];
+  const targets = transitionTargetsFor(project);
   // 직전 상태(되돌리기 대상): history 역순의 최근 다른 상태(STATUS_ORDER에 있는 것), 없으면 STATUS_ORDER상 한 단계 이전.
   const prevStatus = (() => {
     const hist = project.history || [];
@@ -4617,7 +4624,9 @@ function App({ session }) {
     }
     setSaving(true);
     try {
-      const entry = { status:newStatus, note:note||'' };
+      // 직거래가 '지원 완료'에서 미팅 기록 없이 바로 '미팅 완료'로 가면 이력에 그 사실을 남긴다 (meeting_at 없는 미팅 완료의 출처 표시)
+      const skippedMeeting = newStatus === 'meeting_done' && project.current_status === 'applied' && !project.meeting_at;
+      const entry = { status:newStatus, note: note || (skippedMeeting ? '미팅 기록 없이 완료 처리 (직거래)' : '') };
       if (newStatus==='meeting_done' && project.meeting_at) { entry.meeting_at=project.meeting_at; entry.meeting_type=project.meeting_type||null; }
       const fields = { current_status:newStatus };
       // 예정 시각 전에 완료 처리하면 미팅 시각을 지금으로 맞춤 — 완료 상태에 미래 일정이 남아 긴급표시/알림이 계속 뜨는 불일치 방지
@@ -4683,6 +4692,7 @@ function App({ session }) {
     const samples = [];
     data.forEach(d => {
       if (!SECURED.includes(d.current_status) || !d.created_at) return;
+      if (isDirectContract(d)) return;  // 위시켓 리드타임 지표 — 직거래는 지원 단계가 형식상이라 제외 (2026-10-01)
       // 첫 won 엔트리 = 실제 상태 전환 시점. (.pop()이면 won 상태에서 매니저 배정 등
       // meta 이벤트가 status:'won'으로 추가될 때 그 날짜로 오염됨 — 2026-06-07 수정)
       const wonDate = (d.history||[]).find(h => h.status==='won')?.date;
@@ -4690,7 +4700,7 @@ function App({ session }) {
       samples.push(daysBetween(d.created_at, wonDate));
     });
     if (samples.length === 0) return null;
-    return Math.round(samples.reduce((a,b) => a+b, 0) / samples.length);
+    return { avg: Math.round(samples.reduce((a,b) => a+b, 0) / samples.length), n: samples.length };
   }, [data]);
 
   // 지원 → 미팅 평균: 지원일부터 첫 미팅 잡힐 때까지 (lead response 신호)
@@ -4755,8 +4765,11 @@ function App({ session }) {
 
   // 수주율 분모 = "미팅을 거친 모든 프로젝트" (interview, meeting_done, 또는 수주 후 단계)
   const wonCount = data.filter(d => SECURED_STATUSES.includes(d.current_status)).length;
-  const meetingReachedCount = data.filter(d => MEETING_REACHED_STATUSES.includes(d.current_status)).length;
-  const winRate = meetingReachedCount > 0 ? ((wonCount/meetingReachedCount)*100).toFixed(1) : '0.0';
+  // 전환율은 위시켓 건만 — 직거래는 미팅 없이 수주로 갈 수 있어 분자만 부풀린다. 수주대금(wonCount)은 직거래 포함.
+  const wkData = data.filter(d => !isDirectContract(d));
+  const wkWonCount = wkData.filter(d => SECURED_STATUSES.includes(d.current_status)).length;
+  const meetingReachedCount = wkData.filter(d => MEETING_REACHED_STATUSES.includes(d.current_status)).length;
+  const winRate = meetingReachedCount > 0 ? ((wkWonCount/meetingReachedCount)*100).toFixed(1) : '0.0';
 
   const now = new Date();
   // 이번 주(한국 시간, 일요일 시작) 남은 미팅 — 이미 끝난 미팅·지난 시각은 제외 (2026-09-20)
@@ -5038,7 +5051,7 @@ function App({ session }) {
             <div style={kpiStyle} title="'미팅 완료' 이후 단계에 도달한 건 대비 수주 성공 비율.&#10;아직 미팅 전인 '미팅 예정'은 분모에서 제외됩니다.&#10;※ 미선정으로 삭제된 건은 집계에 남지 않아 실제보다 높게 나올 수 있습니다.">
               <span style={{ color:'var(--text2)' }}>미팅 → 수주 전환율</span>
               <span style={numStyle('var(--green)')}>{winRate}%</span>
-              <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>({wonCount}/{meetingReachedCount})</span>
+              <span style={{ color:'var(--text2)', fontSize:'0.8rem' }}>({wkWonCount}/{meetingReachedCount})</span>
             </div>
             {wonBudgetTotal > 0 && (
               <div style={kpiStyle} title="위시켓 수수료(지원가 500만 이하 25% / 초과 20%) 차감 후 실지급 대금 합산 (부가세 제외)">
@@ -5080,12 +5093,12 @@ function App({ session }) {
               return (
                 <div style={{ display:'flex', gap:'0.75rem', flexWrap:'wrap', marginTop:'0.75rem', marginBottom:'1rem' }}>
                   <StatCard title="총 프로젝트" value={data.length} sub={`생성 ${counts.generated||0} / 지원 ${appliedOrBeyond}`} delay={1} />
-                  <StatCard title="미팅 → 수주 전환율" value={`${winRate}%`} sub={`${wonCount} / ${meetingReachedCount} · 미팅 완료 이후 기준`} color="var(--green)" delay={1} />
+                  <StatCard title="미팅 → 수주 전환율" value={`${winRate}%`} sub={`${wkWonCount} / ${meetingReachedCount} · 미팅 완료 이후 · 위시켓 건`} color="var(--green)" delay={1} />
                   <StatCard title="수주대금" value={wonBudgetStr} sub={`${wonCount}건 합산 · 수수료 차감 (부가세 제외)`} color="var(--green)" delay={1} />
                   <StatCard title="진행 중" value={SECURED_STATUSES.reduce((s,k)=>s+(counts[k]||0),0)}
                     sub={SECURED_STATUSES.map(k=>counts[k]>0?`${STATUS_META[k].label} ${counts[k]}`:'').filter(Boolean).join(' · ')||'없음'} color="var(--accent2)" delay={1} />
                   {avgInterviewDays && <StatCard title="지원 → 미팅 잡힘" value={`평균 ${avgInterviewDays.avg}일`} sub={`${avgInterviewDays.n}건 (미팅 예정 전환 시점 기준)`} color="var(--blue)" delay={1} />}
-                  {avgWonDays!==null && <StatCard title="지원 → 수주" value={`평균 ${avgWonDays}일`} sub={`${wonCount}건 기준 (전체 사이클)`} color="var(--blue)" delay={1} />}
+                  {avgWonDays!==null && <StatCard title="지원 → 수주" value={`평균 ${avgWonDays.avg}일`} sub={`${avgWonDays.n}건 기준 (전체 사이클 · 위시켓 건)`} color="var(--blue)" delay={1} />}
                 </div>
               );
             })()}
@@ -5148,6 +5161,7 @@ function QuickAddModal({ onClose, onAdd, saving }) {
   const [url, setUrl]     = useState('');
   const [title, setTitle] = useState('');
   const [budget, setBudget] = useState('');
+  const [direct, setDirect] = useState(false);           // 직계약 — URL 이 없으면 자동으로 직거래 취급(isDirectContract), URL 을 참고로 넣을 때만 의미
   const [manualSlug, setManualSlug] = useState(false);   // 직접 수정 모드
   const [slugBody, setSlugBody] = useState('');          // 직접 수정 모드의 본문
   const [slugErr, setSlugErr] = useState('');
@@ -5201,6 +5215,7 @@ function QuickAddModal({ onClose, onAdd, saving }) {
       title: title.trim(),
       budget: budgetVal,
       wishket_url: url||null,
+      direct_contract: direct || !url,
       current_status: 'applied',
       // created_at은 DB DEFAULT now()로 시각까지 자동 기록 (오버라이드 금지 — 정렬 정밀도 보존)
       updated_at: today,
@@ -5238,6 +5253,10 @@ function QuickAddModal({ onClose, onAdd, saving }) {
             <input type="url" value={url} onChange={e => setUrl(e.target.value)}
               placeholder="https://www.wishket.com/project/123456/"
               style={inputS} onFocus={focusOn} onBlur={focusOff} />
+            <label style={{ display:'flex', alignItems:'center', gap:6, marginTop:6, fontSize:'0.8rem', color:'var(--text2)', cursor: url ? 'pointer' : 'default' }}>
+              <input type="checkbox" checked={direct || !url} disabled={!url} onChange={e => setDirect(e.target.checked)} style={{ width:14, height:14, accentColor:'var(--green)' }} />
+              직계약 — 위시켓 수수료 미적용, '지원 완료'에서 미팅 없이 계약 논의 중으로 바로 전환 가능{!url && ' (URL 없음 → 자동)'}
+            </label>
           </div>
           <div>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:5 }}>
