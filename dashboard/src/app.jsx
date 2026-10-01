@@ -720,6 +720,80 @@ function LiveDot({ connected }) {
 }
 
 // ─── UserMenu ───
+// ─── 납품 캡처 프롬프트 복사 ───
+// 납품을 끝낸 직원이 자기 레포의 Claude Code 에 붙여넣는 프롬프트. 결과물(tar.gz)은 담당자(cgy@firstpip.co.kr)에게
+// 보내고, 담당자가 ingest-capture 로 받아 포트폴리오를 만든다. 본문의 정본은 wishket-portfolio-system/prompts/
+// delivered-capture.md 이고, 여기선 같은 origin 의 사본(dashboard/prompts/delivered-capture.md)을 fetch 한다 —
+// 사본 드리프트는 그쪽 selftest-prompt-vendor.js 가 하루 2회 검사해 텔레그램으로 알린다. 본문은 가공하지 않는다
+// (사양 계약). 프로젝트 맥락은 본문 **앞에** 짧은 머리 블록으로만 붙인다.
+const CAPTURE_PROMPT_URL = './prompts/delivered-capture.md';
+const CAPTURE_OWNER = '최기용 선임 (cgy@firstpip.co.kr)';
+let _capturePromptCache = null;
+async function loadCapturePrompt() {
+  if (_capturePromptCache) return _capturePromptCache;
+  const res = await fetch(`${CAPTURE_PROMPT_URL}?v=${Date.now()}`, { cache: 'no-store' });  // Pages CDN 구버전 방지
+  if (!res.ok) throw new Error(`프롬프트 파일을 불러오지 못했습니다 (${res.status})`);
+  const text = await res.text();
+  let h = 5381; for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+  _capturePromptCache = { text, version: h.toString(16).slice(0, 6) };
+  return _capturePromptCache;
+}
+function capturePromptHeader(project, version) {
+  const lines = [];
+  if (project) lines.push(`[워크룸 프로젝트] ${project.title} (워크룸 슬러그: ${project.slug})`);
+  lines.push(`완료되면 tar.gz 를 ${CAPTURE_OWNER}에게 보내고, 메일 제목에 ${project ? '위 워크룸 슬러그를' : '프로젝트명을'} 적어 주세요.`);
+  lines.push('20MB 가 넘으면 메일 첨부 대신 Google Drive 링크로 보내 주세요.');
+  lines.push(`(프롬프트 버전 ${version} · 아래 본문은 수정하지 말고 그대로 쓰세요)`);
+  return lines.join('\n') + '\n\n';
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (_) {}
+  // Safari 권한 거부·비보안 컨텍스트 폴백
+  try {
+    const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy'); document.body.removeChild(ta); return ok;
+  } catch (_) { return false; }
+}
+function CapturePromptButton({ project, onAppendHistory, style, label = '📋 납품 캡처 프롬프트 복사' }) {
+  const [state, setState] = useState('idle');   // idle | busy | copied | failed
+  const [version, setVersion] = useState(null);
+  useEffect(() => { loadCapturePrompt().then(p => setVersion(p.version)).catch(() => {}); }, []);
+  const build = async () => { const p = await loadCapturePrompt(); return { text: capturePromptHeader(project, p.version) + p.text, version: p.version }; };
+  const copy = async () => {
+    setState('busy');
+    try {
+      const { text } = await build();
+      const ok = await copyText(text);
+      setState(ok ? 'copied' : 'failed');
+      // 누가 포트폴리오 제작을 시작했는지 이력에 남긴다 (상태는 그대로)
+      if (ok && project && onAppendHistory) onAppendHistory(project, [{ status: project.current_status, note: '납품 캡처 프롬프트 복사 — 포트폴리오 제작 시작' }], {});
+    } catch (e) { setState('failed'); }
+    setTimeout(() => setState('idle'), 2500);
+  };
+  const download = async () => {
+    try {
+      const { text } = await build();
+      const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+      a.download = `capture-prompt${project ? '-' + project.slug : ''}.md`; a.click(); URL.revokeObjectURL(a.href);
+    } catch (e) { setState('failed'); setTimeout(() => setState('idle'), 2500); }
+  };
+  const text = state === 'busy' ? '불러오는 중…' : state === 'copied' ? '✓ 복사됨 — Claude Code 에 붙여넣으세요' : state === 'failed' ? '복사 실패 — 다운로드를 쓰세요' : label;
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap', ...style }}>
+      <button type="button" onClick={copy} disabled={state === 'busy'}
+        title="납품이 끝난 레포에서 Claude Code 를 열고 그대로 붙여넣으면 포트폴리오 재료(tar.gz)가 만들어집니다. 결과물은 담당자에게 보내세요."
+        style={btn.secondary({ padding:'0.4rem 0.75rem', background: state === 'copied' ? 'var(--surface-success-soft, var(--surface2))' : 'var(--surface2)', color: state === 'failed' ? 'var(--red)' : 'var(--text)', fontWeight:500 })}>
+        {text}
+      </button>
+      <button type="button" onClick={download} title=".md 파일로 저장 (클립보드가 막힌 환경·메일 전달용)"
+        style={btn.ghost({ padding:'0.4rem 0.5rem', fontSize:'0.8rem' })}>⬇ .md</button>
+      {version && <span style={{ fontSize:'0.7rem', color:'var(--text2)', fontFamily:'monospace' }} title="프롬프트 버전 (내용 해시) — 반려 문의 시 이 값을 알려주세요">v{version}</span>}
+    </div>
+  );
+}
+
 function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onDeleted, onShortcuts, onSignOut, notifyState, notifyLeads, onToggleNotify }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -779,6 +853,11 @@ function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onD
             </span>
           </button>
           <div style={{ height:1, background:'var(--border)', margin:'2px 6px' }} />
+          {/* 프로젝트 row 를 못 찾는 직원용 전역 진입점 — 프로젝트 맥락 없는 원본 그대로 복사 */}
+          <div style={{ ...itemStyle, cursor:'default', flexDirection:'column', alignItems:'flex-start', gap:4 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:6 }}><span style={{ width:18 }}>📋</span> 납품 캡처 프롬프트</div>
+            <CapturePromptButton label="복사" style={{ paddingLeft:24 }} />
+          </div>
           <button onClick={select(onDeleted)} style={itemStyle}
             onMouseEnter={e=>onItemHover(e,true)} onMouseLeave={e=>onItemHover(e,false)}>
             <span style={{ width:18 }}>🗑</span> 최근 삭제
@@ -1811,7 +1890,7 @@ function MilestoneEditModal({ milestone, teamMembers, saving, onUpdate, onDelete
 }
 
 // ─── ProjectView (Jira-style full-screen project page) ───
-function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, onUpdate, onDelete, onAdd, onBulkAdd, onReorder, onCreateFromTemplate, onBack, onBulkCreateWeekly, onClearWeeklyPlan, onBackfillAssignees, onRequestConfirm, onFieldSave }) {
+function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, onUpdate, onDelete, onAdd, onBulkAdd, onReorder, onCreateFromTemplate, onBack, onBulkCreateWeekly, onClearWeeklyPlan, onBackfillAssignees, onRequestConfirm, onFieldSave, onAppendHistory }) {
   // Sort: by week_number asc (unassigned last), then by order_idx asc.
   // 같은 컬럼 안에서 주차별로 자동 클러스터링되어 시각적으로 묶임.
   const sortedAll = useMemo(() => {
@@ -2008,6 +2087,7 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         {mgrM && <MemberBadge member={mgrM} role="mgr" />}
         {mainM && <MemberBadge member={mainM} role="main" />}
         {subM && <MemberBadge member={subM} role="sub" />}
+        {POST_DEV.includes(project.current_status) && <CapturePromptButton project={project} onAppendHistory={onAppendHistory} style={{ flexShrink:0 }} />}
         {project.start_date && !POST_DEV.includes(project.current_status) && (() => {
           const cw = getCurrentWeek(project.start_date);
           if (cw == null) return null;
@@ -2825,6 +2905,15 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                     <div style={{ fontSize:'0.75rem', color:'var(--red)', marginTop:6 }}>⚠ 위시켓 공고 URL 없이 직계약을 해제할 수 없습니다. 위시켓 건이면 URL을 입력하세요.</div>
                   )}
                 </div>
+                {POST_DEV.includes(project.current_status) && (
+                  <div>
+                    <div style={labelS}>납품 포트폴리오 제작</div>
+                    <CapturePromptButton project={project} onAppendHistory={onAppendHistory} />
+                    <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginTop:6, lineHeight:1.5 }}>
+                      납품한 레포에서 Claude Code 를 열고 붙여넣으면 캡처 묶음(tar.gz)이 만들어집니다. 결과물은 {CAPTURE_OWNER}에게 보내 주세요.
+                    </div>
+                  </div>
+                )}
                 <div>
                   <div style={labelS}>메모</div>
                   <textarea value={editMemo} placeholder="자유롭게 메모..." onChange={e => { setEditMemo(e.target.value); setMemoChanged(e.target.value!==(project.memo||'')); }}
@@ -4756,6 +4845,7 @@ function App({ session }) {
         <ConfirmModal state={confirmState} onCancel={() => { confirmState?.onCancel?.(); setConfirmState(null); }} />
         <ProjectView
           project={proj}
+          onAppendHistory={handleAppendHistory}
           milestones={milestones[route.slug] || []}
           setupNeeded={milestonesSetupNeeded}
           teamMembers={teamMembers}
