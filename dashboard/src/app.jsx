@@ -942,53 +942,66 @@ function Funnel({ data }) {
 }
 
 // ─── MonthlyChart ───
-function MonthlyChart({ data }) {
+function MonthlyChart({ data, convStats }) {
+  // 월별 **수주** 추이만 그린다 (2026-10-01). 이전엔 지원 건수 막대 위에 수주를 겹쳤는데, 미팅 없이 떨어진 건은
+  // 지원종료 자동정리로 row 가 사라져 오래된 달일수록 지원 막대가 실제보다 낮았다(퍼널에서 지원 단계를 뺀 것과 같은 이유).
+  // 월 기준도 지원일이 아니라 **수주 전환 시점**(history 의 첫 won 이상 날짜) — 6월 지원·9월 수주가 6월에 찍히던 문제.
+  // 모집단은 상단 KPI 와 동일(convStats.rows: 라이브 ∪ 삭제 스냅샷, 직계약 제외). 없으면 라이브 row 로 대체.
   const monthData = useMemo(() => {
-    // 최근 6개월을 먼저 만들어 0으로 채운다 — 데이터 없는 달이 빠져 '최근 6개월'이 6개월이 아니게 되던 문제 (2026-09-20)
+    // 최근 6개월 키를 KST 연·월 산술로 만든다. 이전의 setUTCMonth + kstDateStr 조합은 KST 자정이 UTC 로는 전날이라
+    // 월초(1일)에 달이 하나씩 밀리고 키가 겹쳐 6월·9월 칸이 사라졌다 (2026-10-01 실측).
     const months = {};
-    const base = new Date(`${kstDateStr()}T00:00:00+09:00`);
+    const [y0, m0] = kstDateStr().split('-').map(Number);
     for (let i = 5; i >= 0; i--) {
-      const d = new Date(base); d.setUTCMonth(d.getUTCMonth() - i);
-      months[kstDateStr(d).slice(0,7)] = { applied:0, won:0 };
+      const idx = y0 * 12 + (m0 - 1) - i;
+      months[`${Math.floor(idx / 12)}-${String(idx % 12 + 1).padStart(2, '0')}`] = { won:0, amount:0 };
     }
-    data.forEach(d => {
-      const m = kstParts(d.created_at)?.date.slice(0,7) || (d.created_at||'').substring(0,7);   // KST 기준 월
-      if (!m || !months[m]) return;
-      months[m].applied++;
-      // 수주 후 단계(개발중/납품/정산 등)로 넘어간 건도 수주로 집계 — 퍼널과 기준 일치 (2026-06-07)
-      if (SECURED_STATUSES.includes(d.current_status)) months[m].won++;
-    });
+    if (convStats?.rows) {
+      for (const r of convStats.rows) {
+        if (!r.secured || !r.secured_month || !months[r.secured_month]) continue;
+        months[r.secured_month].won++;
+        months[r.secured_month].amount += contractNet(parseBudgetNum(r.budget));   // 위시켓 건만이라 수수료 차감 일괄 적용
+      }
+    } else {
+      data.forEach(d => {
+        if (!SECURED_STATUSES.includes(d.current_status) || isDirectContract(d)) return;
+        const m = (d.history||[]).find(h => SECURED_STATUSES.includes(h.status))?.date?.slice(0,7);
+        if (!m || !months[m]) return;
+        months[m].won++; months[m].amount += contractNet(parseBudgetNum(d.budget));
+      });
+    }
     return Object.entries(months).sort((a,b) => a[0].localeCompare(b[0]));
-  }, [data]);
+  }, [data, convStats]);
   if (monthData.length === 0) return null;
-  const maxVal = Math.max(...monthData.map(([,v]) => v.applied), 1);
+  const maxVal = Math.max(...monthData.map(([,v]) => v.won), 1);
+  const total = monthData.reduce((s,[,v]) => s+v.won, 0);
   return (
     <div style={{ background:'var(--surface)', borderRadius:12, padding:'1.5rem', border:'1px solid var(--border)', marginTop:'1rem' }}>
-      <h3 style={{ fontSize:'1rem', fontWeight:600, marginBottom:'1.25rem' }}>월별 추이 (최근 6개월)</h3>
+      <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:'1.25rem', flexWrap:'wrap', gap:8 }}>
+        <h3 style={{ fontSize:'1rem', fontWeight:600, margin:0 }}>월별 수주 (최근 6개월)</h3>
+        <span style={{ fontSize:'0.75rem', color:'var(--text2)' }}>수주 전환 시점 기준 · 위시켓 건 · {convStats ? '삭제분 포함' : '라이브만'} · 합계 {total}건</span>
+      </div>
       <div style={{ display:'flex', alignItems:'flex-end', gap:8, height:140 }}>
         {monthData.map(([month,v]) => (
           <div key={month} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:4 }}>
-            <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>{v.applied}</div>
+            <div style={{ fontSize:'0.8rem', color: v.won>0 ? 'var(--green)' : 'var(--text2)', fontWeight: v.won>0 ? 600 : 400 }}>{v.won}</div>
             <div style={{ width:'100%', display:'flex', flexDirection:'column', alignItems:'center' }}>
-              <div style={{ width:'70%', height:Math.max((v.applied/maxVal)*100,4), background:'var(--accent)', borderRadius:'4px 4px 0 0', position:'relative' }}>
-                {v.won > 0 && <div style={{ position:'absolute', bottom:0, left:0, right:0, height:Math.max((v.won/v.applied)*100,10)+'%', background:'var(--green)' }} />}
-              </div>
+              <div title={v.amount>0 ? `계약대금 ${fmtManwon(v.amount)}만원 (수수료 차감)` : undefined}
+                style={{ width:'70%', height:Math.max((v.won/maxVal)*100,4), background: v.won>0 ? 'var(--green)' : 'var(--surface2)', borderRadius:'4px 4px 0 0' }} />
             </div>
             <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>{month.substring(5)}월</div>
-            {v.won > 0 && <div style={{ fontSize:'0.8rem', color:'var(--green)' }}>수주 {v.won}</div>}
+            {v.amount > 0 && <div style={{ fontSize:'0.72rem', color:'var(--text2)' }}>{fmtManwon(v.amount)}만</div>}
           </div>
         ))}
-      </div>
-      <div style={{ display:'flex', gap:12, marginTop:'0.75rem', justifyContent:'center' }}>
-        <span style={{ fontSize:'0.8rem', color:'var(--text2)', display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'var(--accent)' }} /> 지원</span>
-        <span style={{ fontSize:'0.8rem', color:'var(--text2)', display:'flex', alignItems:'center', gap:4 }}><span style={{ width:8, height:8, borderRadius:2, background:'var(--green)' }} /> 수주</span>
       </div>
     </div>
   );
 }
 
 // ─── BudgetAnalysis ───
-function BudgetAnalysis({ data }) {
+function BudgetAnalysis({ data, convStats }) {
+  // 예산 구간별 **미팅 → 수주** 전환율 (2026-10-01). 이전엔 분모가 '지원 완료 이후 전부'였는데, 지원 후 떨어진 건은
+  // 삭제돼 빠지고 결과 없는 지원 완료 건은 남아 "지원 대비"도 "미팅 대비"도 아닌 값이었다. 상단 KPI 와 같은 모집단·정의.
   const ranges = useMemo(() => {
     const buckets = [
       { label:'~500만',      min:0,    max:500 },
@@ -997,19 +1010,23 @@ function BudgetAnalysis({ data }) {
       { label:'2000~5000만', min:2000, max:5000 },
       { label:'5000만+',     min:5000, max:Infinity },
     ];
+    const rows = convStats?.rows
+      ? convStats.rows.map(r => ({ budget: r.budget, secured: !!r.secured }))
+      : data.filter(d => !isDirectContract(d) && (MEETING_REACHED_STATUSES.includes(d.current_status) || (d.history||[]).some(h => MEETING_REACHED_STATUSES.includes(h.status))))
+            .map(d => ({ budget: d.budget, secured: SECURED_STATUSES.includes(d.current_status) }));
     return buckets.map(b => {
-      const inRange = data.filter(d => {
-        const budget = parseBudgetNum(d.budget);
-        return budget > 0 && budget >= b.min && budget < b.max && d.current_status !== 'generated';
-      });
-      const won = inRange.filter(d => SECURED_STATUSES.includes(d.current_status)).length;   // 퍼널·차트와 같은 기준
+      const inRange = rows.filter(r => { const n = parseBudgetNum(r.budget); return n > 0 && n >= b.min && n < b.max; });
+      const won = inRange.filter(r => r.secured).length;
       return { ...b, total:inRange.length, won, rate: inRange.length > 0 ? ((won/inRange.length)*100).toFixed(0) : '—' };
     }).filter(b => b.total > 0);
-  }, [data]);
+  }, [data, convStats]);
   if (ranges.length === 0) return null;
   return (
     <div style={{ background:'var(--surface)', borderRadius:12, padding:'1.5rem', border:'1px solid var(--border)', marginTop:'1rem' }}>
-      <h3 style={{ fontSize:'1rem', fontWeight:600, marginBottom:'1rem' }}>예산 구간별 수주율</h3>
+      <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:'1rem', flexWrap:'wrap', gap:8 }}>
+        <h3 style={{ fontSize:'1rem', fontWeight:600, margin:0 }}>예산 구간별 미팅 → 수주 전환율</h3>
+        <span style={{ fontSize:'0.75rem', color:'var(--text2)' }}>분모 = 미팅 완료 이상 · 위시켓 건 · {convStats ? '삭제분 포함' : '라이브만'}</span>
+      </div>
       <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
         {ranges.map(r => (
           <div key={r.label} style={{ display:'flex', alignItems:'center', gap:12 }}>
@@ -5219,8 +5236,8 @@ function App({ session }) {
                 </div>
               );
             })()}
-            <MonthlyChart data={data} />
-            <BudgetAnalysis data={data} />
+            <MonthlyChart data={data} convStats={convStats} />
+            <BudgetAnalysis data={data} convStats={convStats} />
           </div>
         )}
       </div>
