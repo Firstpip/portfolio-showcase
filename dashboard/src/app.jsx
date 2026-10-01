@@ -3946,16 +3946,17 @@ function App({ session }) {
   const [milestonesSetupNeeded, setMilestonesSetupNeeded] = useState(false);
   // 미팅→수주 전환율 — 삭제된 프로젝트(감사 로그 스냅샷)까지 포함한 서버 집계. null 이면 로드 전/실패 → 라이브 계산으로 대체.
   const [convStats, setConvStats] = useState(null);
+  // row 수(등록/삭제/복원)뿐 아니라 상태 구성이 바뀔 때(미팅 완료→계약 논의 중 등)도 다시 집계해야 카드가 즉시 맞는다.
+  const statusSig = useMemo(() => (data || []).map(d => d.current_status).sort().join(','), [data]);
   useEffect(() => {
     let alive = true;
-    // row 수가 바뀔 때(등록/삭제/복원) 다시 집계 — 삭제 직후 감사 로그 스냅샷이 분모로 들어와야 숫자가 안 튄다
     supabase.rpc('meeting_conversion_stats').then(({ data: s, error }) => {
       if (!alive) return;
       if (error || !s || typeof s !== 'object') { if (error) console.warn('meeting_conversion_stats 실패 — 라이브 계산으로 대체:', error.message); setConvStats(null); return; }
       setConvStats(s);
     });
     return () => { alive = false; };
-  }, [data?.length]);
+  }, [data?.length, statusSig]);
   const [route, setRoute]                 = useState(() => parseHash());
   useEffect(() => {
     const h = () => {
