@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>집단소송 플랫폼 관리자 · 이관 콘솔 — 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P2 — 메인 1 · 서브 2 · 나머지 무채색 (gen-color-tokens.js 산출, hue 355°, light) ── */
+:root{
+  /* 메인 — 브랜드 마크·primary CTA(화면당 1)·활성 nav·링크·주 차트·포커스. 앵커 m600 = plan primary */
+  --m50:#f8f0f0;
+  --m100:#f2e0e1;
+  --m200:#e4c1c4;
+  --m300:#d49ca0;
+  --m400:#c27278;
+  --m500:#b14a52;
+  --m600:#a0222c;
+  --m700:#831c24;
+  --m800:#66161c;
+  --m900:#480f14;
+  /* 무채색 — 배경(n0~n2)·테두리/비활성(n3~n5)·아이콘/보조텍스트(n6~n8)·본문/다크필(n9~n10). 아바타·태그·아이콘박스·KPI배경·보조 차트는 전부 여기 */
+  --n0:#fafafa;
+  --n1:#ffffff;
+  --n2:#f0efef;
+  --n3:#e6e5e5;
+  --n4:#d7d5d5;
+  --n5:#bab5b5;
+  --n6:#989090;
+  --n7:#666666;
+  --n8:#5a5354;
+  --n9:#3a3636;
+  --n10:#201e1e;
+  /* 서브 — 상태 의미가 있을 때만. 배지=bg+text, 점/셀/바=solid */
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b; /* 성공/진행/정상/상승 */
+  --s3:#d48d11; --s3-bg:#f6f1ea; --s3-text:#8b6118; /* 경고/주의 */
+}
+/* ⚠ s2(오류/위험/실패/하락/환불) — 메인 hue 355°와 5° 겹침 → 제거, 해당 상태는 무채색(n9/n10 필 + 아이콘)으로 표현 */
+
+/* ── 상태 레이어 P2 — 모양은 페이지가, 상태는 여기서 (gen-component-kit.js 산출, 색은 토큰만) ── */
+/* state-layer elevation=elevated theme=light */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{transform:scale(.98);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #ffffff;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--n10);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Pretendard',system-ui,sans-serif;background:var(--n0);color:var(--n10);font-size:13.5px;line-height:1.55;-webkit-font-smoothing:antialiased;height:100vh;overflow:hidden}
+button{font-family:inherit;font-size:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select,textarea{font-family:inherit;font-size:13.5px;color:var(--n10)}
+i.ph,i.ph-bold{font-size:16px;vertical-align:-3px}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes slideUp{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:none}}
+@keyframes shimmer{0%{background-position:-200px 0}100%{background-position:200px 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes ripple{to{transform:scale(3);opacity:0}}
+@keyframes popIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+.app{display:grid;grid-template-columns:240px 1fr;height:100vh}
+.sidebar{background:var(--n1);border-right:1px solid var(--n3);display:flex;flex-direction:column;padding:14px 10px;gap:10px;overflow:auto}
+.sidebar-brand{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:12px;font-weight:600;font-size:14px}
+.sidebar-brand .lg{width:28px;height:28px;border-radius:8px;background:var(--m600);color:var(--n1);display:grid;place-items:center}
+.sidebar-search{display:flex;flex-direction:column;gap:6px}
+.sb-btn{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;background:var(--n2);color:var(--n8);width:100%;text-align:left;transition:background .15s}
+.sb-btn:hover{background:var(--n3)}
+.tree-nav{display:flex;flex-direction:column;gap:1px;margin-top:4px;flex:1}
+.tree-item{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:8px;width:100%;text-align:left;color:var(--n8);transition:background .15s}
+.tree-item:hover{background:var(--n2)}
+.tree-item.on{background:var(--m50);color:var(--m700);font-weight:600}
+.tree-item .cnt{margin-left:auto;font-size:11px;background:var(--n3);color:var(--n9);padding:0 7px;border-radius:10px}
+.tree-group{font-size:11px;letter-spacing:.08em;color:var(--n7);font-weight:600;padding:12px 8px 4px;display:flex;align-items:center;gap:4px;width:100%;text-align:left}
+.tree-toggle-placeholder{width:16px;display:inline-block}
+.sidebar-footer{border-top:1px solid var(--n3);padding-top:10px;display:flex;align-items:center;gap:10px}
+.av{width:28px;height:28px;border-radius:50%;background:var(--n3);color:var(--n9);display:grid;place-items:center;font-weight:600;font-size:12px}
+.main{display:flex;flex-direction:column;min-width:0;height:100vh;overflow:hidden}
+.topbar{height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid var(--n3);background:var(--n1);flex:none}
+.page-breadcrumb{display:flex;gap:6px;align-items:center;color:var(--n7);font-size:13px}
+.page-breadcrumb span:last-child{color:var(--n10);font-weight:600}
+.q-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;background:var(--n2);padding:4px 10px;border-radius:20px;color:var(--n9)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--s1);animation:pulse 1.8s infinite}
+.page{flex:1;overflow:auto;padding:24px 28px 40px;animation:slideUp .35s ease both}
+.page-title{font-size:38px;font-weight:600;letter-spacing:-.04em;line-height:1.15;margin-bottom:6px}
+.page-sub{color:var(--n7);margin-bottom:20px;max-width:760px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:12px;font-weight:600;font-size:13px;position:relative;overflow:hidden;transition:background .15s,box-shadow .15s}
+.btn-main{background:var(--m600);color:var(--n1);box-shadow:0 2px 6px rgba(0,0,0,.18)}
+.btn-main:hover{background:var(--m700)}
+.btn-ghost{background:var(--n1);border:1px solid var(--n4);box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.btn-ghost:hover{border-color:var(--n7);transform:scale(1.02)}
+.chip:hover,.li:hover{transform:scale(1.01)}
+.btn-sm{padding:4px 10px;font-size:12px;border-radius:8px}
+.rp{position:absolute;border-radius:50%;background:rgba(255,255,255,.45);width:20px;height:20px;margin:-10px;animation:ripple .6s ease-out forwards;pointer-events:none}
+.card{background:var(--n1);border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08),0 8px 24px rgba(0,0,0,.05)}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:2px 9px;border-radius:20px;background:var(--n2);color:var(--n9)}
+.badge.ok{background:var(--s1-bg);color:var(--s1-text)}
+.badge.warn{background:var(--s3-bg);color:var(--s3-text)}
+.badge.dark{background:var(--n10);color:var(--n0)}
+.badge.end{background:var(--n3);color:var(--n7)}
+.md{display:grid;grid-template-columns:330px 1fr;gap:16px;height:calc(100vh - 48px - 64px)}
+.list-rail{display:flex;flex-direction:column;overflow:hidden}
+.rail-top{padding:12px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--n3)}
+.inp{padding:7px 10px;border:1px solid var(--n4);border-radius:8px;background:var(--n1);width:100%}
+.chips{display:flex;gap:4px;flex-wrap:wrap}
+.chip{padding:3px 10px;border-radius:20px;font-size:12px;background:var(--n2);color:var(--n8);transition:background .15s}
+.chip.on{background:var(--n10);color:var(--n0)}
+.rail-list{overflow:auto;flex:1}
+.li{display:block;width:100%;text-align:left;padding:11px 14px;border-bottom:1px solid var(--n2);transition:background .12s}
+.li:hover{background:var(--n0)}
+.li.on{background:var(--m50);box-shadow:inset 3px 0 0 var(--m600)}
+.li b{display:block;font-size:13px;margin-bottom:3px}
+.li small{color:var(--n7)}
+.detail-panel{overflow:auto;padding:22px 26px}
+.blocks{max-width:880px}
+.block{padding:8px 10px;border-radius:8px;margin:2px -10px;position:relative}
+.block:hover{background:var(--n0)}
+.block:hover .hdl{opacity:1}
+.hdl{position:absolute;left:-26px;top:8px;opacity:0;color:var(--n6);cursor:grab;transition:opacity .15s}
+.block h2{font-size:20px;font-weight:600}
+.block.callout{background:var(--n2);display:flex;gap:10px;padding:12px 14px}
+.block.quote{border-left:3px solid var(--n10);padding-left:14px;color:var(--n8)}
+.block ul{padding-left:20px}
+.block[contenteditable]:focus,.block [contenteditable]:focus{outline:0}
+.ed{width:100%;border:0;background:transparent;resize:none;font:inherit;line-height:1.6;outline:0}
+.slash{position:absolute;z-index:20;background:var(--n1);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:6px;width:220px;animation:popIn .15s}
+.slash button{display:flex;gap:8px;align-items:center;padding:7px 10px;border-radius:8px;width:100%;text-align:left}
+.slash button:hover{background:var(--n2)}
+.ctl{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 0;border-top:1px solid var(--n3);border-bottom:1px solid var(--n3);margin:12px 0 16px}
+.sw{width:38px;height:22px;border-radius:12px;background:var(--n5);position:relative;transition:background .2s}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:var(--n1);transition:transform .2s}
+.sw.on{background:var(--m600)}
+.sw.on::after{transform:translateX(16px)}
+table.t{width:100%;border-collapse:collapse}
+.t th{font-size:11.5px;color:var(--n7);text-align:left;padding:8px 12px;border-bottom:1px solid var(--n3);font-weight:600;letter-spacing:.03em}
+.t td{padding:8px 12px;border-bottom:1px solid var(--n2);height:36px}
+.t tr.sel td{background:var(--m50)}
+.t tbody tr{cursor:default;transition:background .12s}
+.t tbody tr:hover td{background:var(--n0)}
+.grid2{display:grid;grid-template-columns:1fr 340px;gap:16px}
+.toast{position:fixed;bottom:22px;right:22px;background:var(--n10);color:var(--n0);padding:10px 16px;border-radius:12px;z-index:90;animation:slideUp .25s;max-width:360px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.wiz{display:flex;gap:8px;margin-bottom:16px}
+.wiz div{flex:1;padding:10px 14px;border-radius:12px;background:var(--n1);color:var(--n7);box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.wiz div.on{background:var(--n10);color:var(--n0)}
+.wiz div.done{color:var(--m700)}
+.bar{height:8px;background:var(--n3);border-radius:4px;overflow:hidden;display:flex}
+.bar i{display:block;height:100%;transform-origin:left;animation:barGrow .9s ease both}
+.skel{height:14px;border-radius:6px;background:linear-gradient(90deg,var(--n2) 25%,var(--n3) 50%,var(--n2) 75%);background-size:400px 100%;animation:shimmer 1.2s infinite}
+.guide{display:grid;grid-template-columns:260px 1fr;gap:16px}
+.doc{padding:26px 32px;min-height:420px;animation:fadeIn .4s}
+.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:var(--n2);padding:1px 6px;border-radius:4px}
+.kbd{border:1px solid var(--n4);border-radius:4px;padding:0 5px;font-size:11px;color:var(--n7)}
+.hl{background:var(--m100)}
+@media(max-width:900px){.app{grid-template-columns:1fr}.sidebar{display:none}.md,.grid2,.guide{grid-template-columns:1fr;height:auto}}
+</style>
+</head>
+<body data-archetype="notion-blocks-tree">
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useMemo} = React;
+const P=({n,b})=><i className={(b?'ph-bold ph-':'ph ph-')+n}/>;
+function Btn({className='',onClick,children,...r}){
+  const [d,setD]=useState([]);
+  const go=e=>{const b=e.currentTarget.getBoundingClientRect();const id=Math.random();setD(x=>[...x,{id,x:e.clientX-b.left,y:e.clientY-b.top}]);setTimeout(()=>setD(x=>x.filter(q=>q.id!==id)),600);onClick&&onClick(e);};
+  return <button className={'btn '+className} onClick={go} {...r}>{children}{d.map(p=>React.createElement('span',{key:p.id,className:'rp',style:{left:p.x,top:p.y}}))}</button>;
+}
+const ST=['준비중','모집중','진행중','종결'];
+const RULE={'준비중':['모집중'],'모집중':['진행중','준비중'],'진행중':['종결'],'종결':[]};
+const LAW0=[
+ {id:1,t:'온라인 플랫폼 개인정보 유출 피해 집단소송',s:'모집중',pub:true,cat:'소비자·개인정보',n:1284,end:'2026-11-20'},
+ {id:2,t:'허위·과장 광고 건강식품 소비자 피해 소송',s:'모집중',pub:true,cat:'소비자·개인정보',n:642,end:'2026-11-05'},
+ {id:3,t:'프랜차이즈 불공정 계약 조항 무효 확인 소송',s:'진행중',pub:true,cat:'기업·계약',n:218,end:'2026-09-30'},
+ {id:4,t:'항공권 환불 지연 및 수수료 부과 피해 소송',s:'진행중',pub:true,cat:'소비자·개인정보',n:903,end:'2026-09-15'},
+ {id:5,t:'신축 공동주택 층간소음 시공 하자 소송',s:'준비중',pub:false,cat:'부동산·건설',n:0,end:'2026-12-10'},
+ {id:6,t:'하도급 대금 부당 감액 공동 소송',s:'종결',pub:true,cat:'기업·계약',n:74,end:'2026-06-30'}
+];
+const INQ0=[
+ {id:'R-260412',law:1,name:'김서연',phone:'010-2345-6712',st:'신규',at:'10-05 09:12',owner:'미지정',kind:'참여 신청',body:'유출 통지 메일을 받았고 카드 부정 사용 시도 알림이 있었습니다.'},
+ {id:'R-260411',law:1,name:'박준호',phone:'010-8821-4409',st:'검토중',at:'10-04 17:40',owner:'서하린',kind:'참여 신청',body:'계정 정보 유출 이후 스팸 전화가 늘었습니다.'},
+ {id:'R-260409',law:2,name:'이도현',phone:'010-5530-1187',st:'신규',at:'10-04 11:03',owner:'미지정',kind:'참여 신청',body:'제품 3개월분을 구매했고 영수증을 보관 중입니다.'},
+ {id:'R-260406',law:0,name:'최유나',phone:'010-9012-3345',st:'완료',at:'10-03 15:21',owner:'배서준',kind:'일반 문의',body:'상담 가능 시간과 방문 상담 여부를 문의합니다.'},
+ {id:'R-260404',law:3,name:'정민재',phone:'010-4477-0921',st:'검토중',at:'10-02 13:55',owner:'윤재희',kind:'참여 신청',body:'가맹점 3년차이며 필수 구입 품목 계약서가 있습니다.'},
+ {id:'R-260401',law:4,name:'한지우',phone:'010-3318-7750',st:'완료',at:'10-01 09:48',owner:'오지안',kind:'참여 신청',body:'취소편 항공권 환불이 지연되고 있습니다.'}
+];
+const HIS0=[
+ {id:3,at:'10-05 09:30',who:'배서준',type:'열람',tgt:'R-260411',diff:'연락처 마스킹 해제'},
+ {id:2,at:'10-04 16:02',who:'한도윤',type:'상태 변경',tgt:'프랜차이즈 불공정 계약 조항…',diff:'모집중 → 진행중'},
+ {id:1,at:'10-03 10:15',who:'서하린',type:'이관',tgt:'배치 B-0021',diff:'게시물 412건 적재(경고 6건)'}
+];
+const LAWYERS=['미지정','한도윤','서하린','윤재희','강민서','오지안','배서준'];
+const GUIDE=[
+ {id:'g1',g:'시작하기',t:'관리자 화면 둘러보기',blocks:[['h','관리자 화면 구성'],['p','왼쪽 트리에서 메뉴를 고르면 오른쪽에 해당 화면이 열립니다. 모든 화면 우측 상단의 도움말 아이콘은 이 가이드의 같은 항목으로 연결됩니다.'],['l',['소송 관리: 소송 등록·수정·상태 변경','참여·문의 접수함: 신청자 확인과 담당자 지정','데이터 이관: 기존 홈페이지 자료 이전']],['c','처음 로그인한 직원은 역할에 따라 보이는 메뉴가 다를 수 있습니다.']]},
+ {id:'g2',g:'소송 운영',t:'소송 상태 변경하기',blocks:[['h','상태는 정해진 순서로만 바뀝니다'],['p','준비중 → 모집중 → 진행중 → 종결 순서로 변경합니다. 허용되지 않는 전환은 사유 안내와 함께 거부됩니다.'],['q','잘못 바꾼 경우 변경 이력에서 이전 값을 확인한 뒤 같은 화면에서 되돌립니다.'],['t',[['현재 상태','변경 가능'],['준비중','모집중'],['모집중','진행중, 준비중'],['진행중','종결']]]]},
+ {id:'g3',g:'소송 운영',t:'참여 신청 확인과 개인정보 열람',blocks:[['h','연락처는 기본적으로 가려져 있습니다'],['p','열람 버튼을 누르면 마스킹이 풀리고, 열람한 사람과 시각이 변경 이력에 기록됩니다.'],['l',['필요한 경우에만 열람합니다','화면 캡처나 외부 공유를 하지 않습니다','CSV 내보내기도 이력에 남습니다']]]},
+ {id:'g4',g:'데이터',t:'기존 홈페이지 자료 이관 절차',blocks:[['h','드라이런 후 본 이관'],['p','원본 파일을 올리고 필드 매핑을 확인한 뒤 드라이런으로 오류를 먼저 확인합니다. 본 이관은 배치 단위로 실행되며 배치마다 되돌릴 수 있습니다.'],['c','실패 건은 사유와 함께 목록으로 내려받아 원본을 보정한 뒤 다시 시도합니다.']]},
+ {id:'g5',g:'문제 해결',t:'자주 겪는 문제',blocks:[['h','화면이 열리지 않을 때'],['l',['새로고침 후 다시 로그인합니다','접수 알림이 오지 않으면 알림 큐 상태를 확인합니다','그래도 해결되지 않으면 유지보수 담당자에게 문의합니다']]]}
+];
+const NAVS=[['소송 운영',[['소송 관리','file-text'],['참여·문의 접수함','tray']]],['데이터·문서',[['데이터 이관','database'],['사용 가이드','book-open']]],['감사',[['변경 이력','clock-counter-clockwise']]]];
+
+function Block({b,onChange}){
+  const [type,val]=b;
+  const H=<span className="hdl"><P n="dots-six-vertical"/></span>;
+  const txt=onChange?<textarea className="ed" rows={Math.max(1,Math.ceil(String(val).length/70))} value={val} onChange={e=>onChange(e.target.value)}/>:<span>{val}</span>;
+  if(type==='h') return <div className="block" data-block-type="heading">{H}<h2>{val}</h2></div>;
+  if(type==='l') return <div className="block" data-block-type="list">{H}<ul>{val.map((x,i)=><li key={i}>{x}</li>)}</ul></div>;
+  if(type==='t') return <div className="block" data-block-type="table">{H}<table className="t"><tbody>{val.map((r,i)=><tr key={i}>{r.map((c,j)=>i===0?<th key={j}>{c}</th>:<td key={j}>{c}</td>)}</tr>)}</tbody></table></div>;
+  if(type==='c') return <div className="block callout" data-block-type="callout">{H}<P n="lightbulb"/>{txt}</div>;
+  if(type==='q') return <div className="block quote" data-block-type="quote">{H}{txt}</div>;
+  return <div className="block" data-block-type="paragraph">{H}{txt}</div>;
+}
+
+function Lawsuits({laws,setLaws,log,toast,setHelp}){
+  const [sel,setSel]=useState(1);const [q,setQ]=useState('');const [f,setF]=useState('전체');
+  const [blocks,setBlocks]=useState({1:[['h','개요'],['p','가상 플랫폼의 회원 정보 유출로 피해를 입은 이용자를 모집하는 집단소송입니다.'],['c','참여 대상은 유출 통지를 받은 회원입니다. 모집 마감 후에는 신청 버튼이 종료 안내로 바뀝니다.'],['h','참여 방법'],['l',['참여 신청서 작성','요건 확인 상담','위임 계약 및 소장 제출']],['q','본 소송은 구현 데모용 가상 사건입니다.'],['t',[['단계','담당'],['접수','사무장'],['검토','담당 변호사']]]]});
+  const [slash,setSlash]=useState(false);
+  const cur=laws.find(l=>l.id===sel);
+  const list=laws.filter(l=>(f==='전체'||l.s===f)&&(!q||l.t.includes(q)));
+  const change=(to)=>{if(!RULE[cur.s].includes(to)){toast('허용되지 않는 전환입니다: '+cur.s+' → '+to+' (허용: '+(RULE[cur.s].join(', ')||'없음')+')');return;}
+    setLaws(ls=>ls.map(l=>l.id===sel?{...l,s:to}:l));log('상태 변경',cur.t.slice(0,14)+'…',cur.s+' → '+to);toast('상태를 변경하고 이력에 기록했습니다');};
+  const bl=blocks[sel]||[['h','개요'],['p','내용을 입력하세요.']];
+  const add=t=>{setBlocks(b=>({...b,[sel]:[...bl,t==='h'?['h','새 제목']:t==='l'?['l',['항목 1','항목 2']]:t==='c'?['c','안내 문구']:['p','새 문단']]}));setSlash(false);};
+  return (<div className="page"><div className="md">
+    <div className="card list-rail" data-region="list-rail" style={{borderRadius:12,boxShadow:'0 8px 24px rgba(0,0,0,0.12)'}}>
+      <div className="rail-top"><input className="inp" placeholder="소송 검색" value={q} onChange={e=>setQ(e.target.value)}/><div className="chips">{['전체',...ST].map(s=><button key={s} className={'chip '+(f===s?'on':'')} onClick={()=>setF(s)}>{s}</button>)}</div></div>
+      <div className="rail-list">{list.map(l=><button key={l.id} className={'li '+(sel===l.id?'on':'')} onClick={()=>setSel(l.id)}><b>{l.t}</b><small><span className={'badge '+(l.s==='모집중'?'ok':l.s==='종결'?'end':l.s==='진행중'?'dark':'')}>{l.s}</span> &nbsp;{l.pub?'공개':'비공개'} · 신청 {l.n.toLocaleString()}</small></button>)}
+      {!list.length&&<div style={{padding:24,color:'var(--n7)'}}>결과 없음</div>}</div>
+    </div>
+    <div className="card detail-panel" data-region="detail-panel" style={{borderRadius:12,boxShadow:'0 8px 24px rgba(0,0,0,0.12)'}}>
+      <div className="blocks">
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}><div className="page-title" style={{fontSize:34}}>{cur.t}</div><button className="btn btn-ghost btn-sm" onClick={()=>setHelp('g2')}><P n="question"/>도움말</button></div>
+        <div className="ctl">
+          <span>상태</span><select className="inp" style={{width:130}} value={cur.s} onChange={e=>change(e.target.value)}>{ST.map(s=><option key={s}>{s}</option>)}</select>
+          <span style={{marginLeft:12}}>공개</span><button className={'sw '+(cur.pub?'on':'')} aria-label="공개 전환" onClick={()=>{setLaws(ls=>ls.map(l=>l.id===sel?{...l,pub:!l.pub}:l));log('공개 전환',cur.t.slice(0,14)+'…',cur.pub?'공개 → 비공개':'비공개 → 공개');}}/>
+          <span style={{marginLeft:'auto',color:'var(--n7)'}}>마감 {cur.end}</span>
+          <Btn className="btn-main btn-sm" onClick={()=>{log('내용 저장',cur.t.slice(0,14)+'…','블록 '+bl.length+'개');toast('저장했습니다');}}>저장</Btn>
+        </div>
+        {bl.map((b,i)=><Block key={sel+'-'+i} b={b} onChange={['p','c','q'].includes(b[0])?v=>setBlocks(x=>({...x,[sel]:bl.map((y,j)=>j===i?[y[0],v]:y)})):null}/>)}
+        <div style={{position:'relative',marginTop:8}}>
+          <button className="btn btn-ghost btn-sm" onClick={()=>setSlash(!slash)}><span className="kbd">/</span> 블록 추가</button>
+          {slash&&<div className="slash" style={{top:34,left:0}}>{[['h','제목','text-h'],['p','문단','text-align-left'],['l','목록','list-bullets'],['c','안내 박스','lightbulb']].map(([t,n,ic])=><button key={t} onClick={()=>add(t)}><P n={ic}/>{n}</button>)}</div>}
+        </div>
+      </div>
+    </div>
+  </div></div>);
+}
+
+function Inbox({inq,setInq,laws,log,toast}){
+  const [sel,setSel]=useState(inq[0].id);const [f,setF]=useState('전체');const [open,setOpen]=useState({});
+  const list=inq.filter(i=>f==='전체'||i.st===f);const cur=inq.find(i=>i.id===sel);
+  const lawName=id=>id?laws.find(l=>l.id===id)?.t.slice(0,16)+'…':'일반 문의';
+  const mask=p=>p.slice(0,4)+'****'+p.slice(-5);
+  const upd=(k,v)=>setInq(x=>x.map(i=>i.id===sel?{...i,[k]:v}:i));
+  return (<div className="page">
+   <div className="page-title">참여·문의 접수함</div><div className="page-sub">연락처는 가려진 상태로 보이며, 열람하면 열람 로그가 남습니다.</div>
+   <div className="grid2">
+    <div className="card" style={{borderRadius:12,boxShadow:'0 8px 24px rgba(0,0,0,0.12)',padding:14}}>
+      <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:10}}><div className="chips">{['전체','신규','검토중','완료'].map(s=><button key={s} className={'chip '+(f===s?'on':'')} onClick={()=>setF(s)}>{s}</button>)}</div>
+       <span className="q-pill" style={{marginLeft:'auto'}}><span className="dot"/>알림 큐 대기 0 · 재시도 1</span>
+       <Btn className="btn-ghost btn-sm" onClick={()=>{log('내보내기','접수 목록',list.length+'건 CSV');toast('CSV '+list.length+'건을 내려받았습니다');}}><P n="download-simple"/>CSV 내보내기</Btn></div>
+      <table className="t"><thead><tr><th>접수번호</th><th>소송</th><th>이름</th><th>연락처</th><th>상태</th><th>담당</th></tr></thead>
+       <tbody>{list.map(i=><tr key={i.id} className={sel===i.id?'sel':''} onClick={()=>setSel(i.id)}><td className="mono" style={{fontSize:12}}>{i.id}</td><td>{lawName(i.law)}</td><td>{i.name}</td><td>{open[i.id]?i.phone:mask(i.phone)}</td><td><span className={'badge '+(i.st==='신규'?'warn':i.st==='완료'?'ok':'')}>{i.st}</span></td><td>{i.owner}</td></tr>)}</tbody></table>
+    </div>
+    <div className="card" style={{borderRadius:12,boxShadow:'0 8px 24px rgba(0,0,0,0.12)',padding:18,display:'flex',flexDirection:'column',gap:12}}>
+      <div style={{fontWeight:600,fontSize:15}}>{cur.name} <span className="badge">{cur.kind}</span></div>
+      <div style={{color:'var(--n8)'}}>{cur.body}</div>
+      <div style={{display:'flex',alignItems:'center',gap:8}}><P n="phone"/><span>{open[cur.id]?cur.phone:mask(cur.phone)}</span>
+        <Btn className="btn-ghost btn-sm" onClick={()=>{if(!open[cur.id]){setOpen(o=>({...o,[cur.id]:true}));log('열람',cur.id,'연락처 마스킹 해제');toast('열람 로그를 기록했습니다');}else setOpen(o=>({...o,[cur.id]:false}));}}>{open[cur.id]?'가리기':'열람'}</Btn></div>
+      <label>담당 변호사<select className="inp" value={cur.owner} onChange={e=>{upd('owner',e.target.value);log('담당 지정',cur.id,e.target.value);}}>{LAWYERS.map(l=><option key={l}>{l}</option>)}</select></label>
+      <label>처리 상태<select className="inp" value={cur.st} onChange={e=>{upd('st',e.target.value);log('접수 상태',cur.id,cur.st+' → '+e.target.value);}}>{['신규','검토중','완료'].map(s=><option key={s}>{s}</option>)}</select></label>
+      <label>메모<textarea className="inp" rows={3} placeholder="담당자 메모"/></label>
+      <Btn className="btn-main" onClick={()=>toast('메모와 상태를 저장했습니다')}>저장</Btn>
+    </div>
+   </div></div>);
+}
+
+function Migration({log,toast}){
+  const [step,setStep]=useState(0);const [file,setFile]=useState(null);const [busy,setBusy]=useState(false);const [batches,setBatches]=useState([{id:'B-0021',n:412,w:6,f:0,st:'완료'},{id:'B-0020',n:158,w:2,f:0,st:'롤백됨'}]);
+  const MAP=[['title','제목','title'],['wr_content','본문 HTML','body'],['wr_datetime','작성일','published_at'],['mb_name','작성자','author'],['file1','첨부 경로','attachment_url']];
+  const fails=[['게시물 #1182','작성일 형식 오류(0000-00-00)'],['게시물 #1307','본문 길이 초과(미리보기 잘림)'],['고객 #44','중복 연락처(건너뜀)']];
+  const dry=()=>{setBusy(true);setTimeout(()=>{setBusy(false);setStep(2);},900);};
+  const run=()=>{setBusy(true);setTimeout(()=>{setBusy(false);setBatches(b=>[{id:'B-0022',n:640,w:3,f:3,st:'완료'},...b]);log('이관','배치 B-0022','게시물·문의 640건 적재(실패 3건)');toast('배치 B-0022를 실행했습니다');setStep(3);},1200);};
+  return (<div className="page">
+   <div className="page-title">데이터 이관</div><div className="page-sub">기존 홈페이지 자료를 단계별로 점검하고, 배치 단위로 실행하거나 되돌립니다.</div>
+   <div className="wiz">{['원본 업로드','필드 매핑','드라이런 리포트','실행·롤백'].map((s,i)=><div key={s} className={step===i?'on':i<step?'done':''}>{i+1}. {s}</div>)}</div>
+   <div className="grid2">
+    <div className="card" style={{borderRadius:12,boxShadow:'0 8px 24px rgba(0,0,0,0.12)',padding:20,minHeight:300}}>
+     {step===0&&<><div style={{border:'1.5px dashed var(--n5)',borderRadius:12,padding:36,textAlign:'center',color:'var(--n7)'}}><P n="upload-simple"/><div style={{margin:'8px 0'}}>{file||'CSV·JSON 원본 파일을 선택하세요'}</div>
+       <Btn className="btn-ghost" onClick={()=>{setFile('legacy_export_2026-10.csv (4.1MB, 1,018행)');}}>샘플 파일 선택</Btn></div>
+       <div style={{marginTop:14}}><Btn className="btn-main" disabled={!file} onClick={()=>setStep(1)}>다음: 필드 매핑</Btn></div></>}
+     {step===1&&<><table className="t"><thead><tr><th>원본 필드</th><th>설명</th><th>대상 필드</th></tr></thead><tbody>{MAP.map(([a,b,c])=><tr key={a}><td className="mono">{a}</td><td>{b}</td><td><span className="mono">{c}</span></td></tr>)}</tbody></table>
+       <div style={{marginTop:14,display:'flex',gap:8}}><Btn className="btn-ghost" onClick={()=>setStep(0)}>이전</Btn><Btn className="btn-main" data-loading={busy?'true':undefined} onClick={dry}>드라이런 실행</Btn></div></>}
+     {step===2&&<><div style={{display:'flex',gap:20,marginBottom:12}}><div><div style={{fontSize:26,fontWeight:600}} className="num">1,018</div><small>전체</small></div><div><div style={{fontSize:26,fontWeight:600}} className="num">1,009</div><small>성공</small></div><div><div style={{fontSize:26,fontWeight:600}} className="num">6</div><small>경고</small></div><div><div style={{fontSize:26,fontWeight:600}} className="num">3</div><small>실패</small></div></div>
+       <div className="bar" style={{marginBottom:14}}><i style={{width:'99.1%',background:'var(--m600)'}}/><i style={{width:'.6%',background:'var(--s3)'}}/><i style={{width:'.3%',background:'var(--n10)'}}/></div>
+       <table className="t"><thead><tr><th>대상</th><th>사유</th></tr></thead><tbody>{fails.map(([a,b])=><tr key={a}><td>{a}</td><td>{b}</td></tr>)}</tbody></table>
+       <div style={{marginTop:14,display:'flex',gap:8}}><Btn className="btn-ghost" onClick={()=>toast('실패 건 목록을 내려받았습니다')}>실패 목록 다운로드</Btn><Btn className="btn-main" data-loading={busy?'true':undefined} onClick={run}>본 이관 실행</Btn></div></>}
+     {step===3&&<div style={{textAlign:'center',padding:40}}><P n="check-circle" b/><div style={{fontWeight:600,fontSize:16,margin:'8px 0'}}>배치 B-0022 실행이 끝났습니다</div><Btn className="btn-ghost" onClick={()=>{setStep(0);setFile(null);}}>새 이관 시작</Btn></div>}
+    </div>
+    <div className="card" style={{borderRadius:12,boxShadow:'0 8px 24px rgba(0,0,0,0.12)',padding:16}}><div style={{fontWeight:600,marginBottom:8}}>이관 배치</div>
+      <table className="t"><thead><tr><th>배치</th><th>건수</th><th>상태</th><th/></tr></thead><tbody>{batches.map(b=><tr key={b.id}><td className="mono">{b.id}</td><td className="num">{b.n}</td><td><span className={'badge '+(b.st==='완료'?'ok':'end')}>{b.st}</span></td>
+       <td>{b.st==='완료'&&<Btn className="btn-ghost btn-sm" onClick={()=>{setBatches(x=>x.map(y=>y.id===b.id?{...y,st:'롤백됨'}:y));log('이관',b.id,'배치 롤백');toast(b.id+' 배치를 되돌렸습니다');}}>되돌리기</Btn>}</td></tr>)}</tbody></table></div>
+   </div></div>);
+}
+
+function Guide({focus,setFocus}){
+  const [q,setQ]=useState('');const [rec,setRec]=useState([]);
+  const doc=GUIDE.find(g=>g.id===focus)||GUIDE[0];
+  useEffect(()=>{setRec(r=>[doc.id,...r.filter(x=>x!==doc.id)].slice(0,3));},[doc.id]);
+  const hits=q?GUIDE.filter(g=>(g.t+JSON.stringify(g.blocks)).includes(q)):GUIDE;
+  const groups=[...new Set(hits.map(g=>g.g))];
+  return (<div className="page">
+   <div className="page-title">사용 가이드</div><div className="page-sub">비개발자 직원을 위한 운영 매뉴얼입니다. 각 화면의 도움말 아이콘이 해당 항목을 바로 엽니다.</div>
+   <div className="guide">
+    <div className="card" style={{borderRadius:12,boxShadow:'0 8px 24px rgba(0,0,0,0.12)',padding:14,alignSelf:'start'}}>
+      <input className="inp" placeholder="가이드 검색" value={q} onChange={e=>setQ(e.target.value)} style={{marginBottom:10}}/>
+      {groups.map(g=><div key={g}><div className="tree-group">{g}</div>{hits.filter(x=>x.g===g).map(x=><button key={x.id} className={'tree-item '+(doc.id===x.id?'on':'')} style={{paddingLeft:28}} onClick={()=>setFocus(x.id)}><P n="file-text"/>{x.t}</button>)}</div>)}
+      {!hits.length&&<div style={{color:'var(--n7)',padding:10}}>검색 결과가 없습니다</div>}
+      <div style={{borderTop:'1px solid var(--n3)',marginTop:10,paddingTop:10,fontSize:12,color:'var(--n7)'}}>최근 열람: {rec.map(id=>GUIDE.find(g=>g.id===id).t).join(' · ')}</div>
+    </div>
+    <div className="card doc" style={{borderRadius:12,boxShadow:'0 8px 24px rgba(0,0,0,0.12)'}}><div className="blocks"><div className="page-breadcrumb" style={{marginBottom:10}}><span>가이드</span><span>›</span><span>{doc.g}</span></div>
+      <div className="page-title" style={{fontSize:32}}>{doc.t}</div>
+      {doc.blocks.map((b,i)=><Block key={doc.id+i} b={b}/>)}</div></div>
+   </div></div>);
+}
+
+function History({his}){
+  const [f,setF]=useState('전체');const types=['전체',...new Set(his.map(h=>h.type))];
+  return (<div className="page"><div className="page-title">변경 이력</div><div className="page-sub">상태 변경·개인정보 열람·이관 작업이 변경자와 시각과 함께 기록됩니다.</div>
+   <div className="card" style={{borderRadius:12,boxShadow:'0 8px 24px rgba(0,0,0,0.12)',padding:16}}>
+    <div className="chips" style={{marginBottom:12}}>{types.map(t=><button key={t} className={'chip '+(f===t?'on':'')} onClick={()=>setF(t)}>{t}</button>)}</div>
+    <table className="t"><thead><tr><th>시각</th><th>작업자</th><th>유형</th><th>대상</th><th>변경 내용</th></tr></thead>
+     <tbody>{his.filter(h=>f==='전체'||h.type===f).map(h=><tr key={h.id}><td className="num">{h.at}</td><td>{h.who}</td><td><span className="badge">{h.type}</span></td><td>{h.tgt}</td><td>{h.diff}</td></tr>)}</tbody></table>
+   </div></div>);
+}
+
+function App(){
+  const [view,setView]=useState('소송 관리');const [laws,setLaws]=useState(LAW0);const [inq,setInq]=useState(INQ0);const [his,setHis]=useState(HIS0);const [msg,setMsg]=useState(null);const [gf,setGf]=useState('g1');
+  const [openG,setOpenG]=useState({'소송 운영':true,'데이터·문서':true,'감사':true});
+  const toast=m=>{setMsg(m);setTimeout(()=>setMsg(null),2400);};
+  const log=(type,tgt,diff)=>setHis(h=>[{id:h.length+1,at:'10-06 '+new Date().toTimeString().slice(0,5),who:'한도윤',type,tgt,diff},...h]);
+  const setHelp=id=>{setGf(id);setView('사용 가이드');};
+  const cnt={'참여·문의 접수함':inq.filter(i=>i.st==='신규').length};
+  return (<div className="app">
+   <aside className="sidebar tree-sidebar" data-tree-sidebar style={{width:240}}>
+    <div className="sidebar-brand"><span className="lg"><P n="scales" b/></span>해든 관리자 <small style={{color:'var(--n7)',fontWeight:400}}>샘플</small></div>
+    <div className="sidebar-search"><button className="sb-btn" onClick={()=>toast('검색은 소송·접수·가이드 전체에서 동작합니다')}><P n="magnifying-glass"/>검색</button><button className="sb-btn" onClick={()=>setView('소송 관리')}><P n="plus"/>새 소송 등록</button></div>
+    <nav className="tree-nav">{NAVS.map(([g,items])=><div key={g}>
+      <button className="tree-group" onClick={()=>setOpenG(o=>({...o,[g]:!o[g]}))}><P n={openG[g]?'caret-down':'caret-right'}/>{g}</button>
+      {openG[g]&&items.map(([n,ic])=><button key={n} className={'tree-item child '+(view===n?'on':'')} style={{paddingLeft:28}} onClick={()=>setView(n)}><P n={ic}/><span className="tree-label">{n}</span>{cnt[n]>0&&<span className="cnt">{cnt[n]}</span>}</button>)}
+    </div>)}
+    <div className="tree-item child grandchild" style={{paddingLeft:56,fontSize:12,color:'var(--n7)'}}><span className="tree-toggle-placeholder"/>알림 큐 정상</div></nav>
+    <div className="sidebar-footer"><span className="av">한</span><div style={{fontSize:12}}><b>한도윤</b><br/><span style={{color:'var(--n7)'}}>관리자 · 대표 변호사</span></div></div>
+   </aside>
+   <div className="main">
+    <header className="topbar page-breadcrumb"><div className="page-breadcrumb"><span>관리자</span><span>›</span><span>{view}</span></div><button className="btn btn-ghost btn-sm" onClick={()=>setHelp(view==='데이터 이관'?'g4':view==='참여·문의 접수함'?'g3':'g2')}><P n="question"/>도움말</button></header>
+    {view==='소송 관리'&&<Lawsuits laws={laws} setLaws={setLaws} log={log} toast={toast} setHelp={setHelp}/>}
+    {view==='참여·문의 접수함'&&<Inbox inq={inq} setInq={setInq} laws={laws} log={log} toast={toast}/>}
+    {view==='데이터 이관'&&<Migration log={log} toast={toast}/>}
+    {view==='사용 가이드'&&<Guide focus={gf} setFocus={setGf}/>}
+    {view==='변경 이력'&&<History his={his}/>}
+   </div>
+   {msg&&<div className="toast">{msg}</div>}
+  </div>);
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
