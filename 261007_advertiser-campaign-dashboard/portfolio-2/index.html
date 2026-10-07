@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>광고주 캠페인 실시간 관제·정산 증빙 플랫폼 — 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P2 — 메인 1 · 서브 3 · 나머지 무채색 (gen-color-tokens.js 산출, hue 246°, light) ── */
+:root{
+  /* 메인 — 브랜드 마크·primary CTA(화면당 1)·활성 nav·링크·주 차트·포커스. 앵커 m500 = plan primary */
+  --m50:#e8e6ff;
+  --m100:#d2cdff;
+  --m200:#b7aeff;
+  --m300:#988cff;
+  --m400:#7b6cff;
+  --m500:#5e4cff;
+  --m600:#4d3ed1;
+  --m700:#3c31a3;
+  --m800:#2a2273;
+  --m900:#2a2273;
+  /* 무채색 — 배경(n0~n2)·테두리/비활성(n3~n5)·아이콘/보조텍스트(n6~n8)·본문/다크필(n9~n10). 아바타·태그·아이콘박스·KPI배경·보조 차트는 전부 여기 */
+  --n0:#ffffff;
+  --n1:#f6f8fa;
+  --n2:#efeff0;
+  --n3:#e5e5e6;
+  --n4:#d5d5d7;
+  --n5:#a4abb8;
+  --n6:#909098;
+  --n7:#72717a;
+  --n8:#54535a;
+  --n9:#36363a;
+  --n10:#1e1e20;
+  /* 서브 — 상태 의미가 있을 때만. 배지=bg+text, 점/셀/바=solid */
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b; /* 성공/진행/정상/상승 */
+  --s2:#cf3f3f; --s2-bg:#f9e7e7; --s2-text:#ad1f1f; /* 오류/위험/실패/하락/환불 */
+  --s3:#d48d11; --s3-bg:#f6f1ea; --s3-text:#8b6118; /* 경고/주의 */
+}
+
+/* ── 상태 레이어 P2 — 모양은 페이지가, 상태는 여기서 (gen-component-kit.js 산출, 색은 토큰만) ── */
+/* state-layer elevation=flat theme=light */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{filter:brightness(.94);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #ffffff;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--s2);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{width:100%;min-height:100vh}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:var(--n1);color:var(--n9);font-size:14px;line-height:1.5;letter-spacing:-.01em;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;font-size:inherit;color:inherit;cursor:pointer;border:none;background:none}
+input,select{font-family:inherit;font-size:14px;color:var(--n10)}
+.layout{display:flex;width:100%;min-height:100vh}
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:240px;background:var(--n0);border-right:1px solid var(--n4);padding:16px 12px;display:flex;flex-direction:column;gap:16px;z-index:10}
+.sidebar-brand{display:flex;align-items:center;gap:8px;padding:4px 8px;font-weight:600;color:var(--n10);font-size:14px}
+.sidebar-brand .logo{width:28px;height:28px;border-radius:6px;background:var(--m500);color:var(--n0);display:flex;align-items:center;justify-content:center;font-size:16px}
+.env{display:flex;align-items:center;justify-content:space-between;padding:8px;border:1px solid var(--n4);border-radius:8px;font-size:12px;color:var(--n7)}
+.sidebar-section-title{font-size:12px;color:var(--n6);padding:8px 8px 4px;font-weight:500}
+.sidebar-link{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:8px;border-radius:8px;color:var(--n8);font-size:14px;transition:background .15s,color .15s;line-height:1.35}
+.sidebar-link:hover{background:var(--n1)}
+.sidebar-link.active{background:var(--n2);color:var(--n10);font-weight:600;box-shadow:inset 3px 0 0 var(--m500)}
+.sidebar-link i{font-size:18px;flex-shrink:0}
+.side-foot{margin-top:auto;padding:8px;font-size:12px;color:var(--n6);border-top:1px solid var(--n3)}
+.main{margin-left:240px;width:calc(100% - 240px);flex:1;min-width:0;min-height:100vh;padding:24px 32px 32px;animation:fadeIn .35s ease both}
+.page-header{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:16px;position:relative}
+.page-title{font-size:38px;line-height:1.15;letter-spacing:-.025em;font-weight:600;color:var(--n10)}
+.page-meta{font-size:12px;color:var(--n7);margin-top:4px;display:flex;gap:12px;align-items:center}
+.page-actions{display:flex;gap:8px;align-items:center}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;font-size:14px;white-space:nowrap;transition:background .15s,border-color .15s}
+.btn-primary{background:var(--m500);color:var(--n0)}
+.btn-primary:hover{background:var(--m600)}
+.btn-secondary{border:1px solid var(--n4);background:var(--n0);color:var(--n9)}
+.btn-secondary:hover{background:var(--n1);border-color:var(--n5)}
+.btn-ghost{color:var(--n7);padding:0 8px}
+.btn-ghost:hover{background:var(--n2)}
+.stat-row{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--n4);background:var(--n0);border-radius:8px;margin-bottom:16px}
+.stat-card{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-right:1px solid var(--n4);min-height:72px;animation:rise .5s ease both}
+.stat-card:last-child{border-right:none}
+.stat-label{font-size:12px;color:var(--n7)}
+.stat-value{font-size:28px;line-height:1.15;font-weight:600;color:var(--n10);letter-spacing:-.02em}
+.stat-delta{font-size:12px;color:var(--n7)}
+.stat-delta.neg{color:var(--s2-text)}
+.stat-sparkline{flex-shrink:0}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px}
+.panel{background:var(--n0);border:1px solid var(--n4);border-radius:8px;display:flex;flex-direction:column;min-width:0}
+.panel-h{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--n4)}
+.panel-h b{font-size:20px;font-weight:600;color:var(--n10);letter-spacing:-.02em}
+.panel-b{padding:16px}
+.tab-bar{display:flex;gap:16px}
+.tab{padding:4px 0 8px;margin-bottom:-9px;font-size:14px;color:var(--n7);border-bottom:2px solid transparent;transition:color .15s}
+.tab:hover{color:var(--n10)}
+.tab.active{color:var(--n10);border-bottom-color:var(--m500);font-weight:600}
+.gantt{padding:8px 16px 16px;position:relative}
+.g-axis{display:grid;grid-template-columns:168px 1fr;font-size:12px;color:var(--n6);padding:4px 0}
+.g-axis div:last-child{display:flex;justify-content:space-between}
+.g-row{display:grid;grid-template-columns:168px 1fr;align-items:center;height:36px;border-top:1px solid var(--n3);cursor:pointer;transition:background .15s}
+.g-row:hover{background:var(--n1)}
+.g-row .nm{font-size:13px;padding-right:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--n9)}
+.g-track{position:relative;height:100%;background-image:linear-gradient(to right,var(--n3) 1px,transparent 1px);background-size:calc(100%/6) 100%}
+.g-bar{position:absolute;top:10px;height:16px;border-radius:4px;background:var(--m500);transform-origin:left;animation:barGrow .9s ease both}
+.g-bar.mute{background:var(--n5)}
+.g-bar.hot{background:var(--m500);box-shadow:inset 0 0 0 2px var(--s2)}
+.g-now{position:absolute;top:28px;bottom:16px;width:2px;background:var(--s2);z-index:2}
+.g-now::before{content:'지금';position:absolute;top:-18px;left:-12px;font-size:12px;color:var(--s2-text)}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:500;color:var(--n7);text-align:left;padding:8px 12px;background:var(--n1);border-bottom:1px solid var(--n4)}
+td{padding:0 12px;height:44px;border-bottom:1px solid var(--n3);font-size:14px}
+tbody tr{transition:background .12s}
+tbody tr:hover{background:var(--n1)}
+tbody tr.clickable{cursor:pointer}
+th.r,td.r{text-align:right}
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:12px;padding:1px 6px;border-radius:4px;background:var(--n2);color:var(--n8);border:1px solid var(--n3)}
+.badge.ok{background:var(--s1-bg);color:var(--s1-text);border-color:transparent}
+.badge.bad{background:var(--s2-bg);color:var(--s2-text);border-color:transparent}
+.badge.warn{background:var(--s3-bg);color:var(--s3-text);border-color:transparent}
+.badge.main{background:var(--n2);color:var(--n8)}
+.queue{list-style:none}
+.queue li{display:flex;flex-direction:column;gap:4px;padding:12px 16px;border-bottom:1px solid var(--n3);cursor:pointer;transition:background .15s}
+.queue li:hover{background:var(--n1);transform:scale(1.01)}
+.queue li.sel{background:var(--n2)}
+.qrow{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.meter{height:4px;border-radius:2px;background:var(--n3);overflow:hidden}
+.meter b{display:block;height:100%;background:var(--n6);transform-origin:left;animation:barGrow .9s ease both}
+.queue li.sel .meter b{background:var(--m500)}
+.meter.hot b{background:var(--s2)}
+.meter.warn b{background:var(--s3)}
+.evt{list-style:none;max-height:280px;overflow:hidden}
+.evt li{display:flex;gap:12px;padding:8px 16px;border-bottom:1px solid var(--n3);font-size:13px}
+.evt li:first-child{animation:slideDown .4s ease both}
+.evt time{color:var(--n6);min-width:56px}
+.sw{width:36px;height:20px;border-radius:10px;background:var(--n5);position:relative;transition:background .2s;flex-shrink:0}
+.sw::after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--n0);transition:transform .2s}
+.sw.on{background:var(--m500)}
+.sw.on::after{transform:translateX(16px)}
+.inp{height:32px;padding:0 10px;border-radius:8px;border:1px solid var(--n4);background:var(--n0);width:100%}
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:12px;color:var(--n7)}
+.err{font-size:12px;color:var(--s2-text)}
+.overlay{position:fixed;inset:0;z-index:50;background:color-mix(in srgb,var(--n10) 32%,transparent);display:flex;justify-content:flex-end;animation:fadeIn .2s ease both}
+.slide{width:400px;max-width:100%;height:100%;background:var(--n0);border-left:1px solid var(--n4);padding:24px;display:flex;flex-direction:column;gap:16px;animation:slideLeft .25s ease both}
+.modalwrap{position:fixed;inset:0;z-index:60;background:color-mix(in srgb,var(--n10) 32%,transparent);display:flex;align-items:center;justify-content:center;animation:fadeIn .2s ease both}
+.modal{width:420px;background:var(--n0);border:1px solid var(--n4);border-radius:8px;padding:24px;display:flex;flex-direction:column;gap:16px;animation:rise .25s ease both}
+.toast{position:fixed;right:24px;bottom:24px;z-index:80;background:var(--n10);color:var(--n0);border-radius:8px;padding:8px 16px;font-size:14px;display:flex;align-items:center;gap:8px;animation:rise .25s ease both}
+.progress{height:6px;border-radius:3px;background:var(--n3);overflow:hidden}
+.progress b{display:block;height:100%;background:var(--m500);transition:width .3s}
+.check{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--n3);cursor:pointer}
+.check:hover{background:var(--n1)}
+.cb{width:18px;height:18px;border-radius:4px;border:1px solid var(--n5);display:flex;align-items:center;justify-content:center;color:var(--n0);font-size:14px;flex-shrink:0}
+.cb.on{background:var(--m500);border-color:var(--m500)}
+.cb.miss{border-color:var(--s2);background:var(--s2-bg)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.pix{position:absolute;right:0;top:-8px;opacity:.9;pointer-events:none}
+.mx{display:grid;grid-template-columns:140px repeat(3,1fr);font-size:13px}
+.mx>div{padding:8px 12px;border-bottom:1px solid var(--n3)}
+.mx .h{background:var(--n1);color:var(--n7);font-size:12px}
+.empty{padding:32px;text-align:center;color:var(--n7)}
+.skel{border-radius:6px;background:linear-gradient(90deg,var(--n2),var(--n3),var(--n2));background-size:200% 100%;animation:shimmer 1.2s linear infinite;height:16px}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes rise{from{opacity:0;transform:translate(0,8px)}to{opacity:1;transform:none}}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes slideLeft{from{transform:translateX(32px);opacity:0}to{transform:none;opacity:1}}
+@keyframes slideDown{from{opacity:0;transform:translate(0,-8px);background:var(--n2)}to{opacity:1;transform:none}}
+@keyframes shimmer{to{background-position:-200% 0}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+.liveDot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--s1);animation:blink 1.4s ease-in-out infinite}
+.liveDot.off{background:var(--s2);animation:none}
+@media (max-width:1100px){.grid{grid-template-columns:1fr}.stat-row{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}}
+@media (max-width:760px){.sidebar{position:static;width:100%;flex-direction:row;overflow:auto;border-right:none;border-bottom:1px solid var(--n4)}.layout{flex-direction:column}.main{margin-left:0;width:100%;padding:16px}.page-title{font-size:28px}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const won = n => '₩' + Math.round(n).toLocaleString('ko-KR');
+const num = n => Math.round(n).toLocaleString('ko-KR');
+
+const CAMPS = [
+  { id:'C-2415', name:'토익 단기 완성 배너', burn:91, eta:'14시간 후', st:'주의', s:2, e:20, hot:true },
+  { id:'C-2411', name:'수능 D-30 집중 퀴즈 광고', burn:82, eta:'2일 6시간 후', st:'주의', s:0, e:22 },
+  { id:'C-2410', name:'10월 신학기 영단어 챌린지', burn:71, eta:'5일 후', st:'정상', s:0, e:24 },
+  { id:'C-2412', name:'직장인 자격증 학습 배너', burn:63, eta:'9일 후', st:'정상', s:6, e:24 },
+  { id:'C-2413', name:'초등 수학 리워드 쿠폰', burn:47, eta:'일시중지', st:'중지', s:0, e:9, mute:true },
+];
+const RULES0 = [
+  { id:1, name:'소진율 80% 도달 알림', camp:'전체 캠페인', cond:'소진율 ≥ 80%', ch:'이메일 + 화면', on:true },
+  { id:2, name:'24시간 내 소진 예상', camp:'C-2415', cond:'소진 예상 ≤ 24시간', ch:'화면', on:true },
+  { id:3, name:'참여율 급락 감지', camp:'C-2410', cond:'참여율 < 6.0%', ch:'이메일', on:false },
+];
+const LOG0 = [
+  ['14:21','소진율 80% 도달 알림','이메일','발송완료','ok'],['13:58','24시간 내 소진 예상','화면','발송완료','ok'],
+  ['11:40','소진율 80% 도달 알림','이메일','재시도 2회 후 발송','warn'],['09:12','참여율 급락 감지','이메일','실패 — 수신 주소 확인','bad'],
+];
+const CHECKS0 = [
+  { id:1, t:'캠페인별 집행 내역서', d:'엑셀 · 자동 생성', ok:true },
+  { id:2, t:'세금계산서 사본', d:'정산 기간 내 발행분', ok:true },
+  { id:3, t:'노출·참여 로그 요약', d:'일 단위 집계 시트', ok:true },
+  { id:4, t:'광고 소재 게재 확인서', d:'소재 캡처 첨부', ok:false },
+  { id:5, t:'결과보고서 (작업 내역·화면 캡처)', d:'PDF · 템플릿 기반', ok:false },
+];
+const MEMBERS0 = [
+  { id:1, n:'김서연', m:'seoyeon@sample-edu.example', r:'관리', last:'오늘 14:02' },
+  { id:2, n:'박도현', m:'dohyun@sample-edu.example', r:'내보내기', last:'오늘 11:20' },
+  { id:3, n:'이하준', m:'hajun@sample-edu.example', r:'조회', last:'어제 17:45' },
+  { id:4, n:'정수아', m:'sua@sample-edu.example', r:'조회', last:'10.05 09:10' },
+];
+const AUDIT0 = [
+  ['14:02','김서연','로그인','—'],['13:48','박도현','엑셀 내보내기','ST-2610-A 정산 내역'],['13:10','김서연','권한 변경','이하준 → 조회'],
+  ['11:20','박도현','로그인','—'],['10:55','이하준','조회','C-2411 캠페인 상세'],['10:31','정수아','조회','정산 내역 목록'],
+  ['09:44','박도현','엑셀 내보내기','C-2410 일별 집계'],['09:02','김서연','증빙 패키지 생성','2026.09 정산'],
+];
+const IMPR_SPARK = [52,64,71,66,88,97,92,104,118,112,126,139];
+
+function I({ n }) { return <i className={'ti ti-' + n}></i>; }
+function Spark({ d, w = 72, h = 28, c = "var(--m500)" }) {
+  const mx = Math.max(...d), mn = Math.min(...d);
+  const p = d.map((v, i) => (i * (w / (d.length - 1))).toFixed(1) + ',' + (h - 3 - ((v - mn) / (mx - mn || 1)) * (h - 6)).toFixed(1)).join(' ');
+  return <svg className="stat-sparkline" width={w} height={h} viewBox={`0 0 ${w} ${h}`}><polyline points={p} fill="none" stroke={c} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" /></svg>;
+}
+function PixelArt() {
+  const cells = [[0,3,2],[1,2,3],[2,1,4],[3,0,2],[4,0,1],[0,1,0]];
+  return <svg className="pix" width="132" height="84" viewBox="0 0 132 84">{cells.map((c, i) => <rect key={i} x={c[0] * 22 + 8} y={c[1] * 18 + 6} width="18" height="14" rx="2" fill={['var(--m50)', 'var(--m100)', 'var(--m200)', 'var(--m300)', 'var(--m400)'][c[2]]} style={{ animation: `rise .5s ${i * 0.05}s ease both` }} />)}</svg>;
+}
+function Toast({ msg }) { return msg ? <div className="toast"><I n="circle-check" /> {msg}</div> : null; }
+
+function Side({ view, setView }) {
+  const g = [['운영', [['main', 'radar-2', '실시간 집행 관제'], ['alerts', 'bell-ringing', '예산 소진 알림']]], ['정산', [['evidence', 'file-certificate', '정산 증빙 패키지']]], ['설정', [['access', 'shield-lock', '권한 관리·감사 로그']]]];
+  return (
+    <aside className="sidebar" data-sidebar>
+      <div className="sidebar-brand"><span className="logo"><I n="chart-dots-3" /></span>리워드 관제 센터</div>
+      <div className="env"><span>환경</span><b style={{ color: 'var(--n10)' }}>Production</b></div>
+      {g.map(s => <div key={s[0]}><div className="sidebar-section-title">{s[0]}</div>{s[1].map(l => <button key={l[0]} className={'sidebar-link' + (view === l[0] ? ' active' : '')} onClick={() => setView(l[0])}><I n={l[1]} />{l[2]}</button>)}</div>)}
+      <div className="side-foot">샘플교육미디어 · 관리 역할<br />v2.4 확장 데모</div>
+    </aside>
+  );
+}
+
+function Header({ title, meta, actions }) {
+  return <header className="page-header"><div><h1 className="page-title">{title}</h1><div className="page-meta">{meta}</div></div><div className="page-actions">{actions}</div><PixelArt /></header>;
+}
+
+function MainView({ toast }) {
+  const [tick, setTick] = useState(0);
+  const [conn, setConn] = useState(true);
+  const [missed, setMissed] = useState(0);
+  const [sortBy, setSortBy] = useState('burn');
+  const [sel, setSel] = useState(CAMPS[0].id);
+  useEffect(() => { const t = setInterval(() => { if (conn) setTick(v => v + 1); else setMissed(m => m + 1); }, 2500); return () => clearInterval(t); }, [conn]);
+  const toggle = () => { if (conn) { setConn(false); setMissed(0); } else { setConn(true); toast(`재연결 완료 — 누락 이벤트 ${missed + 3}건 보정`); } };
+  const q = [...CAMPS].sort((a, b) => sortBy === 'burn' ? b.burn - a.burn : a.e - b.e);
+  const cur = CAMPS.find(c => c.id === sel);
+  const events = [[`14:${30 + (tick % 25)}`, `C-2415 노출 ${1200 + tick * 17}회 수신`], ['14:29', 'C-2411 참여 52건 수신'], ['14:28', 'C-2410 집행 ₩31,000 반영'], ['14:27', 'C-2412 노출 2,114회 수신'], ['14:26', 'C-2415 소진율 90% 돌파'], ['14:24', 'C-2410 참여 77건 수신'], ['14:22', 'C-2411 노출 1,987회 수신']];
+  return (
+    <main className="main main-wrap">
+      <Header title="실시간 집행 관제" meta={<><span><span className={'liveDot' + (conn ? '' : ' off')}></span> {conn ? 'SSE 연결됨' : '연결 끊김 — 폴링 폴백 중'}</span><span>이벤트 ID #{48210 + tick}</span><span>환경 Production</span></>} actions={<><button className="btn btn-secondary" onClick={toggle}><I n={conn ? 'wifi-off' : 'wifi'} />{conn ? '연결 끊김 시연' : '재연결하기'}</button><button className="btn btn-primary" onClick={() => toast('관제 스냅샷 저장 완료')}><I n="camera" />스냅샷 저장</button></>} />
+      <section className="stat-row" data-stat-row>
+        <div className="stat-card"><div><div className="stat-label">오늘 집행 금액</div><div className="stat-value num">{won(2184000 + tick * 3100)}</div><div className="stat-delta">▲ 8.2% 전일 동시간 대비</div></div><Spark d={IMPR_SPARK} /></div>
+        <div className="stat-card"><div><div className="stat-label">분당 노출</div><div className="stat-value num">{num(1284 + (tick % 7) * 11)}</div><div className="stat-delta">▲ 3.1%</div></div><Spark d={[60, 64, 62, 70, 74, 71, 80, 83, 79, 88]} c="var(--n6)" /></div>
+        <div className="stat-card"><div><div className="stat-label">분당 참여</div><div className="stat-value num">{num(96 + (tick % 5) * 2)}</div><div className="stat-delta neg">▼ 1.4%</div></div><Spark d={[30, 34, 33, 31, 35, 32, 30, 29, 31, 28]} c="var(--n6)" /></div>
+        <div className="stat-card"><div><div className="stat-label">연결 상태</div><div className="stat-value" style={{ fontSize: 20 }}>{conn ? '정상 수신' : '끊김 ' + missed * 2 + '초'}</div><div className={'stat-delta' + (conn ? '' : ' neg')}>{conn ? '지연 0.4초' : '마지막 ID 기준 재연결 대기'}</div></div><Spark d={[5, 5, 6, 5, 5, 6, 5, 4, 5, 5]} c="var(--n6)" /></div>
+      </section>
+      <div className="grid" data-archetype="stripe-multipane">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+          <section className="panel">
+            <div className="panel-h"><b>집행 타임라인</b><span className="badge main">최근 24시간</span></div>
+            <div className="gantt">
+              <div className="g-axis"><div>캠페인</div><div><span>00시</span><span>04시</span><span>08시</span><span>12시</span><span>16시</span><span>20시</span><span>24시</span></div></div>
+              <div className="g-now" style={{ left: 'calc(168px + (100% - 168px - 32px) * 0.6 + 16px)' }}></div>
+              {CAMPS.map(c => <div key={c.id} className="g-row" onClick={() => setSel(c.id)}><div className="nm">{c.name}</div><div className="g-track"><div className={'g-bar' + (c.mute ? ' mute' : c.hot ? ' hot' : '')} style={{ left: (c.s / 24 * 100) + '%', width: ((c.e - c.s) / 24 * 100) + '%' }}></div></div></div>)}
+            </div>
+          </section>
+          <section className="panel">
+            <div className="panel-h"><div className="tab-bar" data-tabs><button className="tab active" onClick={() => toast('실시간 이벤트 보기')}>실시간 이벤트</button><button className="tab" onClick={() => toast('집계 기준 시각 14:30')}>집계 기준</button></div><span className="badge">부분 갱신</span></div>
+            <ul className="evt">{events.slice(0, 6).map((e, i) => <li key={i + e[1]}><time className="num">{e[0]}</time><span>{e[1]}</span></li>)}</ul>
+          </section>
+        </div>
+        <section className="panel" style={{ alignSelf: 'start' }}>
+          <div className="panel-h"><b>우선 대응 큐</b></div>
+          <div style={{ padding: '8px 16px 0' }}><div className="tab-bar"><button className={'tab' + (sortBy === 'burn' ? ' active' : '')} onClick={() => setSortBy('burn')}>소진율 순</button><button className={'tab' + (sortBy === 'end' ? ' active' : '')} onClick={() => setSortBy('end')}>종료 임박 순</button></div></div>
+          <ul className="queue" style={{ marginTop: 8 }}>
+            {q.map(c => <li key={c.id} className={sel === c.id ? 'sel' : ''} onClick={() => setSel(c.id)}>
+              <div className="qrow"><b style={{ fontSize: 14, fontWeight: 500 }}>{c.name}</b><span className={'badge' + (c.st === '주의' ? (c.burn > 90 ? ' bad' : ' warn') : '')}>{c.st}</span></div>
+              <div className={'meter' + (c.burn > 90 ? ' hot' : c.burn > 80 ? ' warn' : '')}><b style={{ width: c.burn + '%' }}></b></div>
+              <div className="qrow" style={{ fontSize: 12, color: 'var(--n7)' }}><span className="num">소진율 {c.burn}%</span><span>소진 예상 {c.eta}</span></div>
+            </li>)}
+          </ul>
+          <div className="panel-b" style={{ borderTop: '1px solid var(--n4)', fontSize: 13 }}><div style={{ color: 'var(--n7)', marginBottom: 4 }}>선택된 캠페인</div><b>{cur.id} · {cur.name}</b><div style={{ marginTop: 8 }}><button className="btn btn-secondary" onClick={() => toast(cur.id + ' 알림 규칙 화면으로 이동')}><I n="bell-plus" />알림 규칙 추가하기</button></div></div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function AlertsView({ toast }) {
+  const [rules, setRules] = useState(RULES0);
+  const [open, setOpen] = useState(false);
+  const [pick, setPick] = useState('C-2415');
+  const [f, setF] = useState({ name: '', camp: 'C-2415', th: '', ch: '화면' });
+  const [err, setErr] = useState('');
+  const [retry, setRetry] = useState(null);
+  const [log, setLog] = useState(LOG0);
+  const c = CAMPS.find(x => x.id === pick);
+  const days = 12, W = 560, H = 190;
+  const rate = c.burn / 18;
+  const pts = Array.from({ length: days }, (_, i) => [40 + i * 38, H - 24 - Math.min(100, (c.burn * (i + 1)) / days * (days / 11)) * 1.5]);
+  const save = () => { const t = Number(f.th); if (!f.name.trim() || !(t >= 1 && t <= 100)) { setErr('임계값은 1~100 사이 숫자로 입력해 주세요'); return; } setErr(''); setRules([...rules, { id: Date.now(), name: f.name, camp: f.camp, cond: `소진율 ≥ ${t}%`, ch: f.ch, on: true }]); setOpen(false); setF({ name: '', camp: 'C-2415', th: '', ch: '화면' }); toast('알림 규칙 저장 완료'); };
+  const redo = i => { setRetry(i); setTimeout(() => { setRetry(null); setLog(l => l.map((r, j) => j === i ? [r[0], r[1], r[2], '재시도 후 발송완료', 'ok'] : r)); toast('알림 재발송 완료'); }, 1100); };
+  return (
+    <main className="main main-wrap">
+      <Header title="예산 소진 알림" meta={<span>이동 평균 기반 소진 예상 · 규칙 평가와 발송은 큐로 분리</span>} actions={<button className="btn btn-primary" onClick={() => setOpen(true)}><I n="plus" />알림 규칙 추가</button>} />
+      <div className="grid">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+          <section className="panel">
+            <div className="panel-h"><b>소진 예상 추이</b><select className="inp" style={{ width: 220 }} value={pick} onChange={e => setPick(e.target.value)}>{CAMPS.map(x => <option key={x.id} value={x.id}>{x.id} · {x.name}</option>)}</select></div>
+            <div className="panel-b">
+              <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 190 }}>
+                {[0, 1, 2, 3].map(i => <line key={i} x1="32" x2={W - 8} y1={20 + i * 47} y2={20 + i * 47} stroke="var(--n3)" />)}
+                <line x1="32" x2={W - 8} y1="20" y2="20" stroke="var(--s2)" strokeDasharray="4 4" /><text x={W - 8} y="14" textAnchor="end" fontSize="11" fill="var(--s2-text)">예산 한도 100%</text>
+                <polyline points={pts.slice(0, 8).map(p => p.join(',')).join(' ')} fill="none" stroke="var(--m500)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                <polyline points={pts.slice(7).map(p => p.join(',')).join(' ')} fill="none" stroke="var(--m300)" strokeWidth="2.5" strokeDasharray="6 5" />
+                <circle cx={pts[7][0]} cy={pts[7][1]} r="5" fill="var(--m500)" stroke="var(--n0)" strokeWidth="2" />
+                {pts.map((p, i) => i % 2 === 0 && <text key={i} x={p[0]} y={H - 6} fontSize="11" textAnchor="middle" fill="var(--n6)">{`10.${i + 1}`}</text>)}
+              </svg>
+              <div style={{ display: 'flex', gap: 24, fontSize: 13, color: 'var(--n7)' }}><span>현재 소진율 <b className="num" style={{ color: 'var(--n10)' }}>{c.burn}%</b></span><span>소진 예상 <b style={{ color: 'var(--n10)' }}>{c.eta}</b></span><span>일 평균 {rate.toFixed(1)}%p</span></div>
+            </div>
+          </section>
+          <section className="panel">
+            <div className="panel-h"><b>알림 발송 이력</b><span className="badge">최근 24시간</span></div>
+            <table><thead><tr><th>시각</th><th>규칙</th><th>채널</th><th>상태</th><th></th></tr></thead>
+              <tbody>{log.map((r, i) => <tr key={i}><td className="num">{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td><span className={'badge ' + r[4]}>{r[3]}</span></td><td className="r">{r[4] === 'bad' && <button className="btn btn-secondary" data-loading={retry === i} onClick={() => redo(i)}>재발송하기</button>}</td></tr>)}</tbody></table>
+          </section>
+        </div>
+        <section className="panel" style={{ alignSelf: 'start' }}>
+          <div className="panel-h"><b>알림 규칙</b><span className="badge main">{rules.filter(r => r.on).length}개 활성</span></div>
+          {rules.map(r => <div key={r.id} className="check" style={{ cursor: 'default' }}>
+            <div style={{ flex: 1 }}><b style={{ fontWeight: 500 }}>{r.name}</b><div style={{ fontSize: 12, color: 'var(--n7)' }}>{r.camp} · {r.cond} · {r.ch}</div></div>
+            <button className={'sw' + (r.on ? ' on' : '')} role="switch" aria-checked={r.on} aria-label={r.name + ' 켜기/끄기'} onClick={() => setRules(rules.map(x => x.id === r.id ? { ...x, on: !x.on } : x))}></button>
+          </div>)}
+        </section>
+      </div>
+      {open && <div className="overlay" onClick={() => setOpen(false)}><aside className="slide" onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><b style={{ fontSize: 20 }}>알림 규칙 추가</b><button className="btn btn-ghost" onClick={() => setOpen(false)}><I n="x" />닫기</button></div>
+        <div className="field"><label>규칙 이름</label><input className="inp" placeholder="예: 소진율 90% 도달 알림" value={f.name} onChange={e => setF({ ...f, name: e.target.value })} /></div>
+        <div className="field"><label>대상 캠페인</label><select className="inp" value={f.camp} onChange={e => setF({ ...f, camp: e.target.value })}>{CAMPS.map(x => <option key={x.id}>{x.id}</option>)}</select></div>
+        <div className="field"><label>소진율 임계값 (%)</label><input className="inp" aria-invalid={!!err} placeholder="1~100" value={f.th} onChange={e => setF({ ...f, th: e.target.value })} />{err && <span className="err">{err}</span>}</div>
+        <div className="field"><label>수신 채널</label><select className="inp" value={f.ch} onChange={e => setF({ ...f, ch: e.target.value })}><option>화면</option><option>이메일</option><option>이메일 + 화면</option></select></div>
+        <button className="btn btn-primary" onClick={save}>규칙 저장하기</button>
+      </aside></div>}
+    </main>
+  );
+}
+
+function EvidenceView({ toast }) {
+  const [checks, setChecks] = useState(CHECKS0);
+  const [period, setPeriod] = useState('2026.09 정산');
+  const [job, setJob] = useState(0);
+  const [done, setDone] = useState(false);
+  const [hist, setHist] = useState([['2026.08 정산', '08.31 17:20', '5개 항목', '엑셀·PDF'], ['2026.07 정산', '07.31 16:05', '5개 항목', '엑셀·PDF']]);
+  const miss = checks.filter(c => !c.ok).length; const running = job !== 0 && !done;
+  const run = () => { setDone(false); setJob(1); let p = 1; const t = setInterval(() => { p += 22; if (p >= 100) { clearInterval(t); setJob(100); setDone(true); setHist(h => [[period, '방금 전', checks.length + '개 항목', '엑셀·PDF'], ...h]); toast('증빙 패키지 생성 완료'); } else setJob(p); }, 450); };
+  return (
+    <main className="main main-wrap">
+      <Header title="정산 증빙 패키지" meta={<span>정부지원사업 사업비 집행 증빙 항목을 설정 데이터로 관리</span>} actions={<><select className="inp" style={{ width: 160 }} value={period} onChange={e => { setPeriod(e.target.value); setDone(false); setJob(0); }}><option>2026.09 정산</option><option>2026.10 1차 정산</option></select><button className="btn btn-primary" data-loading={running} onClick={run}><I n="package-export" />패키지 생성하기</button></>} />
+      <div className="grid">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+          <section className="panel">
+            <div className="panel-h"><b>증빙 체크리스트</b>{miss ? <span className="badge bad"><I n="alert-triangle" />누락 {miss}건</span> : <span className="badge ok">모든 항목 충족</span>}</div>
+            {checks.map(c => <div key={c.id} className="check" onClick={() => setChecks(checks.map(x => x.id === c.id ? { ...x, ok: !x.ok } : x))}>
+              <span className={'cb ' + (c.ok ? 'on' : 'miss')}>{c.ok && <I n="check" />}</span>
+              <div style={{ flex: 1 }}><b style={{ fontWeight: 500 }}>{c.t}</b><div style={{ fontSize: 12, color: 'var(--n7)' }}>{c.d}</div></div>
+              {!c.ok && <span className="badge bad">누락</span>}
+            </div>)}
+          </section>
+          <section className="panel">
+            <div className="panel-h"><b>생성 이력</b></div>
+            <table><thead><tr><th>정산 기간</th><th>생성 시각</th><th>구성</th><th>형식</th><th></th></tr></thead>
+              <tbody>{hist.map((h, i) => <tr key={i}><td>{h[0]}</td><td className="num">{h[1]}</td><td>{h[2]}</td><td><span className="badge">{h[3]}</span></td><td className="r"><button className="btn btn-secondary" onClick={() => toast(h[0] + ' 패키지 다시 내려받기 완료')}><I n="download" />다시 받기</button></td></tr>)}</tbody></table>
+          </section>
+        </div>
+        <section className="panel" style={{ alignSelf: 'start' }}>
+          <div className="panel-h"><b>내보내기 작업</b><span className="badge">큐 처리</span></div>
+          <div className="panel-b" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}><span>{period}</span><b className="num">{job}%</b></div>
+            <div className="progress"><b style={{ width: job + '%' }}></b></div>
+            <div style={{ fontSize: 13, color: 'var(--n7)' }}>{job === 0 ? '대기 중 — 패키지 생성을 시작해 주세요.' : done ? '완료 — 다운로드 링크가 알림으로 전달되었습니다.' : 'ExcelJS 템플릿으로 시트를 구성하는 중입니다.'}</div>
+            {done && <><button className="btn btn-secondary" onClick={() => toast('정산 요약·상세 엑셀 저장 완료')}><I n="file-spreadsheet" />엑셀 내려받기</button><button className="btn btn-secondary" onClick={() => toast('결과보고서 PDF 저장 완료')}><I n="file-type-pdf" />결과보고서 PDF 내려받기</button></>}
+            {!done && job === 0 && <div className="skel"></div>}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+function AccessView({ toast }) {
+  const [mem, setMem] = useState(MEMBERS0);
+  const [me, setMe] = useState('관리');
+  const [act, setAct] = useState('전체');
+  const [q, setQ] = useState('');
+  const [inv, setInv] = useState(false);
+  const [email, setEmail] = useState('');
+  const logs = AUDIT0.filter(a => (act === '전체' || a[2] === act) && (!q || a[1].includes(q)));
+  const canExport = me !== '조회';
+  const invite = () => { if (!email.includes('@')) return; setMem([...mem, { id: Date.now(), n: email.split('@')[0], m: email, r: '조회', last: '초대 대기' }]); setInv(false); setEmail(''); toast('초대 메일 발송 완료'); };
+  return (
+    <main className="main main-wrap">
+      <Header title="권한 관리·감사 로그" meta={<span>광고주 단위 격리를 담당자 단위로 세분화</span>} actions={<><select className="inp" style={{ width: 150 }} value={me} onChange={e => setMe(e.target.value)} aria-label="내 권한 미리보기"><option>관리</option><option>내보내기</option><option>조회</option></select><button className="btn btn-secondary" disabled={!canExport} onClick={() => toast('감사 로그 엑셀 저장 완료')}><I n="download" />엑셀 내보내기</button><button className="btn btn-primary" onClick={() => setInv(true)}><I n="user-plus" />담당자 초대하기</button></>} />
+      <div className="two" style={{ marginBottom: 16 }}>
+        <section className="panel">
+          <div className="panel-h"><b>담당자</b><span className="badge">{mem.length}명</span></div>
+          <table><thead><tr><th>이름</th><th>역할</th><th>최근 접속</th></tr></thead>
+            <tbody>{mem.map(m => <tr key={m.id}><td>{m.n}<div style={{ fontSize: 12, color: 'var(--n7)' }}>{m.m}</div></td><td><select className="inp" style={{ width: 110 }} value={m.r} onChange={e => { setMem(mem.map(x => x.id === m.id ? { ...x, r: e.target.value } : x)); toast(m.n + ' 역할 변경 완료'); }}><option>관리</option><option>내보내기</option><option>조회</option></select></td><td className="num" style={{ fontSize: 13 }}>{m.last}</td></tr>)}</tbody></table>
+        </section>
+        <section className="panel" style={{ alignSelf: 'start' }}>
+          <div className="panel-h"><b>역할별 권한</b></div>
+          <div className="mx"><div className="h">기능</div><div className="h">관리</div><div className="h">내보내기</div><div className="h">조회</div>
+            <div>현황·정산 조회</div><div>허용</div><div>허용</div><div>허용</div>
+            <div>엑셀·증빙 내보내기</div><div>허용</div><div>허용</div><div style={{ color: 'var(--s2-text)' }}>차단</div>
+            <div>담당자·규칙 관리</div><div>허용</div><div style={{ color: 'var(--s2-text)' }}>차단</div><div style={{ color: 'var(--s2-text)' }}>차단</div></div>
+        </section>
+      </div>
+      <section className="panel">
+        <div className="panel-h"><div className="tab-bar" data-tabs>{['전체', '로그인', '엑셀 내보내기', '권한 변경', '조회'].map(t => <button key={t} className={'tab' + (act === t ? ' active' : '')} onClick={() => setAct(t)}>{t}</button>)}</div><input className="inp" style={{ width: 200 }} placeholder="담당자 이름 검색" value={q} onChange={e => setQ(e.target.value)} /></div>
+        <table><thead><tr><th>시각</th><th>담당자</th><th>행위</th><th>대상</th></tr></thead>
+          <tbody>{logs.map((a, i) => <tr key={i}><td className="num">{a[0]}</td><td>{a[1]}</td><td><span className="badge">{a[2]}</span></td><td>{a[3]}</td></tr>)}</tbody></table>
+        {!logs.length && <div className="empty">조건에 맞는 기록이 없습니다. 행위 탭을 전체로 바꿔 보세요.</div>}
+      </section>
+      {inv && <div className="modalwrap" onClick={() => setInv(false)}><div className="modal" onClick={e => e.stopPropagation()}>
+        <b style={{ fontSize: 20 }}>담당자 초대</b>
+        <div className="field"><label>이메일 주소</label><input className="inp" placeholder="name@company.example" value={email} onChange={e => setEmail(e.target.value)} aria-invalid={email.length > 0 && !email.includes('@')} /></div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}><button className="btn btn-secondary" onClick={() => setInv(false)}>취소하기</button><button className="btn btn-primary" onClick={invite}>초대 메일 보내기</button></div>
+      </div></div>}
+    </main>
+  );
+}
+
+function App() {
+  const [view, setView] = useState('main');
+  const [msg, setMsg] = useState('');
+  const toast = m => { setMsg(m); setTimeout(() => setMsg(''), 2200); };
+  return (
+    <div className="layout">
+      <Side view={view} setView={v => { setView(v); window.scrollTo(0, 0); }} />
+      {view === 'main' && <MainView toast={toast} />}
+      {view === 'alerts' && <AlertsView toast={toast} />}
+      {view === 'evidence' && <EvidenceView toast={toast} />}
+      {view === 'access' && <AccessView toast={toast} />}
+      <Toast msg={msg} />
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
