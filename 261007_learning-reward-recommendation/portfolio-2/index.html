@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>추천 기준값·노출 로그 관리 콘솔 — 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P2 — 메인 1 · 서브 3 · 나머지 무채색 (gen-color-tokens.js 산출, hue 67°, light) ── */
+:root{
+  /* 메인 — 브랜드 마크·primary CTA(화면당 1)·활성 nav·링크·주 차트·포커스. 앵커 m600 = plan primary */
+  --m50:#fcfdf0;
+  --m100:#f9fce0;
+  --m200:#f2f9c1;
+  --m300:#ebf59c;
+  --m400:#e2f072;
+  --m500:#daec4b;
+  --m600:#d2e823;
+  --m700:#acbe1d;
+  --m800:#869416;
+  --m900:#5e6810;
+  /* 무채색 — 배경(n0~n2)·테두리/비활성(n3~n5)·아이콘/보조텍스트(n6~n8)·본문/다크필(n9~n10). 아바타·태그·아이콘박스·KPI배경·보조 차트는 전부 여기 */
+  --n0:#f3f3f1;
+  --n1:#ffffff;
+  --n2:#f0f0ef;
+  --n3:#e6e6e5;
+  --n4:#d7d7d5;
+  --n5:#babab5;
+  --n6:#979890;
+  --n7:#797a71;
+  --n8:#676b5f;
+  --n9:#3a3a36;
+  --n10:#000000;
+  /* 서브 — 상태 의미가 있을 때만. 배지=bg+text, 점/셀/바=solid */
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b; /* 성공/진행/정상/상승 */
+  --s2:#cf3f3f; --s2-bg:#f9e7e7; --s2-text:#ad1f1f; /* 오류/위험/실패/하락/환불 */
+  --s3:#d48d11; --s3-bg:#f6f1ea; --s3-text:#8b6118; /* 경고/주의 */
+}
+/* ── 상태 레이어 P2 — 모양은 페이지가, 상태는 여기서 (gen-component-kit.js 산출, 색은 토큰만) ── */
+/* state-layer elevation=flat theme=light */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{filter:brightness(.94);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #111111;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--s2);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{width:100%;height:100%}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:var(--n0);color:var(--n10);font-size:14px;line-height:1.5;letter-spacing:-.01em;-webkit-font-smoothing:antialiased;overflow:hidden}
+button{font-family:inherit;font-size:14px;color:inherit;background:none;border:0;cursor:pointer}
+input,select{font-family:inherit;font-size:14px;color:var(--n10)}
+i.ph,i.ph-bold{font-size:16px;vertical-align:-3px;line-height:1}
+.num{font-variant-numeric:tabular-nums}
+.shell{display:flex;width:100%;height:100vh;overflow:hidden}
+
+/* ── 워크스페이스 strip 64px ── */
+.workspace-strip{flex:0 0 64px;width:64px;background:var(--m600);border-right:2px solid var(--n10);display:flex;flex-direction:column;align-items:center;padding:16px 0;gap:12px}
+.ws-item{width:40px;height:40px;border-radius:99px;border:2px solid var(--n10);background:var(--n1);display:grid;place-items:center;transition:transform .15s;position:relative}
+.ws-item:hover{transform:translate(0,-2px)}
+.ws-item.active{background:var(--n10);color:var(--n1)}
+.ws-item i{font-size:18px}
+.ws-divider{width:24px;height:2px;background:var(--n10);border-radius:2px}
+
+/* ── 채널 리스트 260px ── */
+.channel-list{flex:0 0 260px;width:260px;background:var(--n1);border-right:2px solid var(--n10);display:flex;flex-direction:column;overflow:auto}
+.channel-header{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:2px solid var(--n10)}
+.ws-name{font-size:16px;font-weight:800;letter-spacing:-.04em}
+.new-conv{width:32px;height:32px;border-radius:99px;border:2px solid var(--n10);display:grid;place-items:center;background:var(--n1)}
+.channel-search{padding:12px 16px}
+.channel-search input{width:100%;padding:8px 12px;border:2px solid var(--n10);border-radius:8px;background:var(--n1)}
+.channel-section{padding:8px 8px 12px}
+.section-toggle{display:flex;width:100%;align-items:center;gap:4px;padding:4px 8px;font-size:12px;font-weight:700;color:var(--n8)}
+.channel-item{display:flex;width:100%;align-items:center;gap:8px;padding:8px 12px;border-radius:99px;border:2px solid transparent;text-align:left;font-weight:500;color:var(--n9);position:relative}
+.channel-item::before{content:"#";color:var(--n7);font-weight:700}
+.channel-item:hover{background:var(--n2)}
+.channel-item.active{background:var(--m600);border-color:var(--n10);font-weight:800;color:var(--n10)}
+.channel-item[data-count]::after{content:attr(data-count);margin-left:auto;min-width:20px;height:20px;border-radius:99px;background:var(--n10);color:var(--n1);font-size:12px;display:grid;place-items:center;padding:0 4px}
+.ver-item{display:flex;width:100%;align-items:center;gap:8px;padding:8px 12px;border-radius:99px;border:2px solid transparent;text-align:left}
+.ver-item:hover{background:var(--n2)}
+.ver-item.active{border-color:var(--n10);background:var(--n2);font-weight:700}
+.ver-item small{margin-left:auto;font-size:12px;color:var(--n7)}
+.dm-item{display:flex;width:100%;align-items:center;gap:8px;padding:8px 12px;border-radius:99px;border:2px solid transparent;text-align:left}
+.dm-item:hover{background:var(--n2)}
+.dm-item.active{border-color:var(--n10);background:var(--n2);font-weight:700}
+.presence{width:10px;height:10px;border-radius:50%;border:2px solid var(--n10);background:var(--n1)}
+.presence.online{background:var(--n10)}
+
+/* ── 메인 ── */
+.conv-main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--n0);height:100vh}
+.conv-header{display:flex;justify-content:space-between;align-items:center;padding:16px 24px;border-bottom:2px solid var(--n10);background:var(--n1)}
+.conv-title-row{display:flex;align-items:center;gap:8px}
+.conv-prefix{font-weight:800;color:var(--n7);font-size:16px}
+.conv-title{font-size:16px;font-weight:800;letter-spacing:-.04em}
+.member-count{padding:4px 12px;border:2px solid var(--n10);border-radius:99px;font-size:12px;font-weight:700;background:var(--n0)}
+.conv-actions{display:flex;gap:8px}
+.conv-action{width:32px;height:32px;border:2px solid var(--n10);border-radius:99px;display:grid;place-items:center;background:var(--n1)}
+.conv-action.on{background:var(--n10);color:var(--n1)}
+.conv-body{flex:1;overflow:auto;padding:24px;display:flex;flex-direction:column;gap:16px;animation:viewIn .35s ease both}
+.conv-input{display:flex;gap:8px;align-items:center;padding:12px 24px;border-top:2px solid var(--n10);background:var(--n1);position:sticky;bottom:0}
+.msg-input{flex:1;padding:12px 16px;border:2px solid var(--n10);border-radius:99px;background:var(--n1);min-width:0}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:8px 20px;border-radius:99px;border:2px solid var(--n10);font-weight:700;background:var(--n1);transition:transform .15s}
+.btn:hover:not(:disabled){transform:translate(0,-2px)}
+.btn.primary{background:var(--m600)}
+.btn.dark{background:var(--n10);color:var(--n1)}
+.btn.sm{padding:4px 12px;font-size:12px}
+.card{background:var(--n1);border:2px solid var(--n10);border-radius:32px;padding:20px 24px}
+.card.lime{background:var(--m600);position:relative;overflow:hidden}
+.sticker{position:absolute;right:-12px;bottom:-16px;pointer-events:none;transform:rotate(-6deg);animation:floaty 5s ease-in-out infinite}
+.hatch{background:repeating-linear-gradient(135deg,var(--n2) 0 8px,var(--n1) 8px 16px)}
+@keyframes floaty{0%,100%{transform:rotate(-6deg) translateY(0)}50%{transform:rotate(-3deg) translateY(-6px)}}
+.big{font-size:44px;line-height:1;font-weight:800;letter-spacing:-.06em}
+.cap{font-size:12px;color:var(--n8);font-weight:500}
+.stat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.pill{display:inline-flex;align-items:center;gap:4px;padding:4px 12px;border:2px solid var(--n10);border-radius:99px;font-size:12px;font-weight:700;background:var(--n1)}
+.pill.dark{background:var(--n10);color:var(--n1)}
+.pill.ok{border-color:var(--s1);background:var(--s1-bg);color:var(--s1-text)}
+.pill.err{border-color:var(--s2);background:var(--s2-bg);color:var(--s2-text)}
+.pill.warn{border-color:var(--s3);background:var(--s3-bg);color:var(--s3-text)}
+.rank-row{display:grid;grid-template-columns:32px 1fr auto 72px 48px;gap:12px;align-items:center;padding:8px 16px;border:2px solid var(--n10);border-radius:99px;background:var(--n1);animation:rowIn .4s both;cursor:pointer;transition:background .15s}
+.rank-row:hover{background:var(--n2)}
+.rank-row.sel{background:var(--m100)}
+.rank-no{width:28px;height:28px;border-radius:50%;background:var(--n10);color:var(--n1);display:grid;place-items:center;font-weight:800;font-size:12px}
+.rank-row.ex{border-style:dashed;color:var(--n7);background:var(--n0)}
+.rank-row.ex .rank-no{background:var(--n4);color:var(--n8)}
+.delta{display:inline-flex;align-items:center;gap:2px;font-weight:700;font-size:12px}
+.delta.up{color:var(--s1-text)}.delta.down{color:var(--s2-text)}.delta.eq{color:var(--n7)}
+.bar-wrap{height:8px;border:2px solid var(--n10);border-radius:99px;overflow:hidden;background:var(--n1);width:72px}
+.bar-in{height:100%;background:var(--m600);transform-origin:left;animation:barGrow .7s both}
+
+/* ── 정보 패널 320px ── */
+.info-panel{flex:0 0 320px;width:320px;background:var(--n1);border-left:2px solid var(--n10);overflow:auto;height:100vh;animation:slideIn .3s both}
+.info-header{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:2px solid var(--n10)}
+.info-header h3{font-size:16px;font-weight:800;letter-spacing:-.04em}
+.info-section{padding:16px 20px;border-bottom:2px solid var(--n3)}
+.info-label{font-size:12px;font-weight:700;color:var(--n8);margin-bottom:8px;display:flex;justify-content:space-between}
+.slider{width:100%;appearance:none;height:12px;border:2px solid var(--n10);border-radius:99px;background:var(--n2);outline-offset:4px}
+.slider::-webkit-slider-thumb{appearance:none;width:24px;height:24px;border-radius:50%;background:var(--m600);border:2px solid var(--n10);cursor:grab}
+.field{width:100%;padding:8px 12px;border:2px solid var(--n10);border-radius:8px;background:var(--n1)}
+.err-text{color:var(--s2-text);font-size:12px;margin-top:8px;font-weight:500;display:flex;gap:4px;align-items:center}
+.tl{position:relative;padding-left:24px;display:grid;gap:16px}
+.tl::before{content:"";position:absolute;left:7px;top:4px;bottom:4px;width:2px;background:var(--n10)}
+.tl-item{position:relative;animation:rowIn .4s both}
+.tl-item::before{content:"";position:absolute;left:-24px;top:4px;width:16px;height:16px;border-radius:50%;border:2px solid var(--n10);background:var(--n1)}
+.tl-item.click::before{background:var(--m600)}
+table{width:100%;border-collapse:collapse}
+th,td{padding:8px 12px;text-align:left;border-bottom:2px solid var(--n3);font-size:12px}
+th{color:var(--n8);font-weight:700;position:sticky;top:0;background:var(--n1)}
+tr.clk{cursor:pointer}tr.clk:hover td{background:var(--n2)}
+tr.clk.sel td{background:var(--m100)}
+.seg{display:inline-flex;border:2px solid var(--n10);border-radius:99px;padding:2px;background:var(--n1)}
+.seg button{padding:4px 12px;border-radius:99px;font-weight:500;font-size:12px}
+.seg button.on{background:var(--n10);color:var(--n1);font-weight:700}
+.toast{position:fixed;right:24px;top:24px;background:var(--n10);color:var(--n1);padding:12px 20px;border-radius:99px;z-index:90;font-weight:600;display:flex;gap:8px;align-items:center;animation:slideIn .3s both;border:2px solid var(--n10)}
+.chart{display:flex;gap:24px;align-items:flex-end;height:180px;padding:0 8px;border-bottom:2px solid var(--n10)}
+.col{flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;justify-content:flex-end;height:100%}
+.col .pair{display:flex;gap:8px;align-items:flex-end;height:100%;width:100%;justify-content:center}
+.col .b{width:36px;border:2px solid var(--n10);border-bottom:0;border-radius:12px 12px 0 0;transform-origin:bottom;animation:barUp .8s cubic-bezier(.2,.8,.2,1) both}
+.step-line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.step-line .node{padding:8px 16px;border:2px solid var(--n10);border-radius:99px;font-weight:700;background:var(--n1)}
+.step-line .node.hot{background:var(--m600);animation:pulse 1.8s ease-in-out infinite}
+@keyframes viewIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes rowIn{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:none}}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes barUp{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+@keyframes slideIn{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useMemo,useEffect} = React;
+const P=({n,b})=><i className={(b?'ph-bold ph-':'ph ph-')+n}/>;
+
+const CONTENTS=[
+ {id:1,t:'조선 건국과 왕권 강화',topic:'한국사',lv:3},
+ {id:2,t:'임진왜란 사건 순서 맞히기',topic:'한국사',lv:4},
+ {id:3,t:'일상 회화 필수 표현 20',topic:'영어',lv:2},
+ {id:4,t:'비즈니스 이메일 어휘',topic:'영어',lv:4},
+ {id:5,t:'금리와 물가 기초 개념',topic:'경제',lv:3},
+ {id:6,t:'주식·채권 용어 입문',topic:'경제',lv:1},
+ {id:7,t:'우주와 태양계 상식',topic:'과학',lv:2},
+ {id:8,t:'생활 속 화학 반응',topic:'과학',lv:3},
+ {id:9,t:'코딩 기초 용어 사전',topic:'IT',lv:1},
+ {id:10,t:'네트워크와 보안 상식',topic:'IT',lv:4},
+ {id:11,t:'이번 주 시사 한눈에',topic:'시사',lv:3},
+ {id:12,t:'헷갈리는 맞춤법 30선',topic:'상식',lv:2},
+];
+const LEARNERS=[
+ {id:'u_30412',name:'김서연',lv:3,interest:['한국사','경제'],done:[1,12],seen:{7:1,11:2,3:5}},
+ {id:'u_28877',name:'박도윤',lv:4,interest:['영어','IT'],done:[4,10],seen:{2:1,9:6}},
+ {id:'u_31560',name:'이하준',lv:1.5,interest:[],done:[],seen:{},fresh:true},
+];
+const SCREENS=['추천 기준값 편집기','노출·클릭 로그 조회','기준값 버전 비교 지표','추천 결과 점검 도구'];
+
+function compute(L,cfg){
+  const rows=CONTENTS.map(c=>{
+    const d=c.lv-L.lv;
+    const fit=Math.max(20,Math.round(100-Math.abs(d)*25));
+    const topic=L.interest.includes(c.topic)?100:55;
+    const fresh=90;
+    const total=Math.round((cfg.wl*fit+cfg.wt*topic+cfg.wf*fresh)/100);
+    let ex=null;
+    if(L.done.includes(c.id)) ex='이미 완료한 콘텐츠';
+    else if(L.seen[c.id]!==undefined&&L.seen[c.id]<cfg.days) ex='최근 노출 '+L.seen[c.id]+'일 전';
+    return {c,fit,topic,fresh,total,ex};
+  });
+  const ok=rows.filter(r=>!r.ex).sort((a,b)=>b.total-a.total||a.c.id-b.c.id).map((r,i)=>({...r,rank:i+1}));
+  const ex=rows.filter(r=>r.ex).sort((a,b)=>a.c.id-b.c.id);
+  return {ok,ex};
+}
+
+/* 이벤트 로그 (시연용 고정 목록) */
+const NAMES=[0,1,2,0,1,0,2,1,0,1,2,0,0,1,2,1,0,2,1,0,1,2,0,1];
+const EVENTS=NAMES.map((n,i)=>{
+  const L=LEARNERS[n];
+  const m=872-i*17-(i%3)*4;
+  const hh=Math.floor(m/60),mm=m%60;
+  return {id:i,time:String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0'),L,screen:i%3===1?'학습 완료':'홈',cid:(i*5+n*3)%12+1,type:i%3===2||i%4===0?'클릭':'노출',ver:i>19?'v11':'v12',days:i<10?7:i<18?14:30};
+});
+
+const BASE={
+ v10:{homeImp:10800,homeClk:1500,doneImp:6900,doneClk:820,topics:[38,21,15,13,13]},
+ v11:{homeImp:11200,homeClk:1840,doneImp:7220,doneClk:1010,topics:[34,22,16,14,14]},
+ v12:{homeImp:11640,homeClk:2160,doneImp:7510,doneClk:1290,topics:[28,24,19,15,14]},
+};
+const MULT={7:1,14:2.1,30:4.4};
+const TOPICS5=['한국사','영어','경제','과학','IT'];
+const fmt=n=>n.toLocaleString('ko-KR');
+function stat(v,p){const b=BASE[v],m=MULT[p];const r=x=>Math.round(x*m);const hi=r(b.homeImp),hc=r(b.homeClk),di=r(b.doneImp),dc=r(b.doneClk);return {imp:hi+di,clk:hc+dc,hi,hc,di,dc,ctr:((hc+dc)/(hi+di)*100),topics:b.topics};}
+
+const Sticker=()=>(
+  <svg className="sticker" width="120" height="104" viewBox="0 0 120 104" fill="none" stroke="var(--n10)" strokeWidth="2">
+    <rect x="8" y="40" width="44" height="52" rx="16" fill="var(--n1)"/>
+    <rect x="58" y="12" width="52" height="44" rx="18" fill="var(--n10)"/>
+    <circle cx="84" cy="78" r="20" fill="var(--n1)"/>
+    <path d="M18 62h24M18 72h16" strokeLinecap="round"/>
+    <path d="M70 34l8 8 14-16" stroke="var(--m600)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+);
+function useToast(){
+  const [m,setM]=useState('');
+  return [m,t=>{setM(t);setTimeout(()=>setM(''),2400);}];
+}
+
+/* ───── 1. 추천 기준값 편집기 ───── */
+function Editor({L,applied,draft,setDraft,onApply,onSave,memo,setMemo,sel,setSel,setInfo}){
+  const a=useMemo(()=>compute(L,applied),[L,applied]);
+  const d=useMemo(()=>compute(L,draft),[L,draft]);
+  const aRank={};a.ok.forEach(r=>aRank[r.c.id]=r.rank);
+  const sum=draft.wl+draft.wt+draft.wf;
+  const changed=JSON.stringify(applied)!==JSON.stringify(draft);
+  const moved=d.ok.filter(r=>aRank[r.c.id]!==r.rank).length;
+  return (<>
+    <div className="conv-body" key={L.id}>
+      <div className="stat-row">
+        <div className="card lime"><Sticker/><div className="cap" style={{color:'var(--n10)'}}>미리보기 학습자</div><div className="big" style={{fontSize:28,marginTop:8}}>{L.name}</div><div className="cap" style={{color:'var(--n10)',marginTop:8}}>{L.fresh?'신규 · 입문 폴백':'수준 Lv.'+L.lv+' · 관심 '+L.interest.join('·')}</div></div>
+        <div className="card"><div className="cap">순서가 바뀐 콘텐츠</div><div className="big num" style={{marginTop:8}}>{moved}<span style={{fontSize:16,letterSpacing:0,marginLeft:4}}>개</span></div><div className="cap" style={{marginTop:8}}>적용 중 버전 대비</div></div>
+        <div className="card"><div className="cap">제외된 콘텐츠</div><div className="big num" style={{marginTop:8}}>{d.ex.length}<span style={{fontSize:16,letterSpacing:0,marginLeft:4}}>개</span></div><div className="cap" style={{marginTop:8}}>완료 · 최근 {draft.days}일 노출</div></div>
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <span style={{fontWeight:800,fontSize:16}}>초안 기준 추천 순서</span>
+        <span className="pill">{changed?<><P n="note-pencil"/>초안 변경 있음</>:<><P n="check"/>적용 중 버전과 동일</>}</span>
+      </div>
+      <div style={{display:'grid',gap:8}}>
+        {d.ok.slice(0,7).map((r,i)=>{
+          const diff=(aRank[r.c.id]||0)-r.rank;
+          return (
+          <div key={r.c.id} className={'rank-row'+(sel===r.c.id?' sel':'')} style={{animationDelay:i*50+'ms'}} onClick={()=>{setSel(r.c.id);setInfo(true);}}>
+            <span className="rank-no num">{r.rank}</span>
+            <span><b>{r.c.t}</b> <span className="cap">{r.c.topic} · Lv.{r.c.lv}</span></span>
+            <span className={'delta '+(diff>0?'up':diff<0?'down':'eq')}>{diff>0?<><P n="arrow-up" b/>{diff}</>:diff<0?<><P n="arrow-down" b/>{-diff}</>:<P n="minus"/>}</span>
+            <span className="bar-wrap"><span className="bar-in" style={{display:'block',width:r.total+'%'}}/></span>
+            <b className="num" style={{textAlign:'right'}}>{r.total}</b>
+          </div>);})}
+        {d.ex.map(r=>(
+          <div key={r.c.id} className="rank-row ex">
+            <span className="rank-no"><P n="prohibit"/></span>
+            <span>{r.c.t}</span><span className="cap">{r.ex}</span><span/><span/>
+          </div>))}
+      </div>
+    </div>
+    <footer className="conv-input">
+      <input className="msg-input" placeholder="이 초안의 변경 사유를 입력합니다 (예: 수준 가중치 상향)" value={memo} onChange={e=>setMemo(e.target.value)} aria-invalid={sum!==100?'true':'false'}/>
+      <button className="btn" onClick={onSave}><P n="floppy-disk"/>초안 저장</button>
+      <button className="btn primary" disabled={sum!==100||!changed} onClick={onApply}><P n="rocket-launch"/>적용하기</button>
+    </footer>
+  </>);
+}
+
+/* ───── 2. 노출·클릭 로그 조회 ───── */
+function Logs({L,period,setPeriod,scr,setScr,pick,setPick,q,setQ,more,setMore,toast}){
+  const [busy,setBusy]=useState(false);
+  const list=EVENTS.filter(e=>e.days<=period&&(scr==='전체'||e.screen===scr)&&(!q||(e.L.name+e.L.id+CONTENTS[e.cid-1].t).includes(q)));
+  const shown=list.slice(0,more);
+  const imp=list.filter(e=>e.type==='노출').length,clk=list.length-imp;
+  return (<>
+    <div className="conv-body">
+      <div className="stat-row">
+        <div className="card"><div className="cap">노출</div><div className="big num" style={{marginTop:8}}>{imp}</div></div>
+        <div className="card lime"><Sticker/><div className="cap" style={{color:'var(--n10)'}}>클릭</div><div className="big num" style={{marginTop:8}}>{clk}</div></div>
+        <div className="card"><div className="cap">클릭 비율</div><div className="big num" style={{marginTop:8}}>{list.length?Math.round(clk/(imp||1)*100):0}<span style={{fontSize:16,letterSpacing:0}}>%</span></div></div>
+      </div>
+      <div style={{display:'flex',gap:16,alignItems:'center',flexWrap:'wrap'}}>
+        <span className="cap">기간</span><div className="seg">{[7,14,30].map(p=><button key={p} className={period===p?'on':''} onClick={()=>setPeriod(p)}>{p}일</button>)}</div>
+        <span className="cap">화면</span><div className="seg">{['전체','홈','학습 완료'].map(s=><button key={s} className={scr===s?'on':''} onClick={()=>setScr(s)}>{s}</button>)}</div>
+      </div>
+      <div className="card" style={{padding:0,overflow:'hidden'}}>
+        <table>
+          <thead><tr><th>시각</th><th>학습자</th><th>화면</th><th>콘텐츠</th><th>구분</th><th>기준값</th></tr></thead>
+          <tbody>
+            {shown.map(e=>(
+              <tr key={e.id} className={'clk'+(pick&&pick.id===e.L.id?' sel':'')} onClick={()=>setPick(e.L)}>
+                <td className="num">{e.time}</td><td>{e.L.name}</td><td>{e.screen}</td><td>{CONTENTS[e.cid-1].t}</td>
+                <td><span className={'pill'+(e.type==='클릭'?' dark':'')}>{e.type==='클릭'?<P n="cursor-click"/>:<P n="eye"/>}{e.type}</span></td><td className="num">{e.ver}</td>
+              </tr>))}
+            {shown.length===0&&<tr><td colSpan="6" style={{padding:32,textAlign:'center',color:'var(--n7)'}}>조건에 맞는 로그가 없습니다. 기간을 넓혀 다시 조회해 주세요.</td></tr>}
+          </tbody>
+        </table>
+        {list.length>more&&<div style={{padding:12,textAlign:'center'}}><button className="btn sm" data-loading={busy?'true':'false'} onClick={()=>{setBusy(true);setTimeout(()=>{setBusy(false);setMore(m=>m+8);},700);}}>다음 8건 불러오기</button></div>}
+      </div>
+    </div>
+    <footer className="conv-input">
+      <input className="msg-input" placeholder="학습자 이름·ID 또는 콘텐츠명으로 검색합니다" value={q} onChange={e=>setQ(e.target.value)}/>
+      <button className="btn dark" onClick={()=>toast(list.length+'건을 조회했습니다')}><P n="magnifying-glass"/>조회하기</button>
+    </footer>
+  </>);
+}
+
+/* ───── 3. 기준값 버전 비교 지표 ───── */
+function Compare({a,b,setA,setB,period,setPeriod,toast}){
+  const [note,setNote]=useState('');
+  const sa=stat(a,period),sb=stat(b,period);
+  const maxv=Math.max(sa.hi,sa.di,sb.hi,sb.di);
+  const H=n=>Math.round(n/maxv*150);
+  const sets=[['홈',sa.hi,sb.hi,sa.hc,sb.hc],['학습 완료',sa.di,sb.di,sa.dc,sb.dc]];
+  return (<>
+    <div className="conv-body" key={a+b+period}>
+      <div style={{display:'flex',gap:16,alignItems:'center',flexWrap:'wrap'}}>
+        <span className="cap">기준 버전</span><div className="seg">{Object.keys(BASE).map(v=><button key={v} className={a===v?'on':''} onClick={()=>setA(v)}>{v}</button>)}</div>
+        <span className="cap">비교 버전</span><div className="seg">{Object.keys(BASE).map(v=><button key={v} className={b===v?'on':''} onClick={()=>setB(v)}>{v}</button>)}</div>
+        <span className="cap">기간</span><div className="seg">{[7,14,30].map(p=><button key={p} className={period===p?'on':''} onClick={()=>setPeriod(p)}>{p}일</button>)}</div>
+      </div>
+      <div className="stat-row">
+        <div className="card"><div className="cap">{a} 클릭 비율</div><div className="big num" style={{marginTop:8}}>{sa.ctr.toFixed(1)}<span style={{fontSize:16,letterSpacing:0}}>%</span></div><div className="cap num" style={{marginTop:8}}>노출 {fmt(sa.imp)} · 클릭 {fmt(sa.clk)}</div></div>
+        <div className="card lime"><Sticker/><div className="cap" style={{color:'var(--n10)'}}>{b} 클릭 비율</div><div className="big num" style={{marginTop:8}}>{sb.ctr.toFixed(1)}<span style={{fontSize:16,letterSpacing:0}}>%</span></div><div className="cap num" style={{marginTop:8,color:'var(--n10)'}}>노출 {fmt(sb.imp)} · 클릭 {fmt(sb.clk)}</div></div>
+        <div className="card"><div className="cap">차이</div><div className="big num" style={{marginTop:8}}>{(sb.ctr-sa.ctr)>=0?'+':''}{(sb.ctr-sa.ctr).toFixed(1)}<span style={{fontSize:16,letterSpacing:0}}>%p</span></div><div className="cap" style={{marginTop:8}}>같은 기간·같은 집계 기준</div></div>
+      </div>
+      <div className="card">
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:16}}><b>화면별 노출 수</b><span style={{display:'flex',gap:16}}><span className="cap"><span style={{display:'inline-block',width:12,height:12,background:'var(--n10)',borderRadius:4,marginRight:4}}/>{a}</span><span className="cap"><span style={{display:'inline-block',width:12,height:12,background:'var(--m600)',border:'2px solid var(--n10)',borderRadius:4,marginRight:4}}/>{b}</span></span></div>
+        <div className="chart">
+          {sets.map(([n,x,y,cx,cy],i)=>(
+            <div className="col" key={n}>
+              <div className="pair">
+                <div className="b" style={{height:H(x),background:'var(--n10)',animationDelay:i*120+'ms'}} title={fmt(x)}/>
+                <div className="b" style={{height:H(y),background:'var(--m600)',animationDelay:i*120+60+'ms'}} title={fmt(y)}/>
+              </div>
+            </div>))}
+        </div>
+        <div style={{display:'flex',gap:24,padding:'8px 8px 0'}}>{sets.map(([n,x,y,cx,cy])=><div key={n} style={{flex:1,textAlign:'center'}}><b>{n}</b><div className="cap num">{fmt(x)} → {fmt(y)} · 클릭 {fmt(cx)} → {fmt(cy)}</div></div>)}</div>
+      </div>
+      <div className="card">
+        <b>주제별 노출 분포</b>
+        <div style={{display:'grid',gap:12,marginTop:16}}>
+          {TOPICS5.map((t,i)=>(<div key={t} style={{display:'grid',gridTemplateColumns:'56px 1fr 64px',gap:12,alignItems:'center'}}>
+            <span className="cap">{t}</span>
+            <div style={{display:'grid',gap:4}}>
+              <div className="bar-wrap" style={{width:'100%',height:10}}><div className="bar-in" style={{width:sa.topics[i]*2+'%',background:'var(--n10)'}}/></div>
+              <div className="bar-wrap" style={{width:'100%',height:10}}><div className="bar-in" style={{width:sb.topics[i]*2+'%'}}/></div>
+            </div>
+            <span className="cap num">{sa.topics[i]}% → {sb.topics[i]}%</span>
+          </div>))}
+        </div>
+      </div>
+    </div>
+    <footer className="conv-input">
+      <input className="msg-input" placeholder="비교 결과에 대한 메모를 남깁니다" value={note} onChange={e=>setNote(e.target.value)}/>
+      <button className="btn dark" disabled={!note.trim()} onClick={()=>{toast('비교 메모를 저장했습니다');setNote('');}}><P n="note-pencil"/>메모 남기기</button>
+    </footer>
+  </>);
+}
+
+/* ───── 4. 추천 결과 점검 도구 ───── */
+function Inspect({L,setL,applied,sel,setSel,toast}){
+  const [q,setQ]=useState('');
+  const [onlyEx,setOnlyEx]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const r=useMemo(()=>compute(L,applied),[L,applied]);
+  const rows=onlyEx?r.ex:[...r.ok,...r.ex];
+  const find=()=>{const f=LEARNERS.find(l=>l.name.includes(q.trim())||l.id.includes(q.trim()));if(f){setL(f);toast(f.name+' 학습자를 불러왔습니다');}else toast('일치하는 학습자가 없습니다. 이름이나 ID를 다시 확인해 주세요');};
+  const exportCsv=()=>{setBusy(true);setTimeout(()=>{setBusy(false);toast(rows.length+'행을 CSV로 내려받았습니다');},1000);};
+  return (<>
+    <div className="conv-body" key={L.id}>
+      <div className="step-line">
+        <span className="node">수준 {L.fresh?'미산정':'Lv.'+L.lv}</span><P n="caret-right" b/>
+        <span className="node">후보 {CONTENTS.length}개</span><P n="caret-right" b/>
+        <span className="node">제외 {r.ex.length}개</span><P n="caret-right" b/>
+        <span className="node hot">최종 {r.ok.length}개 정렬</span>
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div className="seg"><button className={!onlyEx?'on':''} onClick={()=>setOnlyEx(false)}>전체 후보</button><button className={onlyEx?'on':''} onClick={()=>setOnlyEx(true)}>제외 항목만</button></div>
+        <button className="btn" data-loading={busy?'true':'false'} disabled={busy} onClick={exportCsv}><P n="download-simple"/>CSV 내려받기</button>
+      </div>
+      <div className="card" style={{padding:0,overflow:'hidden'}}>
+        <table>
+          <thead><tr><th>순위</th><th>콘텐츠</th><th>수준</th><th>주제</th><th>미노출</th><th>합계</th><th>상태</th></tr></thead>
+          <tbody>{rows.map(x=>(
+            <tr key={x.c.id} className={'clk'+(sel===x.c.id?' sel':'')} onClick={()=>setSel(x.c.id)}>
+              <td className="num">{x.rank||'—'}</td><td>{x.c.t}</td><td className="num">{x.fit}</td><td className="num">{x.topic}</td><td className="num">{x.fresh}</td><td className="num"><b>{x.total}</b></td>
+              <td>{x.ex?<span className="pill warn"><P n="warning"/>{x.ex}</span>:<span className="pill"><P n="check"/>추천</span>}</td>
+            </tr>))}
+            {rows.length===0&&<tr><td colSpan="7" style={{padding:32,textAlign:'center',color:'var(--n7)'}}>제외된 콘텐츠가 없습니다.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <footer className="conv-input">
+      <input className="msg-input" placeholder="학습자 이름 또는 ID를 입력합니다 (예: 박도윤)" value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==='Enter'&&find()}/>
+      <button className="btn dark" onClick={find}><P n="magnifying-glass"/>점검하기</button>
+    </footer>
+  </>);
+}
+
+/* ───── App ───── */
+function App(){
+  const [view,setView]=useState(0);
+  const [L,setL]=useState(LEARNERS[0]);
+  const [applied,setApplied]=useState({wl:50,wt:30,wf:20,days:3});
+  const [draft,setDraft]=useState({wl:50,wt:30,wf:20,days:3});
+  const [vers,setVers]=useState([{id:'v12',st:'적용 중'},{id:'v11',st:'이력'},{id:'v10',st:'이력'}]);
+  const [memo,setMemo]=useState('');
+  const [sel,setSel]=useState(null);
+  const [info,setInfo]=useState(true);
+  const [period,setPeriod]=useState(14);
+  const [scr,setScr]=useState('전체');
+  const [pick,setPick]=useState(LEARNERS[0]);
+  const [q,setQ]=useState('');
+  const [more,setMore]=useState(8);
+  const [ca,setCa]=useState('v11');
+  const [cb,setCb]=useState('v12');
+  const [toastMsg,toast]=useToast();
+  const sum=draft.wl+draft.wt+draft.wf;
+  const onApply=()=>{
+    const n='v'+(10+vers.length+0);
+    setApplied(draft);
+    setVers(v=>[{id:n,st:'적용 중'},...v.map(x=>({...x,st:'이력'}))]);
+    setMemo('');toast(n+' 버전을 적용했습니다. 이전 버전은 이력에 남깁니다');
+  };
+  const onSave=()=>toast(memo.trim()?'초안을 저장했습니다':'초안을 저장했습니다. 변경 사유를 함께 남기면 이력에서 찾기 쉽습니다');
+  const setW=(k,v)=>setDraft(d=>({...d,[k]:v}));
+  const selC=CONTENTS.find(c=>c.id===sel);
+  const selRow=selC&&compute(L,draft).ok.concat(compute(L,draft).ex).find(r=>r.c.id===sel);
+  const myEvents=EVENTS.filter(e=>e.L.id===pick.id).slice(0,7);
+  const NAV=[['sliders-horizontal','기준값'],['list-magnifying-glass','로그'],['chart-bar','비교'],['scan','점검']];
+  const infoToggle=<button className={'conv-action'+(info?' on':'')} title="정보 패널" aria-label="정보 패널 열기·닫기" onClick={()=>setInfo(v=>!v)}><P n="info"/></button>;
+  return (
+    <div className="shell" data-archetype="slack-3pane">
+      <nav className="workspace-strip" data-workspace-strip style={{width:64}}>
+        <div className="ws-item" title="콘솔 홈" aria-label="콘솔 홈" role="button" tabIndex={0} onClick={()=>setView(0)} style={{background:'var(--n10)',color:'var(--m600)'}}><P n="graduation-cap" b/></div>
+        <div className="ws-divider"/>
+        {NAV.map(([ic,t],i)=><button key={t} className={'ws-item'+(view===i?' active':'')} title={t} aria-label={t} onClick={()=>setView(i)}><P n={ic}/></button>)}
+        <div className="ws-divider"/>
+        <button className="ws-item" title="새 작업 공간" aria-label="새 작업 공간" onClick={()=>toast('작업 공간 추가는 관리자 권한이 필요합니다')}><P n="plus"/></button>
+      </nav>
+      <aside className="channel-list" data-channel-list style={{width:260}}>
+        <header className="channel-header"><h2 className="ws-name">추천 운영 콘솔</h2><button className="new-conv" aria-label="새 기준값 초안" onClick={()=>{setView(0);setDraft({...applied});toast('적용 중 값으로 새 초안을 시작합니다');}}><P n="note-pencil"/></button></header>
+        <div className="channel-search hatch" style={{borderBottom:'2px solid var(--n10)'}}><input placeholder="화면·버전 검색…" aria-label="검색" onChange={()=>{}}/></div>
+        <div className="channel-section">
+          <div className="section-toggle"><P n="caret-down" b/> 화면</div>
+          {SCREENS.map((s,i)=><button key={s} className={'channel-item'+(view===i?' active':'')} data-count={i===1?'24':undefined} onClick={()=>setView(i)}>{s}</button>)}
+        </div>
+        <div className="channel-section">
+          <div className="section-toggle"><P n="caret-down" b/> 기준값 버전</div>
+          {sum!==100||JSON.stringify(applied)!==JSON.stringify(draft)?<div className="ver-item active"><P n="note-pencil"/>초안<small>미적용</small></div>:null}
+          {vers.map(v=><button key={v.id} className="ver-item" onClick={()=>{setCa(v.id in BASE?v.id:'v12');toast(v.id+' · '+v.st)}}><P n="git-branch"/>{v.id}<small>{v.st}</small></button>)}
+        </div>
+        <div className="channel-section">
+          <div className="section-toggle"><P n="caret-down" b/> 샘플 학습자</div>
+          {LEARNERS.map(l=><button key={l.id} className={'dm-item'+(L.id===l.id?' active':'')} onClick={()=>{setL(l);setPick(l);setSel(null);}}><span className={'presence'+(L.id===l.id?' online':'')}/>{l.name}<span className="cap" style={{marginLeft:'auto'}}>{l.fresh?'신규':'Lv.'+l.lv}</span></button>)}
+        </div>
+      </aside>
+      <main className="conv-main">
+        <header className="conv-header">
+          <div className="conv-title-row"><span className="conv-prefix">#</span><h2 className="conv-title">{SCREENS[view]}</h2><span className="member-count num">샘플 학습자 {LEARNERS.length}</span></div>
+          <div className="conv-actions"><button className="conv-action" title="새로고침" aria-label="새로고침" onClick={()=>toast('최신 상태입니다')}><P n="arrows-clockwise"/></button>{infoToggle}</div>
+        </header>
+        {view===0&&<Editor L={L} applied={applied} draft={draft} setDraft={setDraft} onApply={onApply} onSave={onSave} memo={memo} setMemo={setMemo} sel={sel} setSel={setSel} setInfo={setInfo}/>}
+        {view===1&&<Logs L={L} period={period} setPeriod={p=>{setPeriod(p);setMore(8);}} scr={scr} setScr={s=>{setScr(s);setMore(8);}} pick={pick} setPick={p=>{setPick(p);setInfo(true);}} q={q} setQ={setQ} more={more} setMore={setMore} toast={toast}/>}
+        {view===2&&<Compare a={ca} b={cb} setA={setCa} setB={setCb} period={period} setPeriod={setPeriod} toast={toast}/>}
+        {view===3&&<Inspect L={L} setL={l=>{setL(l);setPick(l);}} applied={applied} sel={sel} setSel={s=>{setSel(s);setInfo(true);}} toast={toast}/>}
+      </main>
+      {info&&<aside className="info-panel" data-info-panel style={{width:320}}>
+        <header className="info-header"><h3>{view===0?'기준값 속성':view===1?pick.name+' 타임라인':view===2?'지표 정의':'점수 상세'}</h3><button className="close-info conv-action" aria-label="패널 닫기" onClick={()=>setInfo(false)}><P n="x"/></button></header>
+        {view===0&&<>
+          <div className="info-section">
+            <div className="info-label"><span>수준 가중치</span><b className="num">{draft.wl}</b></div>
+            <input type="range" className="slider" min="0" max="100" step="5" value={draft.wl} onChange={e=>setW('wl',+e.target.value)} aria-label="수준 가중치"/>
+            <div className="info-label" style={{marginTop:16}}><span>주제 가중치</span><b className="num">{draft.wt}</b></div>
+            <input type="range" className="slider" min="0" max="100" step="5" value={draft.wt} onChange={e=>setW('wt',+e.target.value)} aria-label="주제 가중치"/>
+            <div className="info-label" style={{marginTop:16}}><span>미노출 가중치</span><b className="num">{draft.wf}</b></div>
+            <input type="range" className="slider" min="0" max="100" step="5" value={draft.wf} onChange={e=>setW('wf',+e.target.value)} aria-label="미노출 가중치"/>
+            {sum!==100?<div className="err-text"><P n="warning"/>가중치 합이 {sum}입니다. 합계를 100에 맞춰 주세요.</div>:<div className="cap" style={{marginTop:12}}>가중치 합 100 · 적용할 수 있습니다</div>}
+          </div>
+          <div className="info-section">
+            <div className="info-label"><span>최근 노출 제외 기간</span></div>
+            <select className="field" value={draft.days} onChange={e=>setW('days',+e.target.value)} aria-label="최근 노출 제외 기간">{[1,3,7,14].map(d=><option key={d} value={d}>{d}일 이내 노출 제외</option>)}</select>
+          </div>
+          <div className="info-section">
+            <div className="info-label"><span>선택한 콘텐츠</span></div>
+            {selRow?<div style={{display:'grid',gap:8}}><b>{selC.t}</b><span className="cap num">수준 {selRow.fit} · 주제 {selRow.topic} · 미노출 {selRow.fresh}</span><span className="pill dark" style={{alignSelf:'start'}}>합계 {selRow.total}</span></div>:<div className="cap">목록에서 콘텐츠를 선택하면 점수 구성이 표시됩니다.</div>}
+          </div>
+          <div className="info-section"><div className="info-label"><span>버전 이력</span></div><div style={{display:'grid',gap:8}}>{vers.slice(0,4).map(v=><div key={v.id} style={{display:'flex',justifyContent:'space-between'}}><b className="num">{v.id}</b><span className={'pill'+(v.st==='적용 중'?' dark':'')}>{v.st}</span></div>)}</div></div>
+        </>}
+        {view===1&&<div className="info-section"><div className="tl">{myEvents.map((e,i)=><div key={e.id} className={'tl-item '+(e.type==='클릭'?'click':'')} style={{animationDelay:i*60+'ms'}}><div className="cap num">{e.time} · {e.screen}</div><b>{CONTENTS[e.cid-1].t}</b><div><span className={'pill'+(e.type==='클릭'?' dark':'')}>{e.type}</span> <span className="cap num">기준값 {e.ver}</span></div></div>)}{myEvents.length===0&&<div className="cap">이 학습자의 이벤트가 없습니다.</div>}</div></div>}
+        {view===2&&<div className="info-section" style={{display:'grid',gap:16}}>
+          <div><b>클릭 비율</b><div className="cap">클릭 수 ÷ 노출 수. 두 버전 모두 같은 기간·화면 조건으로 집계합니다.</div></div>
+          <div><b>집계 갱신</b><div className="cap">일 단위로 미리 계산해 두고, 짧은 시간 캐시한 뒤 집계가 갱신되면 비웁니다.</div></div>
+          <div><b>해석 시 유의</b><div className="cap">노출 수가 적은 기간에는 비율이 크게 흔들릴 수 있어 기간을 14일 이상으로 보기를 권장합니다.</div></div>
+        </div>}
+        {view===3&&<div className="info-section">{selRow?<div style={{display:'grid',gap:12}}>
+          <b>{selC.t}</b>
+          <div className="card" style={{padding:16,borderRadius:18}}><div className="cap">점수식</div><div className="num" style={{marginTop:8,fontWeight:700}}>{applied.wl}% × {selRow.fit} + {applied.wt}% × {selRow.topic} + {applied.wf}% × {selRow.fresh} = {selRow.total}</div></div>
+          {selRow.ex?<span className="pill warn"><P n="warning"/>{selRow.ex}</span>:<span className="pill ok"><P n="check"/>추천 후보</span>}
+          <div className="cap">운영 추천과 같은 계산 함수를 점검 모드로 호출한 결과입니다.</div>
+        </div>:<div className="cap">표에서 콘텐츠를 선택하면 점수식이 표시됩니다.</div>}</div>}
+      </aside>}
+      {toastMsg&&<div className="toast"><P n="check-circle" b/>{toastMsg}</div>}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>학습 이력 기반 맞춤 콘텐츠 추천 앱 — 맞춤 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P1 — 메인 1 · 서브 3 · 나머지 무채색 (gen-color-tokens.js 산출, hue 240°, light) ── */
+:root{
+  /* 메인 — 브랜드 마크·primary CTA(화면당 1)·활성 nav·링크·주 차트·포커스. 앵커 m800 = plan primary */
+  --m50:#eeeeee;
+  --m100:#eeeeee;
+  --m200:#eeeeee;
+  --m300:#dcdcdd;
+  --m400:#bababa;
+  --m500:#8f8f90;
+  --m600:#606062;
+  --m700:#343435;
+  --m800:#070709;
+  --m900:#060607;
+  /* 무채색 — 배경(n0~n2)·테두리/비활성(n3~n5)·아이콘/보조텍스트(n6~n8)·본문/다크필(n9~n10). 아바타·태그·아이콘박스·KPI배경·보조 차트는 전부 여기 */
+  --n0:#f5f5f5;
+  --n1:#f5f5f5;
+  --n2:#efeff0;
+  --n3:#e5e5e6;
+  --n4:#d5d5d7;
+  --n5:#b5b5ba;
+  --n6:#8b8b8b;
+  --n7:#71717a;
+  --n8:#53535a;
+  --n9:#36363a;
+  --n10:#1e1e20;
+  /* 서브 — 상태 의미가 있을 때만. 배지=bg+text, 점/셀/바=solid */
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b; /* 성공/진행/정상/상승 */
+  --s2:#cf3f3f; --s2-bg:#f9e7e7; --s2-text:#ad1f1f; /* 오류/위험/실패/하락/환불 */
+  --s3:#d48d11; --s3-bg:#f6f1ea; --s3-text:#8b6118; /* 경고/주의 */
+}
+/* ⚠ primary #070709가 거의 무채색(채도 13%) — 메인 램프가 회색 계열이 된다. 브랜드 포인트가 필요하면 plan primary를 유채색으로 */
+/* ── 상태 레이어 P1 — 모양은 페이지가, 상태는 여기서 (gen-component-kit.js 산출, 색은 토큰만) ── */
+/* state-layer elevation=subtle theme=light */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{transform:scale(.98);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #ffffff;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--s2);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{width:100%;min-height:100%}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:var(--n0);color:var(--n9);font-size:14px;line-height:1.5;letter-spacing:-.01em;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;font-size:14px;color:inherit;background:none;border:0;cursor:pointer}
+input{font-family:inherit;font-size:14px}
+.num{font-variant-numeric:tabular-nums}
+.app{width:100%;min-height:100vh;display:flex;flex-direction:column}
+
+/* ── 상단 sticky 검색 헤더 ── */
+.search-header{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--n0) 92%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--n3)}
+.header-row{display:flex;align-items:center;gap:24px;padding:16px 40px 12px}
+.brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px;letter-spacing:-.04em;color:var(--n10);min-width:176px}
+.brand-mark{width:32px;height:32px;border-radius:50%;background:var(--m800);color:var(--n0);display:grid;place-items:center}
+.search-bar{position:relative;flex:1;max-width:680px;margin:0 auto;display:flex;align-items:center;background:var(--n1);border:1px solid var(--n4);border-radius:100px;padding:4px 4px 4px 8px;box-shadow:0 8px 24px color-mix(in srgb,var(--n10) 6%,transparent)}
+.search-segment{flex:1;text-align:left;padding:8px 20px;border-radius:100px;transition:background .2s}
+.search-segment:hover,.search-segment.on{background:var(--n2)}
+.segment-label{font-size:12px;font-weight:700;color:var(--n10)}
+.segment-value{font-size:14px;color:var(--n7);white-space:nowrap}
+.search-divider{width:1px;height:28px;background:var(--n4)}
+.search-submit{width:44px;height:44px;border-radius:50%;background:var(--m800);color:var(--n0);display:grid;place-items:center;flex-shrink:0;transition:background .2s}
+.search-submit:hover{background:var(--m700)}
+.pop{position:absolute;top:calc(100% + 8px);background:var(--n1);border:1px solid var(--n3);border-radius:18px;padding:8px;min-width:240px;box-shadow:0 24px 48px color-mix(in srgb,var(--n10) 12%,transparent);animation:sheetUp .22s ease both;z-index:5}
+.pop button{display:flex;width:100%;align-items:center;justify-content:space-between;gap:16px;padding:12px;border-radius:12px;text-align:left}
+.pop button:hover{background:var(--n2)}
+.pop button.sel{background:var(--m100);font-weight:700}
+.pop small{font-size:12px;color:var(--n7)}
+.header-user{display:flex;align-items:center;gap:12px;min-width:176px;justify-content:flex-end}
+.points{display:flex;align-items:center;gap:8px;padding:8px 16px;border:1px solid var(--n4);border-radius:100px;background:var(--n1);font-weight:700}
+.avatar{width:32px;height:32px;border-radius:50%;background:var(--n3);color:var(--n8);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}
+.header-nav{display:flex;gap:8px;padding:0 40px 12px}
+.nav-tab{display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border-radius:100px;border:1px solid var(--n4);background:transparent;color:var(--n8);font-weight:500;transition:background .2s,color .2s}
+.nav-tab:hover{background:var(--n2)}
+.nav-tab.active{background:var(--m800);border-color:var(--m800);color:var(--n0)}
+.filter-chips{display:flex;gap:8px;padding:0 40px 16px;overflow-x:auto;align-items:center;scrollbar-width:none}
+.chip{display:inline-flex;align-items:center;gap:8px;padding:8px 16px;border-radius:100px;background:var(--n1);border:1px solid var(--n3);color:var(--n8);white-space:nowrap;transition:all .2s}
+.chip:hover{border-color:var(--n6)}
+.chip.active{background:var(--n10);border-color:var(--n10);color:var(--n0)}
+.chip.filter-toggle{margin-left:auto;border-color:var(--n6)}
+
+/* ── 본문 ── */
+.main{flex:1;width:100%;padding:24px 40px 48px;max-width:1440px;margin:0 auto}
+.hero{position:relative;overflow:hidden;border-radius:32px;padding:32px 48px;background:linear-gradient(180deg,var(--n3) 0%,var(--n1) 100%);border:1px solid var(--n3);display:grid;grid-template-columns:1fr;gap:32px;align-items:center;margin-bottom:32px;text-align:center;padding:48px}
+.hero .level-card{max-width:760px;width:100%;margin:0 auto;text-align:left}
+.hero h1{font-size:56px;line-height:1.05;letter-spacing:-.04em;font-weight:600;color:var(--n10)}
+.hero p{margin:16px auto 0;max-width:560px;color:var(--n8);font-size:16px}
+.hero-art{position:absolute;right:-40px;top:-60px;opacity:.55;pointer-events:none}
+.level-card{position:relative;background:var(--n1);border-radius:18px;padding:24px;border:1px solid var(--n3);box-shadow:0 17px 37px color-mix(in srgb,var(--n10) 5%,transparent)}
+.level-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.level-big{font-size:28px;font-weight:700;letter-spacing:-.04em;color:var(--n10)}
+.meter{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px}
+.meter i{display:block;height:8px;border-radius:100px;background:var(--n3);overflow:hidden;position:relative}
+.meter i.on::after{content:"";position:absolute;inset:0;background:var(--m800);transform-origin:left;animation:barGrow .9s cubic-bezier(.2,.8,.2,1) both}
+.meter i:nth-child(2).on::after{animation-delay:.1s}.meter i:nth-child(3).on::after{animation-delay:.2s}.meter i:nth-child(4).on::after{animation-delay:.3s}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:16px}
+.step{padding:12px;border-radius:12px;background:var(--n2);font-size:12px;color:var(--n8)}
+.step b{display:block;font-size:14px;color:var(--n10);margin-bottom:4px}
+.section-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:16px}
+.section-head h2{font-size:28px;letter-spacing:-.04em;font-weight:600;color:var(--n10)}
+.section-head span{color:var(--n7)}
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:24px}
+.listing-card{text-align:left;background:var(--n1);border-radius:18px;border:1px solid var(--n3);overflow:hidden;transition:transform .25s,box-shadow .25s;animation:cardIn .5s cubic-bezier(.2,.8,.2,1) both;display:block;width:100%}
+.listing-card:hover{transform:translateY(-4px) scale(1.01);box-shadow:0 17px 37px color-mix(in srgb,var(--n10) 10%,transparent)}
+.card-image-wrap{position:relative;aspect-ratio:4/3;background:var(--n2);overflow:hidden}
+.card-tile{position:absolute;inset:0;padding:20px;display:flex;flex-direction:column;justify-content:space-between}
+.card-tile .big{font-size:44px;line-height:1;font-weight:600;letter-spacing:-.04em;color:var(--n10)}
+.card-tile .big small{font-size:16px;font-weight:500;margin-left:4px;color:var(--n7)}
+.tags{display:flex;gap:8px;flex-wrap:wrap}
+.tag{padding:4px 12px;border-radius:100px;border:1px solid var(--n10);font-size:12px;font-weight:500;background:var(--n1);color:var(--n10)}
+.tag.soft{border-color:var(--n4);color:var(--n8)}
+.card-pattern{position:absolute;right:-24px;bottom:-24px;opacity:.9}
+.card-favorite{position:absolute;top:12px;right:12px;width:32px;height:32px;border-radius:50%;background:var(--n1);display:grid;place-items:center;z-index:2;border:1px solid var(--n3)}
+.card-favorite.on{background:var(--m800);color:var(--n0)}
+.match{position:absolute;left:12px;top:12px;z-index:2;background:var(--n10);color:var(--n0);border-radius:100px;padding:4px 12px;font-size:12px;font-weight:700}
+.card-body{padding:16px 20px 20px}
+.card-row-1{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.card-title{font-size:16px;font-weight:700;letter-spacing:-.02em;color:var(--n10)}
+.card-rating{display:flex;align-items:center;gap:4px;white-space:nowrap;color:var(--n8)}
+.card-meta{display:flex;align-items:center;gap:8px;color:var(--n7);margin-top:8px}
+.reason{display:inline-flex;align-items:center;gap:4px;padding:4px 12px;border-radius:100px;background:var(--n2);color:var(--n8);font-size:12px;font-weight:500}
+.card-price{font-weight:700;color:var(--n10)}
+.empty{grid-column:1/-1;padding:48px;text-align:center;border:1px dashed var(--n5);border-radius:18px;color:var(--n7)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 24px;border-radius:100px;font-weight:700;transition:background .2s,transform .1s}
+.btn.primary{background:var(--m800);color:var(--n0)}
+.btn.primary:hover{background:var(--m700)}
+.btn.ghost{border:1px solid var(--n10);color:var(--n10)}
+.btn.ghost:hover{background:var(--n2)}
+.btn.sm{padding:8px 16px}
+.footer{padding:32px 40px;border-top:1px solid var(--n3);color:var(--n7);display:flex;justify-content:space-between;font-size:12px}
+
+/* ── 드로어 · 토스트 ── */
+.scrim{position:fixed;inset:0;background:color-mix(in srgb,var(--n10) 32%,transparent);z-index:50;animation:fadeIn .2s both}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:440px;max-width:100%;background:var(--n1);z-index:60;padding:32px;overflow:auto;animation:slideIn .3s cubic-bezier(.2,.8,.2,1) both;border-radius:32px 0 0 32px}
+.drawer h3{font-size:28px;letter-spacing:-.04em;line-height:1.2;margin:16px 0 8px;font-weight:600;color:var(--n10)}
+.bars{display:grid;gap:16px;margin:24px 0}
+.bar-row .lab{display:flex;justify-content:space-between;margin-bottom:8px}
+.bar-track{height:8px;border-radius:100px;background:var(--n3);overflow:hidden}
+.bar-fill{height:100%;border-radius:100px;background:var(--m800);transform-origin:left;animation:barGrow .8s cubic-bezier(.2,.8,.2,1) both}
+.bar-fill.soft{background:var(--m500)}
+.toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);background:var(--n10);color:var(--n0);padding:12px 24px;border-radius:100px;z-index:80;display:flex;gap:8px;align-items:center;animation:sheetUp .3s both;font-weight:500}
+.toast i{color:var(--s1)}
+.kv{display:grid;grid-template-columns:96px 1fr;gap:8px 16px;padding:16px;background:var(--n2);border-radius:12px}
+.kv dt{color:var(--n7)}.kv dd{color:var(--n10);font-weight:500}
+
+/* ── 앱 화면 목업 (홈 · 완료) ── */
+.stage{display:grid;grid-template-columns:420px 1fr;gap:48px;align-items:start}
+.phone{width:380px;height:760px;border-radius:48px;border:10px solid var(--n10);background:var(--n0);position:relative;overflow:hidden;margin:0 auto;box-shadow:0 48px 80px color-mix(in srgb,var(--n10) 14%,transparent)}
+.phone-scroll{position:absolute;inset:0;overflow:auto;padding:48px 20px 24px;scrollbar-width:none}
+.phone-notch{position:absolute;top:8px;left:50%;width:96px;height:24px;border-radius:100px;background:var(--n10);transform:translateX(-50%);z-index:3}
+.p-title{font-size:20px;font-weight:700;letter-spacing:-.04em;color:var(--n10)}
+.p-sub{color:var(--n7);font-size:12px}
+.p-card{background:var(--n1);border-radius:18px;border:1px solid var(--n3);padding:16px}
+.p-exist{border:1px dashed var(--n5);background:repeating-linear-gradient(135deg,var(--n2) 0 8px,var(--n0) 8px 16px);border-radius:12px;padding:12px;color:var(--n7);font-size:12px;display:flex;justify-content:space-between;align-items:center}
+.p-sec{margin-top:24px}
+.p-sec-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.hscroll{display:flex;gap:12px;overflow-x:auto;padding-bottom:8px;scrollbar-width:none}
+.m-card{flex:0 0 168px;text-align:left;background:var(--n1);border:1px solid var(--n3);border-radius:18px;padding:16px;display:flex;flex-direction:column;gap:12px;transition:transform .2s}
+.m-card:hover{transform:translateY(-2px)}
+.m-card .big{font-size:28px;font-weight:600;letter-spacing:-.04em;line-height:1;color:var(--n10)}
+.m-card b{font-size:14px;color:var(--n10);line-height:1.3}
+.skel{border-radius:12px;background:linear-gradient(90deg,var(--n3) 0%,var(--n2) 50%,var(--n3) 100%);background-size:200% 100%;animation:shimmer 1.2s linear infinite}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--n1);border-radius:32px 32px 0 0;padding:24px 20px 28px;z-index:5;animation:sheetUp .3s both;border-top:1px solid var(--n3)}
+.seg{display:inline-flex;background:var(--n2);border-radius:100px;padding:4px}
+.seg button{padding:8px 16px;border-radius:100px;color:var(--n7);font-weight:500}
+.seg button.on{background:var(--n1);color:var(--n10);font-weight:700;box-shadow:0 2px 8px color-mix(in srgb,var(--n10) 10%,transparent)}
+.code{background:var(--n10);color:var(--n3);border-radius:18px;padding:20px;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.7;overflow:auto;white-space:pre}
+.code .k{color:var(--n5)}.code .v{color:var(--n0)}
+.panel{background:var(--n1);border:1px solid var(--n3);border-radius:18px;padding:24px}
+.panel h3{font-size:16px;font-weight:700;margin-bottom:16px;color:var(--n10);display:flex;align-items:center;gap:8px}
+.tree{font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.9;color:var(--n8)}
+.tree .hl{background:var(--n10);color:var(--n0);padding:2px 8px;border-radius:100px}
+.ring{transform:rotate(-90deg)}
+.ring circle.f{stroke-dasharray:var(--len);animation:ringFill 1.1s cubic-bezier(.2,.8,.2,1) both}
+.api-grid{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:24px;align-items:start}
+.pipe{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.pipe .node{padding:8px 12px;border-radius:12px;background:var(--n2);font-weight:700;font-size:12px;color:var(--n9)}
+.pipe .node.run{background:var(--n10);color:var(--n0);animation:pulse 1.6s ease-in-out infinite}
+table{width:100%;border-collapse:collapse}
+th,td{padding:8px 0;text-align:left;border-bottom:1px solid var(--n3);font-size:12px}
+th{color:var(--n7);font-weight:500}
+.check{display:flex;align-items:center;gap:12px;width:100%;padding:12px;border-radius:12px;text-align:left}
+.check:hover{background:var(--n2)}
+.check .bx{width:20px;height:20px;border-radius:6px;border:1.5px solid var(--n5);display:grid;place-items:center;flex-shrink:0}
+.check.on .bx{background:var(--m800);border-color:var(--m800);color:var(--n0)}
+.pill-ok{display:inline-flex;gap:4px;align-items:center;padding:4px 12px;border-radius:100px;background:var(--s1-bg);color:var(--s1-text);font-size:12px;font-weight:700}
+.pill-err{display:inline-flex;gap:4px;align-items:center;padding:4px 12px;border-radius:100px;background:var(--s2-bg);color:var(--s2-text);font-size:12px;font-weight:700}
+.view{animation:viewIn .35s ease both}
+@keyframes cardIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes sheetUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+@keyframes slideIn{from{transform:translateX(48px);opacity:0}to{transform:none;opacity:1}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes viewIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes shimmer{to{background-position:-200% 0}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
+@keyframes ringFill{from{stroke-dashoffset:var(--len)}to{stroke-dashoffset:var(--off)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useMemo} = React;
+
+function Ic({n,s=18}){
+  const ref=useRef(null);
+  useEffect(()=>{ if(window.lucide) lucide.createIcons(); },[n]);
+  return <span ref={ref} style={{display:'inline-flex',width:s,height:s,flexShrink:0}} dangerouslySetInnerHTML={{__html:`<i data-lucide="${n}" style="width:${s}px;height:${s}px"></i>`}}/>;
+}
+
+const CONTENTS=[
+ {id:1,t:'조선 건국과 왕권 강화',topic:'한국사',lv:3,q:12,pt:120,min:8,ic:'landmark'},
+ {id:2,t:'임진왜란 사건 순서 맞히기',topic:'한국사',lv:4,q:10,pt:140,min:7,ic:'scroll'},
+ {id:3,t:'일상 회화 필수 표현 20',topic:'영어',lv:2,q:15,pt:100,min:9,ic:'message-circle'},
+ {id:4,t:'비즈니스 이메일 어휘',topic:'영어',lv:4,q:12,pt:150,min:10,ic:'mail'},
+ {id:5,t:'금리와 물가 기초 개념',topic:'경제',lv:3,q:10,pt:130,min:7,ic:'trending-up'},
+ {id:6,t:'주식·채권 용어 입문',topic:'경제',lv:1,q:8,pt:80,min:5,ic:'coins'},
+ {id:7,t:'우주와 태양계 상식',topic:'과학',lv:2,q:10,pt:100,min:6,ic:'orbit'},
+ {id:8,t:'생활 속 화학 반응',topic:'과학',lv:3,q:12,pt:120,min:8,ic:'flask-conical'},
+ {id:9,t:'코딩 기초 용어 사전',topic:'IT',lv:1,q:10,pt:80,min:6,ic:'code'},
+ {id:10,t:'네트워크와 보안 상식',topic:'IT',lv:4,q:14,pt:150,min:10,ic:'shield'},
+ {id:11,t:'이번 주 시사 한눈에',topic:'시사',lv:3,q:8,pt:110,min:5,ic:'newspaper'},
+ {id:12,t:'헷갈리는 맞춤법 30선',topic:'상식',lv:2,q:15,pt:90,min:9,ic:'spell-check'},
+];
+const LEARNERS=[
+ {id:'a',name:'김서연',lv:3,acc:72,interest:['한국사','경제'],done:[1,12],note:'최근 20문항 정답 72%',pt:'12,480'},
+ {id:'b',name:'박도윤',lv:4,acc:86,interest:['영어','IT'],done:[4,10],note:'최근 20문항 정답 86%',pt:'31,920'},
+ {id:'c',name:'이하준',lv:2,acc:0,interest:[],done:[],note:'풀이 이력 없음 · 입문 폴백',pt:'0',fresh:true},
+];
+const TOPICS=['전체','한국사','영어','경제','과학','IT','시사','상식'];
+const TOPIC_IC={전체:'layout-grid',한국사:'landmark',영어:'languages',경제:'trending-up',과학:'flask-conical',IT:'code',시사:'newspaper',상식:'lightbulb'};
+
+function score(L,c){
+  const target=L.fresh?1.5:L.lv;
+  const d=c.lv-target;
+  const fit=Math.max(20,Math.round(100-Math.abs(d)*25));
+  const topic=L.interest.includes(c.topic)?100:55;
+  const fresh=L.done.includes(c.id)?0:90;
+  return {fit,topic,fresh,total:Math.round(fit*.5+topic*.3+fresh*.2),d};
+}
+function reasonOf(L,c,s){
+  if(L.fresh) return '입문 폴백';
+  if(L.interest.includes(c.topic)&&Math.abs(s.d)<=1) return '수준·관심 일치';
+  if(s.d===1) return '한 단계 도전';
+  if(s.d===0) return '수준 적합';
+  if(s.d===-1) return '가볍게 복습';
+  return L.interest.includes(c.topic)?'관심 주제':'새 주제 탐색';
+}
+function recommend(L,topic,includeDone){
+  return CONTENTS.map(c=>({c,s:score(L,c)}))
+    .filter(x=>includeDone||!L.done.includes(x.c.id))
+    .filter(x=>topic==='전체'||x.c.topic===topic)
+    .sort((a,b)=>b.s.total-a.s.total||a.c.id-b.c.id)
+    .map(x=>({...x,reason:reasonOf(L,x.c,x.s)}));
+}
+
+function Pattern({seed}){
+  const k=seed%4;
+  return (
+    <svg className="card-pattern" width="160" height="160" viewBox="0 0 160 160" fill="none" stroke="currentColor" strokeWidth="1.2" style={{color:'var(--n5)'}}>
+      {k===0&&[20,44,68,92].map(r=><circle key={r} cx="100" cy="100" r={r}/>)}
+      {k===1&&[0,1,2,3,4].map(i=><rect key={i} x={40+i*10} y={40+i*10} width={90-i*8} height={90-i*8} rx="18"/>)}
+      {k===2&&[0,1,2,3,4,5].map(i=><path key={i} d={`M ${20+i*8} 150 Q 90 ${30+i*14} 150 ${150-i*8}`}/>)}
+      {k===3&&[0,1,2,3].map(i=>[0,1,2,3].map(j=><circle key={i+'-'+j} cx={50+i*28} cy={50+j*28} r={i===j?7:3}/>))}
+    </svg>
+  );
+}
+
+function Toast({msg}){ return msg?<div className="toast"><Ic n="circle-check" s={18}/>{msg}</div>:null; }
+
+/* ───── 1. 학습 수준 기반 추천 로직 (main) ───── */
+function LogicView({L,setL,topic,setTopic,list,loading,favs,setFavs,openQuick,includeDone,setIncludeDone,showFilter}){
+  return (
+    <div className="view">
+      <section className="hero">
+        <svg className="hero-art" width="360" height="360" viewBox="0 0 360 360" fill="none" stroke="var(--n5)" strokeWidth="1.2">
+          {[40,80,120,160].map(r=><circle key={r} cx="240" cy="140" r={r}/>)}
+        </svg>
+        <div style={{position:'relative'}}>
+          <h1>{L.name}님의 지금 수준에<br/>맞는 다음 학습</h1>
+          <p>풀이 이력과 정답 비율로 수준을 산정하고, 이미 푼 콘텐츠를 뺀 뒤 적합도 순서로 보여드릴 예정입니다.</p>
+        </div>
+        <div className="level-card">
+          <div className="level-top">
+            <div><div className="p-sub">산정된 학습 수준</div><div className="level-big num">{L.fresh?'미산정':'Lv.'+L.lv}</div></div>
+            <span className="reason"><Ic n="activity" s={14}/>{L.note}</span>
+          </div>
+          <div className="meter" key={L.id}>{[1,2,3,4,5].map(i=><i key={i} className={!L.fresh&&i<=L.lv?'on':''}/>)}</div>
+          <div className="steps">
+            <div className="step"><b>1. 수준 산정</b>정답 비율·난이도 가중</div>
+            <div className="step"><b>2. 후보 점수화</b>수준 50 · 주제 30 · 미노출 20</div>
+            <div className="step"><b>3. 제외·정렬</b>완료 {L.done.length}개 제외</div>
+          </div>
+        </div>
+      </section>
+      <div className="section-head">
+        <h2>{L.fresh?'입문 콘텐츠부터 시작해요':'다음에 풀어볼 콘텐츠'}</h2>
+        <span className="num">추천 {list.length}개 · 완료 콘텐츠 {includeDone?'포함':'제외'}</span>
+      </div>
+      <div className="card-grid">
+        {loading?[0,1,2,3,4,5].map(i=><div key={i} className="skel" style={{height:352,borderRadius:18}}/>):
+         list.length===0?<div className="empty">이 주제에는 추천할 콘텐츠가 아직 없어요. 다른 주제를 골라 보세요.</div>:
+         list.map((x,i)=>(
+          <article key={x.c.id} className="listing-card" style={{animationDelay:i*60+'ms'}}>
+            <div className="card-image-wrap" onClick={()=>openQuick(x)} style={{cursor:'pointer'}}>
+              <span className="match num">적합도 {x.s.total}</span>
+              <button className={'card-favorite'+(favs.includes(x.c.id)?' on':'')} aria-label="나중에 풀기 저장" onClick={e=>{e.stopPropagation();setFavs(f=>f.includes(x.c.id)?f.filter(v=>v!==x.c.id):[...f,x.c.id]);}}><Ic n="bookmark" s={16}/></button>
+              <div className="card-tile">
+                <div style={{height:28}}/>
+                <div>
+                  <div className="big num">{x.c.q}<small>문항</small></div>
+                  <div className="tags" style={{marginTop:12}}><span className="tag">Lv.{x.c.lv}</span><span className="tag soft">{x.c.topic}</span><span className="tag soft">{x.c.min}분</span></div>
+                </div>
+              </div>
+              <Pattern seed={x.c.id}/>
+            </div>
+            <div className="card-body" onClick={()=>openQuick(x)} style={{cursor:'pointer'}}>
+              <div className="card-row-1"><h3 className="card-title">{x.c.t}</h3><div className="card-rating num"><Ic n="gem" s={14}/>{x.c.pt}</div></div>
+              <div className="card-meta"><span className="reason"><Ic n="sparkles" s={12}/>{x.reason}</span></div>
+              <div className="card-meta" style={{marginTop:12}}><span className="card-price num">+{x.c.pt}P</span><span>완료 시 적립</span></div>
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ───── 2. 홈 화면 추천 영역 ───── */
+function HomeView({L,toast}){
+  const [mode,setMode]=useState('ok');
+  const [t,setT]=useState('전체');
+  const [sheet,setSheet]=useState(null);
+  const [fav,setFav]=useState([]);
+  const list=recommend(L,t,false).slice(0,6);
+  return (
+    <div className="view stage">
+      <div className="phone">
+        <div className="phone-notch"/>
+        <div className="phone-scroll">
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div><div className="p-sub">오늘도 한 걸음</div><div className="p-title">안녕하세요, {L.name}님</div></div>
+            <span className="points num"><Ic n="gem" s={14}/>{L.pt}P</span>
+          </div>
+          <div className="p-exist" style={{marginTop:16}}><span>출석 체크 · 7일 연속</span><span>기존 영역</span></div>
+          <div className="p-sec">
+            <div className="p-sec-h"><span className="p-title">오늘의 추천</span><span className="p-sub">{mode==='ok'?'수준 Lv.'+L.lv+' 기준':'—'}</span></div>
+            <div className="hscroll" style={{marginBottom:12}}>
+              {TOPICS.map(x=><button key={x} className={'chip'+(t===x?' active':'')} style={{padding:'4px 12px',fontSize:12}} onClick={()=>setT(x)}>{x}</button>)}
+            </div>
+            {mode==='loading'&&<div className="hscroll">{[0,1].map(i=><div key={i} className="skel" style={{flex:'0 0 168px',height:172,borderRadius:18}}/>)}</div>}
+            {mode==='error'&&<div className="p-exist" style={{background:'var(--n2)',border:'1px solid var(--n3)'}}><span>추천을 불러오지 못해 이 영역만 숨겼어요</span><button className="btn ghost sm" onClick={()=>{setMode('loading');setTimeout(()=>setMode('ok'),900);}}>다시 불러오기</button></div>}
+            {mode==='ok'&&<div className="hscroll">{list.map(x=>(
+              <button key={x.c.id} className="m-card" onClick={()=>setSheet(x)}>
+                <span className="tag soft" style={{alignSelf:'flex-start'}}>{x.c.topic} · Lv.{x.c.lv}</span>
+                <div className="big num">{x.c.q}<small style={{fontSize:12,color:'var(--n7)',marginLeft:4}}>문항</small></div>
+                <b>{x.c.t}</b>
+                <span className="reason" style={{alignSelf:'flex-start'}}>{x.reason}</span>
+              </button>))}
+              {list.length===0&&<div className="p-sub">이 주제는 모두 완료했어요</div>}
+            </div>}
+          </div>
+          <div className="p-sec"><div className="p-exist"><span>이벤트 배너 · 친구 초대</span><span>기존 영역</span></div></div>
+          <div className="p-sec"><div className="p-exist"><span>랭킹 · 이번 주 학습왕</span><span>기존 영역</span></div></div>
+        </div>
+        {sheet&&<><div className="scrim" style={{position:'absolute',zIndex:4}} onClick={()=>setSheet(null)}/>
+          <div className="sheet">
+            <div style={{display:'flex',justifyContent:'space-between'}}><span className="reason"><Ic n="sparkles" s={12}/>{sheet.reason}</span><button aria-label="닫기" onClick={()=>setSheet(null)}><Ic n="x" s={18}/></button></div>
+            <div className="p-title" style={{margin:'12px 0 4px'}}>{sheet.c.t}</div>
+            <div className="p-sub">{sheet.c.topic} · Lv.{sheet.c.lv} · 약 {sheet.c.min}분</div>
+            <dl className="kv" style={{margin:'16px 0'}}><dt>문항 수</dt><dd className="num">{sheet.c.q}문항</dd><dt>적립 리워드</dt><dd className="num">+{sheet.c.pt}P</dd></dl>
+            <div style={{display:'flex',gap:8}}>
+              <button className={'btn ghost'} style={{flex:'0 0 auto'}} onClick={()=>{setFav(f=>[...f,sheet.c.id]);toast('나중에 풀 목록에 담았어요');}}>{fav.includes(sheet.c.id)?'담았어요':'나중에 풀기'}</button>
+              <button className="btn primary" style={{flex:1}} onClick={()=>{toast('학습을 시작해요');setSheet(null);}}>학습 시작하기</button>
+            </div>
+          </div></>}
+      </div>
+      <div style={{display:'grid',gap:24}}>
+        <div className="panel">
+          <h3><Ic n="plug" s={18}/>응답 상태 시연</h3>
+          <div className="seg">{[['ok','정상 응답'],['loading','응답 지연'],['error','오류 발생']].map(([k,l])=><button key={k} className={mode===k?'on':''} onClick={()=>setMode(k)}>{l}</button>)}</div>
+          <p style={{marginTop:16,color:'var(--n8)'}}>추천 영역만 독립 컴포넌트로 분리하여, 응답이 늦거나 실패해도 출석 체크·배너·랭킹 같은 기존 홈 화면은 그대로 보이도록 설계할 예정입니다.</p>
+        </div>
+        <div className="panel">
+          <h3><Ic n="folder-tree" s={18}/>기존 홈 화면에 얹는 구조</h3>
+          <div className="tree">
+            HomeScreen<br/>
+            ├─ AttendanceBar <span style={{color:'var(--n6)'}}>(기존)</span><br/>
+            ├─ <span className="hl">RecommendSection</span> <span style={{color:'var(--n6)'}}>(신규)</span><br/>
+            │&nbsp;&nbsp;├─ TopicChips<br/>
+            │&nbsp;&nbsp;├─ FlatList horizontal · RecommendCard<br/>
+            │&nbsp;&nbsp;└─ ErrorBoundary → 영역 숨김<br/>
+            ├─ EventBanner <span style={{color:'var(--n6)'}}>(기존)</span><br/>
+            └─ WeeklyRanking <span style={{color:'var(--n6)'}}>(기존)</span>
+          </div>
+        </div>
+        <div className="panel">
+          <h3><Ic n="list-checks" s={18}/>확인 항목</h3>
+          {['홈 상단에서 추천 카드 목록 확인','주제 칩 선택 시 해당 주제 카드만 표시','카드 선택 시 문항 수·적립 리워드 퀵뷰','추천 실패 시에도 기존 홈 화면 정상 표시'].map(x=><div key={x} style={{display:'flex',gap:8,padding:'8px 0',color:'var(--n8)'}}><Ic n="check" s={16}/>{x}</div>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ───── 3. 학습 완료 화면 추천 ───── */
+function CompleteView({L,toast}){
+  const [right,setRight]=useState(7);
+  const q=10, ratio=right/q;
+  const target=ratio>=.8?L.lv+1:L.lv;
+  const rule=ratio>=.8?'정답 비율 '+Math.round(ratio*100)+'% → 한 단계 위(Lv.'+target+') 우선':ratio>=.5?'정답 비율 '+Math.round(ratio*100)+'% → 같은 수준(Lv.'+target+') 우선':'정답 비율 '+Math.round(ratio*100)+'% → 같은 수준 복습 위주';
+  const next=CONTENTS.filter(c=>!L.done.includes(c.id)&&c.id!==5).map(c=>({c,k:Math.abs(c.lv-target)*10+(L.interest.includes(c.topic)?0:4)+(ratio<.5&&c.lv>target?6:0)})).sort((a,b)=>a.k-b.k||a.c.id-b.c.id).slice(0,2);
+  const len=2*Math.PI*44, off=len*(1-ratio);
+  const reward=right*20;
+  return (
+    <div className="view stage">
+      <div className="phone">
+        <div className="phone-notch"/>
+        <div className="phone-scroll" key={right}>
+          <div style={{textAlign:'center'}}>
+            <div className="p-sub">이번 학습 · 금리와 물가 기초 개념</div>
+            <svg className="ring" width="120" height="120" viewBox="0 0 120 120" style={{margin:'16px auto 0',display:'block',transform:'rotate(-90deg)'}}>
+              <circle cx="60" cy="60" r="44" fill="none" stroke="var(--n3)" strokeWidth="10"/>
+              <circle className="f" cx="60" cy="60" r="44" fill="none" stroke="var(--m800)" strokeWidth="10" strokeLinecap="round" style={{'--len':len,'--off':off,strokeDashoffset:off}}/>
+            </svg>
+            <div style={{marginTop:-84,height:84,display:'flex',flexDirection:'column',justifyContent:'center'}}><div className="p-title num" style={{fontSize:28}}>{right}/{q}</div><div className="p-sub">정답</div></div>
+            <div className="p-title" style={{marginTop:24}}>{ratio>=.8?'아주 잘했어요':ratio>=.5?'좋은 흐름이에요':'조금만 더 다져 볼까요'}</div>
+          </div>
+          <div className="p-card" style={{marginTop:16,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span style={{display:'flex',gap:8,alignItems:'center'}}><Ic n="gem" s={18}/>적립 리워드</span><b className="num" style={{fontSize:20,color:'var(--n10)'}}>+{reward}P</b>
+          </div>
+          <div className="p-sec">
+            <div className="p-sec-h"><span className="p-title">이어서 풀어볼까요?</span></div>
+            <div style={{display:'grid',gap:12}}>
+              {next.map(({c},i)=>(
+                <button key={c.id} className="p-card" style={{textAlign:'left',animation:'cardIn .5s '+i*120+'ms both',display:'flex',gap:12,alignItems:'center'}} onClick={()=>toast(c.t+' 학습을 시작해요')}>
+                  <div style={{width:48,height:48,borderRadius:12,background:'var(--n2)',display:'grid',placeItems:'center',color:'var(--n8)',flexShrink:0}}><Ic n={c.ic} s={22}/></div>
+                  <div style={{flex:1}}><b style={{color:'var(--n10)'}}>{c.t}</b><div className="p-sub">{c.topic} · Lv.{c.lv} · {c.q}문항 · +{c.pt}P</div></div>
+                  <Ic n="chevron-right" s={18}/>
+                </button>))}
+            </div>
+            <div style={{display:'flex',gap:8,marginTop:16}}>
+              <button className="btn ghost" style={{flex:1}} onClick={()=>toast('같은 콘텐츠를 다시 풀어요')}>다시 풀기</button>
+              <button className="btn primary" style={{flex:1}} onClick={()=>toast('홈으로 이동해요')}>홈으로 가기</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style={{display:'grid',gap:24}}>
+        <div className="panel">
+          <h3><Ic n="sliders-horizontal" s={18}/>방금 푼 결과 바꿔 보기</h3>
+          <div className="seg">{[[4,'4/10 정답'],[7,'7/10 정답'],[9,'9/10 정답']].map(([v,l])=><button key={v} className={right===v?'on':''} onClick={()=>setRight(v)}>{l}</button>)}</div>
+          <div className="kv" style={{marginTop:24}}>
+            <dt>적용 규칙</dt><dd>{rule}</dd>
+            <dt>제안 수준</dt><dd className="num">Lv.{target} 중심 · 이미 푼 콘텐츠 제외</dd>
+            <dt>반영 시점</dt><dd>풀이 결과 저장 직후 같은 요청 흐름에서 재계산</dd>
+          </div>
+        </div>
+        <div className="panel">
+          <h3><Ic n="workflow" s={18}/>저장과 추천의 호출 순서</h3>
+          <div className="tree">
+            POST /quiz/:id/result<br/>
+            &nbsp;&nbsp;1. MySQL 풀이 결과 저장 <span style={{color:'var(--n6)'}}>(트랜잭션)</span><br/>
+            &nbsp;&nbsp;2. 학습 수준 재산정 <span style={{color:'var(--n6)'}}>(방금 결과 포함)</span><br/>
+            &nbsp;&nbsp;3. <span className="hl">GET /recommendations?from=complete</span><br/>
+            &nbsp;&nbsp;4. 완료 화면 하단 RecommendSection 렌더
+          </div>
+        </div>
+        <div className="panel">
+          <h3><Ic n="list-checks" s={18}/>확인 항목</h3>
+          {['학습 완료 시 정답 수·적립 리워드 표시','하단에 다음 추천 콘텐츠 카드 표시','정답 비율에 따라 같은 수준 / 한 단계 위 제안','추천 카드를 누르면 해당 학습 바로 시작'].map(x=><div key={x} style={{display:'flex',gap:8,padding:'8px 0',color:'var(--n8)'}}><Ic n="check" s={16}/>{x}</div>)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ───── 4. 추천 API·AWS 배포 구성 ───── */
+const API={
+ home:{path:'GET /v1/recommendations?screen=home&limit=6',req:'{\n  "userId": "u_30412",\n  "screen": "home",\n  "topic": "all",\n  "limit": 6\n}',res:'{\n  "level": 3,\n  "configVersion": "v12",\n  "items": [\n    { "contentId": 5, "score": 86, "reason": "수준·관심 일치" },\n    { "contentId": 8, "score": 79, "reason": "수준 적합" },\n    { "contentId": 2, "score": 74, "reason": "한 단계 도전" }\n  ],\n  "fallback": false\n}'},
+ done:{path:'GET /v1/recommendations?screen=complete&resultId=...',req:'{\n  "userId": "u_30412",\n  "screen": "complete",\n  "resultId": "r_88120",\n  "limit": 2\n}',res:'{\n  "level": 3,\n  "accuracy": 0.7,\n  "rule": "same-level",\n  "items": [\n    { "contentId": 8, "score": 81 },\n    { "contentId": 11, "score": 77 }\n  ],\n  "fallback": false\n}'},
+};
+const ENV={dev:[['클러스터','lr-dev'],['태스크 수','1'],['MySQL','dev-rds'],['MongoDB','dev-docdb']],stg:[['클러스터','lr-stg'],['태스크 수','2'],['MySQL','stg-rds'],['MongoDB','stg-docdb']],prod:[['클러스터','lr-prod'],['태스크 수','3'],['MySQL','prod-rds'],['MongoDB','prod-docdb']]};
+function ApiView({toast}){
+  const [ep,setEp]=useState('home');
+  const [sent,setSent]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const [env,setEnv]=useState('stg');
+  const [done,setDone]=useState([0,1]);
+  const items=['홈 화면 추천 영역 캡처','학습 완료 화면 추천 캡처','신규 학습자 폴백 화면 캡처','추천 실패 시 기존 홈 유지 캡처','설계서 점수식 표 첨부','스테이징 배포 확인 화면'];
+  const send=()=>{setBusy(true);setSent(false);setTimeout(()=>{setBusy(false);setSent(true);},900);};
+  return (
+    <div className="view api-grid">
+      <div className="panel">
+        <h3><Ic n="terminal" s={18}/>추천 조회 API 명세</h3>
+        <div className="seg" style={{marginBottom:16}}>{[['home','홈 추천'],['done','완료 직후 추천']].map(([k,l])=><button key={k} className={ep===k?'on':''} onClick={()=>{setEp(k);setSent(false);}}>{l}</button>)}</div>
+        <div className="tags" style={{marginBottom:12}}><span className="tag" style={{borderColor:'var(--n10)'}}>{API[ep].path}</span></div>
+        <div className="p-sub" style={{marginBottom:8}}>요청</div>
+        <div className="code" style={{marginBottom:16}}>{API[ep].req}</div>
+        <button className="btn primary" data-loading={busy?'true':'false'} disabled={busy} onClick={send}>예시 요청 보내기</button>
+        {sent&&<div style={{marginTop:16,animation:'sheetUp .3s both'}}>
+          <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}><span className="pill-ok"><Ic n="check" s={12}/>200 OK</span><span className="p-sub num">142ms · 예시 응답</span></div>
+          <div className="code">{API[ep].res}</div>
+        </div>}
+      </div>
+      <div style={{display:'grid',gap:24}}>
+        <div className="panel">
+          <h3><Ic n="container" s={18}/>ECR → ECS 배포 흐름</h3>
+          <div className="pipe">{['빌드','Docker 이미지','ECR 푸시','ECS 서비스'].map((x,i)=><React.Fragment key={x}><span className={'node'+(i===3?' run':'')}>{x}</span>{i<3&&<Ic n="arrow-right" s={14}/>}</React.Fragment>)}</div>
+          <div className="seg" style={{marginBottom:16}}>{[['dev','개발'],['stg','스테이징'],['prod','운영']].map(([k,l])=><button key={k} className={env===k?'on':''} onClick={()=>setEnv(k)}>{l}</button>)}</div>
+          <table><tbody>{ENV[env].map(([a,b])=><tr key={a}><th>{a}</th><td className="num" style={{color:'var(--n10)',fontWeight:500}}>{b}</td></tr>)}<tr><th>점수식 설정</th><td><span className="pill-ok">설정값 분리</span></td></tr></tbody></table>
+        </div>
+        <div className="panel">
+          <h3><Ic n="file-text" s={18}/>설계서와 명세의 공통 설정</h3>
+          <div className="tree">recommend.config.ts<br/>&nbsp;&nbsp;weights: <span className="hl">level 0.5 · topic 0.3 · fresh 0.2</span><br/>&nbsp;&nbsp;excludeDone: true<br/>&nbsp;&nbsp;fallbackLevel: 1~2</div>
+        </div>
+      </div>
+      <div className="panel">
+        <h3><Ic n="camera" s={18}/>결과보고서 캡처 목록</h3>
+        <div className="bar-track" style={{marginBottom:16}}><div key={done.length} className="bar-fill" style={{width:Math.round(done.length/items.length*100)+'%'}}/></div>
+        <div className="p-sub num" style={{marginBottom:8}}>{done.length}/{items.length} 항목 준비</div>
+        {items.map((x,i)=><button key={x} className={'check'+(done.includes(i)?' on':'')} onClick={()=>setDone(d=>d.includes(i)?d.filter(v=>v!==i):[...d,i])}><span className="bx">{done.includes(i)&&<Ic n="check" s={14}/>}</span>{x}</button>)}
+        <button className="btn ghost" style={{marginTop:16,width:'100%'}} onClick={()=>toast('캡처 목록을 보고서 초안에 담았어요')}>보고서 초안에 담기</button>
+      </div>
+    </div>
+  );
+}
+
+/* ───── App ───── */
+function App(){
+  const [tab,setTab]=useState('logic');
+  const [L,setLs]=useState(LEARNERS[0]);
+  const [topic,setTopic]=useState('전체');
+  const [seg,setSeg]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [favs,setFavs]=useState([]);
+  const [quick,setQuick]=useState(null);
+  const [msg,setMsg]=useState('');
+  const [includeDone,setIncludeDone]=useState(false);
+  const [filterOpen,setFilterOpen]=useState(false);
+  const list=useMemo(()=>recommend(L,topic,includeDone),[L,topic,includeDone]);
+  const toast=m=>{setMsg(m);setTimeout(()=>setMsg(''),2200);};
+  const run=()=>{setSeg(null);setLoading(true);setTimeout(()=>setLoading(false),700);};
+  const pickLearner=l=>{setLs(l);setSeg(null);setTopic('전체');setLoading(true);setTimeout(()=>setLoading(false),600);};
+  const s=quick&&quick.s;
+  const TABS=[['logic','학습 수준 기반 추천 로직','brain-circuit'],['home','홈 화면 추천 영역','house'],['complete','학습 완료 화면 추천','circle-check'],['api','추천 API·AWS 배포 구성','server']];
+  return (
+    <div className="app" data-archetype="airbnb-search-grid">
+      <header className="search-header" data-search-header>
+        <div className="header-row">
+          <a className="brand"><span className="brand-mark"><Ic n="graduation-cap" s={18}/></span>배움결 리워드</a>
+          <div className="search-bar">
+            <div style={{flex:1,position:'relative',display:'flex'}}>
+              <button className={'search-segment'+(seg==='who'?' on':'')} onClick={()=>setSeg(seg==='who'?null:'who')}><div className="segment-label">학습자</div><div className="segment-value">{L.name}</div></button>
+              {seg==='who'&&<div className="pop" style={{left:0}}>{LEARNERS.map(l=><button key={l.id} className={l.id===L.id?'sel':''} onClick={()=>pickLearner(l)}><span>{l.name}<br/><small>{l.note}</small></span><span className="tag soft num">{l.fresh?'신규':'Lv.'+l.lv}</span></button>)}</div>}
+            </div>
+            <span className="search-divider"/>
+            <div style={{flex:1}}>
+              <button className="search-segment" style={{width:'100%'}} onClick={()=>toast('수준은 풀이 이력에서 자동 산정돼요')}><div className="segment-label">학습 수준</div><div className="segment-value num">{L.fresh?'이력 없음':'Lv.'+L.lv+' · 정답 '+L.acc+'%'}</div></button>
+            </div>
+            <span className="search-divider"/>
+            <div style={{flex:1,position:'relative',display:'flex'}}>
+              <button className={'search-segment'+(seg==='topic'?' on':'')} onClick={()=>setSeg(seg==='topic'?null:'topic')}><div className="segment-label">관심 주제</div><div className="segment-value">{topic==='전체'?(L.interest.join('·')||'선택 없음'):topic}</div></button>
+              {seg==='topic'&&<div className="pop" style={{right:0}}>{TOPICS.map(t=><button key={t} className={t===topic?'sel':''} onClick={()=>{setTopic(t);run();}}>{t}</button>)}</div>}
+            </div>
+            <button className="search-submit" aria-label="추천 다시 받기" data-loading={loading?'true':'false'} onClick={run}><Ic n="search" s={18}/></button>
+          </div>
+          <div className="header-user"><span className="points num"><Ic n="gem" s={16}/>{L.pt}P</span><span className="avatar">{L.name.charAt(0)}</span></div>
+        </div>
+        <nav className="header-nav">
+          {TABS.map(([k,l,ic])=><button key={k} className={'nav-tab'+(tab===k?' active':'')} onClick={()=>{setTab(k);setSeg(null);}}><Ic n={ic} s={16}/>{l}</button>)}
+        </nav>
+        {tab==='logic'&&<div className="filter-chips" data-filter-chips>
+          {TOPICS.map(t=><button key={t} className={'chip'+(topic===t?' active':'')} onClick={()=>{setTopic(t);run();}}><Ic n={TOPIC_IC[t]} s={14}/>{t}</button>)}
+          <button className="chip filter-toggle" onClick={()=>setFilterOpen(o=>!o)}><Ic n="sliders-horizontal" s={14}/>필터</button>
+          {filterOpen&&<button className={'chip'+(includeDone?' active':'')} onClick={()=>{setIncludeDone(v=>!v);toast(includeDone?'완료한 콘텐츠를 다시 제외해요':'완료한 콘텐츠도 함께 보여요');}}>완료 콘텐츠 포함</button>}
+        </div>}
+      </header>
+      <main className="main" style={{width:'100%'}}>
+        {tab==='logic'&&<LogicView L={L} topic={topic} list={list} loading={loading} favs={favs} setFavs={setFavs} openQuick={setQuick} includeDone={includeDone}/>}
+        {tab==='home'&&<HomeView L={L} toast={toast}/>}
+        {tab==='complete'&&<CompleteView L={L} toast={toast}/>}
+        {tab==='api'&&<ApiView toast={toast}/>}
+      </main>
+      <footer className="footer"><span>© 2026 배움결 샘플 서비스 — 자체 개발 프로젝트 데모</span><span>모든 데이터는 가상의 예시입니다</span></footer>
+      {quick&&<><div className="scrim" onClick={()=>setQuick(null)}/>
+        <aside className="drawer">
+          <button aria-label="닫기" className="btn ghost sm" onClick={()=>setQuick(null)}><Ic n="x" s={16}/>닫기</button>
+          <h3>{quick.c.t}</h3>
+          <div className="tags"><span className="tag">Lv.{quick.c.lv}</span><span className="tag soft">{quick.c.topic}</span><span className="reason"><Ic n="sparkles" s={12}/>{quick.reason}</span></div>
+          <div className="bars">
+            <div className="bar-row"><div className="lab"><span>수준 적합도 (50%)</span><b className="num">{s.fit}</b></div><div className="bar-track"><div className="bar-fill" style={{width:s.fit+'%'}}/></div></div>
+            <div className="bar-row"><div className="lab"><span>관심 주제 (30%)</span><b className="num">{s.topic}</b></div><div className="bar-track"><div className="bar-fill soft" style={{width:s.topic+'%',animationDelay:'.1s'}}/></div></div>
+            <div className="bar-row"><div className="lab"><span>미노출·미완료 (20%)</span><b className="num">{s.fresh}</b></div><div className="bar-track"><div className="bar-fill soft" style={{width:s.fresh+'%',animationDelay:'.2s'}}/></div></div>
+          </div>
+          <dl className="kv"><dt>종합 적합도</dt><dd className="num">{s.total}점</dd><dt>문항 수</dt><dd className="num">{quick.c.q}문항 · 약 {quick.c.min}분</dd><dt>적립 리워드</dt><dd className="num">+{quick.c.pt}P</dd></dl>
+          <div style={{display:'flex',gap:8,marginTop:24}}>
+            <button className="btn ghost" onClick={()=>{setFavs(f=>f.includes(quick.c.id)?f:[...f,quick.c.id]);toast('나중에 풀 목록에 담았어요');}}>나중에 풀기</button>
+            <button className="btn primary" style={{flex:1}} onClick={()=>{toast('학습을 시작해요');setQuick(null);}}>학습 시작하기</button>
+          </div>
+        </aside></>}
+      <Toast msg={msg}/>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
