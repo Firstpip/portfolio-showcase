@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>포근펫 운영 콘솔 — 정기배송·태그·권한 관리</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P2 — 메인 1 · 서브 2 · 나머지 무채색 (gen-color-tokens.js 산출, hue 27°, light) ── */
+:root{
+  /* 메인 — 브랜드 마크·primary CTA(화면당 1)·활성 nav·링크·주 차트·포커스. 앵커 m700 = plan primary */
+  --m50:#f6f2f0;
+  --m100:#f6f2f0;
+  --m200:#ece6e0;
+  --m300:#daccc1;
+  --m400:#c3ae9c;
+  --m500:#aa8b72;
+  --m600:#926b4a;
+  --m700:#7a4a22;
+  --m800:#643d1c;
+  --m900:#4e2f16;
+  /* 무채색 — 배경(n0~n2)·테두리/비활성(n3~n5)·아이콘/보조텍스트(n6~n8)·본문/다크필(n9~n10). 아바타·태그·아이콘박스·KPI배경·보조 차트는 전부 여기 */
+  --n0:#f6f1eb;
+  --n1:#fbf8f4;
+  --n2:#f0f0ef;
+  --n3:#e6e5e5;
+  --n4:#d7d6d5;
+  --n5:#bab7b5;
+  --n6:#989490;
+  --n7:#7a7571;
+  --n8:#5a5653;
+  --n9:#3a3836;
+  --n10:#201f1e;
+  /* 서브 — 상태 의미가 있을 때만. 배지=bg+text, 점/셀/바=solid */
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b; /* 성공/진행/정상/상승 */
+  --s2:#cf3f3f; --s2-bg:#f9e7e7; --s2-text:#ad1f1f; /* 오류/위험/실패/하락/환불 */
+}
+/* ⚠ s3(경고/주의) — 메인 hue 27°와 11° 겹침 → 제거, 해당 상태는 무채색(n9/n10 필 + 아이콘)으로 표현 */
+
+/* ── 상태 레이어 P2 — 모양은 페이지가, 상태는 여기서 (gen-component-kit.js 산출, 색은 토큰만) ── */
+/* state-layer elevation=flat theme=light */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{filter:brightness(.94);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #ffffff;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--s2);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+/* Walnut Ink — 헤어라인 테두리 전용 무채색 */
+:root{--walnut:#403a34}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{width:100%;min-height:100%}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:var(--n0);color:var(--n10);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit;font-size:inherit}
+input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+@keyframes rowIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes barGrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.app{display:flex;width:100%;min-height:100vh}
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:260px;border-right:1px solid var(--walnut);background:var(--n0);display:flex;flex-direction:column;z-index:30}
+.sidebar-brand{height:64px;display:flex;align-items:center;gap:12px;padding:0 22px;border-bottom:1px solid var(--walnut)}
+.brand-mark{width:26px;height:26px;border:1px solid var(--walnut);display:grid;place-items:center;font-size:15px;color:var(--m700)}
+.brand-name{font-weight:700;letter-spacing:-.02em;font-size:15px}
+.brand-sub{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--n7)}
+.sidebar-cmdk-hint{margin:16px 22px 8px;border:1px solid var(--walnut);height:36px;display:flex;align-items:center;gap:8px;padding:0 12px;color:var(--n7);width:calc(100% - 44px);text-align:left}
+.sidebar-cmdk-hint:hover{background:var(--n2)}
+.sidebar-cmdk-hint kbd{margin-left:auto;font-family:inherit;font-size:11px;border:1px solid var(--n5);padding:0 5px}
+.eyebrow{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--n7);font-weight:600}
+.sidebar-nav{padding:10px 12px;display:flex;flex-direction:column;gap:1px}
+.sidebar-section-title{padding:18px 22px 6px}
+.sidebar-link{display:flex;align-items:center;gap:11px;padding:10px 10px;color:var(--n8);font-weight:500;text-align:left;border-left:2px solid transparent;width:100%}
+.sidebar-link i{font-size:18px}
+.sidebar-link:hover{background:var(--n2)}
+.sidebar-link.on{color:var(--m700);background:var(--m50);border-left-color:var(--m700);font-weight:700}
+.sidebar-link .cnt{margin-left:auto;font-size:11px;color:var(--n7);border:1px solid var(--n5);padding:0 6px}
+.sidebar-user{margin-top:auto;border-top:1px solid var(--walnut);padding:16px 22px;display:flex;gap:10px;align-items:center}
+.ava{width:30px;height:30px;border:1px solid var(--walnut);display:grid;place-items:center;font-weight:700;background:var(--n2)}
+.main{margin-left:260px;width:calc(100% - 260px);flex:1;min-width:0;min-height:100vh;display:flex;flex-direction:column}
+.topbar{height:56px;border-bottom:1px solid var(--walnut);display:flex;align-items:center;justify-content:space-between;padding:0 32px;position:sticky;top:0;background:var(--n0);z-index:20}
+.breadcrumb{display:flex;align-items:center;gap:8px;color:var(--n7)}
+.breadcrumb .divider{color:var(--n5)}
+.breadcrumb b{color:var(--n10)}
+.topbar-actions{display:flex;gap:10px;align-items:center}
+.btn{height:34px;padding:0 16px;border:1px solid var(--walnut);background:var(--n0);font-weight:600;display:inline-flex;align-items:center;gap:7px;transition:background .15s}
+.btn:hover{background:var(--n2)}
+.btn-primary{background:var(--m700);border-color:var(--m700);color:var(--n0)}
+.btn-primary:hover{background:var(--m800)}
+.btn-quiet{border-color:var(--n5);color:var(--n8)}
+.btn-sm{height:28px;padding:0 10px;font-size:12px}
+.btn-cmdk{font-size:12px}
+.content{padding:32px;flex:1;animation:fadeIn .3s}
+.display{font-size:clamp(44px,5vw,76px);font-weight:500;letter-spacing:-.045em;line-height:1}
+.page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;margin-bottom:22px}
+.ledger-art{order:2;width:340px;height:110px;flex:none}
+.ledger-line{stroke-dasharray:600;stroke-dashoffset:600;animation:lineDrawS 1.4s .2s forwards}
+@keyframes lineDrawS{to{stroke-dashoffset:0}}
+.page-head p{max-width:520px;color:var(--n7);margin-top:12px}
+.strip{display:flex;border:1px solid var(--walnut);margin-bottom:22px}
+.strip>div{flex:1;padding:14px 18px;border-right:1px solid var(--walnut);animation:slideUp .5s both}
+.strip>div:last-child{border-right:none}
+.strip .big{font-size:34px;font-weight:500;letter-spacing:-.04em;line-height:1.1;margin-top:4px}
+.strip .big small{font-size:12px;color:var(--n7);letter-spacing:0;margin-left:4px}
+.md{display:grid;grid-template-columns:400px 1fr;border:1px solid var(--walnut);min-height:560px}
+.list-rail{border-right:1px solid var(--walnut);display:flex;flex-direction:column;min-width:0}
+.rail-head{padding:12px 14px;border-bottom:1px solid var(--walnut);display:flex;flex-direction:column;gap:10px}
+.search{display:flex;align-items:center;gap:8px;border:1px solid var(--n5);height:32px;padding:0 10px}
+.search input{border:none;outline:none;background:transparent;flex:1;min-width:0}
+.tabs{display:flex;gap:0}
+.tab{padding:5px 12px;border:1px solid var(--n5);margin-right:-1px;font-size:12px;font-weight:600;color:var(--n7)}
+.tab.on{background:var(--n10);color:var(--n0);border-color:var(--n10)}
+.rail-body{overflow-y:auto;flex:1}
+.row{width:100%;text-align:left;padding:12px 14px;border-bottom:1px solid var(--n3);display:flex;gap:12px;align-items:flex-start;animation:rowIn .4s both;border-left:2px solid transparent}
+.row:hover{background:var(--n2)}
+.row.on{background:var(--m50);border-left-color:var(--m700)}
+.row .t{font-weight:600;letter-spacing:-.01em}
+.row .s{color:var(--n7);font-size:12px;margin-top:2px}
+.row .r{margin-left:auto;text-align:right;white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--n5);display:inline-block;margin-top:6px;flex:none}
+.dot.bad{background:var(--s2);animation:blink 1.6s infinite}
+.dot.ok{background:var(--s1)}
+.detail-panel{padding:26px 30px;min-width:0;animation:fadeIn .3s}
+.detail-title{font-size:30px;font-weight:500;letter-spacing:-.04em;line-height:1.15;margin-top:6px}
+.kvs{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--walnut);margin:20px 0}
+.kvs>div{padding:12px 14px;border-right:1px solid var(--walnut)}
+.kvs>div:last-child{border-right:none}
+.kvs b{display:block;font-size:16px;font-weight:600;margin-top:2px;letter-spacing:-.02em}
+.sec{margin-top:24px}
+.sec h3{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--n7);font-weight:600;padding-bottom:8px;border-bottom:1px solid var(--walnut);margin-bottom:4px}
+.line{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid var(--n3)}
+.line .l{color:var(--n7)}
+.log{position:relative;padding-left:18px;border-left:1px solid var(--walnut);margin-left:4px}
+.log>div{position:relative;padding:0 0 14px 8px}
+.log>div::before{content:"";position:absolute;left:-23px;top:6px;width:9px;height:9px;background:var(--n0);border:1px solid var(--walnut)}
+.log>div.fail::before{background:var(--s2);border-color:var(--s2)}
+.log>div.pass::before{background:var(--s1);border-color:var(--s1)}
+.badge{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--n5);padding:0 7px;height:20px;font-size:11px;font-weight:600;color:var(--n8);background:var(--n0)}
+.badge.fail{background:var(--s2-bg);color:var(--s2-text);border-color:var(--s2)}
+.badge.pass{background:var(--s1-bg);color:var(--s1-text);border-color:var(--s1)}
+.actions{display:flex;gap:10px;margin-top:22px;flex-wrap:wrap}
+.tagrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.tag{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--walnut);padding:3px 4px 3px 10px;font-weight:500}
+.tag button{width:20px;height:20px;display:grid;place-items:center;color:var(--n7)}
+.tag button:hover{background:var(--n2)}
+.tag.ghost{border-color:var(--n5);border-style:dashed;padding-right:10px;color:var(--n7)}
+.field{margin-top:12px}
+.field label{display:block;margin-bottom:5px}
+.inp{width:100%;height:34px;border:1px solid var(--walnut);background:var(--n0);padding:0 10px;outline:none}
+.inp:focus{border-color:var(--m700)}
+textarea.inp{height:70px;padding:8px 10px;resize:none}
+.matrix{width:100%;border-collapse:collapse;margin-top:6px}
+.matrix th{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--n7);font-weight:600;text-align:center;padding:8px 6px;border-bottom:1px solid var(--walnut)}
+.matrix th:first-child,.matrix td:first-child{text-align:left}
+.matrix td{padding:9px 6px;border-bottom:1px solid var(--n3);text-align:center}
+.cell{width:22px;height:22px;border:1px solid var(--walnut);display:inline-grid;place-items:center;color:transparent;transition:background .15s}
+.cell.on{background:var(--n10);color:var(--n0)}
+.cell.dis{border-color:var(--n4);cursor:not-allowed}
+.bars{display:flex;align-items:flex-end;gap:8px;height:120px;border-bottom:1px solid var(--walnut);margin-top:10px}
+.bars>div{flex:1;background:var(--m600);transform-origin:bottom;animation:barGrow .7s both;position:relative}
+.bars>div.low{background:var(--n4)}
+.bars span{position:absolute;bottom:-20px;left:0;right:0;text-align:center;font-size:10px;color:var(--n7)}
+.log-table{width:100%;border-collapse:collapse;margin-top:6px}
+.log-table td,.log-table th{padding:9px 8px;border-bottom:1px solid var(--n3);text-align:left;vertical-align:top}
+.log-table th{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--n7);font-weight:600;border-bottom:1px solid var(--walnut)}
+.diff{color:var(--n7)}
+.diff b{color:var(--n10)}
+.overlay{position:fixed;inset:0;background:rgba(64,58,52,.45);z-index:80;display:flex;align-items:flex-start;justify-content:center;padding-top:14vh;animation:fadeIn .15s}
+.overlay.center{align-items:center;padding-top:0}
+.modal{width:480px;max-width:92%;background:var(--n0);border:1px solid var(--walnut);padding:26px;animation:slideUp .25s}
+.cmdk{width:560px;max-width:92%;background:var(--n0);border:1px solid var(--walnut);animation:slideUp .2s}
+.cmdk input{width:100%;height:50px;border:none;border-bottom:1px solid var(--walnut);padding:0 18px;font-size:15px;outline:none;background:var(--n0)}
+.cmdk-item{width:100%;text-align:left;padding:11px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--n3)}
+.cmdk-item.on,.cmdk-item:hover{background:var(--m50);color:var(--m700)}
+.toast{position:fixed;right:28px;bottom:28px;background:var(--n10);color:var(--n0);padding:12px 18px;z-index:100;animation:slideUp .3s;display:flex;gap:10px;align-items:center}
+.note{display:flex;gap:10px;border:1px solid var(--n5);padding:10px 12px;color:var(--n8);margin-top:14px;background:var(--n0)}
+@media(max-width:900px){.sidebar{display:none}.main{margin-left:0;width:100%}.md{grid-template-columns:1fr}.strip{flex-wrap:wrap}.strip>div{flex:1 1 45%}.kvs{grid-template-columns:1fr}.content{padding:16px}.topbar{padding:0 16px}}
+</style>
+</head>
+<body data-archetype="linear-sidebar-cmdk">
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useMemo}=React;
+const won=n=>n.toLocaleString('ko-KR')+'원';
+
+const CYCLES=[
+  {id:'SB-20418-07',cust:'김*하',pet:'보리 · 말티즈',n:7,amt:76200,due:'10.07 09:00',st:'fail',code:'한도 초과 (카드사 응답 51)',cycle:30,items:['루미도그 그레인프리 2kg ×1','눈물자국 케어 영양제 ×1','초강력 흡수 배변패드 ×1'],tries:[['10.07 09:00','1차 결제 시도','fail','카드사 응답: 한도 초과'],['10.07 09:00','결제 실패 안내 알림톡','','발송 완료 · 고객 확인 대기'],['10.07 13:00','2차 자동 재시도 예약','','4시간 간격 · 최대 3회']]},
+  {id:'SB-19983-03',cust:'박*준',pet:'모카 · 코리안 숏헤어',n:3,amt:52800,due:'10.07 09:00',st:'fail',code:'유효기간 만료 카드',cycle:45,items:['올리브캣 시니어 신장 케어 1.5kg ×1','두부 캣 모래 6L ×2'],tries:[['10.07 09:00','1차 결제 시도','fail','카드 유효기간 만료'],['10.07 09:01','결제수단 변경 요청 알림톡','','발송 완료']]},
+  {id:'SB-20102-12',cust:'이*은',pet:'콩이 · 푸들',n:12,amt:112400,due:'10.07 09:00',st:'retry',code:'재처리 대기',cycle:30,items:['하늘마루 오리 & 고구마 1.5kg ×2','종합 면역 멀티비타민 ×1'],tries:[['10.06 09:00','1차 결제 시도','fail','PG 일시 오류 (타임아웃)'],['10.06 13:00','2차 결제 시도','fail','PG 일시 오류 (타임아웃)'],['10.07 08:40','운영자 재처리 요청','','멱등 키 발급 · 대기']]},
+  {id:'SB-20511-02',cust:'최*우',pet:'하루 · 비숑',n:2,amt:61000,due:'10.08 09:00',st:'plan',code:'',cycle:60,items:['루미도그 퍼피 성장 연어 2kg ×1','덴탈 껌 스몰 ×2'],tries:[['10.08 09:00','결제 예정','','결제 예정 안내 알림톡 10.07 09:00 발송']]},
+  {id:'SB-18877-15',cust:'정*민',pet:'나비 · 러시안 블루',n:15,amt:44500,due:'10.08 09:00',st:'plan',code:'',cycle:30,items:['올리브캣 헤어볼 케어 1.2kg ×1','유산균 장 건강 파우더 ×1'],tries:[['10.08 09:00','결제 예정','','결제 예정 안내 알림톡 10.07 09:00 발송']]},
+  {id:'SB-20230-05',cust:'한*서',pet:'초코 · 포메라니안',n:5,amt:89300,due:'10.09 09:00',st:'plan',code:'',cycle:45,items:['루미도그 그레인프리 2kg ×1','초강력 흡수 배변패드 ×2'],tries:[['10.09 09:00','결제 예정','','사전 안내 발송 예정 10.08']]},
+  {id:'SB-19420-09',cust:'오*진',pet:'레오 · 브리티시 숏헤어',n:9,amt:70400,due:'10.06 09:00',st:'ok',code:'',cycle:30,items:['올리브캣 시니어 신장 케어 1.5kg ×1','두부 캣 모래 6L ×2'],tries:[['10.06 09:00','결제 승인','pass','승인 완료 · 출고 지시 전달']]}
+];
+const STAT={fail:['결제 실패','fail'],retry:['재처리 대기',''],plan:['결제 예정',''],ok:['결제 승인','pass']};
+
+const PRODS=[
+  {id:'P-1042',name:'그레인프리 소형견 사료 2kg',brand:'루미도그',issue:'태그 누락',tags:['소형견','연어'],need:['말티즈','주니어'],note:'품종·연령대 태그가 없어 맞춤 추천 후보에서 빠집니다.'},
+  {id:'P-1107',name:'닭가슴살 동결건조 트릿',brand:'바삭펫',issue:'과다 태깅',tags:['전품종','소형견','대형견','퍼피','어덜트','시니어','닭고기','관절','피부','다이어트'],need:[],note:'태그 10개로 상한(8개)을 넘어 노출 우선순위가 왜곡됩니다.'},
+  {id:'P-1190',name:'시니어 신장 케어 캣 사료',brand:'올리브캣',issue:'매칭 오류',tags:['고양이','어덜트','코리안 숏헤어'],need:['시니어'],note:'상품 설명은 시니어 전용인데 연령대 태그가 어덜트로 붙어 있습니다.'},
+  {id:'P-1233',name:'두부 캣 모래 6L',brand:'뽀송하우스',issue:'태그 누락',tags:['전품종'],need:['패드·모래'],note:'세부속성 태그(무향·응고형)가 없습니다.'},
+  {id:'P-1301',name:'눈물자국 케어 영양제',brand:'올리브독',issue:'재고 0 노출',tags:['말티즈','비숑 프리제','영양제'],need:[],note:'재고 0인데 추천 노출 상태입니다. 노출 제한이 필요합니다.'}
+];
+const DICT=['말티즈','푸들','포메라니안','코리안 숏헤어','러시안 블루','퍼피','키튼','주니어','어덜트','시니어','소형견','전품종','무향','응고형','관절','피부','저알러지'];
+
+const RES=['상품','주문','회원 정보','정기배송','적립금','입양 심사'];
+const OPS=['보기','수정','삭제','다운로드'];
+const ROLES0=[
+  {id:'R1',name:'최고 관리자',who:3,perm:RES.map(()=>[1,1,1,1])},
+  {id:'R2',name:'상품 관리',who:5,perm:[[1,1,1,0],[1,0,0,0],[0,0,0,0],[1,0,0,0],[0,0,0,0],[0,0,0,0]]},
+  {id:'R3',name:'주문·물류',who:8,perm:[[1,0,0,0],[1,1,0,1],[1,0,0,0],[1,1,0,0],[0,0,0,0],[0,0,0,0]]},
+  {id:'R4',name:'고객센터',who:6,perm:[[1,0,0,0],[1,1,0,0],[1,1,0,0],[1,0,0,0],[1,1,0,0],[0,0,0,0]]},
+  {id:'R5',name:'입양 심사',who:2,perm:[[0,0,0,0],[0,0,0,0],[1,0,0,0],[0,0,0,0],[1,0,0,0],[1,1,0,0]]}
+];
+const LOG0=[
+  ['10.06 17:42','이도윤 (최고 관리자)','고객센터 · 회원 정보','다운로드: 해제','다운로드: 해제','개인정보 엑셀 다운로드 통제 정책'],
+  ['10.05 11:08','이도윤 (최고 관리자)','주문·물류 · 정기배송','수정: 해제','수정: 허용','회차 건너뛰기 처리 위임'],
+  ['10.03 15:21','박서연 (상품 관리)','할인율 · 정기배송 7%→7%','구간 5만원 초과','구간 5만원 초과','변경 없음 확인 기록'],
+  ['10.02 09:55','이도윤 (최고 관리자)','입양 심사 · 입양 심사','수정: 해제','수정: 허용','심사 담당 신규 지정']
+];
+
+function useToast(){const [t,setT]=useState(null);return [t,m=>{setT(m);setTimeout(()=>setT(null),2400);}];}
+
+/* ---- 처리 현황 ---- */
+const QUEUE=[
+  {id:'q1',t:'결제 실패 재처리',s:'정기배송 2건 · 재처리 대기 1건',n:3,go:'subscription',icon:'arrows-clockwise',desc:'카드 한도 초과와 유효기간 만료로 오늘 09:00 결제가 실패했습니다. 결제수단 변경 안내 알림톡은 이미 발송되었고, 2차 자동 재시도가 13:00에 예약되어 있습니다.',todo:['한도 초과 건은 고객 응답 후 재처리','유효기간 만료 건은 결제수단 변경 대기','PG 타임아웃 건은 멱등 키로 재처리']},
+  {id:'q2',t:'맞춤 태그 검수',s:'누락·과다·매칭 오류',n:5,go:'tags',icon:'tag',desc:'등록자가 붙인 태그 중 누락 2건, 과다 1건, 매칭 오류 1건, 재고 0 노출 1건이 검수 대기입니다. 총괄 관리자가 승인하면 추천 후보에 반영됩니다.',todo:['태그 누락 상품 보완','태그 상한(8개) 초과 정리','재고 0 상품 노출 제한']},
+  {id:'q3',t:'입양 계약서 심사',s:'보완 요청 응답 대기',n:2,go:null,icon:'file-text',desc:'본인과 심사 담당자만 열람할 수 있는 건입니다. 보완 요청에 대한 고객 응답을 기다리고 있습니다.',todo:['중복 검사 결과 확인','지급 승인은 심사 담당자만 가능']},
+  {id:'q4',t:'권한 변경 이력 확인',s:'최근 7일 4건',n:4,go:'audit',icon:'shield-check',desc:'가격·할인·적립·권한 변경은 변경 전후 값과 담당자, 사유가 함께 기록됩니다. 이번 주 변경 4건의 사유 기재 여부를 확인합니다.',todo:['사유 누락 건 없음 확인','다운로드 권한 변경 건 재확인']}
+];
+function Dashboard({go,toast}){
+  const [sel,setSel]=useState('q1');
+  const q=QUEUE.find(x=>x.id===sel);
+  const bars=[['월',96],['화',98],['수',97],['목',99],['금',95],['토',98],['일',97]];
+  return (
+    <div>
+      <div className="page-head">
+        <svg className="ledger-art" viewBox="0 0 360 120" fill="none" aria-hidden="true">
+            <defs><linearGradient id="la" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="var(--m300)" stopOpacity=".55"/><stop offset="1" stopColor="var(--n0)" stopOpacity="0"/></linearGradient></defs>
+            {[20,45,70,95].map(y=><line key={y} x1="0" x2="360" y1={y} y2={y} stroke="var(--n4)" strokeWidth="1"/>)}
+            <path d="M0 88 L45 74 L90 80 L135 52 L180 58 L225 36 L270 44 L315 22 L360 30 L360 120 L0 120Z" fill="url(#la)"/>
+            <path className="ledger-line" d="M0 88 L45 74 L90 80 L135 52 L180 58 L225 36 L270 44 L315 22 L360 30" stroke="var(--m600)" strokeWidth="1.6"/>
+          </svg>
+        <div><div className="eyebrow">TODAY LEDGER · 2026.10.07</div><h1 className="display" style={{marginTop:10}}>처리 현황</h1><p>정기배송 회차, 결제 실패, 태그 검수, 권한 변경을 한 장부에서 확인하고 해당 화면으로 이어서 처리합니다.</p></div>
+      </div>
+      <div className="strip">
+        <div style={{animationDelay:'0ms'}}><div className="eyebrow">오늘 결제 예정</div><div className="big num">1,284<small>건</small></div></div>
+        <div style={{animationDelay:'80ms'}}><div className="eyebrow">결제 실패</div><div className="big num">37<small>건</small></div></div>
+        <div style={{animationDelay:'160ms'}}><div className="eyebrow">태그 검수 대기</div><div className="big num">82<small>건</small></div></div>
+        <div style={{animationDelay:'240ms'}}><div className="eyebrow">재고 부족</div><div className="big num">14<small>개</small></div></div>
+      </div>
+      <div className="md">
+        <div className="list-rail">
+          <div className="rail-head"><div className="eyebrow">처리 대기 큐</div></div>
+          <div className="rail-body">
+            {QUEUE.map((x,i)=><button key={x.id} className={'row '+(sel===x.id?'on':'')} style={{animationDelay:i*70+'ms'}} onClick={()=>setSel(x.id)}>
+              <i className={'ph ph-'+x.icon} style={{fontSize:20,color:'var(--n8)',marginTop:2}}/>
+              <div><div className="t">{x.t}</div><div className="s">{x.s}</div></div>
+              <div className="r"><b className="num" style={{fontSize:18}}>{x.n}</b></div>
+            </button>)}
+          </div>
+        </div>
+        <section className="detail-panel" key={sel}>
+          <div className="eyebrow">DETAIL</div>
+          <h2 className="detail-title">{q.t}</h2>
+          <p style={{marginTop:10,color:'var(--n8)',maxWidth:560}}>{q.desc}</p>
+          <div className="sec"><h3>처리 체크리스트</h3>
+            {q.todo.map(x=><div key={x} className="line"><span>{x}</span><i className="ph ph-check" style={{color:'var(--n6)'}}/></div>)}
+          </div>
+          <div className="sec"><h3>최근 7일 결제 승인 추이 (샘플 데이터)</h3>
+            <div className="bars" style={{marginBottom:26}}>{bars.map(([d,v],i)=><div key={d} className={i===4?'low':''} style={{height:(v-80)*5+'px',animationDelay:i*80+'ms'}}><span>{d}</span></div>)}</div>
+          </div>
+          <div className="actions">
+            {q.go?<button className="btn btn-primary" onClick={()=>go(q.go)}>처리 화면으로 이동<i className="ph ph-arrow-right"/></button>:<button className="btn btn-primary" onClick={()=>toast('입양 심사 담당자 화면에서 처리됩니다')}>심사 담당자에게 전달</button>}
+            <button className="btn" onClick={()=>toast('담당자 지정 요청이 기록됩니다')}>담당자 지정</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+/* ---- 정기배송 ---- */
+function SubPage({toast}){
+  const [list,setList]=useState(CYCLES);
+  const [sel,setSel]=useState('SB-20418-07');
+  const [tab,setTab]=useState('all');
+  const [q,setQ]=useState('');
+  const [modal,setModal]=useState(null);
+  const [reason,setReason]=useState('고객이 결제수단을 변경함');
+  const view=list.filter(x=>(tab==='all'||(tab==='fail'&&(x.st==='fail'||x.st==='retry'))||(tab==='plan'&&x.st==='plan'))&&(x.id+x.cust+x.pet).includes(q));
+  const c=list.find(x=>x.id===sel)||list[0];
+  const key='idem-'+c.id.toLowerCase()+'-'+c.n+'-r'+(c.tries.length);
+  const reprocess=()=>{
+    setList(list.map(x=>x.id===c.id?{...x,st:'retry',code:'재처리 대기',tries:[...x.tries,['10.07 14:05','운영자 재처리 요청','','멱등 키 '+key+' · 사유: '+reason]]}:x));
+    setModal(null);toast('재처리가 큐에 등록됩니다 (같은 회차는 한 번만 결제)');
+  };
+  const skip=()=>{setList(list.map(x=>x.id===c.id?{...x,st:'plan',code:'',tries:[...x.tries,['10.07 14:07','회차 건너뛰기','','다음 회차로 이동 · 고객 안내 발송']]}:x));toast('이번 회차를 건너뛰고 고객에게 안내합니다');};
+  return (
+    <div>
+      <div className="page-head"><svg className="ledger-art" viewBox="0 0 360 120" fill="none" aria-hidden="true">
+            <defs><linearGradient id="la" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="var(--m300)" stopOpacity=".55"/><stop offset="1" stopColor="var(--n0)" stopOpacity="0"/></linearGradient></defs>
+            {[20,45,70,95].map(y=><line key={y} x1="0" x2="360" y1={y} y2={y} stroke="var(--n4)" strokeWidth="1"/>)}
+            <path d="M0 88 L45 74 L90 80 L135 52 L180 58 L225 36 L270 44 L315 22 L360 30 L360 120 L0 120Z" fill="url(#la)"/>
+            <path className="ledger-line" d="M0 88 L45 74 L90 80 L135 52 L180 58 L225 36 L270 44 L315 22 L360 30" stroke="var(--m600)" strokeWidth="1.6"/>
+          </svg><div><div className="eyebrow">SUBSCRIPTION LEDGER</div><h1 className="display" style={{marginTop:10}}>정기배송 회차</h1><p>예정 회차와 결제 실패 건을 한 줄씩 읽고, 오른쪽에서 시도 이력을 확인한 뒤 재처리합니다.</p></div></div>
+      <div className="md">
+        <div className="list-rail">
+          <div className="rail-head">
+            <div className="search"><i className="ph ph-magnifying-glass"/><input placeholder="회차 번호·고객·반려동물" value={q} onChange={e=>setQ(e.target.value)}/></div>
+            <div className="tabs">{[['all','전체'],['fail','실패·재처리'],['plan','예정']].map(([k,l])=><button key={k} className={'tab '+(tab===k?'on':'')} onClick={()=>setTab(k)}>{l}</button>)}</div>
+          </div>
+          <div className="rail-body">
+            {view.map((x,i)=><button key={x.id} className={'row '+(sel===x.id?'on':'')} style={{animationDelay:i*50+'ms'}} onClick={()=>setSel(x.id)}>
+              <span className={'dot '+(x.st==='fail'?'bad':x.st==='ok'?'ok':'')}/>
+              <div><div className="t">{x.cust} · {x.pet}</div><div className="s">{x.id} · {x.n}회차 · {x.due}</div></div>
+              <div className="r"><b className="num">{won(x.amt)}</b><div className="s">{STAT[x.st][0]}</div></div>
+            </button>)}
+            {view.length===0&&<div style={{padding:24,color:'var(--n7)'}}>조건에 맞는 회차가 없습니다.</div>}
+          </div>
+        </div>
+        <section className="detail-panel" key={c.id+c.tries.length}>
+          <div style={{display:'flex',gap:10,alignItems:'center'}}><span className="eyebrow">{c.id}</span><span className={'badge '+STAT[c.st][1]}>{STAT[c.st][0]}</span></div>
+          <h2 className="detail-title">{c.cust} · {c.pet}</h2>
+          <div className="kvs">
+            <div><span className="eyebrow">회차 금액</span><b className="num">{won(c.amt)}</b></div>
+            <div><span className="eyebrow">주기</span><b>{c.cycle}일 · {c.n}회차</b></div>
+            <div><span className="eyebrow">결제 예정</span><b>{c.due}</b></div>
+          </div>
+          {c.code&&<div className="note"><i className="ph ph-warning-circle" style={{fontSize:18}}/><span>{c.code}</span></div>}
+          <div className="sec"><h3>구성 상품</h3>{c.items.map(x=><div key={x} className="line"><span>{x}</span></div>)}</div>
+          <div className="sec"><h3>결제 시도 이력</h3>
+            <div className="log" style={{marginTop:12}}>{c.tries.map((t,i)=><div key={i} className={t[2]}><b>{t[1]}</b> <span className="s" style={{color:'var(--n7)'}}>{t[0]}</span><div className="diff">{t[3]}</div></div>)}</div>
+          </div>
+          <div className="actions">
+            <button className="btn btn-primary" disabled={c.st==='plan'||c.st==='ok'} onClick={()=>setModal('re')}><i className="ph ph-arrows-clockwise"/>재처리 요청</button>
+            <button className="btn" disabled={c.st==='ok'} onClick={skip}><i className="ph ph-skip-forward"/>회차 건너뛰기</button>
+            <button className="btn btn-quiet" onClick={()=>toast('결제수단 변경 안내 알림톡이 발송됩니다 (실패 시 문자 대체)')}><i className="ph ph-bell"/>고객 안내 발송</button>
+          </div>
+        </section>
+      </div>
+      {modal&&<div className="overlay center" onClick={()=>setModal(null)}><div className="modal" onClick={e=>e.stopPropagation()}>
+        <div className="eyebrow">재처리 확인</div>
+        <h2 style={{fontSize:24,fontWeight:500,letterSpacing:'-.03em',marginTop:6}}>{c.id} {c.n}회차를 다시 결제합니다</h2>
+        <div className="field"><label className="eyebrow">사유</label><select className="inp" value={reason} onChange={e=>setReason(e.target.value)}><option>고객이 결제수단을 변경함</option><option>PG 일시 오류 복구</option><option>한도 초과 해소 확인</option></select></div>
+        <div className="field"><label className="eyebrow">멱등 키 (중복 결제 방지)</label><input className="inp" readOnly value={key}/></div>
+        <div className="note"><i className="ph ph-shield-check" style={{fontSize:18}}/><span>같은 키로는 한 번만 승인됩니다. 이미 승인된 회차는 재처리되지 않습니다.</span></div>
+        <div className="actions"><button className="btn btn-primary" onClick={reprocess}>재처리 실행</button><button className="btn" onClick={()=>setModal(null)}>취소</button></div>
+      </div></div>}
+    </div>
+  );
+}
+
+/* ---- 태그 검수 ---- */
+function TagPage({toast}){
+  const [list,setList]=useState(PRODS);
+  const [sel,setSel]=useState('P-1042');
+  const [add,setAdd]=useState('말티즈');
+  const [done,setDone]=useState({});
+  const p=list.find(x=>x.id===sel);
+  const edit=(fn)=>setList(list.map(x=>x.id===sel?{...x,tags:fn(x.tags)}:x));
+  const verdict=(v)=>{setDone({...done,[sel]:v});toast(v==='ok'?`${p.id} 검수 승인 — 추천 후보에 반영됩니다`:`${p.id} 반려 — 등록자에게 보완 요청이 전달됩니다`);};
+  return (
+    <div>
+      <div className="page-head"><div><div className="eyebrow">TAG REVIEW</div><h1 className="display" style={{marginTop:10}}>맞춤 태그 검수</h1><p>태그는 표준 사전에서만 고르고, 등록자·검수자·총괄 관리자의 권한은 서로 분리됩니다.</p></div></div>
+      <div className="md">
+        <div className="list-rail">
+          <div className="rail-head"><div className="eyebrow">검수 대기 {list.length - Object.keys(done).length}건</div></div>
+          <div className="rail-body">
+            {list.map((x,i)=><button key={x.id} className={'row '+(sel===x.id?'on':'')} style={{animationDelay:i*60+'ms'}} onClick={()=>setSel(x.id)}>
+              <span className={'dot '+(done[x.id]==='ok'?'ok':'')}/>
+              <div><div className="t">{x.name}</div><div className="s">{x.id} · {x.brand}</div></div>
+              <div className="r"><span className="badge">{done[x.id]?(done[x.id]==='ok'?'승인':'반려'):x.issue}</span></div>
+            </button>)}
+          </div>
+        </div>
+        <section className="detail-panel" key={sel}>
+          <div className="eyebrow">{p.id} · {p.brand}</div>
+          <h2 className="detail-title">{p.name}</h2>
+          <div className="note"><i className="ph ph-warning-circle" style={{fontSize:18}}/><span><b>{p.issue}</b> — {p.note}</span></div>
+          <div className="sec"><h3>현재 태그 {p.tags.length}개 (상한 8개)</h3>
+            <div className="tagrow">{p.tags.map(t=><span key={t} className="tag">{t}<button aria-label="태그 삭제" onClick={()=>edit(ts=>ts.filter(x=>x!==t))}><i className="ph ph-x"/></button></span>)}</div>
+          </div>
+          {p.need.length>0&&<div className="sec"><h3>제안 태그</h3><div className="tagrow">{p.need.map(t=><button key={t} className="tag ghost" onClick={()=>edit(ts=>ts.includes(t)?ts:[...ts,t])}><i className="ph ph-plus"/>{t}</button>)}</div></div>}
+          <div className="sec"><h3>사전에서 추가</h3>
+            <div style={{display:'flex',gap:10,marginTop:8}}>
+              <select className="inp" style={{maxWidth:240}} value={add} onChange={e=>setAdd(e.target.value)}>{DICT.map(d=><option key={d}>{d}</option>)}</select>
+              <button className="btn" onClick={()=>edit(ts=>ts.includes(add)?ts:[...ts,add])}><i className="ph ph-plus"/>태그 추가</button>
+            </div>
+          </div>
+          <div className="actions">
+            <button className="btn btn-primary" onClick={()=>verdict('ok')}><i className="ph ph-check"/>검수 승인</button>
+            <button className="btn" onClick={()=>verdict('no')}>반려하고 보완 요청</button>
+          </div>
+          <div className="note" style={{marginTop:22}}><i className="ph ph-user-circle" style={{fontSize:18}}/><span>등록자는 태그를 붙이고, 검수자는 예외만 확인하며, 승인 확정은 총괄 관리자만 가능합니다.</span></div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+/* ---- 권한·이력 ---- */
+function AuditPage({toast}){
+  const [roles,setRoles]=useState(ROLES0);
+  const [sel,setSel]=useState('R4');
+  const [log,setLog]=useState(LOG0);
+  const [why,setWhy]=useState('');
+  const [draft,setDraft]=useState(null);
+  const r=roles.find(x=>x.id===sel);
+  const perm=draft||r.perm;
+  const dirty=draft&&JSON.stringify(draft)!==JSON.stringify(r.perm);
+  useEffect(()=>{setDraft(null);setWhy('');},[sel]);
+  const flip=(i,j)=>{if(r.id==='R1')return;const d=perm.map(x=>[...x]);d[i][j]=d[i][j]?0:1;setDraft(d);};
+  const save=()=>{
+    if(why.trim().length<5){toast('변경 사유를 5자 이상 입력해 주세요');return;}
+    const ch=[];perm.forEach((row,i)=>row.forEach((v,j)=>{if(v!==r.perm[i][j])ch.push([RES[i]+' · '+OPS[j],OPS[j]+': '+(r.perm[i][j]?'허용':'해제'),OPS[j]+': '+(v?'허용':'해제')]);}));
+    setLog([...ch.map(c=>['10.07 14:12','이도윤 (최고 관리자)',r.name+' · '+c[0],c[1],c[2],why]),...log]);
+    setRoles(roles.map(x=>x.id===r.id?{...x,perm}:x));setDraft(null);setWhy('');toast('변경 전후 값과 사유가 이력에 기록됩니다');
+  };
+  return (
+    <div>
+      <div className="page-head"><div><div className="eyebrow">ACCESS & AUDIT</div><h1 className="display" style={{marginTop:10}}>직무 권한과 변경 이력</h1><p>권한은 서버에서 한 번 더 확인되며, 모든 변경은 변경 전후 값·담당자·사유와 함께 남습니다.</p></div></div>
+      <div className="md" style={{minHeight:420}}>
+        <div className="list-rail">
+          <div className="rail-head"><div className="eyebrow">직무</div></div>
+          <div className="rail-body">
+            {roles.map((x,i)=><button key={x.id} className={'row '+(sel===x.id?'on':'')} style={{animationDelay:i*60+'ms'}} onClick={()=>setSel(x.id)}>
+              <i className="ph ph-key" style={{fontSize:18,color:'var(--n8)',marginTop:2}}/>
+              <div><div className="t">{x.name}</div><div className="s">담당자 {x.who}명</div></div>
+              <div className="r"><span className="badge">{x.perm.flat().filter(Boolean).length}/24</span></div>
+            </button>)}
+          </div>
+        </div>
+        <section className="detail-panel" key={sel}>
+          <div className="eyebrow">{r.id}</div>
+          <h2 className="detail-title">{r.name} 권한</h2>
+          <table className="matrix"><thead><tr><th>대상</th>{OPS.map(o=><th key={o}>{o}</th>)}</tr></thead>
+            <tbody>{RES.map((res,i)=><tr key={res}><td>{res}</td>{OPS.map((o,j)=>{const lock=r.id==='R1';return <td key={o}><button className={'cell '+(perm[i][j]?'on':'')+(lock?' dis':'')} aria-label={res+' '+o} onClick={()=>flip(i,j)}><i className="ph ph-check" style={{fontSize:13}}/></button></td>;})}</tr>)}</tbody>
+          </table>
+          {r.id==='R1'?<div className="note"><i className="ph ph-lock-key" style={{fontSize:18}}/><span>최고 관리자 권한은 이 화면에서 변경할 수 없습니다.</span></div>:
+          <div className="field"><label className="eyebrow">변경 사유 (필수)</label><textarea className="inp" value={why} onChange={e=>setWhy(e.target.value)} placeholder="예: 고객 문의 응대를 위해 보기 권한이 필요합니다"/></div>}
+          <div className="actions"><button className="btn btn-primary" disabled={!dirty||r.id==='R1'} onClick={save}><i className="ph ph-floppy-disk"/>변경 저장</button><button className="btn" disabled={!dirty} onClick={()=>setDraft(null)}>되돌리기</button></div>
+        </section>
+      </div>
+      <div className="sec" style={{marginTop:30}}><h3>변경 이력</h3>
+        <table className="log-table"><thead><tr><th>일시</th><th>담당자</th><th>대상</th><th>변경 전</th><th>변경 후</th><th>사유</th></tr></thead>
+          <tbody>{log.map((l,i)=><tr key={i} style={{animation:'rowIn .4s both',animationDelay:i*40+'ms'}}><td className="num">{l[0]}</td><td>{l[1]}</td><td>{l[2]}</td><td className="diff">{l[3]}</td><td><b>{l[4]}</b></td><td className="diff">{l[5]}</td></tr>)}</tbody></table>
+      </div>
+    </div>
+  );
+}
+
+function App(){
+  const [view,setView]=useState('main');
+  const [cmd,setCmd]=useState(false);
+  const [cq,setCq]=useState('');
+  const [t,toast]=useToast();
+  const NAV=[['main','처리 현황 대시보드','squares-four',null],['subscription','정기배송 회차·결제 실패 재처리','arrows-clockwise',3],['tags','맞춤 태그 검수','tag',82],['audit','직무 권한·변경 이력','shield-check',null]];
+  useEffect(()=>{
+    const h=e=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();setCmd(c=>!c);}if(e.key==='Escape')setCmd(false);};
+    window.addEventListener('keydown',h);return()=>window.removeEventListener('keydown',h);
+  },[]);
+  const go=v=>{setView(v);setCmd(false);setCq('');window.scrollTo(0,0);};
+  const cur=NAV.find(n=>n[0]===view);
+  const cmds=[...NAV.map(n=>({k:n[0],l:n[1]+' 이동',i:n[2]})),{k:'subscription',l:'결제 실패 회차 바로 보기',i:'warning-circle'}].filter(c=>c.l.includes(cq));
+  return (
+    <div className="app" id="app-shell">
+      <aside className="sidebar" data-sidebar style={{width:260}}>
+        <div className="sidebar-brand"><div className="brand-mark"><i className="ph ph-paw-print"/></div><div><div className="brand-name">포근펫 운영 콘솔</div><div className="brand-sub">Back Office</div></div></div>
+        <button className="sidebar-cmdk-hint" data-cmdk-trigger onClick={()=>setCmd(true)}><i className="ph ph-magnifying-glass"/>빠른 이동<kbd>⌘K</kbd></button>
+        <div className="sidebar-section-title eyebrow">운영</div>
+        <nav className="sidebar-nav">
+          {NAV.map(([id,label,ic,n])=><a key={id} href="#" className={'sidebar-link '+(view===id?'on':'')} onClick={e=>{e.preventDefault();go(id);}}><i className={'ph ph-'+ic}/><span>{label}</span>{n&&<span className="cnt num">{n}</span>}</a>)}
+        </nav>
+        <div className="sidebar-section-title eyebrow">정책 기준표</div>
+        <nav className="sidebar-nav">
+          <a href="#" className="sidebar-link" onClick={e=>{e.preventDefault();toast('할인 구간: 5만·8만·15만원 초과 시 7·10·12%');}}><i className="ph ph-percent"/><span>정기배송 할인 구간</span></a>
+          <a href="#" className="sidebar-link" onClick={e=>{e.preventDefault();toast('적립금: 주문당 결제금액 30% 한도');}}><i className="ph ph-coins"/><span>적립금 사용 규칙</span></a>
+          <a href="#" className="sidebar-link" onClick={e=>{e.preventDefault();toast('알림톡 템플릿: 결제 예정·실패·배송 안내');}}><i className="ph ph-chat-circle-text"/><span>알림톡 템플릿</span></a>
+          <a href="#" className="sidebar-link" onClick={e=>{e.preventDefault();toast('백업: 일 1회 · 복구 리허설 분기 1회');}}><i className="ph ph-database"/><span>백업·복구 기준</span></a>
+        </nav>
+        <div className="sidebar-user"><div className="ava">이</div><div><div style={{fontWeight:600}}>이도윤</div><div className="eyebrow">최고 관리자</div></div></div>
+      </aside>
+      <main className="main">
+        <header className="topbar" style={{height:56}}>
+          <nav className="breadcrumb"><a href="#" onClick={e=>{e.preventDefault();go('main');}}>포근펫</a><span className="divider">/</span><a href="#" onClick={e=>{e.preventDefault();go('main');}}>운영</a><span className="divider">/</span><b>{cur[1]}</b></nav>
+          <div className="topbar-actions">
+            <button className="btn btn-cmdk" onClick={()=>setCmd(true)}><i className="ph ph-command"/>K</button>
+            <button className="btn btn-primary" onClick={()=>go('subscription')}><i className="ph ph-arrows-clockwise"/>실패 건 처리</button>
+          </div>
+        </header>
+        <div className="content" key={view}>
+          {view==='main'&&<Dashboard go={go} toast={toast}/>}
+          {view==='subscription'&&<SubPage toast={toast}/>}
+          {view==='tags'&&<TagPage toast={toast}/>}
+          {view==='audit'&&<AuditPage toast={toast}/>}
+          <div style={{marginTop:36,color:'var(--n7)',fontSize:11}}>© 2026 포근펫 샘플 몰 — 자체 개발 프로젝트 데모</div>
+        </div>
+      </main>
+      {cmd&&<div className="overlay" onClick={()=>setCmd(false)}><div className="cmdk" onClick={e=>e.stopPropagation()}>
+        <input autoFocus placeholder="이동할 화면이나 작업을 입력하세요" value={cq} onChange={e=>setCq(e.target.value)}/>
+        {cmds.map(c=><button key={c.l} className="cmdk-item" onClick={()=>go(c.k)}><i className={'ph ph-'+c.i} style={{fontSize:18}}/>{c.l}</button>)}
+        {cmds.length===0&&<div style={{padding:18,color:'var(--n7)'}}>일치하는 항목이 없습니다.</div>}
+      </div></div>}
+      {t&&<div className="toast"><i className="ph ph-check-circle"/>{t}</div>}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
