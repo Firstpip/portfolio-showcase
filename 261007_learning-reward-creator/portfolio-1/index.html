@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>퀴즈 학습 리워드 앱 크리에이터 콘텐츠·등급 — 맞춤 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<style>
+/* ── 컬러 역할 토큰 P1 — 메인 1 · 서브 3 · 나머지 무채색 (gen-color-tokens.js 산출, hue 67°, light) ── */
+:root{
+  /* 메인 — 브랜드 마크·primary CTA(화면당 1)·활성 nav·링크·주 차트·포커스. 앵커 m600 = plan primary */
+  --m50:#fcfdf0;
+  --m100:#f9fce0;
+  --m200:#f2f9c1;
+  --m300:#ebf59c;
+  --m400:#e2f072;
+  --m500:#daec4b;
+  --m600:#d2e823;
+  --m700:#acbe1d;
+  --m800:#869416;
+  --m900:#5e6810;
+  /* 무채색 — 배경(n0~n2)·테두리/비활성(n3~n5)·아이콘/보조텍스트(n6~n8)·본문/다크필(n9~n10). 아바타·태그·아이콘박스·KPI배경·보조 차트는 전부 여기 */
+  --n0:#f3f3f1;
+  --n1:#ffffff;
+  --n2:#f0f0ef;
+  --n3:#e6e6e5;
+  --n4:#d7d7d5;
+  --n5:#babab5;
+  --n6:#979890;
+  --n7:#797a71;
+  --n8:#676b5f;
+  --n9:#3a3a36;
+  --n10:#000000;
+  /* 서브 — 상태 의미가 있을 때만. 배지=bg+text, 점/셀/바=solid */
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b; /* 성공/진행/정상/상승 */
+  --s2:#cf3f3f; --s2-bg:#f9e7e7; --s2-text:#ad1f1f; /* 오류/위험/실패/하락/환불 */
+  --s3:#d48d11; --s3-bg:#f6f1ea; --s3-text:#8b6118; /* 경고/주의 */
+}
+
+/* ── 상태 레이어 P1 — 모양은 페이지가, 상태는 여기서 (gen-component-kit.js 산출, 색은 토큰만) ── */
+/* state-layer elevation=flat theme=light */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{filter:brightness(.94);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #111111;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--s2);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%}
+body{font-family:'Pretendard',system-ui,sans-serif;background:var(--n0);color:var(--n10);font-size:16px;line-height:1.5;letter-spacing:-.01em;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;color:inherit;cursor:pointer;background:none;border:0}
+input,select{font-family:inherit;font-size:15px;color:var(--n10)}
+.ti{font-size:20px;line-height:1;vertical-align:middle}
+:root{--ink:2px solid var(--n10);--r-card:28px;--r-pill:99px}
+@keyframes riseIn{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+@keyframes livePulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--s1) 55%,transparent)}100%{box-shadow:0 0 0 9px transparent}}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes colGrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+@keyframes ringDraw{from{stroke-dashoffset:var(--ring-len)}to{stroke-dashoffset:var(--ring-off)}}
+@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+@keyframes slideIn{from{transform:translateX(100%)}to{transform:none}}
+@keyframes toastUp{from{opacity:0;transform:translate(-50%,14px)}to{opacity:1;transform:translate(-50%,0)}}
+
+[data-archetype]{width:100%;min-height:100vh;display:flex;flex-direction:column}
+/* ── 상단 sticky 검색 헤더 ── */
+.search-header{position:sticky;top:0;z-index:30;background:var(--n0);border-bottom:var(--ink)}
+.header-row{max-width:1200px;margin:0 auto;display:flex;align-items:center;gap:20px;padding:14px 24px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:22px;letter-spacing:-.04em;white-space:nowrap}
+.brand-mark{width:38px;height:38px;border-radius:50%;background:var(--m600);border:var(--ink);display:grid;place-items:center}
+.brand-mark .ti{font-size:20px;color:var(--n10)}
+.search-bar{flex:1;display:flex;align-items:center;background:var(--n1);border:var(--ink);border-radius:var(--r-pill);padding:5px 5px 5px 20px;gap:4px;max-width:720px}
+.search-segment{display:flex;flex-direction:column;padding:2px 14px;border-left:2px solid var(--n3);min-width:130px}
+.search-segment:first-child{border-left:0;padding-left:0;flex:1;min-width:0}
+.segment-label{font-size:11px;font-weight:700;color:var(--n7);letter-spacing:.02em}
+.search-segment input,.search-segment select{border:0;outline:0;background:transparent;font-size:14px;font-weight:600;width:100%;padding:0;appearance:none;-webkit-appearance:none}
+.search-segment input:focus,.search-segment select:focus{box-shadow:none}
+.search-submit{width:44px;height:44px;border-radius:50%;background:var(--m600);border:var(--ink);display:grid;place-items:center;transition:transform .15s}
+.search-submit:hover{transform:rotate(-8deg) scale(1.06)}
+.header-nav{display:flex;align-items:center;gap:8px;margin-left:auto}
+.role-switch{display:flex;background:var(--n2);border:var(--ink);border-radius:var(--r-pill);padding:3px}
+.role-switch button{padding:7px 14px;border-radius:var(--r-pill);font-size:13px;font-weight:700;color:var(--n8);display:flex;align-items:center;gap:6px}
+.role-switch button.on{background:var(--m600);color:var(--n10);outline:2px solid var(--n10);outline-offset:-2px}
+/* 화면 탭 */
+.screen-tabs{max-width:1200px;margin:0 auto;width:100%;padding:0 24px 12px;display:flex;gap:8px;flex-wrap:wrap}
+.screen-tabs button{padding:9px 16px;border-radius:var(--r-pill);border:2px solid var(--n4);font-size:13.5px;font-weight:700;color:var(--n8);background:var(--n1);display:flex;align-items:center;gap:7px;transition:border-color .15s,background .15s}
+.screen-tabs button:hover{border-color:var(--n10)}
+.screen-tabs button.on{background:var(--m600);color:var(--n10);border:var(--ink)}
+.screen-tabs .ti{font-size:17px}
+/* 칩 */
+.filter-chips{max-width:1200px;margin:0 auto;width:100%;padding:0 24px;display:flex;gap:8px;overflow-x:auto;scrollbar-width:none}
+.chip{flex:none;padding:8px 16px;border-radius:var(--r-pill);border:2px solid var(--n4);background:var(--n1);font-size:14px;font-weight:600;color:var(--n8);display:flex;align-items:center;gap:6px;transition:all .15s}
+.chip:hover{border-color:var(--n10)}
+.chip.active{background:var(--n10);color:var(--n0);border-color:var(--n10)}
+.chip .ti{font-size:16px}
+main{flex:1;width:100%;max-width:1200px;margin:0 auto;padding:36px 24px 72px}
+.screen{display:none}
+.screen.on{display:block;animation:riseIn .45s ease both}
+/* 히어로 */
+.hero{display:flex;align-items:flex-end;justify-content:space-between;gap:32px;margin-bottom:28px}
+.hero h1{font-size:56px;line-height:1.06;font-weight:800;letter-spacing:-.043em}
+.hero h1 mark{background:linear-gradient(transparent 58%,var(--m600) 58%);color:inherit;padding:0 4px}
+.hero p{font-size:16px;color:var(--n8);margin-top:12px;max-width:520px}
+.hero-art{width:340px;flex:none}.hero-art svg{width:100%;display:block}
+.stat-sticker{border:var(--ink);border-radius:var(--r-card);background:var(--n1);padding:12px 20px;text-align:center;animation:floaty 5s ease-in-out infinite}
+.stat-sticker:nth-child(2){animation-delay:-2.2s}
+.stat-sticker b{display:block;font-size:28px;font-weight:800;letter-spacing:-.04em;line-height:1.1}
+.stat-sticker span{font-size:12px;color:var(--n7);font-weight:600}
+/* 크리에이터 레일 */
+.layout-grid{display:grid;grid-template-columns:230px 1fr;gap:28px;align-items:start}
+.filter-rail{position:sticky;top:176px;border:var(--ink);border-radius:var(--r-card);background:var(--n1);padding:20px}
+.filter-rail h3{font-size:13px;font-weight:800;color:var(--n7);letter-spacing:.04em;margin-bottom:12px}
+.rail-creator{width:100%;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:16px;font-size:14px;font-weight:600;text-align:left;transition:background .15s}
+.rail-creator:hover{background:var(--n2)}
+.rail-creator.on{background:var(--m50);outline:2px solid var(--n10);outline-offset:-2px}
+.rail-creator small{display:block;font-size:11.5px;color:var(--n7);font-weight:500}
+.avatar{width:34px;height:34px;border-radius:50%;background:var(--n2);color:var(--n8);display:grid;place-items:center;font-size:13px;font-weight:800;flex:none;border:2px solid var(--n10)}
+.rail-div{height:2px;background:var(--n3);margin:16px 0}
+.rail-sort{width:100%;padding:10px 12px;border:2px solid var(--n4);border-radius:14px;background:var(--n1);font-weight:600;font-size:14px}
+.result-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;font-size:14px;color:var(--n8)}
+.result-bar b{color:var(--n10);font-size:18px;letter-spacing:-.02em}
+/* 카드 그리드 */
+.card-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.listing-card{border:var(--ink);border-radius:var(--r-card);background:var(--n1);overflow:hidden;text-align:left;display:flex;flex-direction:column;transition:transform .18s,background .18s;animation:riseIn .5s ease both}
+.listing-card:hover{transform:translate(-3px,-3px);background:var(--m50)}
+.card-img{aspect-ratio:280 / 136;background:var(--n2);border-bottom:var(--ink);position:relative;overflow:hidden}
+.card-img svg{width:100%;height:100%;display:block}
+.card-tag{position:absolute;left:12px;top:12px;background:var(--n1);border:2px solid var(--n10);border-radius:var(--r-pill);padding:3px 11px;font-size:11.5px;font-weight:800}
+.card-body{padding:16px 18px 18px;display:flex;flex-direction:column;gap:10px;flex:1}
+.card-title{font-size:17px;font-weight:700;letter-spacing:-.03em;line-height:1.3}
+.card-meta{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--n8)}
+.card-meta .avatar{width:26px;height:26px;font-size:10.5px;border-width:1.5px}
+.card-foot{margin-top:auto;display:flex;align-items:center;justify-content:space-between;padding-top:10px;border-top:2px dashed var(--n4);font-size:13px;color:var(--n8)}
+.price{font-weight:800;font-size:15px;color:var(--n10);display:flex;align-items:center;gap:4px}
+.rating{display:flex;align-items:center;gap:3px;font-weight:700}
+.empty{grid-column:1/-1;text-align:center;padding:56px 20px;border:2px dashed var(--n5);border-radius:var(--r-card);color:var(--n7)}
+.empty svg{width:120px;margin-bottom:12px}
+.empty h4{font-size:18px;color:var(--n10);margin-bottom:4px}
+/* 버튼 */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:14px 26px;border-radius:var(--r-pill);font-weight:700;font-size:15px;border:var(--ink);transition:transform .12s}
+.btn:hover{transform:translateY(-2px)}
+.btn-primary{background:var(--m600);color:var(--n10)}
+.btn-ghost{background:transparent;color:var(--n10)}
+.btn-sm{padding:8px 16px;font-size:13px}
+/* 퀵뷰 */
+.scrim{position:fixed;inset:0;background:color-mix(in srgb,var(--n10) 45%,transparent);z-index:60;display:none}
+.scrim.on{display:block}
+.quick-view{position:fixed;right:0;top:0;bottom:0;width:440px;max-width:100%;background:var(--n0);border-left:var(--ink);z-index:70;padding:28px;overflow:auto;display:none;flex-direction:column;gap:18px}
+.quick-view.on{display:flex;animation:slideIn .3s ease both}
+.qv-close{align-self:flex-end;width:40px;height:40px;border-radius:50%;border:var(--ink);display:grid;place-items:center;background:var(--n1)}
+.qv-art{height:170px;border:var(--ink);border-radius:var(--r-card);overflow:hidden;background:var(--n2)}
+.qv-art svg{width:100%;height:100%}
+.quick-view h2{font-size:28px;line-height:1.15;letter-spacing:-.04em;font-weight:800}
+.qv-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.qv-cell{border:2px solid var(--n10);border-radius:20px;background:var(--n1);padding:12px;text-align:center}
+.qv-cell b{display:block;font-size:22px;font-weight:800;letter-spacing:-.03em}
+.qv-cell span{font-size:12px;color:var(--n7);font-weight:600}
+.qv-creator{display:flex;align-items:center;gap:12px;padding:14px;border:2px solid var(--n4);border-radius:22px;background:var(--n1)}
+/* 섹션 카드 */
+.panel{border:var(--ink);border-radius:var(--r-card);background:var(--n1);padding:26px}
+.panel h3{font-size:20px;font-weight:800;letter-spacing:-.03em;margin-bottom:4px}
+.panel .sub{font-size:13.5px;color:var(--n7);margin-bottom:18px}
+.two-col{display:grid;grid-template-columns:1.05fr 1fr;gap:20px}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:3px 11px;border-radius:var(--r-pill);font-size:12px;font-weight:700;background:var(--n2);color:var(--n8)}
+.badge.ok{background:var(--s1-bg);color:var(--s1-text)}
+.badge i{width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block}
+.badge.live i{animation:livePulse 1.6s infinite}
+/* 프로필 */
+.profile-head{display:flex;gap:24px;align-items:center;margin-bottom:20px}
+.avatar-xl{width:96px;height:96px;border-radius:50%;background:var(--n10);color:var(--n0);display:grid;place-items:center;font-size:34px;font-weight:800;border:var(--ink);flex:none}
+.profile-head h2{font-size:40px;letter-spacing:-.045em;font-weight:800;line-height:1.1}
+.profile-head p{color:var(--n8);margin-top:6px}
+.rev-fig{font-size:44px;font-weight:800;letter-spacing:-.045em;line-height:1.1}
+.cols{display:flex;align-items:flex-end;gap:12px;height:140px;margin-top:20px}
+.col{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%;justify-content:flex-end;font-size:12px;color:var(--n7);font-weight:600}
+.col i{display:block;width:100%;background:var(--n4);border:2px solid var(--n10);border-radius:12px 12px 4px 4px;transform-origin:bottom;animation:colGrow .8s ease both}
+.col.cur i{background:var(--m600)}
+.locked{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;padding:36px 16px;border:2px dashed var(--n5);border-radius:22px;color:var(--n7)}
+.locked .ti{font-size:34px;color:var(--n8)}
+.row-item{display:flex;align-items:center;gap:14px;padding:14px 0;border-top:2px solid var(--n3)}
+.row-item:first-of-type{border-top:0}
+.row-thumb{width:56px;height:56px;border-radius:18px;border:2px solid var(--n10);background:var(--n2);overflow:hidden;flex:none}
+.row-thumb svg{width:100%;height:100%}
+.row-item .t{flex:1;min-width:0}
+.row-item .t b{display:block;font-size:15px;letter-spacing:-.02em}
+.row-item .t span{font-size:12.5px;color:var(--n7)}
+/* 등급 */
+.grade-hero{display:grid;grid-template-columns:300px 1fr;gap:28px;align-items:center}
+.ring-wrap{position:relative;width:260px;height:260px;margin:auto}
+.ring-wrap svg{transform:rotate(-90deg)}
+.ring-track{stroke:var(--n3)}
+.ring-fill{stroke:var(--m600);stroke-linecap:round;stroke-dasharray:var(--ring-len);stroke-dashoffset:var(--ring-off);animation:ringDraw 1.4s ease both}
+.ring-core{position:absolute;inset:0;display:grid;place-content:center;text-align:center}
+.ring-core small{font-size:12px;font-weight:700;color:var(--n7);letter-spacing:.06em}
+.ring-core b{font-size:48px;font-weight:800;letter-spacing:-.05em;line-height:1.05}
+.ring-core span{font-size:13px;color:var(--n8);font-weight:600}
+.contrib{margin-top:6px}
+.contrib-row{display:grid;grid-template-columns:120px 1fr 64px;align-items:center;gap:14px;padding:9px 0;font-size:14px;font-weight:600}
+.bar{height:16px;border:2px solid var(--n10);border-radius:var(--r-pill);background:var(--n2);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--n6);transform-origin:left;animation:barGrow 1s ease both}
+.bar i.hl{background:var(--m600)}
+.tiers{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:20px}
+.tier{border:2px solid var(--n10);border-radius:24px;background:var(--n1);padding:18px;text-align:left;display:flex;flex-direction:column;gap:6px;transition:transform .15s}
+.tier:hover{transform:translateY(-3px)}
+.tier.cur{background:var(--m50);outline:3px solid var(--n10);outline-offset:3px}
+.tier .t-name{font-size:18px;font-weight:800;letter-spacing:-.03em;display:flex;justify-content:space-between;align-items:center}
+.tier .t-need{font-size:12.5px;color:var(--n7);font-weight:600}
+.tier ul{list-style:none;margin-top:6px;font-size:13px;color:var(--n8);display:flex;flex-direction:column;gap:5px}
+.tier li{display:flex;gap:6px;align-items:flex-start}
+.tier li .ti{font-size:15px;margin-top:2px;color:var(--n7)}
+/* 역할 */
+.role-grid{display:grid;grid-template-columns:340px 1fr;gap:20px}
+.phone{width:270px;height:500px;border:3px solid var(--n10);border-radius:44px;background:var(--n0);margin:0 auto;display:flex;flex-direction:column;overflow:hidden;position:relative}
+.phone-top{height:30px;display:flex;justify-content:center;align-items:center}
+.phone-top i{width:84px;height:14px;border-radius:9px;background:var(--n10)}
+.phone-body{flex:1;padding:6px 16px;overflow:hidden}
+.phone-body h5{font-size:20px;font-weight:800;letter-spacing:-.04em;margin:6px 0 10px}
+.mini-card{border:2px solid var(--n10);border-radius:18px;padding:10px 12px;background:var(--n1);margin-bottom:8px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px}
+.mini-card .ti{font-size:17px}
+.tabbar{display:flex;border-top:2px solid var(--n10);background:var(--n1)}
+.tabbar div{flex:1;padding:10px 0 12px;text-align:center;font-size:10.5px;font-weight:700;color:var(--n7);display:flex;flex-direction:column;align-items:center;gap:2px}
+.tabbar div .ti{font-size:21px}
+.tabbar div.on{color:var(--n10)}
+.tabbar div.lock{opacity:.35}
+.tbl{width:100%;border-collapse:collapse;font-size:14px}
+.tbl th{text-align:left;font-size:12px;color:var(--n7);padding:8px 10px;border-bottom:2px solid var(--n10);letter-spacing:.03em}
+.tbl td{padding:12px 10px;border-bottom:2px solid var(--n3);font-weight:600}
+.tbl td.c,.tbl th.c{text-align:center}
+.tbl .yes{color:var(--n10)}
+.tbl .no{color:var(--n5)}
+.stepper{display:flex;align-items:center;margin:8px 0 14px}
+.step{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--n7)}
+.step b{width:30px;height:30px;border-radius:50%;border:2px solid var(--n10);display:grid;place-items:center;background:var(--n1);color:var(--n10);font-size:13px}
+.step.done b{background:var(--n10);color:var(--n0)}
+.step.cur b{background:var(--m600)}
+.step.cur{color:var(--n10)}
+.step-line{flex:1;height:2px;background:var(--n10);margin:0 10px;min-width:20px}
+.pipe{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;font-weight:700}
+.pipe span{border:2px solid var(--n10);border-radius:14px;padding:7px 12px;background:var(--n1);display:flex;gap:6px;align-items:center}
+.pipe .ti.arrow{color:var(--n6)}
+.env-chips{display:flex;gap:8px;margin-top:12px}
+.env-chips button{padding:6px 14px;border-radius:var(--r-pill);border:2px solid var(--n4);font-size:12.5px;font-weight:700;color:var(--n8);background:var(--n1)}
+.env-chips button.on{background:var(--n10);color:var(--n0);border-color:var(--n10)}
+footer{border-top:var(--ink);padding:20px 24px;text-align:center;font-size:12.5px;color:var(--n7)}
+.toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);background:var(--n10);color:var(--n0);padding:13px 22px;border-radius:var(--r-pill);font-weight:700;font-size:14px;z-index:90;display:none;align-items:center;gap:10px}
+.toast.on{display:flex;animation:toastUp .3s ease both}
+.toast .ti{color:var(--m500)}
+@media (max-width:1100px){.card-grid{grid-template-columns:repeat(2,1fr)}.layout-grid{grid-template-columns:1fr}.filter-rail{position:static}.two-col,.role-grid,.grade-hero{grid-template-columns:1fr}.hero h1{font-size:40px}.tiers{grid-template-columns:repeat(2,1fr)}.search-segment{display:none}.search-segment:first-child{display:flex}.header-nav{display:none}}
+@media (max-width:640px){.card-grid{grid-template-columns:1fr}.hero{flex-direction:column;align-items:flex-start}.hero-art{display:none}.header-row{padding:12px 16px}.profile-head h2{font-size:28px}}
+</style>
+</head>
+<body data-archetype="airbnb-search-grid">
+
+<header class="search-header" data-search-header>
+  <div class="header-row">
+    <a class="brand" href="#top"><span class="brand-mark"><i class="ti ti-bulb"></i></span>배움콕</a>
+    <div class="search-bar">
+      <label class="search-segment"><span class="segment-label">콘텐츠 검색</span><input id="q" type="text" placeholder="퀴즈 제목·키워드" oninput="applyFilters()"></label>
+      <label class="search-segment"><span class="segment-label">크리에이터</span>
+        <select id="selCreator" onchange="pickCreator(this.value)"></select></label>
+      <label class="search-segment"><span class="segment-label">정렬</span>
+        <select id="selSort" onchange="applyFilters()"><option value="new">최신 등록순</option><option value="reward">리워드 높은순</option><option value="rating">평점순</option></select></label>
+      <button class="search-submit" title="검색" onclick="applyFilters(true)"><i class="ti ti-search"></i></button>
+    </div>
+    <nav class="header-nav">
+      <div class="role-switch" role="group" aria-label="역할 전환">
+        <button id="roleL" class="on" onclick="setRole('learner')"><i class="ti ti-book-2"></i>학습자</button>
+        <button id="roleC" onclick="setRole('creator')"><i class="ti ti-sparkles"></i>크리에이터</button>
+      </div>
+    </nav>
+  </div>
+  <div class="screen-tabs" id="tabs">
+    <button class="on" data-s="main" onclick="go('main')"><i class="ti ti-compass"></i>크리에이터·주제별 콘텐츠 탐색</button>
+    <button data-s="profile" onclick="go('profile')"><i class="ti ti-user-circle"></i>크리에이터 프로필·수익 요약</button>
+    <button data-s="grade" onclick="go('grade')"><i class="ti ti-medal"></i>활동량 기반 등급 현황·혜택</button>
+    <button data-s="role" onclick="go('role')"><i class="ti ti-shield-lock"></i>역할별 접근 제어·배포 구성</button>
+  </div>
+  <div class="filter-chips" id="chips" data-filter-chips></div>
+  <div style="height:14px"></div>
+</header>
+
+<main id="top">
+  <!-- ── 콘텐츠 탐색 ── -->
+  <section class="screen on" id="s-main">
+    <div class="hero">
+      <div>
+        <h1>오늘은 어떤 <mark>퀴즈</mark>로<br>포인트를 모아볼까요?</h1>
+        <p>주제 칩과 크리에이터 필터를 함께 걸어 원하는 콘텐츠만 좁혀 보고, 카드를 눌러 문항 수와 적립 리워드를 미리 확인합니다.</p>
+      </div>
+      <div class="hero-art" aria-hidden="true"><svg viewBox="0 0 340 220"><defs><linearGradient id="lg1" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="var(--m400)"/><stop offset="1" stop-color="var(--m700)"/></linearGradient></defs><path d="M40 120c-20-60 40-100 110-96s130 30 140 90-50 96-120 96S60 180 40 120z" fill="url(#lg1)" stroke="var(--n10)" stroke-width="3"/><g style="animation:floaty 5s ease-in-out infinite"><rect x="104" y="30" width="132" height="168" rx="26" fill="var(--n1)" stroke="var(--n10)" stroke-width="3"/><rect x="120" y="52" width="100" height="14" rx="7" fill="var(--n10)"/><rect x="120" y="80" width="84" height="10" rx="5" fill="var(--n4)"/><rect x="120" y="106" width="100" height="30" rx="15" fill="var(--n2)" stroke="var(--n10)" stroke-width="2"/><rect x="120" y="144" width="100" height="30" rx="15" fill="var(--m600)" stroke="var(--n10)" stroke-width="2.5"/><path d="M134 159l8 8 16-16" fill="none" stroke="var(--n10)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g><g style="animation:floaty 4s ease-in-out infinite -1.5s"><circle cx="268" cy="66" r="26" fill="var(--n1)" stroke="var(--n10)" stroke-width="3"/><text x="268" y="74" text-anchor="middle" font-size="22" font-weight="800" fill="var(--n10)">P</text></g><g style="animation:floaty 6s ease-in-out infinite -3s"><circle cx="70" cy="64" r="18" fill="var(--n1)" stroke="var(--n10)" stroke-width="3"/><path d="M62 64l6 6 11-12" fill="none" stroke="var(--n10)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></g></svg></div>
+    </div>
+    <div class="layout-grid">
+      <aside class="filter-rail">
+        <h3>크리에이터별 보기</h3>
+        <div id="rail"></div>
+        <div class="rail-div"></div>
+        <h3>정렬 기준</h3>
+        <select class="rail-sort" id="railSort" onchange="document.getElementById('selSort').value=this.value;applyFilters()"><option value="new">최신 등록순</option><option value="reward">리워드 높은순</option><option value="rating">평점순</option></select>
+        <div class="rail-div"></div>
+        <button class="btn btn-ghost btn-sm" style="width:100%" onclick="resetFilters()"><i class="ti ti-refresh"></i>필터 초기화</button>
+      </aside>
+      <div>
+        <div class="result-bar"><div><b id="resCnt">12</b>개 콘텐츠 <span id="resDesc">· 전체 주제</span></div><span class="badge ok live"><i></i>목록 API 연동 구조</span></div>
+        <div class="card-grid" id="grid"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 프로필·수익 ── -->
+  <section class="screen" id="s-profile">
+    <div class="profile-head">
+      <div class="avatar-xl">한</div>
+      <div>
+        <h2>한서윤</h2>
+        <p>경제·금융 상식 퀴즈 크리에이터 · 콘텐츠 4개 운영</p>
+        <div style="margin-top:10px;display:flex;gap:8px"><span class="badge"><i></i>골드 등급</span><span class="badge ok"><i></i>인증 크리에이터</span></div>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="panel" id="revPanel"></div>
+      <div class="panel">
+        <h3>등록 콘텐츠</h3>
+        <div class="sub">학습자에게는 이 목록과 소개만 보입니다.</div>
+        <div id="myList"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 등급 ── -->
+  <section class="screen" id="s-grade">
+    <div class="panel">
+      <div class="grade-hero">
+        <div class="ring-wrap">
+          <svg width="260" height="260" viewBox="0 0 260 260" style="--ring-len:690;--ring-off:193">
+            <circle class="ring-track" cx="130" cy="130" r="110" fill="none" stroke-width="22"/>
+            <circle class="ring-fill" cx="130" cy="130" r="110" fill="none" stroke-width="22"/>
+          </svg>
+          <div class="ring-core"><small>현재 등급</small><b>골드</b><span>활동량 2,160점</span></div>
+        </div>
+        <div>
+          <h3 style="font-size:28px;letter-spacing:-.04em">플래티넘까지 <span style="background:var(--m600);padding:0 8px;border-radius:10px">840점</span> 남았어요</h3>
+          <div class="sub" style="margin-top:6px">지난 30일 활동량을 항목별 가중치로 합산해 등급을 산정하는 구조를 설계합니다.</div>
+          <div class="contrib" id="contrib"></div>
+        </div>
+      </div>
+    </div>
+    <div class="tiers" id="tiers"></div>
+  </section>
+
+  <!-- ── 역할 접근 제어·배포 구성 ── -->
+  <section class="screen" id="s-role">
+    <div class="role-grid">
+      <div class="panel">
+        <h3>역할별 하단 메뉴</h3>
+        <div class="sub">역할을 바꾸면 메뉴와 접근 범위가 달라집니다.</div>
+        <div class="phone">
+          <div class="phone-top"><i></i></div>
+          <div class="phone-body" id="phoneBody"></div>
+          <div class="tabbar" id="tabbar"></div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:20px">
+        <div class="panel">
+          <h3>화면 접근 범위</h3>
+          <div class="sub">API 가드와 앱 라우트 가드가 같은 권한표를 공유하도록 설계합니다.</div>
+          <table class="tbl"><thead><tr><th>기능</th><th class="c">학습자</th><th class="c">크리에이터</th></tr></thead>
+            <tbody id="matrix"></tbody></table>
+        </div>
+        <div class="panel">
+          <h3>크리에이터 전환 신청</h3>
+          <div class="stepper" id="stepper"></div>
+          <button class="btn btn-primary btn-sm" onclick="advanceStep()" id="stepBtn"><i class="ti ti-send"></i>다음 단계 확인</button>
+        </div>
+        <div class="panel">
+          <h3>배포 구성</h3>
+          <div class="sub">환경별 이미지를 분리해 같은 파이프라인으로 배포합니다.</div>
+          <div class="pipe"><span><i class="ti ti-brand-git"></i>저장소</span><i class="ti ti-arrow-right arrow"></i><span><i class="ti ti-package"></i>ECR 이미지</span><i class="ti ti-arrow-right arrow"></i><span><i class="ti ti-server-2"></i>ECS 서비스</span><i class="ti ti-arrow-right arrow"></i><span><i class="ti ti-database"></i>MySQL·MongoDB</span></div>
+          <div class="env-chips" id="envChips"></div>
+          <div id="envNote" style="margin-top:12px;font-size:13.5px;color:var(--n8)"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="scrim" id="scrim" onclick="closeQV()"></div>
+<aside class="quick-view" id="qv" aria-label="콘텐츠 퀵뷰"></aside>
+<div class="toast" id="toast"><i class="ti ti-circle-check"></i><span id="toastMsg"></span></div>
+<footer>© 샘플 학습 앱 — 자체 개발 구현 데모 · 화면의 모든 데이터는 가상의 예시입니다</footer>
+
+<script>
+var CREATORS=[
+ {id:'all',name:'전체 크리에이터',ini:'전',n:12},
+ {id:'han',name:'한서윤',ini:'한',n:4,role:'경제·금융'},
+ {id:'yoon',name:'윤도현',ini:'윤',n:3,role:'코딩 기초'},
+ {id:'lee',name:'이하린',ini:'이',n:2,role:'영어 회화'},
+ {id:'park',name:'박지후',ini:'박',n:1,role:'한국사'},
+ {id:'cho',name:'조예은',ini:'조',n:1,role:'과학'},
+ {id:'kang',name:'강민재',ini:'강',n:1,role:'자격증'}
+];
+var TOPICS=[['all','전체','ti-layout-grid'],['eco','경제·금융','ti-coin'],['code','코딩 기초','ti-code'],['eng','영어 회화','ti-message-language'],['hist','한국사','ti-building-castle'],['sci','과학','ti-atom'],['cert','자격증','ti-certificate'],['life','생활상식','ti-home-heart'],['news','시사','ti-news']];
+var TOPIC_NAME={eco:'경제·금융',code:'코딩 기초',eng:'영어 회화',hist:'한국사',sci:'과학',cert:'자격증',life:'생활상식',news:'시사'};
+var CONTENTS=[
+ {id:1,t:'하루 5분 금리·환율 기초',c:'han',tp:'eco',q:10,r:120,rt:4.9,m:6,d:12},
+ {id:2,t:'주식 용어 OX 챌린지',c:'han',tp:'eco',q:15,r:150,rt:4.7,m:8,d:9},
+ {id:3,t:'변수와 조건문 첫걸음',c:'yoon',tp:'code',q:12,r:100,rt:4.8,m:7,d:11},
+ {id:4,t:'HTML 태그 짝 맞추기',c:'yoon',tp:'code',q:8,r:80,rt:4.6,m:4,d:6},
+ {id:5,t:'출근길 영어 한 문장',c:'lee',tp:'eng',q:10,r:90,rt:4.8,m:5,d:10},
+ {id:6,t:'비즈니스 이메일 표현',c:'lee',tp:'eng',q:14,r:140,rt:4.5,m:9,d:3},
+ {id:7,t:'조선 건국 인물 퀴즈',c:'park',tp:'hist',q:12,r:110,rt:4.7,m:7,d:8},
+ {id:8,t:'생활 속 화학 반응',c:'cho',tp:'sci',q:10,r:100,rt:4.9,m:6,d:5},
+ {id:9,t:'컴활 1급 함수 모음',c:'kang',tp:'cert',q:20,r:200,rt:4.4,m:14,d:2},
+ {id:10,t:'세금·연말정산 감 잡기',c:'han',tp:'eco',q:10,r:130,rt:4.6,m:6,d:4},
+ {id:11,t:'알고리즘 시간복잡도',c:'yoon',tp:'code',q:16,r:170,rt:4.7,m:10,d:7},
+ {id:12,t:'이번 주 시사 3분 퀴즈',c:'han',tp:'news',q:6,r:60,rt:4.3,m:3,d:1}
+];
+var ST={topic:'all',creator:'all',role:'learner',step:1,env:'dev'};
+function cr(id){return CREATORS.filter(function(x){return x.id===id})[0]}
+function art(i){
+  var s=i%4,sh='';
+  var ink='var(--n10)',fl='var(--n1)',lm='var(--n4)';
+  if(s===0)sh='<circle cx="70" cy="76" r="42" fill="'+fl+'" stroke="'+ink+'" stroke-width="3"/><rect x="150" y="40" width="96" height="70" rx="22" fill="'+lm+'" stroke="'+ink+'" stroke-width="3"/><path d="M52 78l14 14 28-30" fill="none" stroke="'+ink+'" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>';
+  if(s===1)sh='<rect x="36" y="34" width="100" height="74" rx="24" fill="'+fl+'" stroke="'+ink+'" stroke-width="3"/><circle cx="196" cy="72" r="38" fill="'+lm+'" stroke="'+ink+'" stroke-width="3"/><path d="M60 62h52M60 80h32" stroke="'+ink+'" stroke-width="5" stroke-linecap="round"/>';
+  if(s===2)sh='<path d="M30 100c30-70 60 30 90-30s70 20 110-20" fill="none" stroke="'+ink+'" stroke-width="4" stroke-linecap="round"/><circle cx="76" cy="52" r="20" fill="'+fl+'" stroke="'+ink+'" stroke-width="3"/><rect x="170" y="70" width="64" height="44" rx="16" fill="'+lm+'" stroke="'+ink+'" stroke-width="3"/>';
+  if(s===3)sh='<circle cx="84" cy="70" r="46" fill="'+lm+'" stroke="'+ink+'" stroke-width="3"/><circle cx="84" cy="70" r="20" fill="'+fl+'" stroke="'+ink+'" stroke-width="3"/><rect x="152" y="36" width="92" height="30" rx="15" fill="'+fl+'" stroke="'+ink+'" stroke-width="3"/><rect x="152" y="78" width="64" height="30" rx="15" fill="'+fl+'" stroke="'+ink+'" stroke-width="3"/>';
+  return '<svg viewBox="0 0 280 136" preserveAspectRatio="xMidYMid slice">'+sh+'</svg>';
+}
+function toast(m){var t=document.getElementById('toast');document.getElementById('toastMsg').textContent=m;t.classList.add('on');clearTimeout(window._tt);window._tt=setTimeout(function(){t.classList.remove('on')},2200)}
+function go(s){
+  document.querySelectorAll('.screen').forEach(function(e){e.classList.remove('on')});
+  document.getElementById('s-'+s).classList.add('on');
+  document.querySelectorAll('#tabs button').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-s')===s)});
+  document.getElementById('chips').style.display=(s==='main')?'flex':'none';
+  window.scrollTo(0,0);
+  if(s==='profile')renderProfile();
+  if(s==='grade')renderGrade();
+  if(s==='role')renderRole();
+}
+function setRole(r){
+  ST.role=r;
+  document.getElementById('roleL').classList.toggle('on',r==='learner');
+  document.getElementById('roleC').classList.toggle('on',r==='creator');
+  renderProfile();renderRole();
+  toast(r==='creator'?'크리에이터 메뉴로 전환했어요':'학습자 메뉴로 전환했어요');
+}
+function renderChips(){
+  document.getElementById('chips').innerHTML=TOPICS.map(function(t){return '<button class="chip'+(ST.topic===t[0]?' active':'')+'" onclick="pickTopic(\''+t[0]+'\')"><i class="ti '+t[2]+'"></i>'+t[1]+'</button>'}).join('');
+}
+function renderRail(){
+  document.getElementById('rail').innerHTML=CREATORS.map(function(c){return '<button class="rail-creator'+(ST.creator===c.id?' on':'')+'" onclick="pickCreator(\''+c.id+'\')"><span class="avatar">'+c.ini+'</span><span>'+c.name+'<small>'+(c.role||'콘텐츠 '+c.n+'개')+'</small></span></button>'}).join('');
+  document.getElementById('selCreator').innerHTML=CREATORS.map(function(c){return '<option value="'+c.id+'"'+(ST.creator===c.id?' selected':'')+'>'+c.name+'</option>'}).join('');
+}
+function pickTopic(t){ST.topic=t;applyFilters()}
+function pickCreator(c){ST.creator=c;applyFilters()}
+function resetFilters(){ST.topic='all';ST.creator='all';document.getElementById('q').value='';document.getElementById('selSort').value='new';document.getElementById('railSort').value='new';applyFilters();toast('필터를 초기화했어요')}
+function applyFilters(fromBtn){
+  var q=document.getElementById('q').value.trim();
+  var sort=document.getElementById('selSort').value;
+  document.getElementById('railSort').value=sort;
+  var list=CONTENTS.filter(function(x){return (ST.topic==='all'||x.tp===ST.topic)&&(ST.creator==='all'||x.c===ST.creator)&&(!q||x.t.indexOf(q)>-1||cr(x.c).name.indexOf(q)>-1)});
+  if(sort==='reward')list.sort(function(a,b){return b.r-a.r});
+  else if(sort==='rating')list.sort(function(a,b){return b.rt-a.rt});
+  else list.sort(function(a,b){return a.d-b.d});
+  renderChips();renderRail();
+  document.getElementById('resCnt').textContent=list.length;
+  
+  document.getElementById('resDesc').textContent='· '+(ST.topic==='all'?'전체 주제':TOPIC_NAME[ST.topic])+(ST.creator==='all'?'':' · '+cr(ST.creator).name);
+  var g=document.getElementById('grid');
+  if(!list.length){g.innerHTML='<div class="empty"><svg viewBox="0 0 120 80"><rect x="14" y="14" width="64" height="48" rx="16" fill="var(--n2)" stroke="var(--n10)" stroke-width="3"/><circle cx="84" cy="52" r="20" fill="var(--n1)" stroke="var(--n10)" stroke-width="3"/><path d="M98 66l12 10" stroke="var(--n10)" stroke-width="4" stroke-linecap="round"/></svg><h4>조건에 맞는 콘텐츠가 없어요</h4><div>주제나 크리에이터 조건을 하나 풀어 보세요.</div></div>';return}
+  g.innerHTML=list.map(function(x,i){var c=cr(x.c);return '<button class="listing-card" style="animation-delay:'+(i*45)+'ms" onclick="openQV('+x.id+')"><div class="card-img">'+art(x.id)+'<span class="card-tag">'+TOPIC_NAME[x.tp]+'</span></div><div class="card-body"><div class="card-title">'+x.t+'</div><div class="card-meta"><span class="avatar">'+c.ini+'</span>'+c.name+'</div><div class="card-foot"><span class="price"><i class="ti ti-coin"></i>+'+x.r+'P</span><span>문항 '+x.q+' · '+x.m+'분</span><span class="rating"><i class="ti ti-star-filled" style="font-size:14px"></i>'+x.rt+'</span></div></div></button>'}).join('');
+}
+function openQV(id){
+  var x=CONTENTS.filter(function(v){return v.id===id})[0],c=cr(x.c);
+  document.getElementById('qv').innerHTML='<button class="qv-close" title="닫기" onclick="closeQV()"><i class="ti ti-x"></i></button><div class="qv-art">'+art(x.id)+'</div><div><span class="badge">'+TOPIC_NAME[x.tp]+'</span></div><h2>'+x.t+'</h2><div class="qv-grid"><div class="qv-cell"><b>'+x.q+'</b><span>문항 수</span></div><div class="qv-cell"><b>+'+x.r+'P</b><span>적립 리워드</span></div><div class="qv-cell"><b>'+x.m+'분</b><span>예상 시간</span></div></div><div class="qv-creator"><span class="avatar">'+c.ini+'</span><div style="flex:1"><b>'+c.name+'</b><div style="font-size:12.5px;color:var(--n7)">'+c.role+' 크리에이터 · 콘텐츠 '+c.n+'개</div></div><button class="btn btn-ghost btn-sm" onclick="filterByCreator(\''+c.id+'\')">작품 보기</button></div><p style="font-size:14px;color:var(--n8)">완주하면 리워드가 적립되고 활동량 집계에 반영됩니다. 주제 태그와 크리에이터 정보는 MongoDB 콘텐츠 메타에서 조회하는 구조입니다.</p><button class="btn btn-primary" style="margin-top:auto" onclick="startQuiz('+x.id+')"><i class="ti ti-player-play"></i>퀴즈 시작하기</button>';
+  document.getElementById('qv').classList.add('on');document.getElementById('scrim').classList.add('on');
+}
+function closeQV(){document.getElementById('qv').classList.remove('on');document.getElementById('scrim').classList.remove('on')}
+function filterByCreator(id){closeQV();pickCreator(id);toast(cr(id).name+' 크리에이터 콘텐츠만 표시해요')}
+function startQuiz(id){closeQV();toast('퀴즈를 시작해요 · 완주 시 리워드가 적립돼요')}
+function renderProfile(){
+  var p=document.getElementById('revPanel');
+  if(ST.role==='creator'){
+    var m=[['5월',46],['6월',58],['7월',52],['8월',74],['9월',88],['10월',100]];
+    p.innerHTML='<h3>이번 달 수익 요약</h3><div class="sub">정산 전 예상 금액이며 학습 참여 수와 함께 집계됩니다.</div><div class="rev-fig num">₩1,284,000</div><div style="display:flex;gap:8px;margin-top:10px"><span class="badge ok"><i></i>전월 대비 상승</span><span class="badge"><i></i>학습 참여 3,420회</span></div><div class="cols">'+m.map(function(v,i){return '<div class="col'+(i===5?' cur':'')+'"><i style="height:'+v[1]+'%;animation-delay:'+(i*90)+'ms"></i>'+v[0]+'</div>'}).join('')+'</div><div style="display:flex;gap:10px;margin-top:20px"><button class="btn btn-primary btn-sm" onclick="go(\'grade\')"><i class="ti ti-medal"></i>등급 확인</button><button class="btn btn-ghost btn-sm" onclick="toast(\'정산 내역 화면으로 연결되는 구조예요\')"><i class="ti ti-receipt"></i>정산 내역</button></div>';
+  }else{
+    p.innerHTML='<h3>수익 요약</h3><div class="sub">수익 정보는 크리에이터 본인에게만 보입니다.</div><div class="locked"><i class="ti ti-lock"></i><b style="color:var(--n10)">학습자 보기에서는 가려져요</b><span>프로필 소개와 등록 콘텐츠만 공개됩니다.</span><button class="btn btn-ghost btn-sm" onclick="setRole(\'creator\')">크리에이터로 전환해 보기</button></div>';
+  }
+  var mine=CONTENTS.filter(function(v){return v.c==='han'});
+  document.getElementById('myList').innerHTML=mine.map(function(v,i){return '<div class="row-item"><div class="row-thumb">'+art(v.id)+'</div><div class="t"><b>'+v.t+'</b><span>문항 '+v.q+' · 참여 '+(v.q*91+i*37)+'회</span></div>'+(i===3?'<span class="badge"><i></i>검수 중</span>':'<span class="badge ok"><i></i>공개</span>')+'<button class="btn btn-ghost btn-sm" onclick="openQV('+v.id+')">보기</button></div>'}).join('');
+}
+function renderGrade(){
+  var rows=[['콘텐츠 등록',78,'780점',1],['학습 참여 수',64,'640점',1],['완주율',52,'520점',0],['리뷰 응답',22,'220점',0]];
+  document.getElementById('contrib').innerHTML=rows.map(function(r,i){return '<div class="contrib-row"><span>'+r[0]+'</span><div class="bar"><i class="'+(i===0?'hl':'')+'" style="width:'+r[1]+'%;animation-delay:'+(i*120)+'ms"></i></div><span class="num" style="text-align:right">'+r[2]+'</span></div>'}).join('');
+  var T=[['브론즈','0점~',['기본 리워드 적립']],['실버','800점~',['리워드 보너스 5%','콘텐츠 상단 노출 1회']],['골드','1,800점~',['리워드 보너스 10%','주제 큐레이션 노출','수익 리포트 주간 발송']],['플래티넘','3,000점~',['리워드 보너스 15%','홈 배너 기획 노출','전담 운영 문의 창구']]];
+  document.getElementById('tiers').innerHTML=T.map(function(t){var cur=t[0]==='골드';return '<button class="tier'+(cur?' cur':'')+'" onclick="toast(\''+t[0]+' 등급 혜택을 확인했어요\')"><div class="t-name">'+t[0]+(cur?'<span class="badge ok"><i></i>현재</span>':'')+'</div><div class="t-need">'+t[1]+'</div><ul>'+t[2].map(function(b){return '<li><i class="ti ti-check"></i>'+b+'</li>'}).join('')+'</ul></button>'}).join('');
+}
+function renderRole(){
+  var cre=ST.role==='creator';
+  var tabs=[['홈','ti-home',1,1],['탐색','ti-compass',1,1],['내 콘텐츠','ti-folder',0,1],['수익','ti-chart-bar',0,1],['MY','ti-user',1,1]];
+  document.getElementById('tabbar').innerHTML=tabs.map(function(t,i){var ok=cre?t[3]:t[2];return '<div class="'+(i===0?'on':'')+(ok?'':' lock')+'"><i class="ti '+t[1]+'"></i>'+t[0]+'</div>'}).join('');
+  document.getElementById('phoneBody').innerHTML='<h5>'+(cre?'크리에이터 홈':'학습 홈')+'</h5>'+(cre?'<div class="mini-card"><i class="ti ti-coin"></i>이번 달 수익 ₩1,284,000</div><div class="mini-card"><i class="ti ti-medal"></i>골드 · 플래티넘까지 840점</div><div class="mini-card"><i class="ti ti-folder"></i>내 콘텐츠 4개 운영 중</div>':'<div class="mini-card"><i class="ti ti-flame"></i>연속 학습 5일째</div><div class="mini-card"><i class="ti ti-compass"></i>추천 퀴즈 3개</div><div class="mini-card"><i class="ti ti-gift"></i>적립 리워드 2,430P</div>')+'<div class="mini-card" style="opacity:.55"><i class="ti ti-lock"></i>'+(cre?'관리자 기능은 숨김':'수익·내 콘텐츠 메뉴는 숨김')+'</div>';
+  var M=[['콘텐츠 탐색·퀴즈 풀이',1,1],['리워드 적립·사용',1,1],['내 콘텐츠 등록·수정',0,1],['수익 대시보드',0,1],['등급·혜택 확인',0,1],['크리에이터 전환 신청',1,0]];
+  document.getElementById('matrix').innerHTML=M.map(function(r){return '<tr><td>'+r[0]+'</td><td class="c">'+(r[1]?'<i class="ti ti-circle-check yes"></i>':'<i class="ti ti-minus no"></i>')+'</td><td class="c">'+(r[2]?'<i class="ti ti-circle-check yes"></i>':'<i class="ti ti-minus no"></i>')+'</td></tr>'}).join('');
+  var S=['신청 접수','서류 확인','승인 완료'];
+  document.getElementById('stepper').innerHTML=S.map(function(s,i){var n=i+1,cls=n<ST.step?'done':(n===ST.step?'cur':'');return '<div class="step '+cls+'"><b>'+(n<ST.step?'<i class="ti ti-check" style="font-size:15px"></i>':n)+'</b>'+s+'</div>'+(i<2?'<div class="step-line"></div>':'')}).join('');
+  document.getElementById('stepBtn').style.display=ST.step>=3?'none':'inline-flex';
+  var E=[['dev','개발'],['stg','검증'],['prod','운영']];
+  document.getElementById('envChips').innerHTML=E.map(function(e){return '<button class="'+(ST.env===e[0]?'on':'')+'" onclick="setEnv(\''+e[0]+'\')">'+e[1]+'</button>'}).join('');
+  var N={dev:'개발 환경 · 작업 브랜치 병합 시 이미지를 빌드해 개발 서비스에 배포합니다.',stg:'검증 환경 · 운영과 같은 구성으로 앱 심사 빌드를 확인합니다.',prod:'운영 환경 · 승인된 이미지만 롤링 배포하고 이전 버전으로 되돌릴 수 있게 구성합니다.'};
+  document.getElementById('envNote').textContent=N[ST.env];
+}
+function advanceStep(){if(ST.step<3){ST.step++;renderRole();toast(ST.step>=3?'승인 완료 · 크리에이터 메뉴가 열려요':'다음 단계로 진행했어요')}}
+function setEnv(e){ST.env=e;renderRole()}
+applyFilters();
+</script>
+</body>
+</html>
