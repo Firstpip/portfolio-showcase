@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>시스템비계 물량 산출 · 3D 외관 뷰어 — 맞춤 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P1 — 메인 1 · 서브 2 · 나머지 무채색 (hue 151°, light) ── */
+:root{
+  --m50:#eef9f4;--m100:#ddf2e8;--m200:#bbe6d1;--m300:#92d7b6;--m400:#64c597;--m500:#39b579;--m600:#0da55c;--m700:#0b874b;--m800:#086a3b;--m900:#064a29;
+  --n0:#ffffff;--n1:#f2f5fa;--n2:#eff0f0;--n3:#e5e6e6;--n4:#d5d7d6;--n5:#b5bab8;--n6:#909894;--n7:#717a75;--n8:#535a57;--n9:#363a38;--n10:#1e201f;
+  --s2:#cf3f3f;--s2-bg:#f9e7e7;--s2-text:#ad1f1f;
+  --s3:#d48d11;--s3-bg:#f6f1ea;--s3-text:#8b6118;
+}
+/* ── 상태 레이어 P1 ── */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{transform:scale(.98);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #ffffff;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--s2);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{width:100%;height:100%}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:var(--n1);color:var(--n9);font-size:14px;line-height:1.5;overflow:hidden}
+a{text-decoration:none;color:inherit}
+button{font-family:inherit;font-size:inherit;color:inherit;background:none;border:0;cursor:pointer;text-align:left}
+input,select,textarea{font-family:inherit;font-size:14px;color:var(--n10)}
+i.ph,i.ph-bold{font-size:18px;line-height:1;flex-shrink:0}
+
+/* 4단 위계: 12 / 14 / 18 / 24 + 디스플레이 40 */
+.t-cap{font-size:12px;color:var(--n7);line-height:1.6}
+.t-sub{font-size:18px;font-weight:700;color:var(--n10);line-height:1.4}
+.t-head{font-size:24px;font-weight:700;color:var(--n10);line-height:1.3}
+.t-disp{font-size:40px;font-weight:800;color:var(--n10);line-height:1.1;letter-spacing:-.02em}
+
+.app{display:flex;width:100%;height:100vh}
+.workspace-strip{width:64px;flex-shrink:0;background:var(--n10);display:flex;flex-direction:column;align-items:center;padding:16px 0;gap:12px}
+.ws-item{width:40px;height:40px;border-radius:12px;background:var(--n9);color:var(--n4);display:flex;align-items:center;justify-content:center;font-weight:700;position:relative;transition:border-radius .2s,background .2s}
+.ws-item:hover{border-radius:20px;background:var(--n8)}
+.ws-item.active{background:var(--m600);color:var(--n0);border-radius:20px}
+.ws-item.active::before{content:"";position:absolute;left:-12px;top:10px;width:4px;height:20px;border-radius:0 4px 4px 0;background:var(--n0)}
+.ws-divider{width:24px;height:2px;background:var(--n8);border-radius:2px}
+.channel-list{width:260px;flex-shrink:0;background:var(--n0);border-right:1px solid var(--n3);display:flex;flex-direction:column;overflow:hidden}
+.channel-header{padding:16px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ws-name{font-size:18px;font-weight:700;color:var(--n10);line-height:1.3}
+.channel-search{padding:0 16px 12px}
+.channel-search input{width:100%;height:40px;border:1px solid var(--n4);border-radius:8px;padding:0 12px;background:var(--n1)}
+.channel-scroll{flex:1;overflow:auto;padding:0 8px 16px}
+.section-title{font-size:12px;font-weight:700;color:var(--n7);padding:16px 8px 8px}
+.channel-item{display:flex;align-items:center;gap:12px;width:100%;padding:8px 12px;border-radius:12px;color:var(--n8);font-weight:500;transition:background .15s}
+.channel-item:hover{background:var(--n1)}
+.channel-item.active{background:var(--m50);color:var(--n10);font-weight:700;box-shadow:inset 3px 0 0 var(--m600)}
+.dm-item{display:flex;align-items:center;gap:8px;width:100%;padding:8px 12px;border-radius:12px;transition:background .15s}
+.dm-item:hover{background:var(--n1)}
+.dm-item.active{background:var(--m50);box-shadow:inset 3px 0 0 var(--m600)}
+.dm-item .nm{flex:1;min-width:0;font-weight:600;color:var(--n9);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dm-item .sub{font-size:12px;color:var(--n7)}
+.presence{width:8px;height:8px;border-radius:50%;background:var(--n5);flex-shrink:0}
+.presence.on{background:var(--n10)}
+.presence.run{background:var(--n10);animation:pulseDot 1.2s ease-in-out infinite}
+.presence.bad{background:var(--s2)}
+.conv-main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--n1)}
+.conv-header{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;background:var(--n0);border-bottom:1px solid var(--n3);gap:16px}
+.conv-title-row{display:flex;align-items:center;gap:12px;min-width:0}
+.conv-title{font-size:18px;font-weight:700;color:var(--n10);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pill{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 12px;border-radius:9999px;font-size:12px;font-weight:600;background:var(--n2);color:var(--n8);white-space:nowrap}
+.pill.dark{background:var(--n10);color:var(--n0)}
+.pill.warn{background:var(--s3-bg);color:var(--s3-text)}
+.pill.bad{background:var(--s2-bg);color:var(--s2-text)}
+.pill.main{background:var(--m50);color:var(--n10)}
+.conv-actions{display:flex;gap:8px}
+.icon-btn{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;color:var(--n8);transition:background .15s}
+.icon-btn:hover{background:var(--n2)}
+.conv-body{flex:1;overflow:auto;padding:24px;display:flex;flex-direction:column;gap:24px}
+.screen{animation:fadeUp .35s ease both;display:flex;flex-direction:column;gap:24px}
+.card{background:var(--n0);border-radius:20px;padding:24px;box-shadow:0 12px 32px -16px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:16px}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;padding:0 24px;border-radius:40px;font-weight:600;transition:background .15s,transform .1s,box-shadow .15s;white-space:nowrap}
+.btn.primary{background:var(--m600);color:var(--n0)}
+.btn.primary:hover{background:var(--m700);box-shadow:0 8px 20px -8px var(--m600)}
+.btn.line{border:1px solid var(--n4);background:var(--n0);color:var(--n9)}
+.btn.line:hover{background:var(--n1)}
+.btn.sm{height:32px;padding:0 16px}
+.btn.ghost{color:var(--n9);padding:0 12px}
+.btn.ghost:hover{background:var(--m50)}
+.msg-group{display:flex;gap:12px}
+.msg-avatar{width:36px;height:36px;border-radius:50%;background:var(--n2);color:var(--n8);display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0}
+.msg-meta{display:flex;gap:8px;align-items:baseline}
+.msg-name{font-weight:700;color:var(--n10)}
+.conv-input{position:sticky;bottom:0;background:var(--n0);border-top:1px solid var(--n3);padding:16px 24px;display:flex;gap:12px;align-items:center}
+.msg-input{flex:1;height:40px;border:1px solid var(--n4);border-radius:40px;padding:0 20px;background:var(--n1)}
+.info-panel{width:320px;flex-shrink:0;background:var(--n0);border-left:1px solid var(--n3);overflow:auto;display:flex;flex-direction:column}
+.info-header{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--n3)}
+.info-section{padding:16px 24px;border-bottom:1px solid var(--n2);display:flex;flex-direction:column;gap:8px}
+.info-label{font-size:12px;color:var(--n7);font-weight:600}
+.kv{display:flex;justify-content:space-between;gap:12px}
+.kv span:first-child{color:var(--n7)}
+.kv span:last-child{font-weight:600;color:var(--n10);text-align:right}
+.member-item{display:flex;align-items:center;gap:12px;padding:4px 0}
+.member-avatar{width:32px;height:32px;border-radius:50%;background:var(--n2);color:var(--n8);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;font-weight:600;color:var(--n7);text-align:left;padding:8px 12px;border-bottom:1px solid var(--n3)}
+td{padding:12px;border-bottom:1px solid var(--n2);vertical-align:middle}
+tr.row{cursor:pointer;transition:background .15s}
+tr.row:hover{background:var(--n1)}
+tr.row.sel{background:var(--m50);box-shadow:inset 3px 0 0 var(--m600)}
+.num-in{width:80px;height:32px;border:1px solid var(--n4);border-radius:8px;padding:0 8px;text-align:right;background:var(--n0)}
+.field{display:flex;flex-direction:column;gap:8px}
+.field label{font-size:12px;font-weight:600;color:var(--n8)}
+.field input,.field textarea{border:1px solid var(--n4);border-radius:8px;padding:8px 12px;background:var(--n0);height:40px}
+.field textarea{height:96px;resize:none;padding:12px}
+.err{font-size:12px;color:var(--s2-text)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.steps{display:flex;gap:8px}
+.step{flex:1;display:flex;flex-direction:column;gap:8px}
+.step .bar{height:8px;border-radius:8px;background:var(--n3);overflow:hidden;position:relative}
+.step .bar>i{position:absolute;inset:0;background:var(--m600);transform-origin:left;animation:barGrow .9s ease both}
+.step .bar>i.half{background:linear-gradient(90deg,var(--m600),var(--m300),var(--m600));background-size:200% 100%;animation:shimmer 1.4s linear infinite}
+.step .lb{font-size:12px;font-weight:600;color:var(--n8)}
+.drop{border:2px dashed var(--n4);border-radius:20px;padding:32px;display:flex;align-items:center;gap:24px;background:var(--n1);transition:border-color .2s,background .2s}
+.drop:hover{border-color:var(--m500);background:var(--m50)}
+.viewer-wrap{position:relative;height:420px;border-radius:20px;overflow:hidden;background:linear-gradient(160deg,var(--n0) 0%,var(--n2) 100%);box-shadow:0 12px 32px -16px rgba(0,0,0,.18)}
+.viewer-wrap canvas{display:block;cursor:grab}
+.viewer-hint{position:absolute;left:16px;bottom:16px;display:flex;gap:8px}
+.viewer-legend{position:absolute;right:16px;top:16px;background:var(--n0);border-radius:12px;padding:12px 16px;box-shadow:0 8px 24px -12px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:8px}
+.chip{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:9999px;border:1px solid var(--n4);background:var(--n0);font-weight:600;color:var(--n8);transition:background .15s}
+.chip.on{background:var(--n10);color:var(--n0);border-color:var(--n10)}
+.toast{position:fixed;left:96px;bottom:24px;background:var(--n10);color:var(--n0);padding:12px 24px;border-radius:12px;display:flex;align-items:center;gap:12px;animation:fadeUp .3s ease both;z-index:50;box-shadow:0 12px 32px -12px rgba(0,0,0,.4)}
+.browser{border:1px solid var(--n4);border-radius:12px;overflow:hidden;background:var(--n0)}
+.browser .bar{height:32px;background:var(--n2);display:flex;align-items:center;gap:8px;padding:0 12px}
+.browser .dot{width:8px;height:8px;border-radius:50%;background:var(--n5)}
+.code{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:var(--n10);color:var(--n3);padding:12px 16px;border-radius:12px;overflow:auto;white-space:pre}
+.empty{display:flex;flex-direction:column;align-items:center;gap:12px;padding:32px;color:var(--n7);text-align:center}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes dash{to{stroke-dashoffset:-24}}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes pulseDot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.5)}}
+@keyframes shimmer{to{background-position:-200% 0}}
+@media (max-width:1180px){.info-panel{display:none}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo } = React;
+const C = k => getComputedStyle(document.documentElement).getPropertyValue('--' + k).trim();
+
+const SITES = [
+  { id:'d1', name:'동탄 물류센터 A동', file:'DT-LC-A_평면_rev3.dwg', ini:'동', status:'done', unit:'mm', layers:41, when:'10.08 09:12', owner:'김도윤',
+    poly:[[0,0],[48,0],[48,22],[30,22],[30,36],[0,36]], floors:[5.5,4.5,4.5,4.5] },
+  { id:'d2', name:'판교 오피스 신축', file:'PG-OF-본동_입면_rev1.dwg', ini:'판', status:'fix', unit:'mm', layers:63, when:'10.07 17:40', owner:'이서연',
+    poly:[[0,0],[40,0],[40,18],[26,18],[26,30],[0,30]], floors:[4.8,4.2,4.2,4.2,4.2,4.2,4.2,4.2] },
+  { id:'d3', name:'김포 주상복합 2단지', file:'GP-RS-2단지_배치.dwg', ini:'김', status:'run', unit:'m', layers:52, when:'10.08 10:05', owner:'박지훈',
+    poly:[[0,0],[34,0],[34,14],[20,14],[20,26],[0,26]], floors:[4.5,3.6,3.6,3.6,3.6,3.6] },
+  { id:'d4', name:'청주 공장 증축', file:'CJ-FA-증축_평면.dwg', ini:'청', status:'fail', unit:'mm', layers:0, when:'10.06 14:21', owner:'최유나',
+    poly:[[0,0],[60,0],[60,24],[0,24]], floors:[7.0,5.0] },
+  { id:'d5', name:'세종 근린생활시설', file:'SJ-NL-2동_입면.dwg', ini:'세', status:'done', unit:'mm', layers:28, when:'10.05 11:48', owner:'김도윤',
+    poly:[[0,0],[26,0],[26,12],[16,12],[16,20],[0,20]], floors:[4.5,3.9,3.9] },
+];
+const STATUS = { done:['인식 완료','dark','on'], fix:['보정 중','main','on'], run:['변환 중','','run'], fail:['변환 실패','bad','bad'] };
+const NAV = [
+  ['main','DWG 도면 업로드·DXF 변환','upload-simple'],
+  ['viewer3d','3D 외관 뷰어','cube'],
+  ['quantity','개략 물량 산출·수동 보정','ruler'],
+  ['estimate','엑셀 출력·견적 요청','file-xls'],
+];
+const perim = p => p.reduce((s,a,i)=>{const b=p[(i+1)%p.length];return s+Math.hypot(b[0]-a[0],b[1]-a[1]);},0);
+const fmt = (n,d=1) => n.toLocaleString('ko-KR',{minimumFractionDigits:d,maximumFractionDigits:d});
+
+function Ico({n,b}){ return <i className={(b?'ph-bold ph-':'ph ph-')+n}></i>; }
+
+/* 2D 평면 — 인식된 외곽선과 치수 */
+function Plan({site, emphasis}){
+  const W=420,H=280,pad=40;
+  const xs=site.poly.map(p=>p[0]), ys=site.poly.map(p=>p[1]);
+  const mx=Math.max(...xs), my=Math.max(...ys);
+  const s=Math.min((W-pad*2)/mx,(H-pad*2)/my);
+  const ox=(W-mx*s)/2, oy=(H-my*s)/2;
+  const pt=p=>[ox+p[0]*s, oy+p[1]*s];
+  const pts=site.poly.map(pt);
+  const d=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' ')+' Z';
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{width:'100%',height:'auto',background:'var(--n1)',borderRadius:12}} role="img" aria-label="인식된 외곽선">
+      <defs><pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="var(--n4)"/></pattern></defs>
+      <rect width={W} height={H} fill="url(#dots)"/>
+      <path d={d} fill="var(--n0)" stroke="var(--n6)" strokeWidth="1.5"/>
+      <path d={d} fill="none" stroke="var(--m600)" strokeWidth={emphasis?4:2.5} strokeLinejoin="round"/>
+      {pts.map((p,i)=>{
+        const q=pts[(i+1)%pts.length], a=site.poly[i], b=site.poly[(i+1)%site.poly.length];
+        const len=Math.hypot(b[0]-a[0],b[1]-a[1]);
+        return <g key={i}><circle cx={p[0]} cy={p[1]} r="3.5" fill="var(--n0)" stroke="var(--m700)" strokeWidth="1.5"/>
+          <text x={(p[0]+q[0])/2} y={(p[1]+q[1])/2-6} fontSize="10" textAnchor="middle" fill="var(--n8)" style={{fontVariantNumeric:'tabular-nums'}}>{fmt(len)}m</text></g>;
+      })}
+    </svg>
+  );
+}
+
+/* three.js — 외곽선 압출 + 비계 설치 구간 띠 */
+function Viewer3D({site, heights, hidden}){
+  const ref = useRef(null);
+  const rot = useRef({y:0.6, drag:false, lx:0, dist:1});
+  useEffect(()=>{
+    const el = ref.current; if(!el) return;
+    const w = el.clientWidth, h = el.clientHeight;
+    const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true, preserveDrawingBuffer:true});
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2)); renderer.setSize(w,h);
+    el.appendChild(renderer.domElement);
+    const scene = new THREE.Scene();
+    const cam = new THREE.PerspectiveCamera(38, w/h, 0.1, 1000);
+    const xs=site.poly.map(p=>p[0]), ys=site.poly.map(p=>p[1]);
+    const cx=(Math.max(...xs)+Math.min(...xs))/2, cy=(Math.max(...ys)+Math.min(...ys))/2;
+    const total=heights.reduce((a,b)=>a+b,0);
+    const span=Math.max(Math.max(...xs),Math.max(...ys),total*1.4);
+    scene.add(new THREE.AmbientLight(0xffffff,0.75));
+    const dl=new THREE.DirectionalLight(0xffffff,0.7); dl.position.set(30,60,40); scene.add(dl);
+    const grid=new THREE.GridHelper(span*2.2,22,new THREE.Color(C('n4')),new THREE.Color(C('n3'))); scene.add(grid);
+    const g=new THREE.Group(); scene.add(g);
+    const pts=site.poly.map(p=>new THREE.Vector2(p[0]-cx,-(p[1]-cy)));
+    let signed=0; pts.forEach((a,i)=>{const b=pts[(i+1)%pts.length];signed+=a.x*b.y-b.x*a.y;});
+    let z0=0;
+    heights.forEach((fh,i)=>{
+      if(!hidden.includes(i)){
+        const shape=new THREE.Shape(pts);
+        const geo=new THREE.ExtrudeGeometry(shape,{depth:fh*0.96,bevelEnabled:false});
+        geo.rotateX(-Math.PI/2); geo.translate(0,z0,0);
+        const mesh=new THREE.Mesh(geo,new THREE.MeshLambertMaterial({color:new THREE.Color(i%2?C('n4'):C('n3'))}));
+        g.add(mesh);
+        const ed=new THREE.LineSegments(new THREE.EdgesGeometry(geo),new THREE.LineBasicMaterial({color:new THREE.Color(C('n6'))})); g.add(ed);
+        // 비계 설치 구간: 외곽선 바깥 0.9m 띠
+        pts.forEach((a,k)=>{
+          const b=pts[(k+1)%pts.length]; const len=Math.hypot(b.x-a.x,b.y-a.y);
+          let nx=(b.y-a.y)/len, ny=-(b.x-a.x)/len; if(signed<0){nx=-nx;ny=-ny;}
+          const mx=(a.x+b.x)/2+nx*0.9, my=(a.y+b.y)/2+ny*0.9;
+          const pg=new THREE.PlaneGeometry(len,fh*0.96);
+          const pm=new THREE.Mesh(pg,new THREE.MeshBasicMaterial({color:new THREE.Color(C('m500')),transparent:true,opacity:0.28,side:THREE.DoubleSide,depthWrite:false}));
+          pm.position.set(mx,z0+fh*0.48,-my);
+          pm.rotation.y=Math.atan2(b.y-a.y,b.x-a.x);
+          g.add(pm);
+          const pe=new THREE.LineSegments(new THREE.EdgesGeometry(pg),new THREE.LineBasicMaterial({color:new THREE.Color(C('m700'))}));
+          pe.position.copy(pm.position); pe.rotation.copy(pm.rotation); g.add(pe);
+        });
+      }
+      z0+=fh;
+    });
+    g.position.y=0;
+    const dist=span*2.1;
+    const draw=()=>{
+      const r=rot.current;
+      if(!r.drag) r.y+=0.0035;
+      g.rotation.y=r.y; grid.rotation.y=r.y;
+      const d=dist*r.dist;
+      cam.position.set(d*0.62,d*0.55,d*0.62); cam.lookAt(0,total*0.38,0);
+      renderer.render(scene,cam);
+    };
+    let raf; const loop=()=>{draw();raf=requestAnimationFrame(loop)}; loop();
+    const cv=renderer.domElement;
+    const down=e=>{rot.current.drag=true;rot.current.lx=e.clientX;cv.style.cursor='grabbing'};
+    const move=e=>{const r=rot.current;if(!r.drag)return;r.y+=(e.clientX-r.lx)*0.01;r.lx=e.clientX};
+    const up=()=>{rot.current.drag=false;cv.style.cursor='grab'};
+    const wheel=e=>{e.preventDefault();rot.current.dist=Math.min(1.6,Math.max(0.55,rot.current.dist+e.deltaY*0.001))};
+    cv.addEventListener('pointerdown',down); window.addEventListener('pointermove',move); window.addEventListener('pointerup',up); cv.addEventListener('wheel',wheel,{passive:false});
+    return ()=>{
+      cancelAnimationFrame(raf);
+      cv.removeEventListener('pointerdown',down); window.removeEventListener('pointermove',move); window.removeEventListener('pointerup',up); cv.removeEventListener('wheel',wheel);
+      renderer.dispose(); if(cv.parentNode) cv.parentNode.removeChild(cv);
+    };
+  },[site.id, heights.join(','), hidden.join(',')]);
+  return <div ref={ref} style={{position:'absolute',inset:0}} />;
+}
+
+function App(){
+  const [sites,setSites] = useState(SITES);
+  const [sid,setSid] = useState('d1');
+  const [view,setView] = useState('main');
+  const [fh,setFh] = useState(()=>Object.fromEntries(SITES.map(s=>[s.id,s.floors.slice()])));
+  const [segs,setSegs] = useState({ d1:[{n:'하역장 캐노피 측면',len:18,h:6}], d2:[] });
+  const [hidden,setHidden] = useState([]);
+  const [selFloor,setSelFloor] = useState(0);
+  const [info,setInfo] = useState(true);
+  const [toast,setToast] = useState(null);
+  const [up,setUp] = useState(null);
+  const [memo,setMemo] = useState('');
+  const [memos,setMemos] = useState({ d1:[{w:'김도윤',t:'10:20',m:'1층 층고 5.5m는 하역장 기준으로 확인했어요.'}] });
+  const [seg,setSeg] = useState({n:'',len:'',h:''});
+  const [segErr,setSegErr] = useState({});
+  const [xl,setXl] = useState(false);
+  const [form,setForm] = useState({co:'',site:'',tel:'',note:''});
+  const [errs,setErrs] = useState({});
+  const [sent,setSent] = useState(null);
+
+  const site = sites.find(s=>s.id===sid);
+  const heights = fh[sid] || site.floors;
+  const P = useMemo(()=>perim(site.poly),[sid]);
+  const floorRows = heights.map((h,i)=>({i, label:(i+1)+'층', h, area:P*h, edited:Math.abs(h-site.floors[i])>0.001}));
+  const mySegs = segs[sid] || [];
+  const autoSum = floorRows.reduce((a,r)=>a+r.area,0);
+  const segSum = mySegs.reduce((a,s)=>a+s.len*s.h,0);
+  const total = autoSum + segSum;
+  const say = m => { setToast(m); setTimeout(()=>setToast(null),2400); };
+
+  const startUpload = () => {
+    if(up) return;
+    setUp({p:0,name:'SN-DC-신축동_평면_rev1.dwg'});
+    let p=0; const t=setInterval(()=>{
+      p+=14+Math.random()*10;
+      if(p>=100){
+        clearInterval(t); setUp(null);
+        const id='d'+(sites.length+1);
+        const ns={id,name:'성남 데이터센터 신축',file:'SN-DC-신축동_평면_rev1.dwg',ini:'성',status:'done',unit:'mm',layers:37,when:'방금 전',owner:'박지훈',poly:[[0,0],[44,0],[44,20],[0,20]],floors:[6.0,5.0,5.0]};
+        setSites(s=>[ns,...s]); setFh(f=>({...f,[id]:ns.floors.slice()})); setSid(id); say('도면을 올렸어요. 외곽선 4개를 찾았어요.');
+      } else setUp(u=>({...u,p}));
+    },380);
+  };
+  const setH = (i,v) => { const n=parseFloat(v); setFh(f=>{const a=f[sid].slice();a[i]=isNaN(n)?0:Math.max(0,n);return {...f,[sid]:a};}); };
+  const addSeg = () => {
+    const e={}; const len=parseFloat(seg.len), h=parseFloat(seg.h);
+    if(!seg.n.trim()) e.n='구간 이름을 입력해 주세요'; if(!(len>0)) e.len='길이는 0보다 큰 숫자로 입력해 주세요'; if(!(h>0)) e.h='높이는 0보다 큰 숫자로 입력해 주세요';
+    setSegErr(e); if(Object.keys(e).length) return;
+    setSegs(s=>({...s,[sid]:[...(s[sid]||[]),{n:seg.n.trim(),len,h}]})); setSeg({n:'',len:'',h:''}); say('구간을 추가했어요. 합계에 바로 더해졌어요.');
+  };
+  const sendMemo = () => { if(!memo.trim()) return; setMemos(m=>({...m,[sid]:[...(m[sid]||[]),{w:'나',t:'지금',m:memo.trim()}]})); setMemo(''); };
+  const download = () => { if(xl) return; setXl(true); setTimeout(()=>{setXl(false);say('층별 요약과 산식 시트가 담긴 엑셀을 내려받았어요.')},1500); };
+  const submit = () => {
+    const e={}; if(!form.co.trim()) e.co='업체명을 입력해 주세요'; if(!form.site.trim()) e.site='현장명을 입력해 주세요';
+    if(!/^0\d{1,2}-?\d{3,4}-?\d{4}$/.test(form.tel.trim())) e.tel='연락처는 010-0000-0000 형태로 입력해 주세요';
+    setErrs(e); if(Object.keys(e).length) return;
+    setSent('Q-261008-'+(1000+Math.floor(Math.random()*8999)));
+  };
+
+  const [stName,stCls] = STATUS[site.status];
+  const steps = ['업로드','DXF 변환','레이어 분석','외곽선 인식','층고 추정'];
+  const stepState = i => site.status==='done'||site.status==='fix' ? 2 : site.status==='run' ? (i<2?2:i===2?1:0) : (i<1?2:i===1?-1:0);
+
+  return (
+    <div data-archetype="slack-3pane" className="app">
+      <nav className="workspace-strip" data-workspace-strip style={{width:64}}>
+        {sites.slice(0,4).map(s=>(
+          <button key={s.id} className={'ws-item'+(s.id===sid?' active':'')} title={s.name} onClick={()=>setSid(s.id)}><span className="ws-icon">{s.ini}</span></button>
+        ))}
+        <div className="ws-divider"></div>
+        <button className="ws-item" title="도면 올리기" onClick={()=>{setView('main');startUpload();}}><Ico n="plus" b/></button>
+      </nav>
+
+      <aside className="channel-list" data-channel-list style={{width:260}}>
+        <header className="channel-header">
+          <h2 className="ws-name">비계 물량 산출</h2>
+          <button className="icon-btn" title="새 도면" onClick={()=>{setView('main');startUpload();}}><Ico n="note-pencil"/></button>
+        </header>
+        <div className="channel-search"><input placeholder="도면·현장 검색" aria-label="도면 검색"/></div>
+        <div className="channel-scroll">
+          <div className="section-title">작업 화면</div>
+          {NAV.map(([k,t,ic])=>(
+            <button key={k} className={'channel-item'+(view===k?' active':'')} onClick={()=>setView(k)}><Ico n={ic}/>{t}</button>
+          ))}
+          <div className="section-title">내 도면 ({sites.length})</div>
+          {sites.map(s=>{const [n,,pc]=STATUS[s.status];return (
+            <button key={s.id} className={'dm-item'+(s.id===sid?' active':'')} onClick={()=>setSid(s.id)}>
+              <span className={'presence '+pc}></span>
+              <span style={{flex:1,minWidth:0}}><span className="nm" style={{display:'block'}}>{s.name}</span><span className="sub">{n} · {s.when}</span></span>
+            </button>);})}
+        </div>
+      </aside>
+
+      <main className="conv-main">
+        <header className="conv-header">
+          <div className="conv-title-row">
+            <Ico n="buildings" b/>
+            <h2 className="conv-title">{site.name}</h2>
+            <span className={'pill '+stCls}>{stName}</span>
+          </div>
+          <div className="conv-actions">
+            <button className="icon-btn" title="파일 정보" onClick={()=>say(site.file)}><Ico n="file-dashed"/></button>
+            <button className="icon-btn toggle-info" title="정보 패널" onClick={()=>setInfo(v=>!v)}><Ico n="sidebar-simple"/></button>
+          </div>
+        </header>
+
+        <div className="conv-body">
+          {view==='main' && (
+            <div className="screen" key="main">
+              <div className="drop">
+                <Ico n="file-arrow-up" b/>
+                <div style={{flex:1}}>
+                  <div className="t-sub">{up ? up.name : 'DWG 도면을 여기에 올려 주세요'}</div>
+                  <div className="t-cap" style={{marginTop:4}}>{up ? '올리는 중이에요 · '+Math.round(up.p)+'%' : '건축·구조 도면 모두 올릴 수 있어요. 서버가 DXF로 바꾸고 외곽선과 층 정보를 찾아요.'}</div>
+                  {up && <div className="step" style={{marginTop:12}}><div className="bar"><i style={{transform:'scaleX('+up.p/100+')',animation:'none',transition:'transform .3s'}}></i></div></div>}
+                </div>
+                <button className="btn primary" onClick={startUpload} disabled={!!up}>DWG 파일 올리기</button>
+              </div>
+
+              <div className="card">
+                <div className="card-head"><span className="t-sub">변환 진행 상태</span><span className="t-cap">{site.file}</span></div>
+                <div className="steps">
+                  {steps.map((s,i)=>{const st=stepState(i);return (
+                    <div className="step" key={s}>
+                      <div className="bar">{st===2 && <i style={{animationDelay:i*0.12+'s'}}></i>}{st===1 && <i className="half" style={{transform:'none'}}></i>}{st===-1 && <i style={{background:'var(--s2)'}}></i>}</div>
+                      <span className="lb">{s}</span>
+                    </div>);})}
+                </div>
+                {site.status==='fail' && (
+                  <div className="msg-group" style={{background:'var(--s2-bg)',padding:16,borderRadius:12,alignItems:'center'}}>
+                    <Ico n="warning-circle" b/>
+                    <div style={{flex:1}}><div style={{fontWeight:700,color:'var(--s2-text)'}}>DXF 변환에 실패했어요</div><div className="t-cap" style={{color:'var(--s2-text)'}}>외부 참조(XREF) 파일이 빠져 있어요. 참조 파일까지 함께 올려 주세요.</div></div>
+                    <button className="btn line sm" onClick={startUpload}>다시 올리기</button>
+                  </div>)}
+              </div>
+
+              <div className="grid2">
+                <div className="card">
+                  <div className="card-head"><span className="t-sub">인식된 외곽선</span><span className="pill main">자동 인식</span></div>
+                  <Plan site={site}/>
+                </div>
+                <div className="card">
+                  <div className="card-head"><span className="t-sub">인식 결과</span></div>
+                  {[['외곽선 후보',site.status==='fail'?'—':'4개 중 1개 선택'],['층수',site.status==='fail'?'—':heights.length+'층'],['층고 표기',site.status==='fail'?'—':'TEXT에서 '+heights.length+'건 추출'],['도면 단위',site.unit],['레이어',site.layers+'개']].map(([a,b])=>(
+                    <div className="msg-group item" key={a} style={{justifyContent:'space-between',borderBottom:'1px solid var(--n2)',paddingBottom:12}}><span style={{color:'var(--n7)'}}>{a}</span><b className="num">{b}</b></div>))}
+                  <button className="btn line" onClick={()=>setView('viewer3d')}>3D로 확인하기</button>
+                </div>
+              </div>
+            </div>)}
+
+          {view==='viewer3d' && (
+            <div className="screen" key="v3">
+              <div className="viewer-wrap">
+                <Viewer3D site={site} heights={heights} hidden={hidden}/>
+                <div className="viewer-legend">
+                  <span className="t-cap" style={{fontWeight:700,color:'var(--n9)'}}>범례</span>
+                  <span className="t-cap" style={{display:'flex',gap:8,alignItems:'center'}}><i style={{width:12,height:12,borderRadius:4,background:'var(--n3)',display:'inline-block'}}></i>건물 외관</span>
+                  <span className="t-cap" style={{display:'flex',gap:8,alignItems:'center'}}><i style={{width:12,height:12,borderRadius:4,background:'var(--m400)',display:'inline-block'}}></i>비계 설치 구간</span>
+                </div>
+                <div className="viewer-hint"><span className="pill"><Ico n="hand-grabbing"/>드래그로 회전</span><span className="pill"><Ico n="magnifying-glass-plus"/>휠로 확대</span></div>
+              </div>
+              <div className="card">
+                <div className="card-head"><span className="t-sub">층별 표시</span><span className="t-cap">내부는 표시하지 않고 외관만 보여 드려요</span></div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+                  {heights.map((h,i)=>(
+                    <button key={i} className={'chip'+(hidden.includes(i)?'':' on')} onClick={()=>setHidden(x=>x.includes(i)?x.filter(v=>v!==i):[...x,i])}><Ico n={hidden.includes(i)?'eye-slash':'eye'}/>{(i+1)+'층 · '+fmt(h)+'m'}</button>))}
+                  <button className="btn ghost sm" onClick={()=>setHidden([])}>모두 보기</button>
+                </div>
+                <div className="t-cap">층고를 고치면 3D 형상이 바로 바뀌어요. 수정은 <a style={{color:'var(--m700)',fontWeight:600,cursor:'pointer'}} onClick={()=>setView('quantity')}>물량 산출 화면</a>에서 할 수 있어요.</div>
+              </div>
+            </div>)}
+
+          {view==='quantity' && (
+            <div className="screen" key="q">
+              <div className="grid2" style={{gridTemplateColumns:'1.1fr 1fr'}}>
+                <div className="card">
+                  <span className="t-cap">시스템비계 설치면적 합계 (개략)</span>
+                  <div className="t-disp num" key={Math.round(total)} style={{animation:'fadeUp .3s ease both'}}>{fmt(total,0)}<span style={{fontSize:18,fontWeight:700,marginLeft:4}}>㎡</span></div>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap'}}><span className="pill">자동 {fmt(autoSum,0)}㎡</span><span className="pill main">수동 {fmt(segSum,0)}㎡</span></div>
+                  <div className="t-cap">외벽 둘레 × 층고로 계산한 근사치예요. 정밀 구조 계산이 아니에요.</div>
+                </div>
+                <div className="card">
+                  <div className="card-head"><span className="t-sub">근거 도형</span><span className="pill dark">{floorRows[selFloor] ? floorRows[selFloor].label : '-'} 선택</span></div>
+                  <Plan site={site} emphasis/>
+                  {floorRows[selFloor] && <div className="t-cap num" style={{color:'var(--n9)',fontWeight:600}}>둘레 {fmt(P)}m × 층고 {fmt(floorRows[selFloor].h)}m = {fmt(floorRows[selFloor].area)}㎡</div>}
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-head"><span className="t-sub">층별 설치면적</span><span className="t-cap">층고 칸을 눌러 고칠 수 있어요</span></div>
+                <table>
+                  <thead><tr><th>층</th><th>층고(m)</th><th>둘레(m)</th><th>설치면적(㎡)</th><th>구분</th><th style={{width:'24%'}}>비중</th></tr></thead>
+                  <tbody>
+                    {floorRows.map(r=>(
+                      <tr key={r.i} className={'row'+(selFloor===r.i?' sel':'')} onClick={()=>setSelFloor(r.i)}>
+                        <td style={{fontWeight:700}}>{r.label}</td>
+                        <td><input className="num-in num" type="number" step="0.1" value={r.h} onClick={e=>e.stopPropagation()} onChange={e=>setH(r.i,e.target.value)} aria-label={r.label+' 층고'}/></td>
+                        <td className="num">{fmt(P)}</td>
+                        <td className="num" style={{fontWeight:700}}>{fmt(r.area)}</td>
+                        <td><span className={'pill'+(r.edited?' main':'')}>{r.edited?'수정':'자동'}</span></td>
+                        <td><div className="step"><div className="bar"><i style={{transform:'scaleX('+(r.area/Math.max(...floorRows.map(x=>x.area),1))+')',background:r.i===selFloor?'var(--m600)':'var(--n5)'}}></i></div></div></td>
+                      </tr>))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="card">
+                <div className="card-head"><span className="t-sub">수동 지정 구간</span><span className="t-cap">인식하지 못한 구간은 직접 넣어 주세요</span></div>
+                {mySegs.length===0 && <div className="empty"><Ico n="selection-plus" b/><div>아직 직접 지정한 구간이 없어요</div></div>}
+                {mySegs.map((s,i)=>(
+                  <div className="msg-group item" key={i} style={{alignItems:'center',justifyContent:'space-between',borderBottom:'1px solid var(--n2)',paddingBottom:12}}>
+                    <div><b>{s.n}</b><div className="t-cap num">길이 {fmt(s.len)}m × 높이 {fmt(s.h)}m</div></div>
+                    <div style={{display:'flex',alignItems:'center',gap:12}}><b className="num">{fmt(s.len*s.h)}㎡</b><span className="pill main">수동</span>
+                      <button className="icon-btn" title="구간 삭제" onClick={()=>setSegs(x=>({...x,[sid]:x[sid].filter((_,k)=>k!==i)}))}><Ico n="trash"/></button></div>
+                  </div>))}
+                <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr auto',gap:16,alignItems:'end'}}>
+                  <div className="field"><label>구간 이름</label><input value={seg.n} aria-invalid={!!segErr.n} onChange={e=>setSeg({...seg,n:e.target.value})} placeholder="예: 북측 증축 구간"/>{segErr.n&&<span className="err">{segErr.n}</span>}</div>
+                  <div className="field"><label>길이(m)</label><input value={seg.len} aria-invalid={!!segErr.len} onChange={e=>setSeg({...seg,len:e.target.value})} placeholder="18"/>{segErr.len&&<span className="err">{segErr.len}</span>}</div>
+                  <div className="field"><label>높이(m)</label><input value={seg.h} aria-invalid={!!segErr.h} onChange={e=>setSeg({...seg,h:e.target.value})} placeholder="6"/>{segErr.h&&<span className="err">{segErr.h}</span>}</div>
+                  <button className="btn line" onClick={addSeg}>구간 추가하기</button>
+                </div>
+              </div>
+            </div>)}
+
+          {view==='estimate' && (
+            <div className="screen" key="e">
+              <div className="grid2">
+                <div className="card">
+                  <div className="card-head"><span className="t-sub">산출 결과 요약</span><span className="pill dark">{site.name}</span></div>
+                  {floorRows.slice(0,5).map(r=>(<div className="msg-group item" key={r.i} style={{justifyContent:'space-between'}}><span>{r.label}</span><b className="num">{fmt(r.area)}㎡</b></div>))}
+                  {floorRows.length>5 && <div className="t-cap">외 {floorRows.length-5}개 층은 엑셀에 담겨요</div>}
+                  <div className="msg-group" style={{justifyContent:'space-between',borderTop:'1px solid var(--n3)',paddingTop:12}}><b>합계</b><b className="num t-sub">{fmt(total,0)}㎡</b></div>
+                  <button className="btn line" onClick={download} data-loading={xl?'true':'false'} disabled={xl}><Ico n="download-simple"/>엑셀 내려받기</button>
+                </div>
+                <div className="card">
+                  {!sent ? (<>
+                    <div className="card-head"><span className="t-sub">견적 요청</span><span className="t-cap">모든 칸을 채워 주세요</span></div>
+                    <div className="field"><label>업체명</label><input value={form.co} aria-invalid={!!errs.co} onChange={e=>setForm({...form,co:e.target.value})} placeholder="예: 샘플건설"/>{errs.co&&<span className="err">{errs.co}</span>}</div>
+                    <div className="field"><label>현장명</label><input value={form.site} aria-invalid={!!errs.site} onChange={e=>setForm({...form,site:e.target.value})} placeholder="예: 동탄 A동 신축"/>{errs.site&&<span className="err">{errs.site}</span>}</div>
+                    <div className="field"><label>연락처</label><input value={form.tel} aria-invalid={!!errs.tel} onChange={e=>setForm({...form,tel:e.target.value})} placeholder="010-0000-0000"/>{errs.tel&&<span className="err">{errs.tel}</span>}</div>
+                    <button className="btn primary" onClick={submit}>견적 요청 보내기</button>
+                  </>) : (
+                    <div className="empty" style={{animation:'fadeUp .3s ease both'}}>
+                      <Ico n="check-circle" b/><div className="t-sub">견적 요청이 접수됐어요</div>
+                      <span className="pill dark num">접수 번호 {sent}</span>
+                      <button className="btn line sm" onClick={()=>{setSent(null);setForm({co:'',site:'',tel:'',note:''})}}>새 요청 쓰기</button>
+                    </div>)}
+                </div>
+              </div>
+              <div className="card">
+                <div className="card-head"><span className="t-sub">기존 홈페이지에 넣기</span><span className="t-cap">iframe 한 줄로 같은 화면을 쓸 수 있어요</span></div>
+                <div className="grid2">
+                  <div className="code">{'<iframe\n  src="https://demo.example.com/embed/quote"\n  width="100%" height="720"\n  allow="clipboard-write"></iframe>'}</div>
+                  <div className="browser">
+                    <div className="bar"><i className="dot"></i><i className="dot"></i><i className="dot"></i><span className="t-cap" style={{marginLeft:8}}>샘플 가설재 홈페이지</span></div>
+                    <div style={{padding:16,display:'flex',flexDirection:'column',gap:8}}>
+                      <div style={{height:8,width:'50%',borderRadius:8,background:'var(--n3)'}}></div>
+                      <div style={{border:'2px solid var(--m500)',borderRadius:12,padding:16}}><b>도면 올리고 견적 받기</b><div className="t-cap">이 영역이 임베드 화면이에요</div></div>
+                    </div>
+                  </div>
+                </div>
+                <button className="btn line sm" style={{alignSelf:'flex-start'}} onClick={()=>say('임베드 코드를 복사했어요.')}><Ico n="copy"/>코드 복사하기</button>
+              </div>
+            </div>)}
+        </div>
+
+        <footer className="conv-input">
+          <input className="msg-input" value={memo} onChange={e=>setMemo(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sendMemo()} placeholder={site.name+' 도면에 메모 남기기'} aria-label="도면 메모"/>
+          <button className="btn primary sm" onClick={sendMemo}>메모 남기기</button>
+        </footer>
+      </main>
+
+      {info && (
+        <aside className="info-panel detail-panel" data-info-panel style={{width:320}}>
+          <header className="info-header"><h3 className="t-sub">도면 정보</h3><button className="icon-btn close-info" title="패널 닫기" onClick={()=>setInfo(false)}><Ico n="x"/></button></header>
+          <div className="info-section">
+            <div className="kv"><span>파일</span><span style={{maxWidth:170,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{site.file}</span></div>
+            <div className="kv"><span>변환기</span><span>LibreDWG (별도 프로세스)</span></div>
+            <div className="kv"><span>단위</span><span>{site.unit}</span></div>
+            <div className="kv"><span>레이어</span><span className="num">{site.layers}개</span></div>
+            <div className="kv"><span>올린 시각</span><span>{site.when}</span></div>
+          </div>
+          <div className="info-section">
+            <div className="info-label">담당자 (3)</div>
+            {[[site.owner,'도면 검토'],['이서연','산출 보정'],['최유나','견적 회신']].map(([n,r])=>(
+              <div className="member-item item" key={n}><span className="member-avatar">{n.charAt(0)}</span><span style={{flex:1,fontWeight:600}}>{n}</span><span className="t-cap">{r}</span></div>))}
+          </div>
+          <div className="info-section">
+            <div className="info-label">현장 메모</div>
+            {(memos[sid]||[]).length===0 && <div className="t-cap">아직 메모가 없어요. 아래 입력창에서 남겨 보세요.</div>}
+            {(memos[sid]||[]).map((m,i)=>(
+              <div className="msg-group" key={i}><span className="msg-avatar" style={{width:32,height:32,fontSize:12}}>{m.w.charAt(0)}</span>
+                <div><div className="msg-meta"><span className="msg-name">{m.w}</span><span className="t-cap">{m.t}</span></div><div>{m.m}</div></div></div>))}
+          </div>
+          <div className="info-section">
+            <div className="info-label">변경 이력</div>
+            <div className="t-cap">10.08 09:12 · 층고 1건 자동 추출</div>
+            <div className="t-cap">10.08 09:14 · 외곽선 후보 4개 중 1개 선택</div>
+            <div className="t-cap">10.08 09:20 · 하역장 구간 수동 추가</div>
+          </div>
+        </aside>)}
+      {toast && <div className="toast"><Ico n="check-circle" b/>{toast}</div>}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
