@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>숨결 사이트 관리 콘솔 — 확장 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P2 — 메인 1 · 서브 2 · 나머지 무채색 (gen-color-tokens.js 산출, hue 46°, light) ── */
+:root{
+  /* 메인 — 브랜드 마크·primary CTA(화면당 1)·활성 nav·링크·주 차트·포커스. 앵커 m600 = plan primary */
+  --m50:#fffbed;
+  --m100:#fff7db;
+  --m200:#ffefb8;
+  --m300:#ffe58c;
+  --m400:#ffda5c;
+  --m500:#ffcf2e;
+  --m600:#ffc500;
+  --m700:#d1a200;
+  --m800:#a37e00;
+  --m900:#735900;
+  /* 무채색 — 배경(n0~n2)·테두리/비활성(n3~n5)·아이콘/보조텍스트(n6~n8)·본문/다크필(n9~n10). 아바타·태그·아이콘박스·KPI배경·보조 차트는 전부 여기 */
+  --n0:#fdfcf3;
+  --n1:#ffffff;
+  --n2:#f0f0ef;
+  --n3:#e6e6e5;
+  --n4:#d7d7d5;
+  --n5:#bab9b5;
+  --n6:#989690;
+  --n7:#6e6e6e;
+  --n8:#5a5953;
+  --n9:#3a3936;
+  --n10:#000000;
+  /* 서브 — 상태 의미가 있을 때만. 배지=bg+text, 점/셀/바=solid */
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b; /* 성공/진행/정상/상승 */
+  --s2:#cf3f3f; --s2-bg:#f9e7e7; --s2-text:#ad1f1f; /* 오류/위험/실패/하락/환불 */
+}
+/* ⚠ s3(경고/주의) — 메인 hue 46°와 8° 겹침 → 제거, 해당 상태는 무채색(n9/n10 필 + 아이콘)으로 표현 */
+
+/* ── 상태 레이어 P2 — 모양은 페이지가, 상태는 여기서 (gen-component-kit.js 산출, 색은 토큰만) ── */
+/* state-layer elevation=flat theme=light */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{filter:brightness(.94);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #111111;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--s2);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{width:100%;min-height:100%}
+body{font-family:'Pretendard Variable',Pretendard,-apple-system,'Apple SD Gothic Neo',sans-serif;background:var(--n0);color:var(--n10);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+a{text-decoration:none;color:inherit}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select,textarea{font:inherit;color:inherit}
+ul{list-style:none}
+.num{font-variant-numeric:tabular-nums}
+
+@keyframes rise{from{opacity:0;transform:translate(0,10px)}to{opacity:1;transform:none}}
+@keyframes barGrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+@keyframes flowDot{0%{offset-distance:0%;opacity:0}12%{opacity:1}88%{opacity:1}100%{offset-distance:100%;opacity:0}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes sweep{from{background-position:-200px 0}to{background-position:200px 0}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes slideDown{from{opacity:0;transform:translate(0,-6px)}to{opacity:1;transform:none}}
+
+/* ── 상단 유틸리티 바 ── */
+.util{position:sticky;top:0;z-index:40;background:var(--n1);border-bottom:1px solid var(--n4)}
+.util-in{max-width:1380px;margin:0 auto;height:44px;padding:0 28px;display:flex;align-items:center;justify-content:space-between}
+.util-l,.util-r{display:flex;align-items:center;gap:20px;font-size:13px;font-weight:700}
+.util-l button,.util-r .lnk{display:flex;align-items:center;gap:6px;color:var(--n10)}
+.util-l button:hover,.util-r .lnk:hover{color:var(--n7)}
+.cta{height:30px;padding:0 16px;background:var(--m600);color:var(--n10);font-size:12.5px;font-weight:700;letter-spacing:.01em;border-radius:0;display:flex;align-items:center;gap:6px}
+.cta:hover{background:var(--m700)}
+
+/* ── 마스트헤드 ── */
+.mast{max-width:1380px;margin:0 auto;padding:22px 28px 0}
+.mast-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:24px}
+.mast-meta{font-size:12.5px;color:var(--n7);line-height:1.5;border-left:3px solid var(--n10);padding-left:10px}
+.mast-meta b{color:var(--n10);display:block;font-size:13px}
+.mast-title{font-size:40px;font-weight:800;letter-spacing:-.04em;line-height:1;text-align:center}
+.mast-title small{display:block;font-size:12px;font-weight:600;letter-spacing:.075em;color:var(--n7);margin-bottom:8px;text-align:center}
+.mast-art{justify-self:end;display:flex;gap:12px;align-items:center;color:var(--n7);font-size:12.5px;text-align:right;line-height:1.4}
+.nav{margin-top:18px;border-top:1px solid var(--n10);border-bottom:1px solid var(--n4);display:flex;justify-content:center;flex-wrap:wrap}
+.nav button{padding:12px 20px;font-size:14px;font-weight:600;color:var(--n8);position:relative;white-space:nowrap}
+.nav button+button{border-left:1px solid var(--n4)}
+.nav button:hover{color:var(--n10)}
+.nav button[aria-current="page"]{color:var(--n10)}
+.nav button[aria-current="page"]::after{content:"";position:absolute;left:20px;right:20px;bottom:-1px;height:3px;background:var(--n10)}
+
+/* ── 공통 ── */
+.page{max-width:1380px;margin:0 auto;padding:22px 28px 56px;animation:rise .4s ease both}
+.eyebrow{font-size:12px;font-weight:700;letter-spacing:.075em;text-transform:uppercase;color:var(--n7)}
+.h-xl{font-size:32px;line-height:1.15;font-weight:700;letter-spacing:-.04em}
+.h-md{font-size:18px;font-weight:700;letter-spacing:-.02em;line-height:1.3}
+.sub{color:var(--n7);font-size:13.5px}
+.bento{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.tile{background:var(--n1);border:1px solid var(--n4);border-radius:4px;padding:18px;display:flex;flex-direction:column;gap:12px;min-width:0;animation:rise .45s ease both}
+.tile.feature{grid-column:span 2;grid-row:span 2}
+.tile.wide{grid-column:span 2}
+.tile.accent{background:var(--m600);border-color:var(--m600);color:var(--n10)}
+.tile-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.big{font-size:44px;line-height:1;font-weight:800;letter-spacing:-.04em}
+.btn{height:32px;padding:0 13px;border:1px solid var(--n10);border-radius:4px;font-size:13px;font-weight:700;display:inline-flex;align-items:center;gap:6px;background:var(--n1);white-space:nowrap}
+.btn:hover{background:var(--n2)}
+.btn-solid{background:var(--n10);color:var(--n1)}
+.btn-solid:hover{background:var(--n9)}
+.btn-sm{height:26px;padding:0 9px;font-size:12px}
+.badge{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:2px;font-size:11.5px;font-weight:700}
+.b-ok{background:var(--s1-bg);color:var(--s1-text)}
+.b-err{background:var(--s2-bg);color:var(--s2-text)}
+.b-wait{background:var(--n2);color:var(--n8)}
+.b-ink{background:var(--n10);color:var(--n1)}
+.input{height:34px;border:1px solid var(--n5);border-radius:4px;padding:0 10px;background:var(--n1);width:100%;font-size:13.5px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field>label,.lbl{font-size:12px;font-weight:700;color:var(--n8)}
+.hair{border:0;border-top:1px solid var(--n4);margin:2px 0}
+.table{width:100%;border-collapse:collapse;font-size:13px}
+.table th{text-align:left;font-size:11.5px;color:var(--n7);font-weight:700;padding:7px 10px;border-bottom:1px solid var(--n10)}
+.table td{padding:9px 10px;border-bottom:1px solid var(--n3)}
+.table tr:last-child td{border-bottom:0}
+.chk{width:18px;height:18px;border:1.5px solid var(--n6);border-radius:3px;display:inline-flex;align-items:center;justify-content:center;background:var(--n1);flex:none;color:var(--n1)}
+.chk[aria-checked="true"]{background:var(--n10);border-color:var(--n10)}
+.switch{width:38px;height:22px;border-radius:2px;background:var(--n4);position:relative;flex:none;transition:background .2s}
+.switch::after{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;background:var(--n1);transition:transform .2s}
+.switch[aria-checked="true"]{background:var(--n10)}
+.switch[aria-checked="true"]::after{transform:translateX(16px)}
+.seg{display:inline-flex;border:1px solid var(--n10);border-radius:4px;overflow:hidden}
+.seg button{height:30px;padding:0 13px;font-size:12.5px;font-weight:700;color:var(--n8)}
+.seg button+button{border-left:1px solid var(--n10)}
+.seg button[aria-pressed="true"]{background:var(--n10);color:var(--n1)}
+.row-between{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+.code{background:var(--n10);color:var(--n2);border-radius:4px;padding:14px;line-height:1.65;white-space:pre-wrap;word-break:break-all}
+.code .k{color:var(--n5)}
+.toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:90;background:var(--n10);color:var(--n1);padding:11px 18px;border-radius:4px;font-size:13px;display:flex;gap:8px;align-items:center;animation:rise .25s ease;max-width:90%}
+
+/* ── 이미지 파이프라인 타일 ── */
+.pipe{position:relative;height:150px;border:1px solid var(--n3);border-radius:4px;background:var(--n0);overflow:hidden}
+.pipe-node{position:absolute;top:50%;transform:translateY(-50%);width:104px;border:1px solid var(--n10);background:var(--n1);padding:9px 8px;text-align:center;font-size:12px;font-weight:700;border-radius:4px}
+.pipe-node i{display:block;font-size:22px;margin-bottom:3px}
+.pipe-node small{display:block;font-weight:500;color:var(--n7);font-size:11px;margin-top:1px}
+.dotflow{position:absolute;left:0;top:0;width:8px;height:8px;background:var(--n10);border-radius:50%;offset-path:path('M 20 75 L 640 75');offset-rotate:0deg;animation:flowDot 3.2s linear infinite}
+.img-row{display:grid;grid-template-columns:36px 1fr auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--n3);width:100%;text-align:left}
+.img-row:last-child{border-bottom:0}
+.img-row[aria-selected="true"]{background:var(--n0)}
+.ph-box{width:36px;height:36px;border:1px solid var(--n4);background:var(--n2);display:flex;align-items:center;justify-content:center;color:var(--n7);font-size:18px;border-radius:2px}
+.bars{display:flex;align-items:flex-end;gap:6px;height:120px;border-bottom:1px solid var(--n10);padding-bottom:0}
+.bar{flex:1;background:var(--n4);transform-origin:bottom;animation:barGrow .6s ease both;min-width:0;position:relative}
+.bar.hot{background:var(--n10)}
+.bar.key{background:var(--m600)}
+.skel{background:linear-gradient(90deg,var(--n2) 0,var(--n3) 50%,var(--n2) 100%);background-size:200px 100%;animation:sweep 1.4s linear infinite;height:10px;border-radius:2px}
+.live{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700}
+.live i{width:7px;height:7px;border-radius:50%;background:var(--s1);animation:blink 1.4s infinite}
+
+/* ── 마스터-디테일 ── */
+.md{display:grid;grid-template-columns:380px 1fr;gap:12px;align-items:start}
+.panel{background:var(--n1);border:1px solid var(--n4);border-radius:4px}
+.list-row{display:grid;grid-template-columns:1fr auto;gap:4px 10px;padding:11px 14px;width:100%;text-align:left;border-bottom:1px solid var(--n3);border-left:3px solid transparent}
+.list-row:hover{background:var(--n0)}
+.list-row[aria-selected="true"]{background:var(--n0);border-left-color:var(--n10)}
+.stack-bar{display:flex;height:10px;border:1px solid var(--n10);border-radius:2px;overflow:hidden}
+.stack-bar i{display:block;height:100%;animation:rise .5s ease both}
+.step-row{display:flex;gap:0;border:1px solid var(--n10);border-radius:4px;overflow:hidden}
+.step-row div{flex:1;padding:8px 10px;font-size:12px;font-weight:700;color:var(--n7);border-left:1px solid var(--n4);text-align:center}
+.step-row div:first-child{border-left:0}
+.step-row div[data-on="true"]{background:var(--n10);color:var(--n1)}
+
+/* ── 폼 · 영문 ── */
+.two{display:grid;grid-template-columns:1.15fr 1fr;gap:12px;align-items:start}
+.glos{display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:center}
+.prev-head{display:flex;gap:18px;align-items:center;border:1px solid var(--n4);background:var(--n0);padding:12px 14px;font-weight:700;font-size:13px;border-radius:4px;flex-wrap:wrap}
+
+/* ── 권한 ── */
+.term{background:var(--n10);color:var(--n2);border-radius:4px;padding:14px 16px;min-height:150px;line-height:1.7}
+.term b{color:var(--n0)}
+.term .ok{color:var(--s1)}
+.term .no{color:var(--s2)}
+.matrix td,.matrix th{text-align:center}
+.matrix td:first-child,.matrix th:first-child{text-align:left}
+
+.foot{border-top:1px solid var(--n10);max-width:1380px;margin:0 auto;padding:16px 28px 36px;display:flex;justify-content:space-between;font-size:12.5px;color:var(--n7)}
+@media(max-width:1000px){.bento{grid-template-columns:repeat(2,1fr)}.md,.two{grid-template-columns:1fr}.mast-row{grid-template-columns:1fr}.mast-art,.mast-meta{display:none}}
+</style>
+</head>
+<body data-archetype="bento-grid">
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo, useRef, useEffect } = React;
+const Ph = ({ n, s = 16, style }) => <i className={'ph ph-' + n} style={{ fontSize: s, flex: 'none', ...style }} aria-hidden="true"></i>;
+
+const VIEWS = [
+  ['main', '이미지 최적화·부하 대응 현황'],
+  ['migration', '카페24 데이터 이전·301 리디렉션 매핑'],
+  ['forms', '구글시트 연동 폼·영문 변환'],
+  ['roles', '권한 관리·비공개 글 접근 차단'],
+];
+
+function App() {
+  const [view, setView] = useState('main');
+  const [toast, setToast] = useState(null);
+  const tRef = useRef();
+  const say = m => { setToast(m); clearTimeout(tRef.current); tRef.current = setTimeout(() => setToast(null), 2600); };
+  const go = v => { setView(v); window.scrollTo(0, 0); };
+  return (
+    <div style={{ width: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <div className="util">
+        <div className="util-in">
+          <div className="util-l">
+            <button onClick={() => say('메뉴 — 이미지·이전·폼·권한 4개 업무 영역으로 이동합니다')}><Ph n="list" s={18} />메뉴</button>
+            <button onClick={() => go('main')}>대시보드</button>
+            <button onClick={() => say('작업 이력 — 이전·권한·폼 재시도 기록을 시간순으로 봅니다')}>작업 이력</button>
+          </div>
+          <div className="util-r">
+            <button className="lnk" onClick={() => say('검색 — 이미지·주소 매핑·접수 건을 한 번에 찾습니다')}><Ph n="magnifying-glass" s={17} /></button>
+            <button className="lnk" onClick={() => say('관리자 계정 — 관리자 역할로 로그인 중입니다')}>관리자</button>
+            <button className="cta" onClick={() => say('변경 사항을 게시했습니다 — 공개 사이트 캐시가 갱신됩니다')}><Ph n="upload-simple" s={14} />변경 게시</button>
+          </div>
+        </div>
+      </div>
+
+      <header className="mast">
+        <div className="mast-row">
+          <div className="mast-meta"><b>제 12호 · 사이트 운영 면</b>이미지 · 이전 · 접수 · 권한<br />한 면에서 확인하는 관리 현황</div>
+          <div className="mast-title"><small>SUMGYEOL SITE CONSOLE</small>숨결 관리 콘솔</div>
+          <div className="mast-art">
+            <span>비개발자 운영진이<br />코드 없이 쓰는 도구</span>
+            <svg width="56" height="48" viewBox="0 0 56 48" fill="none" stroke="var(--n10)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M10 40c-4-10 0-22 8-24l4 6c4-2 8-2 12 0l4-6c8 2 12 14 8 24-3 5-10 6-18 6s-12-1-18-6z" /><circle cx="22" cy="28" r="1.6" fill="var(--n10)" /><circle cx="36" cy="28" r="1.6" fill="var(--n10)" /><path d="M26 34c2 2 4 2 6 0" />
+            </svg>
+          </div>
+        </div>
+        <nav className="nav">
+          {VIEWS.map(([k, l]) => <button key={k} aria-current={view === k ? 'page' : undefined} onClick={() => go(k)}>{l}</button>)}
+        </nav>
+      </header>
+
+      <main style={{ flex: 1, width: '100%' }}>
+        {view === 'main' && <ImageView say={say} />}
+        {view === 'migration' && <MigrationView say={say} />}
+        {view === 'forms' && <FormsView say={say} />}
+        {view === 'roles' && <RolesView say={say} />}
+      </main>
+
+      <footer className="foot">
+        <span>© 샘플 단체 관리 콘솔 — 자체 개발 프로젝트 데모 · 화면의 모든 데이터는 가상의 예시입니다</span>
+        <span className="eyebrow">Next.js · Prisma · Redis · S3</span>
+      </footer>
+      {toast && <div className="toast"><Ph n="check-circle" s={16} />{toast}</div>}
+    </div>
+  );
+}
+
+/* ═════ 1. 이미지 최적화·부하 대응 ═════ */
+const IMGS = [
+  { id: 1, n: '구조현장_0412.jpg', o: '4.2 MB', w: '4032×3024', st: 'ok', v: ['1600w WebP · 312 KB', '800w WebP · 118 KB', '320w 썸네일 · 24 KB'] },
+  { id: 2, n: '치료실_0418.jpg', o: '3.6 MB', w: '3840×2880', st: 'ok', v: ['1600w WebP · 276 KB', '800w WebP · 102 KB', '320w 썸네일 · 21 KB'] },
+  { id: 3, n: '입양후기_0420.png', o: '5.8 MB', w: '3000×3000', st: 'run', v: ['1600w WebP · 변환 중', '800w WebP · 대기', '320w 썸네일 · 대기'] },
+  { id: 4, n: '봉사단_0421.jpg', o: '2.9 MB', w: '3264×2448', st: 'ok', v: ['1600w WebP · 228 KB', '800w WebP · 87 KB', '320w 썸네일 · 19 KB'] },
+];
+const LAZY = [['메인 랜딩', true, '첫 화면 이미지만 즉시 로드'], ['입양 목록', true, '카드 이미지 스크롤 시 로드'], ['개체 상세 갤러리', true, '두 번째 사진부터 지연'], ['소식 목록', true, '썸네일 지연 로드'], ['관리자 업로드 미리보기', false, '즉시 표시 유지']];
+
+function ImageView({ say }) {
+  const [sel, setSel] = useState(1);
+  const [surge, setSurge] = useState(false);
+  const [cache, setCache] = useState({ img: true, html: true, api: false });
+  const [lazy, setLazy] = useState(LAZY.map(l => l[1]));
+  const cur = IMGS.find(i => i.id === sel);
+  const base = [22, 28, 24, 31, 27, 30, 26, 29];
+  const hot = [24, 30, 70, 96, 100, 88, 52, 30];
+  const data = surge ? hot : base;
+  const Chk = ({ on }) => <span className="chk" aria-checked={on}>{on && <Ph n="check" s={12} />}</span>;
+  return (
+    <div className="page">
+      <div className="row-between" style={{ marginBottom: 16, alignItems: 'flex-end' }}>
+        <div><span className="eyebrow">Images · Traffic</span><h1 className="h-xl" style={{ marginTop: 6 }}>사진은 올리는 즉시 가볍게, 방문이 몰려도 안정적으로</h1></div>
+        <span className="live"><i></i>변환 큐 정상</span>
+      </div>
+      <section className="bento" data-layout="bento">
+        <div className="tile feature" style={{ borderRadius: 4 }}>
+          <div className="tile-head"><div><span className="eyebrow">Pipeline</span><h2 className="h-md" style={{ marginTop: 4 }}>이미지 처리 파이프라인</h2></div>
+            <button className="btn btn-sm" onClick={() => say('시험 이미지를 올렸습니다 — 3종 규격 변환이 큐에 들어갑니다')}><Ph n="upload-simple" s={13} />시험 업로드</button></div>
+          <div className="pipe">
+            <svg width="100%" height="150" viewBox="0 0 640 150" preserveAspectRatio="none" style={{ position: 'absolute', inset: 0 }} aria-hidden="true">
+              <path d="M 60 75 L 580 75" stroke="var(--n5)" strokeWidth="1.5" strokeDasharray="4 5" />
+            </svg>
+            <div className="dotflow" style={{ offsetPath: "path('M 70 75 L 560 75')" }}></div>
+            <div className="dotflow" style={{ animationDelay: '1.1s', offsetPath: "path('M 70 75 L 560 75')" }}></div>
+            <div className="pipe-node" style={{ left: '2%' }}><i className="ph ph-upload-simple"></i>원본 업로드<small>끌어놓기</small></div>
+            <div className="pipe-node" style={{ left: '27%' }}><i className="ph ph-stack"></i>Sharp 변환<small>3종 규격·WebP</small></div>
+            <div className="pipe-node" style={{ left: '52%' }}><i className="ph ph-database"></i>S3 저장<small>규격별 경로</small></div>
+            <div className="pipe-node" style={{ left: '77%', background: 'var(--n10)', color: 'var(--n1)' }}><i className="ph ph-globe-hemisphere-west"></i>CDN 배포<small style={{ color: 'var(--n5)' }}>캐시 경로 기록</small></div>
+          </div>
+          <div>
+            {IMGS.map(im => (
+              <button key={im.id} className="img-row" aria-selected={sel === im.id} onClick={() => setSel(im.id)}>
+                <span className="ph-box"><Ph n="image" s={18} /></span>
+                <span><b style={{ fontSize: 13 }}>{im.n}</b><span className="sub num" style={{ display: 'block', fontSize: 12 }}>원본 {im.o} · {im.w}</span></span>
+                {im.st === 'ok' ? <span className="badge b-ok"><Ph n="check" s={11} />변환 완료</span> : <span className="badge b-wait"><Ph n="arrows-clockwise" s={11} />변환 중</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="tile">
+          <span className="eyebrow">Variants</span>
+          <div className="big num">3<span style={{ fontSize: 16, letterSpacing: 0, fontWeight: 700 }}> 규격</span></div>
+          <p className="sub">업로드 1장마다 목록용·상세용·썸네일 변환본이 자동으로 만들어집니다.</p>
+        </div>
+        <div className="tile accent" style={{ borderRadius: 4 }}>
+          <span className="eyebrow" style={{ color: 'var(--n10)' }}>Format</span>
+          <div className="big">WebP</div>
+          <p style={{ fontSize: 13, fontWeight: 600 }}>지원하지 않는 브라우저에는 JPEG 변환본을 대신 내려줍니다.</p>
+        </div>
+
+        <div className="tile wide" style={{ borderRadius: 4 }}>
+          <div className="tile-head"><div><span className="eyebrow">Selected</span><h2 className="h-md" style={{ marginTop: 4 }}>{cur.n}</h2></div>
+            <button className="btn btn-sm" onClick={() => say('변환본 경로를 복사했습니다')}><Ph n="link" s={13} />경로 복사</button></div>
+          <table className="table">
+            <thead><tr><th>변환본</th><th>상태</th></tr></thead>
+            <tbody>{cur.v.map((v, i) => <tr key={i}><td className="mono">{v.split(' · ')[0]}</td><td>{v.includes('변환 중') ? <div className="skel" style={{ width: 120 }}></div> : v.includes('대기') ? <span className="badge b-wait">대기</span> : <span className="num">{v.split(' · ').slice(1).join(' · ')}</span>}</td></tr>)}</tbody>
+          </table>
+        </div>
+
+        <div className="tile wide" style={{ borderRadius: 4 }}>
+          <div className="tile-head"><div><span className="eyebrow">Traffic</span><h2 className="h-md" style={{ marginTop: 4 }}>방문자 급증 대응 시뮬레이션</h2></div>
+            <button className="btn btn-sm btn-solid" onClick={() => { setSurge(!surge); say(surge ? '평상시 트래픽으로 되돌렸습니다' : '급증 시나리오 — CDN이 이미지 요청을 흡수하고 서버가 늘어납니다'); }}>
+              <Ph n="lightning" s={13} />{surge ? '평상시로 되돌리기' : '급증 시뮬레이션'}</button></div>
+          <div className="bars" key={String(surge)}>
+            {data.map((h, i) => <div key={i} className={'bar' + (surge && h > 90 ? ' key' : surge && h > 50 ? ' hot' : '')} style={{ height: h + '%', animationDelay: i * 50 + 'ms' }}></div>)}
+          </div>
+          <div className="row-between" style={{ fontSize: 12.5 }}>
+            <span><b className="num">{surge ? '1,800' : '120'}</b> 요청/초 (예시값)</span>
+            <span>{surge ? '앱 서버 2대 → 4대 · 한도 초과 시 안내 페이지' : '앱 서버 2대 · CDN 캐시 대기'}</span>
+          </div>
+        </div>
+
+        <div className="tile">
+          <span className="eyebrow">Lazy loading</span>
+          <h2 className="h-md">화면별 지연 로딩</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+            {LAZY.map((l, i) => (
+              <button key={l[0]} className="row-between" style={{ textAlign: 'left' }} onClick={() => setLazy(p => p.map((x, j) => j === i ? !x : x))}>
+                <span style={{ fontSize: 12.5, fontWeight: 600 }}>{l[0]}</span><Chk on={lazy[i]} />
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="tile">
+          <span className="eyebrow">CDN cache</span>
+          <h2 className="h-md">캐시 구성</h2>
+          {[['img', '이미지 변환본', '장기 캐시'], ['html', '공개 페이지 HTML', '짧은 캐시 + 재검증'], ['api', '관리자 API', '캐시 안 함']].map(([k, a, b]) => (
+            <div className="row-between" key={k}><div><div style={{ fontSize: 12.5, fontWeight: 700 }}>{a}</div><div className="sub" style={{ fontSize: 11.5 }}>{b}</div></div>
+              <button className="switch" role="switch" aria-checked={cache[k]} aria-label={a} onClick={() => setCache({ ...cache, [k]: !cache[k] })}></button></div>
+          ))}
+        </div>
+        <div className="tile">
+          <span className="eyebrow">Fallback</span>
+          <h2 className="h-md">장애 안내 페이지</h2>
+          <p className="sub">한도를 넘으면 정적 안내 페이지로 전환하고, 복구 절차 체크 목록을 운영진에게 알립니다.</p>
+          <button className="btn" onClick={() => say('안내 페이지 미리보기를 엽니다')}><Ph n="eye" s={14} />미리보기</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/* ═════ 2. 카페24 이전 · 301 ═════ */
+const MIG_TYPES = { board: '게시판', animal: '개체', photo: '사진' };
+const MIG_STAGE = ['조사', '매핑', '시험 이전', '전체 이전'];
+const MIG0 = [
+  { id: 1, t: 'board', title: '2023 연말 후원 감사 인사', old: '/board/notice/read.html?no=1021', nw: '/news/1021', stage: 3, ck: [true, true, true, false] },
+  { id: 2, t: 'animal', title: '입양 완료 — 하루', old: '/shop/detail.html?pid=377', nw: '/adoption/haru', stage: 2, ck: [true, true, false, false] },
+  { id: 3, t: 'photo', title: '구조현장 사진 24장', old: '/web/upload/rescue_2023/', nw: '/media/rescue-2023', stage: 1, ck: [true, false, false, false] },
+  { id: 4, t: 'board', title: '이동 봉사 후기 모음', old: '/board/review/read.html?no=884', nw: '/news/884', stage: 3, ck: [true, true, true, true] },
+  { id: 5, t: 'animal', title: '임시보호 안내 — 보리', old: '/shop/detail.html?pid=412', nw: '/adoption/bori', stage: 0, ck: [false, false, false, false] },
+  { id: 6, t: 'board', title: '정기후원 안내 FAQ', old: '/board/faq/read.html?no=12', nw: '/support/faq', stage: 2, ck: [true, true, true, false] },
+  { id: 7, t: 'photo', title: '입양 후기 사진 61장', old: '/web/upload/adopt/', nw: '/media/adopt', stage: 1, ck: [true, false, false, false] },
+];
+const CKL = ['원본 주소 확인', '신규 주소 매핑', '시험 이전 검수', '리디렉션 적용'];
+function MigrationView({ say }) {
+  const [rows, setRows] = useState(MIG0);
+  const [sel, setSel] = useState(2);
+  const [tf, setTf] = useState('all');
+  const [q, setQ] = useState('');
+  const [rule, setRule] = useState(false);
+  const cur = rows.find(r => r.id === sel);
+  const vis = rows.filter(r => (tf === 'all' || r.t === tf) && r.title.includes(q.trim()));
+  const patch = p => setRows(rs => rs.map(r => r.id === sel ? { ...r, ...p } : r));
+  const counts = { board: rows.filter(r => r.t === 'board').length, animal: rows.filter(r => r.t === 'animal').length, photo: rows.filter(r => r.t === 'photo').length };
+  const dup = rows.some(r => r.id !== cur.id && r.nw === cur.nw);
+  return (
+    <div className="page">
+      <div className="row-between" style={{ marginBottom: 14, alignItems: 'flex-end' }}>
+        <div><span className="eyebrow">Migration · 301</span><h1 className="h-xl" style={{ marginTop: 6 }}>이전 대상을 유형별로 세고, 주소를 하나씩 짝짓습니다</h1></div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn" onClick={() => say('301 매핑 목록(CSV)을 내려받습니다 — 검수용')}><Ph n="download-simple" s={14} />매핑 CSV</button>
+          <button className="btn btn-solid" onClick={() => say('시험 이전을 시작합니다 — 선택한 유형만 신규 DB에 복사합니다')}><Ph n="play" s={14} />시험 이전</button>
+        </div>
+      </div>
+      <div className="panel" style={{ padding: 14, marginBottom: 12, display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 20, alignItems: 'center' }}>
+        <div className="row-between" style={{ justifyContent: 'flex-start', gap: 28 }}>
+          {Object.entries(counts).map(([k, v]) => <div key={k}><div className="big num" style={{ fontSize: 30 }}>{v}</div><div className="sub" style={{ fontSize: 12 }}>{MIG_TYPES[k]}</div></div>)}
+        </div>
+        <div>
+          <div className="stack-bar"><i style={{ width: counts.board / rows.length * 100 + '%', background: 'var(--n10)' }}></i><i style={{ width: counts.animal / rows.length * 100 + '%', background: 'var(--n6)' }}></i><i style={{ width: counts.photo / rows.length * 100 + '%', background: 'var(--n3)' }}></i></div>
+          <div className="sub" style={{ marginTop: 6, fontSize: 12 }}>이전 건수가 확정되기 전에도 유형별 집계로 범위를 확인하고, 건수가 늘면 같은 표에서 단가를 다시 계산합니다.</div>
+        </div>
+      </div>
+      <div className="md">
+        <div className="panel">
+          <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10, borderBottom: '1px solid var(--n4)' }}>
+            <input className="input" placeholder="제목으로 찾기" value={q} onChange={e => setQ(e.target.value)} />
+            <div className="seg" style={{ alignSelf: 'flex-start' }}>
+              {[['all', '전체'], ['board', '게시판'], ['animal', '개체'], ['photo', '사진']].map(([k, l]) => <button key={k} aria-pressed={tf === k} onClick={() => setTf(k)}>{l}</button>)}
+            </div>
+          </div>
+          {vis.map(r => (
+            <button key={r.id} className="list-row" aria-selected={sel === r.id} onClick={() => setSel(r.id)}>
+              <b style={{ fontSize: 13.5 }}>{r.title}</b>
+              {r.stage === 3 && r.ck.every(Boolean) ? <span className="badge b-ok">완료</span> : <span className="badge b-wait">{MIG_STAGE[r.stage]}</span>}
+              <span className="mono sub" style={{ gridColumn: 'span 2', fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.old}</span>
+            </button>
+          ))}
+          {vis.length === 0 && <div className="sub" style={{ padding: 20, textAlign: 'center' }}>조건에 맞는 이전 대상이 없습니다.</div>}
+        </div>
+        <div className="panel" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="row-between"><div><span className="eyebrow">{MIG_TYPES[cur.t]}</span><h2 className="h-md" style={{ fontSize: 22, marginTop: 4 }}>{cur.title}</h2></div><span className="badge b-ink">{MIG_STAGE[cur.stage]} 단계</span></div>
+          <div className="step-row">{MIG_STAGE.map((s, i) => <div key={s} data-on={i <= cur.stage}>{s}</div>)}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 24px 1fr', gap: 8, alignItems: 'end' }}>
+            <div className="field"><label>기존 주소 (카페24)</label><input className="input mono" value={cur.old} readOnly /></div>
+            <Ph n="arrow-right" s={18} style={{ marginBottom: 8 }} />
+            <div className="field"><label>신규 주소</label><input className="input mono" aria-invalid={dup} value={cur.nw} onChange={e => patch({ nw: e.target.value })} /></div>
+          </div>
+          {dup && <div className="badge b-err" style={{ alignSelf: 'flex-start', height: 'auto', padding: '5px 8px' }}><Ph n="warning" s={13} />다른 항목과 신규 주소가 겹칩니다 — 중복 리디렉션이 생깁니다</div>}
+          <div>
+            <div className="lbl" style={{ marginBottom: 8 }}>검수 체크리스트</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {CKL.map((c, i) => (
+                <button key={c} className="row-between" style={{ border: '1px solid var(--n4)', padding: '9px 12px', borderRadius: 4, textAlign: 'left' }}
+                  onClick={() => patch({ ck: cur.ck.map((x, j) => j === i ? !x : x), stage: Math.max(cur.stage, i) })}>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{c}</span>
+                  <span className="chk" aria-checked={cur.ck[i]}>{cur.ck[i] && <Ph n="check" s={12} />}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-solid" onClick={() => { setRule(true); say('301 규칙을 생성했습니다 — next.config 리디렉션으로 반영됩니다'); }}><Ph n="gear" s={14} />301 규칙 생성</button>
+            <button className="btn" onClick={() => patch({ stage: Math.min(3, cur.stage + 1) })}>다음 단계로</button>
+          </div>
+          {rule && <div className="code mono"><span className="k">{'// next.config.js — redirects()'}</span>{'\n'}{'{ source: '}<b>{JSON.stringify(cur.old.split('?')[0])}</b>{', destination: '}<b>{JSON.stringify(cur.nw)}</b>{', permanent: true }'}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═════ 3. 구글시트 폼 · 영문 변환 ═════ */
+const SUB0 = [
+  { id: 1, k: '봉사 신청', who: '김하늘', at: '10:42', st: 'ok' },
+  { id: 2, k: '문의', who: '이도윤', at: '10:18', st: 'ok' },
+  { id: 3, k: '봉사 신청', who: '박서연', at: '09:57', st: 'err' },
+  { id: 4, k: '문의', who: '최민재', at: '09:31', st: 'wait' },
+];
+const GLOS0 = [['임시보호', 'foster care'], ['입양 심사', 'adoption screening'], ['이동 봉사', 'transport volunteering']];
+function FormsView({ say }) {
+  const [subs, setSubs] = useState(SUB0);
+  const [mode, setMode] = useState('glossary');
+  const [glos, setGlos] = useState(GLOS0);
+  const [ko, setKo] = useState('');
+  const [en, setEn] = useState('');
+  const [lang, setLang] = useState('KO');
+  const nid = useRef(10);
+  const test = () => {
+    const id = nid.current++;
+    setSubs(p => [{ id, k: '봉사 신청', who: '시험 제출', at: '방금', st: 'wait' }, ...p]);
+    setTimeout(() => { setSubs(p => p.map(s => s.id === id ? { ...s, st: 'ok' } : s)); }, 1400);
+    say('시험 제출 — 구글시트에 새 행을 추가하는 중입니다');
+  };
+  const retry = id => { setSubs(p => p.map(s => s.id === id ? { ...s, st: 'wait' } : s)); setTimeout(() => setSubs(p => p.map(s => s.id === id ? { ...s, st: 'ok' } : s)), 1300); };
+  const addTerm = () => { if (!ko.trim() || !en.trim()) { say('한글과 영문을 모두 입력해 주세요'); return; } setGlos(g => [...g, [ko.trim(), en.trim()]]); setKo(''); setEn(''); say('용어집에 추가했습니다 — 영문 화면에 반영됩니다'); };
+  const t = s => lang === 'EN' ? ({ '입양&임시보호': 'Adoption & Foster', '봉사': 'Volunteer', '후원': 'Support' }[s] || s) : s;
+  const pending = subs.filter(s => s.st === 'err').length;
+  return (
+    <div className="page">
+      <div className="row-between" style={{ marginBottom: 14, alignItems: 'flex-end' }}>
+        <div><span className="eyebrow">Forms · Sheets · English</span><h1 className="h-xl" style={{ marginTop: 6 }}>접수는 시트에 쌓이고, 영문은 용어집으로 맞춥니다</h1></div>
+        <button className="btn btn-solid" onClick={test}><Ph n="paper-plane-tilt" s={14} />봉사 신청 시험 제출</button>
+      </div>
+      <div className="two">
+        <div className="panel">
+          <div className="row-between" style={{ padding: '14px 16px', borderBottom: '1px solid var(--n10)' }}>
+            <div><h2 className="h-md">접수 내역 → 구글시트</h2><span className="sub" style={{ fontSize: 12 }}>제출은 큐를 거쳐 시트에 한 행씩 기록됩니다</span></div>
+            {pending > 0 ? <span className="badge b-err"><Ph n="warning" s={12} />재시도 대기 {pending}건</span> : <span className="badge b-ok"><Ph n="check" s={12} />전달 정상</span>}
+          </div>
+          <table className="table">
+            <thead><tr><th>구분</th><th>이름</th><th>접수</th><th>시트 전달</th><th></th></tr></thead>
+            <tbody>
+              {subs.map(s => (
+                <tr key={s.id}>
+                  <td style={{ fontWeight: 700 }}>{s.k}</td><td>{s.who}</td><td className="num sub">{s.at}</td>
+                  <td>{s.st === 'ok' ? <span className="badge b-ok">전달됨</span> : s.st === 'err' ? <span className="badge b-err">전달 실패 · 시트 응답 지연</span> : <span className="badge b-wait"><Ph n="arrows-clockwise" s={11} />전달 중</span>}</td>
+                  <td style={{ textAlign: 'right' }}>{s.st === 'err' && <button className="btn btn-sm" onClick={() => retry(s.id)}>재시도</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ padding: '12px 16px', borderTop: '1px solid var(--n4)', display: 'flex', gap: 10, alignItems: 'center' }}>
+            <span className="chk" aria-checked="true"><Ph n="check" s={12} /></span><span className="sub" style={{ fontSize: 12.5 }}>실패한 건은 사유와 함께 이 목록에 남고, 재시도 큐가 순서대로 다시 전달합니다.</span>
+          </div>
+        </div>
+        <div className="panel" style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div className="row-between"><h2 className="h-md">영문 변환 설정</h2>
+            <div className="seg">{[['glossary', '용어집 적용'], ['auto', '자동 번역 위젯']].map(([k, l]) => <button key={k} aria-pressed={mode === k} onClick={() => { setMode(k); say(k === 'glossary' ? '용어집 우선 방식으로 설정했습니다' : '자동 번역 위젯 방식으로 설정했습니다'); }}>{l}</button>)}</div></div>
+          <div className="prev-head">
+            <span style={{ fontSize: 15 }}>숨결</span>
+            {['입양&임시보호', '봉사', '후원'].map(m => <span key={m}>{t(m)}</span>)}
+            <button className="seg" style={{ marginLeft: 'auto', height: 28 }} onClick={() => setLang(lang === 'KO' ? 'EN' : 'KO')}><span style={{ padding: '0 11px', fontSize: 12, fontWeight: 700, lineHeight: '26px' }}><Ph n="translate" s={13} /> {lang === 'KO' ? 'EN' : 'KO'}</span></button>
+          </div>
+          <div>
+            <div className="lbl" style={{ marginBottom: 6 }}>번역 용어집 {mode === 'auto' && <span className="sub" style={{ fontWeight: 400 }}>(자동 번역에서도 이 용어는 제외)</span>}</div>
+            <table className="table">
+              <thead><tr><th>한글</th><th>영문</th><th></th></tr></thead>
+              <tbody>{glos.map(([a, b], i) => <tr key={a}><td style={{ fontWeight: 700 }}>{a}</td><td className="mono">{b}</td><td style={{ textAlign: 'right' }}><button className="btn btn-sm" aria-label="삭제" onClick={() => setGlos(g => g.filter((_, j) => j !== i))}><Ph n="x" s={12} /></button></td></tr>)}</tbody>
+            </table>
+            <div className="glos" style={{ marginTop: 10 }}>
+              <input className="input" placeholder="한글 용어" value={ko} onChange={e => setKo(e.target.value)} />
+              <input className="input" placeholder="영문 표기" value={en} onChange={e => setEn(e.target.value)} />
+              <button className="btn" onClick={addTerm}><Ph n="plus" s={13} />추가</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═════ 4. 권한 · 비공개 글 ═════ */
+const ROLES = ['관리자', '편집자', '열람자'];
+const PERMS0 = [
+  ['소식 글쓰기', [true, true, false]], ['개체 등록·수정', [true, true, false]], ['공개·숨김 전환', [true, true, false]],
+  ['이전·리디렉션 관리', [true, false, false]], ['권한·계정 관리', [true, false, false]], ['접수 내역 열람', [true, true, true]],
+];
+function RolesView({ say }) {
+  const [perms, setPerms] = useState(PERMS0);
+  const [sess, setSess] = useState('out');
+  const [url, setUrl] = useState('/news/private/2026-board-minutes');
+  const [log, setLog] = useState([{ t: '10:12', who: '관리자', m: '‘열람자’ 역할의 접수 내역 열람을 허용' }]);
+  const [res, setRes] = useState(null);
+  const toggle = (i, j) => {
+    setPerms(p => p.map((r, a) => a === i ? [r[0], r[1].map((v, b) => b === j ? !v : v)] : r));
+    setLog(l => [{ t: '방금', who: '관리자', m: '‘' + ROLES[j] + '’ 역할의 ‘' + perms[i][0] + '’ ' + (perms[i][1][j] ? '허용 해제' : '허용') }, ...l]);
+  };
+  const send = () => {
+    const priv = url.includes('private');
+    const role = sess === 'out' ? null : sess === 'editor' ? 1 : 2;
+    let code = 200, why = '공개 글 — 누구나 열람';
+    if (priv) {
+      if (role === null) { code = 401; why = '세션 없음 — 로그인이 필요합니다'; }
+      else if (!perms[0][1][role]) { code = 403; why = '열람자 역할은 비공개 글 접근 권한이 없습니다'; }
+      else { code = 200; why = ROLES[role] + ' 역할 — 접근 허용'; }
+    }
+    setRes({ code, why, at: new Date().toLocaleTimeString('ko-KR', { hour12: false }) });
+    setLog(l => priv && code !== 200 ? [{ t: '방금', who: '서버', m: '비공개 글 직접 접근 차단 — ' + url }, ...l] : l);
+  };
+  return (
+    <div className="page">
+      <div className="row-between" style={{ marginBottom: 14, alignItems: 'flex-end' }}>
+        <div><span className="eyebrow">Roles · Access</span><h1 className="h-xl" style={{ marginTop: 6 }}>링크를 숨기는 게 아니라, 서버가 문 앞에서 막습니다</h1></div>
+        <span className="badge b-ink"><Ph n="shield-check" s={12} />서버 단 검사</span>
+      </div>
+      <section className="bento" style={{ gridTemplateColumns: '1.3fr 1fr' }}>
+        <div className="tile" style={{ gridRow: 'span 2' }}>
+          <div className="tile-head"><div><span className="eyebrow">Permission matrix</span><h2 className="h-md" style={{ marginTop: 4 }}>역할별 권한표</h2></div></div>
+          <table className="table matrix">
+            <thead><tr><th>작업</th>{ROLES.map(r => <th key={r}>{r}</th>)}</tr></thead>
+            <tbody>{perms.map(([name, vals], i) => (
+              <tr key={name}><td style={{ fontWeight: 700 }}>{name}</td>
+                {vals.map((v, j) => <td key={j}><button className="chk" role="checkbox" aria-checked={v} aria-label={ROLES[j] + ' ' + name} onClick={() => toggle(i, j)}>{v && <Ph n="check" s={12} />}</button></td>)}</tr>
+            ))}</tbody>
+          </table>
+          <p className="sub" style={{ fontSize: 12 }}>변경하면 변경자·시각과 함께 감사 목록에 남고, 편집자는 허용된 메뉴만 화면에 보입니다.</p>
+          <hr className="hair" />
+          <div className="lbl">감사 로그</div>
+          <div>
+            {log.slice(0, 5).map((l, i) => (
+              <div key={i} className="row-between" style={{ padding: '8px 0', borderBottom: '1px solid var(--n3)', fontSize: 12.5, animation: 'slideDown .3s ease' }}>
+                <span><b>{l.who}</b> · {l.m}</span><span className="sub num">{l.t}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="tile">
+          <span className="eyebrow">Private post · request test</span>
+          <h2 className="h-md">비공개 글 직접 접근 시험</h2>
+          <div className="field"><label>요청 주소</label><input className="input mono" value={url} onChange={e => setUrl(e.target.value)} /></div>
+          <div className="field"><label>세션</label>
+            <div className="seg" style={{ alignSelf: 'flex-start' }}>{[['out', '로그아웃'], ['reader', '열람자'], ['editor', '편집자']].map(([k, l]) => <button key={k} aria-pressed={sess === k} onClick={() => setSess(k)}>{l}</button>)}</div></div>
+          <button className="btn btn-solid" style={{ alignSelf: 'flex-start' }} onClick={send}><Ph n="paper-plane-tilt" s={14} />요청 보내기</button>
+        </div>
+        <div className="tile" style={{ background: 'var(--n10)', borderColor: 'var(--n10)' }}>
+          <span className="eyebrow" style={{ color: 'var(--n5)' }}>Server response</span>
+          <div className="mono" style={{ color: 'var(--n2)', lineHeight: 1.8, minHeight: 112 }}>
+            {!res ? <span style={{ color: 'var(--n5)' }}>요청을 보내면 서버의 응답이 여기에 표시됩니다.</span> : (
+              <div style={{ animation: 'fadeIn .3s ease' }}>
+                <div><span style={{ color: 'var(--n5)' }}>GET</span> {url}</div>
+                <div style={{ fontSize: 30, fontWeight: 800, color: res.code === 200 ? 'var(--s1)' : 'var(--s2)', letterSpacing: '-.03em' }}>{res.code} {res.code === 200 ? 'OK' : res.code === 401 ? 'Unauthorized' : 'Forbidden'}</div>
+                <div>{res.why}</div><div style={{ color: 'var(--n5)' }}>{res.at}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
