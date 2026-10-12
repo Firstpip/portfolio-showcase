@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>실측지 판독 기반 창호 가견적 앱 — 맞춤 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P1 — 메인 1 · 서브 1 · 나머지 무채색 (gen-color-tokens.js 산출, hue 19°, light) ── */
+:root{
+  /* 메인 — 브랜드 마크·primary CTA(화면당 1)·활성 nav·링크·주 차트·포커스. 앵커 m600 = plan primary */
+  --m50:#fcf2ed;
+  --m100:#f9e5db;
+  --m200:#f3cab8;
+  --m300:#ebaa8c;
+  --m400:#e3875c;
+  --m500:#db652e;
+  --m600:#d34300;
+  --m700:#ad3700;
+  --m800:#872b00;
+  --m900:#5f1e00;
+  /* 무채색 — 배경(n0~n2)·테두리/비활성(n3~n5)·아이콘/보조텍스트(n6~n8)·본문/다크필(n9~n10). 아바타·태그·아이콘박스·KPI배경·보조 차트는 전부 여기 */
+  --n0:#ffffff;
+  --n1:#f2f5fa;
+  --n2:#f0f0ef;
+  --n3:#e6e5e5;
+  --n4:#d7d6d5;
+  --n5:#bab7b5;
+  --n6:#989290;
+  --n7:#7a7471;
+  --n8:#5a5553;
+  --n9:#3a3736;
+  --n10:#201e1e;
+  /* 서브 — 상태 의미가 있을 때만. 배지=bg+text, 점/셀/바=solid */
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b; /* 성공/진행/정상/상승 */
+}
+/* ⚠ s2(오류/위험/실패/하락/환불) — 메인 hue 19°와 19° 겹침 → 제거, 해당 상태는 무채색(n9/n10 필 + 아이콘)으로 표현 */
+/* ⚠ s3(경고/주의) — 메인 hue 19°와 19° 겹침 → 제거, 해당 상태는 무채색(n9/n10 필 + 아이콘)으로 표현 */
+
+/* ── 상태 레이어 P1 — 모양은 페이지가, 상태는 여기서 (gen-component-kit.js 산출, 색은 토큰만) ── */
+/* state-layer elevation=elevated theme=light */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{transform:scale(.98);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #ffffff;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--n10);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;min-height:100%}
+body{font-family:'Pretendard Variable',Pretendard,sans-serif;background:var(--n0);color:var(--n9);font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
+a{text-decoration:none;color:inherit}
+button{font-family:inherit;font-size:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select{font-family:inherit;font-size:16px;color:var(--n10)}
+svg.lucide{width:18px;height:18px;stroke-width:1.75;flex-shrink:0}
+.num{font-variant-numeric:tabular-nums}
+@keyframes scan{0%{top:6%}50%{top:90%}100%{top:6%}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes ringPulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--m600) 35%,transparent)}100%{box-shadow:0 0 0 18px transparent}}
+@keyframes barGrow{from{width:0}}
+@keyframes popIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}
+/* 글로벌 네비 */
+.nav{position:sticky;top:0;z-index:20;height:72px;background:var(--n0);border-bottom:1px solid var(--n3);display:flex;align-items:center;gap:32px;padding:0 40px}
+.brand{display:flex;align-items:center;gap:12px;font-weight:800;font-size:20px;letter-spacing:-.02em;color:var(--n10)}
+.brand-mark{width:36px;height:36px;border-radius:12px;background:var(--m600);display:grid;place-items:center;color:var(--n0)}
+.brand-mark svg{stroke:var(--n0);width:20px;height:20px}
+.menu{display:flex;gap:4px;flex:1}
+.menu button{height:40px;padding:0 16px;border-radius:40px;display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:var(--n8);transition:background .15s,color .15s}
+.menu button:hover{background:var(--n2)}
+.menu button.active{background:var(--m50);color:var(--m700)}
+.nav-right{display:flex;align-items:center;gap:16px;font-size:14px;color:var(--n7)}
+.free{display:flex;align-items:center;gap:8px;height:40px;padding:0 16px;border-radius:40px;background:var(--n2);font-weight:600;color:var(--n8)}
+.dots{display:flex;gap:4px}.dots i{width:8px;height:8px;border-radius:50%;background:var(--n4)}.dots i.on{background:var(--m600)}
+.btn{height:48px;padding:0 24px;border-radius:40px;font-weight:700;font-size:16px;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:background .15s,transform .15s}
+.btn.primary{background:var(--m600);color:var(--n0)}.btn.primary:hover{background:var(--m700)}
+.btn.primary svg{stroke:var(--n0)}
+.btn.outline{border:1.5px solid var(--n4);background:var(--n0);color:var(--n9)}.btn.outline:hover{background:var(--n2)}
+.btn.sm{height:40px;padding:0 16px;font-size:14px}
+/* 스텝퍼 */
+.stepper{max-width:1280px;margin:0 auto;padding:32px 40px 0;display:flex;align-items:center;gap:8px}
+.st{display:flex;align-items:center;gap:12px;height:48px;padding:0 20px 0 8px;border-radius:40px;background:var(--n0);border:1.5px solid var(--n3);font-weight:600;font-size:14px;color:var(--n7)}
+.st b{width:32px;height:32px;border-radius:50%;background:var(--n2);display:grid;place-items:center;font-size:14px;color:var(--n8)}
+.st.done b{background:var(--n9);color:var(--n0)}
+.st.cur{border-color:var(--m600);background:var(--m50);color:var(--m800)}
+.st.cur b{background:var(--m600);color:var(--n0)}
+.st-line{flex:1;height:2px;background:var(--n3);border-radius:2px;position:relative;overflow:hidden;max-width:64px}
+.st-line.fill::after{content:"";position:absolute;inset:0;background:var(--m600);animation:barGrow .6s ease}
+.eyebrow-en{margin-left:auto;font-size:12px;font-weight:600;letter-spacing:.125em;color:var(--n7);text-transform:uppercase}
+/* 본문 그리드 */
+.wrap{max-width:1280px;margin:0 auto;padding:32px 40px 48px;display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:32px;align-items:start}
+.step-body{background:var(--n0);border-radius:20px;border:1px solid var(--n3);box-shadow:0 24px 48px -32px color-mix(in srgb,var(--n10) 28%,transparent);padding:40px;min-height:640px}
+.screen{display:none}.screen.on{display:block;animation:fadeUp .35s ease}
+h1{font-size:40px;line-height:1.2;font-weight:800;letter-spacing:-.03em;color:var(--n10)}
+.lead{margin-top:12px;font-size:16px;color:var(--n7);max-width:560px}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:32px;margin-top:32px}
+h3{font-size:18px;font-weight:700;color:var(--n10);letter-spacing:-.01em}
+/* 실측지 사진 */
+.photo{position:relative;border-radius:20px;background:var(--n2);height:380px;overflow:hidden;display:grid;place-items:center}
+.sheet{width:78%;transform:rotate(-2.2deg);background:var(--n0);border-radius:8px;padding:16px;box-shadow:0 16px 32px -16px color-mix(in srgb,var(--n10) 40%,transparent)}
+.sheet svg{width:100%;height:auto;display:block}
+.brk{position:absolute;width:28px;height:28px;border:3px solid var(--m600)}
+.brk.a{left:20px;top:20px;border-right:0;border-bottom:0;border-radius:10px 0 0 0}.brk.b{right:20px;top:20px;border-left:0;border-bottom:0;border-radius:0 10px 0 0}
+.brk.c{left:20px;bottom:20px;border-right:0;border-top:0;border-radius:0 0 0 10px}.brk.d{right:20px;bottom:20px;border-left:0;border-top:0;border-radius:0 0 10px 0}
+.scanline{position:absolute;left:5%;right:5%;height:2px;background:var(--m600);box-shadow:0 0 14px var(--m400);animation:scan 3.2s ease-in-out infinite}
+.photo.static .scanline{display:none}
+.shot-row{display:flex;gap:12px;margin-top:16px}
+.shot-row .btn{flex:1}
+.proc{margin-top:24px;display:flex;flex-direction:column;gap:12px}
+.pi{display:flex;align-items:center;gap:12px;font-size:14px;color:var(--n7)}
+.pi i.st-ic{width:28px;height:28px;border-radius:50%;background:var(--n2);display:grid;place-items:center;flex-shrink:0}
+.pi.ok{color:var(--n9)}.pi.ok .st-ic{background:var(--n9)}.pi.ok svg{stroke:var(--n0);width:14px;height:14px}
+.pi.run .st-ic{background:var(--m600);animation:ringPulse 1.4s infinite}.pi.run svg{stroke:var(--n0);width:14px;height:14px}
+.pi.run{color:var(--m700);font-weight:600}
+.bar{height:6px;border-radius:6px;background:var(--n3);overflow:hidden;margin-top:8px}.bar span{display:block;height:100%;border-radius:6px;background:var(--m600);animation:barGrow 1.6s ease}
+/* 표 */
+.tbl{width:100%;border-collapse:collapse;margin-top:16px;font-size:14px}
+.tbl th{text-align:left;font-size:12px;font-weight:600;color:var(--n7);padding:8px 12px;border-bottom:1px solid var(--n3)}
+.tbl td{padding:12px;border-bottom:1px solid var(--n3);color:var(--n9)}
+.tbl td.r,.tbl th.r{text-align:right}
+.tbl tr.flag td{background:var(--n1)}
+.tbl tr.sel td{background:var(--m50)}
+.tbl tr{cursor:pointer;transition:background .15s}.tbl tbody tr:hover td{background:var(--n2)}
+.pill{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 10px;border-radius:24px;font-size:12px;font-weight:600;background:var(--n2);color:var(--n8)}
+.pill.warn{background:var(--n10);color:var(--n0)}.pill.warn svg{stroke:var(--n0);width:12px;height:12px}
+.pill.good{background:var(--s1-bg);color:var(--s1-text)}.pill.good svg{width:12px;height:12px}
+/* 오류 수정 */
+.fixbar{display:flex;align-items:center;gap:12px;margin-top:24px;padding:16px 20px;border-radius:20px;background:var(--n1);border:1px solid var(--n3)}
+.fixbar .cnt{font-weight:700;font-size:14px;color:var(--n10);margin-right:auto}
+.field{display:flex;flex-direction:column;gap:8px;margin-top:20px}
+.field label{font-size:14px;font-weight:600;color:var(--n8)}
+.inp{height:56px;border-radius:16px;border:1.5px solid var(--n4);padding:0 16px;background:var(--n0);font-size:20px;font-weight:700;width:100%}
+.inp.sm{height:44px;font-size:16px;font-weight:500;border-radius:12px}
+.hint{font-size:12px;color:var(--n7)}
+.hl{position:absolute;border:2.5px solid var(--m600);border-radius:6px;background:color-mix(in srgb,var(--m600) 12%,transparent);animation:ringPulse 1.6s infinite}
+/* 가견적 */
+.chips{display:flex;flex-wrap:wrap;gap:12px;margin-top:16px}
+.chip{height:48px;padding:0 20px;border-radius:40px;border:1.5px solid var(--n4);background:var(--n0);display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:var(--n9)}
+.chip.on{border-color:var(--m600);background:var(--m50);color:var(--m800)}
+.chip small{font-weight:500;color:var(--n7)}.chip.on small{color:var(--m700)}
+.total{margin-top:24px;padding:24px;border-radius:20px;background:var(--n10);color:var(--n0);display:flex;align-items:flex-end;justify-content:space-between;gap:16px}
+.total .lab{font-size:14px;color:var(--n4)}
+.total .big{font-size:40px;font-weight:800;letter-spacing:-.03em;line-height:1.1;margin-top:4px}
+.ver{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 14px;border-radius:32px;background:var(--n3);color:var(--n9);font-size:12px;font-weight:600}
+/* 요청 */
+.dates{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+.dt{border-radius:16px;border:1.5px solid var(--n4);padding:12px;text-align:center;font-size:14px;background:var(--n0)}
+.dt b{display:block;font-size:20px;color:var(--n10)}.dt.on{border-color:var(--m600);background:var(--m50)}.dt.on b{color:var(--m800)}
+.dt:disabled{background:var(--n2)}
+.biz{display:flex;align-items:center;gap:16px;margin-top:24px;padding:16px 20px;border-radius:20px;background:var(--n1);border:1px solid var(--n3);font-size:14px}
+.biz .t{flex:1}.biz b{display:block;color:var(--n10)}
+.tl{margin-top:24px;display:none}.tl.on{display:block;animation:fadeUp .35s ease}
+.tl-i{display:flex;gap:16px;position:relative;padding-bottom:20px}
+.tl-i::before{content:"";position:absolute;left:13px;top:28px;bottom:0;width:2px;background:var(--n3)}.tl-i:last-child::before{display:none}
+.tl-i .d{width:28px;height:28px;border-radius:50%;background:var(--n3);display:grid;place-items:center;flex-shrink:0;color:var(--n7);font-size:12px;font-weight:700}
+.tl-i.ok .d{background:var(--m600);color:var(--n0)}.tl-i.ok svg{stroke:var(--n0);width:14px;height:14px}
+.tl-i b{display:block;font-size:14px;color:var(--n10)}.tl-i span{font-size:12px;color:var(--n7)}
+/* 수기 */
+.mrow{display:grid;grid-template-columns:1.4fr 1fr 1fr .7fr 44px;gap:12px;margin-top:12px;align-items:center}
+.mrow.head{font-size:12px;font-weight:600;color:var(--n7);margin-top:24px}
+.xbtn{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;color:var(--n7)}.xbtn:hover{background:var(--n2)}
+/* 요약 */
+.summary{display:flex;flex-direction:column;gap:20px;position:sticky;top:96px}
+.card{background:var(--n0);border:1px solid var(--n3);border-radius:20px;padding:24px;box-shadow:0 24px 48px -36px color-mix(in srgb,var(--n10) 30%,transparent)}
+.card h4{font-size:12px;font-weight:600;color:var(--n7);margin-bottom:16px}
+.ringbox{display:flex;align-items:center;gap:20px}
+.ring{width:96px;height:96px;flex-shrink:0}
+.ring .v{font-size:24px;font-weight:800;fill:var(--n10)}
+.kv{display:flex;justify-content:space-between;font-size:14px;padding:8px 0;border-bottom:1px solid var(--n3);color:var(--n7)}
+.kv:last-child{border:0}.kv b{color:var(--n10)}
+.chk{display:flex;gap:8px;align-items:flex-start;font-size:14px;color:var(--n8);margin-top:12px}
+.chk svg{margin-top:2px;stroke:var(--n9)}
+.tip{background:var(--n1);border-radius:20px;padding:20px;font-size:14px;color:var(--n8);display:flex;gap:12px}
+.tip svg{margin-top:2px;stroke:var(--m600)}
+footer{border-top:1px solid var(--n3);padding:24px 40px;font-size:12px;color:var(--n7);display:flex;justify-content:space-between;max-width:1280px;margin:0 auto}
+.toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);background:var(--n10);color:var(--n0);padding:14px 24px;border-radius:40px;font-size:14px;font-weight:600;display:none;align-items:center;gap:8px;z-index:50}
+.toast.on{display:flex;animation:popIn .25s ease}.toast svg{stroke:var(--n0)}
+</style>
+</head>
+<body>
+<header class="nav">
+  <div class="brand"><span class="brand-mark"><i data-lucide="scan-line"></i></span>샘플 창견적</div>
+  <nav class="menu" id="menu">
+    <button data-s="main" class="active" onclick="show('main')"><i data-lucide="camera"></i>실측지 촬영 판독</button>
+    <button data-s="review" onclick="show('review')"><i data-lucide="pencil-line"></i>판독 오류 수정</button>
+    <button data-s="quote" onclick="show('quote')"><i data-lucide="calculator"></i>가견적 산출</button>
+    <button data-s="request" onclick="show('request')"><i data-lucide="ruler"></i>정밀실측 요청</button>
+    <button data-s="manual" onclick="show('manual')"><i data-lucide="keyboard"></i>수기 입력</button>
+  </nav>
+  <div class="nav-right"><div class="free"><i data-lucide="gift"></i>무료 가견적 <span class="dots"><i class="on"></i><i class="on"></i><i></i></span> <span class="num">2/3회</span></div><button class="btn outline sm" onclick="toast('회원가입 화면으로 이동하는 위치입니다','user-plus')">회원가입</button></div>
+</header>
+
+<div class="stepper" id="stepper">
+  <button class="st cur" data-i="1" onclick="show('main')"><b>1</b>사진 올리기</button><span class="st-line"></span>
+  <button class="st" data-i="2" onclick="show('review')"><b>2</b>값 확인하기</button><span class="st-line"></span>
+  <button class="st" data-i="3" onclick="show('quote')"><b>3</b>견적 보기</button><span class="st-line"></span>
+  <button class="st" data-i="4" onclick="show('request')"><b>4</b>실측 신청</button>
+  <span class="eyebrow-en" id="stepEn">STEP 1 / 4</span>
+</div>
+
+<div class="wrap">
+<section class="step-body">
+
+  <!-- 1. 촬영 판독 -->
+  <div class="screen on" id="s-main">
+    <h1>실측지 사진 한 장이면<br>가견적은 1분 안에</h1>
+    <p class="lead">통일 양식 실측지를 네 모서리가 보이게 촬영해 주세요. 사이즈와 사양을 읽어 입력란에 채워 드립니다.</p>
+    <div class="two">
+      <div>
+        <div class="photo" id="photoBox">
+          <div class="sheet" id="sheetA"></div>
+          <i class="brk a"></i><i class="brk b"></i><i class="brk c"></i><i class="brk d"></i>
+          <span class="scanline"></span>
+        </div>
+        <div class="shot-row">
+          <button class="btn primary" id="shootBtn" onclick="startScan()"><i data-lucide="camera"></i>촬영하기</button>
+          <button class="btn outline" onclick="startScan()"><i data-lucide="image-up"></i>갤러리에서 올리기</button>
+        </div>
+      </div>
+      <div>
+        <h3>판독 진행 상태</h3>
+        <div class="proc" id="proc"></div>
+        <h3 style="margin-top:28px">자동 입력 미리보기</h3>
+        <table class="tbl"><thead><tr><th>위치</th><th class="r">가로</th><th class="r">세로</th><th class="r">수량</th></tr></thead><tbody id="prevBody"></tbody></table>
+        <button class="btn primary" style="margin-top:24px;width:100%" id="toReview" onclick="show('review')">읽은 값 확인하러 가기<i data-lucide="arrow-right"></i></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. 오류 수정 -->
+  <div class="screen" id="s-review">
+    <h1>읽지 못한 칸만<br>골라서 고쳐 주세요</h1>
+    <p class="lead">원본 사진을 보면서 표시된 항목만 순서대로 확인하면 됩니다.</p>
+    <div class="two">
+      <div>
+        <div class="photo static" style="height:420px"><div class="sheet" id="sheetB"></div><div class="hl" id="hlBox" style="left:62%;top:57%;width:16%;height:8%"></div></div>
+        <p class="hint" style="margin-top:12px">원본 사진 · 선택한 항목 위치가 강조됩니다</p>
+      </div>
+      <div>
+        <h3>판독 결과 <span class="pill num" id="rvCnt" style="margin-left:8px">24개 중 2개 확인 필요</span></h3>
+        <table class="tbl"><thead><tr><th>위치</th><th class="r">가로</th><th class="r">세로</th><th>상태</th></tr></thead><tbody id="rvBody"></tbody></table>
+        <div class="field"><label id="fixLab">주방 창 · 세로(mm)</label><input class="inp num" id="fixInp" value="90?" aria-invalid="true" oninput="liveFix(this.value)"><span class="hint" id="fixHint">판독 신뢰도 41% — 사진의 값과 맞는지 확인해 주세요</span></div>
+        <div class="fixbar"><span class="cnt num" id="fixCnt">1 / 2번째 항목</span><button class="btn outline sm" onclick="stepFix(-1)"><i data-lucide="chevron-left"></i>이전 항목</button><button class="btn primary sm" onclick="stepFix(1)">다음 항목<i data-lucide="chevron-right"></i></button></div>
+        <button class="btn outline" style="margin-top:16px;width:100%" onclick="show('quote')">수정 값으로 견적 보기<i data-lucide="arrow-right"></i></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. 가견적 -->
+  <div class="screen" id="s-quote">
+    <h1>가견적 합계를<br>바로 확인하세요</h1>
+    <p class="lead">추가공사 항목을 고르면 합계가 바로 바뀝니다. 단가는 10mm 단위로 올림해 견적 DB에서 조회합니다.</p>
+    <div class="two">
+      <div>
+        <h3>추가공사 선택</h3>
+        <div class="chips" id="extras"></div>
+        <table class="tbl"><thead><tr><th>위치</th><th class="r">규격(mm)</th><th class="r">금액</th></tr></thead><tbody id="qBody"></tbody></table>
+      </div>
+      <div>
+        <div class="total"><div><div class="lab">가견적 합계 (VAT 별도)</div><div class="big num" id="totalV">4,399,000원</div></div><span class="ver"><i data-lucide="database"></i>견적DB_v3 기준</span></div>
+        <div class="kv" style="margin-top:16px"><span>창호 본체 6개소</span><b class="num">4,129,000원</b></div>
+        <div class="kv"><span>추가공사 <span id="exCnt" class="num">2</span>건</span><b class="num" id="exSum">270,000원</b></div>
+        <div class="biz"><i data-lucide="circle-help"></i><div class="t"><b>정확한 금액이 필요하신가요?</b>시공팀이 현장에서 실측한 뒤 최종 금액을 확정합니다.</div></div>
+        <button class="btn primary" style="margin-top:16px;width:100%" onclick="show('request')">정밀실측 신청하러 가기<i data-lucide="arrow-right"></i></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. 정밀실측 요청 -->
+  <div class="screen" id="s-request">
+    <h1>현장 방문 실측을<br>신청해 주세요</h1>
+    <p class="lead">희망 날짜를 고르고 결제하면 담당 시공팀이 배정됩니다. 진행 상황은 이 화면에서 계속 확인할 수 있습니다.</p>
+    <div class="two">
+      <div id="reqForm">
+        <h3>희망 방문일</h3>
+        <div class="dates" id="dates"></div>
+        <div class="field"><label>현장 주소</label><input class="inp sm" value="샘플시 데모구 예시로 101, 샘플아파트 101동 1204호"></div>
+        <div class="field"><label>현장 담당 메모</label><input class="inp sm" placeholder="출입 방법이나 주차 안내를 적어 주세요"></div>
+        <div class="biz"><i data-lucide="badge-check"></i><div class="t"><b>사업자 인증 대기</b>인증이 끝나야 신청할 수 있어요</div><button class="btn outline sm" id="bizBtn" onclick="verifyBiz()">인증하기</button></div>
+      </div>
+      <div>
+        <div class="card" style="box-shadow:none;background:var(--n1)">
+          <h4>정밀실측 결제</h4>
+          <div class="kv"><span>정밀실측비 (6개소)</span><b class="num">66,000원</b></div>
+          <div class="kv"><span>시공 확정 시 가견적에서 차감</span><b>포함</b></div>
+          <button class="btn primary" style="margin-top:20px;width:100%" id="payBtn" onclick="payReq()">정밀실측 요청하기</button>
+        </div>
+        <div class="tl" id="tl">
+          <h3 style="margin-bottom:16px">진행 상태</h3>
+          <div class="tl-i ok" id="t1"><span class="d"><i data-lucide="check"></i></span><div><b>요청 접수 · 결제 완료</b><span>방금 전</span></div></div>
+          <div class="tl-i" id="t2"><span class="d">2</span><div><b>실측자 배정</b><span>관리 웹에서 시공팀이 배정합니다</span></div></div>
+          <div class="tl-i" id="t3"><span class="d">3</span><div><b>현장 실측 · 금액 확정</b><span>확정 금액이 앱으로 전달됩니다</span></div></div>
+          <div class="tl-i" id="t4"><span class="d">4</span><div><b>최종견적 · 발주 · 시공 요청</b><span>앱 안에서 결제까지 이어집니다</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. 수기 입력 -->
+  <div class="screen" id="s-manual">
+    <h1>사진 없이 직접<br>입력할 수도 있어요</h1>
+    <p class="lead">사이즈를 알고 있다면 위치별로 입력해 가견적을 바로 받을 수 있습니다.</p>
+    <div class="mrow head"><span>위치</span><span>가로(mm)</span><span>세로(mm)</span><span>수량</span><span></span></div>
+    <div id="mrows"></div>
+    <div style="display:flex;gap:12px;margin-top:24px"><button class="btn outline" onclick="addRow()"><i data-lucide="plus"></i>위치 추가하기</button><button class="btn primary" id="mcalc" onclick="calcManual()">입력한 값으로 가견적 보기<i data-lucide="arrow-right"></i></button></div>
+  </div>
+
+</section>
+
+<aside class="summary">
+  <div class="card">
+    <h4>이번 견적 요약</h4>
+    <div class="ringbox">
+      <svg class="ring" viewBox="0 0 96 96"><circle cx="48" cy="48" r="40" fill="none" stroke="var(--n3)" stroke-width="10"/><circle id="ringArc" cx="48" cy="48" r="40" fill="none" stroke="var(--m600)" stroke-width="10" stroke-linecap="round" stroke-dasharray="251" stroke-dashoffset="20" transform="rotate(-90 48 48)"/><text x="48" y="56" text-anchor="middle" class="v num" id="ringTxt">92%</text></svg>
+      <div style="font-size:14px;color:var(--n7)">판독 신뢰도<br><b style="color:var(--n10);font-size:16px" id="ringSub">확인 필요 2개</b></div>
+    </div>
+    <div style="margin-top:16px">
+      <div class="kv"><span>현장</span><b>샘플아파트 101동</b></div>
+      <div class="kv"><span>창 개수</span><b class="num">6개소</b></div>
+      <div class="kv"><span>수정 완료</span><b class="num" id="fixDone">0 / 2</b></div>
+      <div class="kv"><span>견적 DB</span><b>견적DB_v3</b></div>
+    </div>
+  </div>
+  <div class="card">
+    <h4>자동 검증</h4>
+    <div class="chk"><i data-lucide="check"></i>사이즈 범위 규칙 통과 22개</div>
+    <div class="chk"><i data-lucide="check"></i>단위(mm) 표기 확인</div>
+    <div class="chk"><i data-lucide="triangle-alert"></i><span id="chkWarn">신뢰도 낮은 항목 2개</span></div>
+  </div>
+  <div class="tip"><i data-lucide="lightbulb"></i><div id="tipTxt">촬영할 때는 양식의 네 모서리가 모두 보이게 하고 그림자가 지지 않도록 해 주세요.</div></div>
+</aside>
+</div>
+
+<footer><span>© 2026 샘플기업 — 자체 개발 프로젝트 (맞춤 구현 데모)</span><span>실측지 판독 · 견적 · 정밀실측 요청 흐름</span></footer>
+<div class="toast" id="toast"><i data-lucide="check"></i><span id="toastT"></span></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const ico=(n,s=14)=>`<i data-lucide="${n}" style="width:${s}px;height:${s}px"></i>`;
+const fmt=n=>n.toLocaleString('ko-KR')+'원';
+let rows=[
+ {n:'거실 창',w:2400,h:1500,q:2,price:1368000},
+ {n:'안방 창',w:1800,h:1400,q:1,price:612000},
+ {n:'작은방 1',w:1500,h:1200,q:1,price:428000},
+ {n:'작은방 2',w:1500,h:1200,q:1,price:428000},
+ {n:'주방 창',w:900,h:'90?',q:1,price:241000,flag:'h',conf:41},
+ {n:'발코니',w:'3?00',h:2100,q:1,price:1052000,flag:'w',conf:58}
+];
+const EXTRAS=[['기존 창 철거',180000,1],['폐기물 처리',90000,1],['실리콘 마감',120000,0],['방충망 교체',210000,0],['몰딩 마감',150000,0]];
+let fixIdx=0, fixDone=[false,false];
+function sheetSvg(hl){
+  const vals=rows.map((r,i)=>{const y=62+i*30;return `<text x="150" y="${y}" class="hw">${r.w}</text><text x="236" y="${y}" class="hw">${r.h}</text><text x="318" y="${y}" class="hw">${r.q}</text>`}).join('');
+  return `<svg viewBox="0 0 380 270"><style>.hw{font:italic 600 15px Pretendard Variable,sans-serif;fill:var(--n8)}.lb{font:500 11px Pretendard Variable,sans-serif;fill:var(--n7)}</style>
+  <rect x="0.5" y="0.5" width="379" height="269" rx="6" fill="var(--n0)" stroke="var(--n4)"/>
+  <text x="16" y="26" font-size="14" font-weight="800" fill="var(--n10)" font-family="Pretendard Variable">실측 기록지</text>
+  <text x="300" y="26" class="lb">NO. 0412</text>
+  <rect x="12" y="38" width="356" height="22" fill="var(--n2)"/>
+  <text x="20" y="53" class="lb">위치</text><text x="140" y="53" class="lb">가로(mm)</text><text x="226" y="53" class="lb">세로(mm)</text><text x="308" y="53" class="lb">수량</text>
+  ${rows.map((r,i)=>`<line x1="12" x2="368" y1="${68+i*30}" y2="${68+i*30}" stroke="var(--n3)"/><text x="20" y="${62+i*30}" class="lb">${r.n}</text>`).join('')}
+  ${vals}
+  <line x1="12" x2="368" y1="248" y2="248" stroke="var(--n3)"/><text x="20" y="262" class="lb">현장 · 샘플아파트 101동 1204호</text>
+  </svg>`;
+}
+function renderSheets(){$('#sheetA').innerHTML=sheetSvg();$('#sheetB').innerHTML=sheetSvg();}
+function prevRows(n){$('#prevBody').innerHTML=rows.slice(0,n).map(r=>`<tr style="animation:fadeUp .3s ease"><td>${r.n}</td><td class="r num">${r.w}</td><td class="r num">${r.h}</td><td class="r num">${r.q}</td></tr>`).join('')}
+function procSet(k){
+  const steps=['이미지 기울기·밝기 보정','실측지 표 구조 인식','실측값 추출 (비전 AI)','신뢰도·범위 검사'];
+  $('#proc').innerHTML=steps.map((t,i)=>{const c=i<k?'ok':i===k?'run':'';const ic=i<k?'check':i===k?'loader':'';return `<div class="pi ${c}"><i class="st-ic">${ic?ico(ic):''}</i><div style="flex:1">${t}${i===k?'<div class="bar"><span></span></div>':''}</div></div>`}).join('');
+  lucide.createIcons();
+}
+let scanTimer=null;
+function startScan(){
+  const b=$('#shootBtn');b.setAttribute('data-loading','true');prevRows(0);let k=0;procSet(0);clearTimeout(scanTimer);
+  const tick=()=>{k++;procSet(Math.min(k,4));if(k===2)prevRows(4);if(k===3)prevRows(6);
+    if(k<4)scanTimer=setTimeout(tick,900);else{b.removeAttribute('data-loading');toast('판독 완료 — 확인이 필요한 항목 2개를 표시했습니다','scan-search')}};
+  scanTimer=setTimeout(tick,900);
+}
+function cellVal(r,k){const v=r[k];const bad=r.flag===k;return bad?`<span class="pill warn">${ico('triangle-alert',12)}${v}</span>`:v}
+function renderReview(){
+  $('#rvBody').innerHTML=rows.map((r,i)=>`<tr class="${r.flag&&!r.fixed?'flag':''} ${(r.flag&&fixIdx===(r.flag==='h'?0:1))?'sel':''}" onclick="${r.flag?`pickFix(${r.flag==='h'?0:1})`:''}"><td>${r.n}</td><td class="r num">${cellVal(r,'w')}</td><td class="r num">${cellVal(r,'h')}</td><td>${r.flag&&!r.fixed?'<span class="pill warn">확인 필요</span>':'<span class="pill good">'+ico('check',12)+'정상</span>'}</td></tr>`).join('');
+  lucide.createIcons();
+}
+function pickFix(i){fixIdx=i;const r=rows[i===0?4:5];const k=i===0?'h':'w';
+  $('#fixLab').textContent=`${r.n} · ${k==='h'?'세로':'가로'}(mm)`;const inp=$('#fixInp');inp.value=r[k];
+  inp.setAttribute('aria-invalid',r.fixed?'false':'true');$('#fixHint').textContent=r.fixed?'수정 완료 — 가견적에 반영됩니다':`판독 신뢰도 ${r.conf}% — 사진의 값과 맞는지 확인해 주세요`;
+  $('#fixCnt').textContent=`${i+1} / 2번째 항목`;
+  const hl=$('#hlBox');if(i===0){hl.style.cssText='left:62%;top:57%;width:16%;height:8%'}else{hl.style.cssText='left:46%;top:67%;width:16%;height:8%'}
+  renderReview();}
+function stepFix(d){pickFix((fixIdx+d+2)%2)}
+function liveFix(v){const r=rows[fixIdx===0?4:5];const k=fixIdx===0?'h':'w';r[k]=v;
+  if(/^\d{3,4}$/.test(v)){r.fixed=true;fixDone[fixIdx]=true;$('#fixInp').setAttribute('aria-invalid','false');$('#fixHint').textContent='수정 완료 — 가견적에 반영됩니다'}else{r.fixed=false;fixDone[fixIdx]=false;$('#fixInp').setAttribute('aria-invalid','true');$('#fixHint').textContent='숫자 3~4자리로 입력해 주세요'}
+  renderSheets();updateSummary();renderReview();}
+function updateSummary(){const n=fixDone.filter(Boolean).length;$('#fixDone').textContent=n+' / 2';$('#ringTxt').textContent=(92+n*4)+'%';
+  $('#ringArc').setAttribute('stroke-dashoffset',String(Math.round(251*(1-(92+n*4)/100))));$('#ringSub').textContent=n===2?'모두 확인 완료':`확인 필요 ${2-n}개`;$('#chkWarn').textContent=n===2?'신뢰도 낮은 항목 없음':`신뢰도 낮은 항목 ${2-n}개`;$('#rvCnt').textContent=`24개 중 ${2-n}개 확인 필요`;}
+let exOn=EXTRAS.map(e=>!!e[2]);
+function renderQuote(){
+  $('#extras').innerHTML=EXTRAS.map((e,i)=>`<button class="chip ${exOn[i]?'on':''}" onclick="toggleEx(${i})">${exOn[i]?ico('check',16):ico('plus',16)}${e[0]}<small class="num">${(e[1]/10000)}만원</small></button>`).join('');
+  $('#qBody').innerHTML=rows.map(r=>`<tr><td>${r.n}${r.q>1?' ×'+r.q:''}</td><td class="r num">${r.w}×${r.h}</td><td class="r num">${fmt(r.price)}</td></tr>`).join('');
+  const base=rows.reduce((a,r)=>a+r.price,0);const ex=EXTRAS.reduce((a,e,i)=>a+(exOn[i]?e[1]:0),0);
+  $('#totalV').textContent=fmt(base+ex);$('#exSum').textContent=fmt(ex);$('#exCnt').textContent=exOn.filter(Boolean).length;lucide.createIcons();}
+function toggleEx(i){exOn[i]=!exOn[i];renderQuote();}
+let dateSel=1;
+function renderDates(){const d=[['10.21','화'],['10.22','수'],['10.23','목'],['10.24','금']];
+  $('#dates').innerHTML=d.map((x,i)=>`<button class="dt ${i===dateSel?'on':''}" ${i===3?'disabled':''} onclick="dateSel=${i};renderDates()"><b class="num">${x[0]}</b>${x[1]}요일${i===3?' · 마감':''}</button>`).join('');}
+let bizOk=false;
+function verifyBiz(){const b=$('#bizBtn');b.setAttribute('data-loading','true');setTimeout(()=>{b.removeAttribute('data-loading');bizOk=true;const box=b.closest('.biz');box.querySelector('b').textContent='사업자 인증 완료';box.querySelector('.t').lastChild.textContent='샘플인테리어 · 등록 정보 확인 완료';b.remove();toast('사업자 인증이 확인되었습니다','badge-check')},1100);}
+function payReq(){if(!bizOk){toast('사업자 인증을 먼저 진행해 주세요','badge-alert');return}
+  const b=$('#payBtn');b.setAttribute('data-loading','true');setTimeout(()=>{b.removeAttribute('data-loading');b.textContent='요청 접수 완료';b.disabled=true;$('#tl').classList.add('on');
+    setTimeout(()=>{$('#t2').classList.add('ok');$('#t2 .d').innerHTML=ico('check');lucide.createIcons();toast('실측자가 배정되었습니다','user-check')},1800)},1200);}
+let mr=[['거실 창',2400,1500,2],['안방 창',1800,1400,1],['주방 창',900,900,1]];
+function renderManual(){$('#mrows').innerHTML=mr.map((r,i)=>`<div class="mrow"><input class="inp sm" value="${r[0]}" oninput="mr[${i}][0]=this.value"><input class="inp sm num" value="${r[1]}" oninput="mr[${i}][1]=this.value"><input class="inp sm num" value="${r[2]}" oninput="mr[${i}][2]=this.value"><input class="inp sm num" value="${r[3]}" oninput="mr[${i}][3]=this.value"><button class="xbtn" aria-label="행 삭제" onclick="mr.splice(${i},1);renderManual()">${ico('x',16)}</button></div>`).join('');lucide.createIcons();}
+function addRow(){mr.push(['새 위치',1200,1200,1]);renderManual();}
+function calcManual(){const b=$('#mcalc');b.setAttribute('data-loading','true');setTimeout(()=>{b.removeAttribute('data-loading');show('quote');toast('입력한 값으로 가견적을 계산했습니다','calculator')},900)}
+const ORDER={main:1,review:2,quote:3,request:4,manual:1};
+const TIPS={main:'촬영할 때는 양식의 네 모서리가 모두 보이게 하고 그림자가 지지 않도록 해 주세요.',review:'강조된 항목만 확인하면 됩니다. 사진의 숫자와 같은지만 봐 주세요.',quote:'추가공사 항목은 현장 상황에 따라 달라질 수 있어 정밀실측 후 확정됩니다.',request:'결제 후에도 실측 일정 전까지 앱에서 일정 변경을 요청할 수 있습니다.',manual:'모든 칸을 채우지 않아도 입력한 위치만으로 가견적을 받을 수 있습니다.'};
+function show(id){
+  document.querySelectorAll('.screen').forEach(e=>e.classList.toggle('on',e.id==='s-'+id));
+  document.querySelectorAll('#menu button').forEach(b=>b.classList.toggle('active',b.dataset.s===id));
+  const cur=ORDER[id];
+  document.querySelectorAll('#stepper .st').forEach(b=>{const i=+b.dataset.i;b.classList.toggle('cur',i===cur);b.classList.toggle('done',i<cur)});
+  document.querySelectorAll('#stepper .st-line').forEach((l,i)=>l.classList.toggle('fill',i+1<cur));
+  $('#stepEn').textContent=`STEP ${cur} / 4`;$('#tipTxt').textContent=TIPS[id];
+  if(id==='review')pickFix(fixIdx);if(id==='quote')renderQuote();if(id==='request')renderDates();if(id==='manual')renderManual();
+  window.scrollTo({top:0,behavior:'smooth'});lucide.createIcons();
+}
+function toast(t,ic='check'){const el=$('#toast');$('#toastT').textContent=t;el.querySelector('svg,i').outerHTML=ico(ic,16);lucide.createIcons();el.classList.add('on');clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove('on'),2600)}
+const DNA={borderRadius:20,boxShadow:'0 24px 48px -32px color-mix(in srgb,var(--n10) 30%,transparent)',hoverLift:'translateY(-3px)'};
+document.querySelectorAll('.card,.tip').forEach(el=>{el.style.borderRadius=DNA.borderRadius+'px';el.style.transition='transform .2s,box-shadow .2s';
+  el.addEventListener('mouseenter',()=>{el.style.transform='translateY(-3px)';});el.addEventListener('mouseleave',()=>{el.style.transform='';});});
+renderSheets();prevRows(6);procSet(4);renderReview();updateSummary();lucide.createIcons();
+</script>
+</body>
+</html>
