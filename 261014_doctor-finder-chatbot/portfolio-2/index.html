@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>챗봇 검수·운영 콘솔 — 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+:root{
+  /* 메인 — 브랜드 마크·primary CTA(화면당 1)·활성 nav·링크·주 차트·포커스. 앵커 m600 = plan primary */
+  --m50:#eff9f2;
+  --m100:#e0f3e5;
+  --m200:#c0e7cc;
+  --m300:#9ad8ad;
+  --m400:#6fc88a;
+  --m500:#47b869;
+  --m600:#1ea948;
+  --m700:#198b3b;
+  --m800:#136c2e;
+  --m900:#0e4c20;
+  /* 무채색 — 배경(n0~n2)·테두리/비활성(n3~n5)·아이콘/보조텍스트(n6~n8)·본문/다크필(n9~n10). 아바타·태그·아이콘박스·KPI배경·보조 차트는 전부 여기 */
+  --n0:#fdf9f4;
+  --n1:#ffffff;
+  --n2:#eff0f0;
+  --n3:#e5e6e5;
+  --n4:#d5d7d6;
+  --n5:#b5bab6;
+  --n6:#909892;
+  --n7:#717a73;
+  --n8:#535a55;
+  --n9:#363a37;
+  --n10:#1e201e;
+  /* 서브 — 상태 의미가 있을 때만. 배지=bg+text, 점/셀/바=solid */
+  --s2:#cf3f3f; --s2-bg:#f9e7e7; --s2-text:#ad1f1f; /* 오류/위험/실패/하락/환불 */
+  --s3:#d48d11; --s3-bg:#f6f1ea; --s3-text:#8b6118; /* 경고/주의 */
+}
+/* ── 상태 레이어 P2 — 모양은 페이지가, 상태는 여기서 (gen-component-kit.js 산출, 색은 토큰만) ── */
+/* state-layer elevation=flat theme=light */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{filter:brightness(.94);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #ffffff;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--s2);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{width:100%;min-height:100%}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:var(--n0);color:var(--n9);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+a{text-decoration:none;color:inherit}
+button{font-family:inherit;font-size:inherit;color:inherit;background:none;border:0;cursor:pointer;text-align:left}
+input,select{font-family:inherit;font-size:14px}
+.num{font-variant-numeric:tabular-nums}
+i.ph,i.ph-bold{line-height:1;flex-shrink:0}
+
+@keyframes ringDraw{from{stroke-dashoffset:var(--len)}to{stroke-dashoffset:var(--off)}}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes tileIn{from{opacity:0;transform:translate(0,10px)}to{opacity:1;transform:none}}
+@keyframes lineDraw{from{stroke-dashoffset:400}to{stroke-dashoffset:0}}
+@keyframes drawerIn{from{transform:translateX(100%)}to{transform:none}}
+@keyframes livePulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+.shell{width:100%;min-height:100vh;display:flex;flex-direction:column}
+.topnav{height:56px;background:var(--n1);border-bottom:1px solid var(--n3);display:flex;align-items:center;padding:0 24px;gap:24px;position:sticky;top:0;z-index:20}
+.brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px;color:var(--n10);white-space:nowrap}
+.brand i{width:28px;height:28px;border-radius:8px;background:var(--m600);color:var(--n1);display:flex;align-items:center;justify-content:center;font-size:16px}
+.tabs{display:flex;gap:4px;flex:1;min-width:0;overflow-x:auto}
+.tab{height:56px;padding:0 12px;display:flex;align-items:center;gap:6px;color:var(--n7);font-weight:500;white-space:nowrap;border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
+.tab:hover{color:var(--n10)}
+.tab.active{color:var(--m700);border-bottom-color:var(--m600);font-weight:700}
+.nav-right{display:flex;align-items:center;gap:12px}
+.sel{height:32px;border:1px solid var(--n4);background:var(--n1);border-radius:8px;padding:0 8px;color:var(--n9)}
+.cta{height:32px;padding:0 14px;border-radius:8px;background:var(--m600);color:var(--n1);font-weight:600;display:inline-flex;align-items:center;gap:6px;transition:background .15s}
+.cta:hover{background:var(--m700)}
+.cta:active{transform:scale(.98)}
+.ghost{height:32px;padding:0 12px;border-radius:8px;border:1px solid var(--n9);background:transparent;font-weight:500;display:inline-flex;align-items:center;gap:6px;color:var(--n10)}
+.ghost:hover{background:var(--n2)}
+.ghost.sm{height:28px;padding:0 10px;font-size:12px}
+.hero{padding:24px 24px 8px;max-width:1360px;width:100%;margin:0 auto}
+.hero h1{font-size:28px;font-weight:700;color:var(--n10);letter-spacing:-.02em;line-height:1.3}
+.hero p{color:var(--n7);margin-top:4px;max-width:640px}
+.live{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--n8);margin-top:8px}
+.live b{width:8px;height:8px;border-radius:50%;background:var(--n10);animation:livePulse 1.6s infinite}
+.page{padding:16px 24px 48px;max-width:1360px;width:100%;margin:0 auto}
+.bento{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
+.tile{background:var(--n1);border:1px solid var(--n3);border-radius:12px;padding:16px;animation:tileIn .45s ease both;min-width:0}
+.tile{transition:transform .2s,border-color .2s}.tile:hover{transform:scale(1.01);border-color:var(--n5)}
+.tile h3{font-size:14px;font-weight:700;color:var(--n10);display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+.tile h3 span{font-size:12px;font-weight:500;color:var(--n7)}
+.span3{grid-column:span 3}.span4{grid-column:span 4}.span5{grid-column:span 5}.span6{grid-column:span 6}.span7{grid-column:span 7}.span8{grid-column:span 8}.span12{grid-column:span 12}
+.row2{grid-row:span 2}
+.big{font-size:48px;font-weight:800;color:var(--n10);line-height:1;letter-spacing:-.02em}
+.big small{font-size:20px;font-weight:700;margin-left:2px}
+.cap{font-size:12px;color:var(--n7);margin-top:8px}
+.pill{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:100px;font-size:12px;font-weight:600;background:var(--n2);color:var(--n8);white-space:nowrap}
+.pill.ok{background:var(--n10);color:var(--n0)}
+.pill.err{background:var(--s2-bg);color:var(--s2-text)}
+.pill.warn{background:var(--s3-bg);color:var(--s3-text)}
+.ring{display:flex;justify-content:center;margin:8px 0 12px}
+.ring svg{width:188px;height:188px}
+.ring .arc{stroke-dasharray:var(--len);stroke-dashoffset:var(--off);animation:ringDraw 1.2s ease both}
+.hbar{display:grid;grid-template-columns:96px 1fr 44px;align-items:center;gap:8px;padding:6px 0;font-size:12px;color:var(--n8)}
+.hbar .track{height:8px;background:var(--n2);border-radius:4px;overflow:hidden}
+.hbar .fill{height:100%;background:var(--m600);border-radius:4px;transform-origin:left;animation:barGrow .9s ease both}
+.hbar .fill.low{background:var(--m300)}
+.hbar b{text-align:right;color:var(--n10)}
+.trend svg{width:100%;height:150px;display:block}
+.trend .ln{stroke-dasharray:400;animation:lineDraw 1.3s ease both}
+.list .row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;padding:10px 8px;border-top:1px solid var(--n3);width:100%;border-radius:8px;transition:background .15s}
+.list .row:first-of-type{border-top:0}
+.list .row:hover{background:var(--n0)}
+.list .row b{display:block;color:var(--n10);font-weight:600}
+.list .row span{font-size:12px;color:var(--n7)}
+table.t{width:100%;border-collapse:collapse}
+.t th{font-size:12px;color:var(--n7);font-weight:600;text-align:left;padding:8px;border-bottom:1px solid var(--n4);white-space:nowrap}
+.t td{padding:10px 8px;border-bottom:1px solid var(--n3);vertical-align:top}
+.t tr.r{cursor:pointer;transition:background .12s}
+.t tr.r:hover{background:var(--n0)}
+.t tr.r.sel{background:var(--m50)}
+.q{color:var(--n10);font-weight:500}
+.filters{display:flex;gap:6px;margin-bottom:12px}
+.fchip{height:28px;padding:0 12px;border-radius:100px;border:1px solid var(--n4);background:var(--n1);font-weight:500;color:var(--n8)}
+.fchip:hover{background:var(--n2)}
+.fchip.on{background:var(--m50);border-color:var(--m600);color:var(--m800);font-weight:700}
+.search{position:relative;margin-bottom:8px}
+.search input,.fld input,.fld select{width:100%;height:36px;border:1px solid var(--n4);border-radius:8px;background:var(--n1);padding:0 12px;color:var(--n10)}
+.search input{padding-left:32px}
+.search i{position:absolute;left:10px;top:10px;color:var(--n6);font-size:16px}
+.term{width:100%;display:flex;align-items:center;justify-content:space-between;padding:10px 10px;border-radius:8px;gap:8px}
+.term:hover{background:var(--n0)}
+.term.on{background:var(--m50);box-shadow:inset 3px 0 0 var(--m600)}
+.term b{font-weight:600;color:var(--n10)}
+.term span{font-size:12px;color:var(--n7)}
+.syn{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px}
+.syn .s{height:28px;padding:0 4px 0 10px;border-radius:100px;background:var(--n2);color:var(--n9);display:inline-flex;align-items:center;gap:4px;font-weight:500}
+.syn .s button{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--n6);font-size:12px}
+.syn .s button:hover{background:var(--n4);color:var(--n10)}
+.add{display:flex;gap:8px}
+.add input{flex:1;height:36px;border:1px solid var(--n4);border-radius:8px;padding:0 12px;background:var(--n1);color:var(--n10)}
+.kvr{display:flex;justify-content:space-between;padding:6px 0;border-top:1px dashed var(--n4)}
+.kvr span:first-child{color:var(--n7)}.kvr span:last-child{color:var(--n10);font-weight:500;text-align:right}
+.queue{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--n3)}
+.queue b{font-weight:600;color:var(--n10)}
+.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--n8)}
+.vbars{display:flex;align-items:flex-end;gap:10px;height:140px;padding-top:8px}
+.vbar{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%;justify-content:flex-end}
+.vbar div{width:100%;background:var(--m600);border-radius:6px 6px 0 0;transform-origin:bottom;animation:barGrow .8s ease both}
+.vbar div.mute{background:var(--m200)}
+.vbar span{font-size:12px;color:var(--n7)}
+.meter{height:10px;background:var(--n2);border-radius:5px;overflow:hidden;margin:12px 0 6px}
+.meter div{height:100%;background:var(--m600);border-radius:5px;transform-origin:left;animation:barGrow 1s ease both}
+.mask{background:var(--n3);color:transparent;border-radius:4px;user-select:none}
+.scrim{position:fixed;inset:0;background:color-mix(in srgb,var(--n10) 35%,transparent);z-index:40;display:flex;justify-content:flex-end}
+.drawer{width:460px;max-width:100%;height:100%;background:var(--n1);padding:24px;overflow-y:auto;animation:drawerIn .28s ease both;border-left:1px solid var(--n4)}
+.drawer h4{font-size:20px;font-weight:700;color:var(--n10);margin:12px 0 4px}
+.dsec{margin-top:16px}
+.dsec .lab{font-size:12px;font-weight:700;color:var(--n7);margin-bottom:6px}
+.box{background:var(--n0);border:1px solid var(--n3);border-radius:8px;padding:12px;color:var(--n9)}
+.box.bad{border-color:var(--s2);background:var(--s2-bg)}
+.box del{color:var(--s2-text)}
+.center{position:fixed;inset:0;z-index:50;background:color-mix(in srgb,var(--n10) 35%,transparent);display:flex;align-items:center;justify-content:center}
+.dlg{width:420px;max-width:92vw;background:var(--n1);border-radius:12px;padding:24px;border:1px solid var(--n4)}
+.dlg h4{font-size:16px;font-weight:700;color:var(--n10);margin-bottom:8px}
+.dlg-act{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
+.toast{position:fixed;right:24px;bottom:24px;background:var(--n10);color:var(--n0);padding:10px 16px;border-radius:8px;font-weight:500;z-index:60;animation:tileIn .25s ease both;display:flex;gap:8px;align-items:center}
+@media (max-width:980px){.span3,.span4,.span5,.span6,.span7,.span8{grid-column:span 12}.row2{grid-row:auto}}
+</style>
+</head>
+<body data-archetype="bento-grid">
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+const P = ({ n, b }) => <i className={(b ? 'ph-bold ph-' : 'ph ph-') + n} />;
+
+const SCEN = [
+  { id: 'S-0412', t: '필수·제외 조건이 섞인 복합 질문', cat: '단일·복합 조건', exp: '"수술 제외" 조건을 결과 필터에 반영', act: '제외 조건이 누락되어 수술 병원이 1곳 포함됨', sev: '일반' },
+  { id: 'S-0877', t: '“그 병원” 지시어 해석', cat: '연속 대화', exp: '직전 결과 2번 카드를 참조', act: '3번 카드로 오참조', sev: '일반' },
+  { id: 'S-1090', t: '평가 정보 없는 의사 안내', cat: '질환·진료과 탐색', exp: '세부진료분야만 안내하고 평점 문구 없음', act: '통과 (재검수 대기)', sev: '일반' },
+  { id: 'S-1123', t: '위치 동의 없이 주변 검색 요청', cat: '지역·위치', exp: '동의를 먼저 요청', act: '지역을 되묻는 것으로 처리됨', sev: '일반' },
+];
+const CATS = [['단일·복합 조건', 97], ['질환·진료과 탐색', 96], ['지역·위치', 94], ['연속 대화', 95], ['결과 비교', 98], ['예외 상황', 97]];
+const LOGS = [
+  { id: 'L-8841', time: '14:32:08', q: '허리 디스크 비수술 병원 강남', draft: '해온정형외과 박서진 원장은 환자 만족도 98%로 평가됩니다.', fin: '해온정형외과 박서진 원장은 환자경험 평가 4.7(132건)로 등록되어 있어요.', res: 'block', why: '"만족도 98%" 값이 DB에 없음 → 문장 재생성', ok: ['의사·병원 레코드 ID 일치', '지역 정보 일치'], bad: ['평가 수치 불일치'] },
+  { id: 'L-8840', time: '14:31:40', q: '두 번째 병원 위치 알려줘', draft: '맑은숲신경외과의원은 서초구 서초동에 있어요.', fin: '맑은숲신경외과의원은 서초구 서초동에 있어요.', res: 'pass', why: '모든 항목 DB와 일치', ok: ['병원명 일치', '주소 일치', '링크 유효'], bad: [] },
+  { id: 'L-8839', time: '14:29:12', q: '야간 진료하는 소아과 분당', draft: '다온소아청소년과는 평일 22시까지 진료해요.', fin: '진료 시간 정보가 등록되어 있지 않아 안내하기 어려워요.', res: 'block', why: '진료 시간 필드 없음 → 정보 생성 차단', ok: ['병원명 일치'], bad: ['진료 시간 필드 부재'] },
+  { id: 'L-8838', time: '14:27:55', q: '무릎이 아픈데 무슨 과로 가야 해요', draft: '무릎 통증은 정형외과·재활의학과 진료 후보예요. 진단은 의료진 상담이 필요해요.', fin: '무릎 통증은 정형외과·재활의학과 진료 후보예요. 진단은 의료진 상담이 필요해요.', res: 'pass', why: '진단 표현 없음 · 진료과 후보만 안내', ok: ['진단 단정 표현 없음', '진료과 매핑 일치'], bad: [] },
+  { id: 'L-8837', time: '14:25:31', q: '당뇨 잘 보는 분 추천해 줘', draft: '김하준 원장님이 당뇨를 완치시켜 드려요.', fin: '완치를 보장하는 표현은 사용하지 않아요. 내분비내과 후보를 안내해 드릴게요.', res: 'block', why: '치료 성과 보증 표현 → 정책 위반', ok: [], bad: ['치료 성과 보증 표현'] },
+  { id: 'L-8836', time: '14:22:03', q: '강남 정형외과 평가 좋은 곳', draft: '해온정형외과, 연세바른신경외과 순으로 안내해요.', fin: '해온정형외과, 연세바른신경외과 순으로 안내해요.', res: 'pass', why: '정렬 기준과 DB 점수 일치', ok: ['정렬 순서 일치', '병원명 일치'], bad: [] },
+];
+const TERMS = [
+  { k: '요추 추간판 탈출증', syn: ['허리 디스크', '디스크 탈출', 'L4-5 디스크'], dept: ['정형외과', '신경외과'], sub: '척추 질환', n: 34 },
+  { k: '척추관 협착증', syn: ['허리 협착', '다리 저림 협착'], dept: ['정형외과', '신경외과', '재활의학과'], sub: '척추 질환', n: 21 },
+  { k: '제2형 당뇨병', syn: ['당뇨', '성인 당뇨', '혈당 높음'], dept: ['내분비내과'], sub: '당뇨·대사', n: 29 },
+  { k: '알레르기 비염', syn: ['코 알레르기', '비염', '콧물 재채기'], dept: ['이비인후과', '소아청소년과'], sub: '비염·부비동', n: 18 },
+  { k: '무릎 관절증', syn: ['무릎 퇴행성', '무릎 연골', '무릎 시큰'], dept: ['정형외과', '재활의학과'], sub: '관절 질환', n: 25 },
+  { k: '안구건조증', syn: ['눈 뻑뻑', '눈 건조'], dept: ['안과'], sub: '각막·결막', n: 12 },
+];
+
+const NAV = ['검수 시나리오 합격률 보드', '환각 차단 검증 로그', '질환 사전·동의어 관리', 'LLM 사용량·대화 로그 가명처리'];
+const KEYS = ['main', 'guard', 'lexicon', 'usage'];
+const ICO = ['chart-bar', 'shield-check', 'book-open-text', 'lock-key'];
+const HERO = [
+  ['2차 중간 검수 현황', '검증 시나리오 240개 기준 기능·품질 검수 결과예요. 중대 결함은 비율과 무관하게 불합격으로 집계해요.'],
+  ['환각 차단 검증 로그', '생성된 답변 문장을 DB 값과 다시 대조한 기록이에요. 일치하지 않는 문장은 사용자에게 나가지 않아요.'],
+  ['질환 사전·동의어 관리', '표준질환과 동의어를 정리하고, LLM이 만든 초안은 사람이 대조한 뒤 반영해요.'],
+  ['LLM 사용량과 대화 로그', '대화 기록은 가명 처리하고 보관 기간이 지나면 파기해요. 사용량은 호출 단위로 집계해요.'],
+];
+
+/* ───── 1. 합격률 보드 ───── */
+const Board = ({ openScen, toast }) => {
+  const len = 2 * Math.PI * 76, off = len * (1 - 0.963);
+  const pts = [[20, 110], [110, 92], [200, 70], [290, 52], [380, 38]];
+  return (
+    <div className="bento">
+      <section className="tile span5 row2" style={{ animationDelay: '0ms', borderRadius: 12 }}>
+        <h3>시나리오 합격률 <span>목표 95% 이상</span></h3>
+        <div className="ring">
+          <svg viewBox="0 0 188 188">
+            <circle cx="94" cy="94" r="76" fill="none" stroke="var(--n2)" strokeWidth="14" />
+            <circle className="arc" style={{ '--len': len, '--off': off }} cx="94" cy="94" r="76" fill="none" stroke="var(--m600)" strokeWidth="14" strokeLinecap="round" transform="rotate(-90 94 94)" />
+            <text x="94" y="96" textAnchor="middle" style={{ fontSize: 40, fontWeight: 800, fill: 'var(--n10)' }}>96.3%</text>
+            <text x="94" y="120" textAnchor="middle" style={{ fontSize: 12, fill: 'var(--n7)' }}>231 / 240 통과</text>
+          </svg>
+        </div>
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <span className="pill ok"><P n="check" b /> 기준 충족</span><span className="pill">중대 결함 0건</span>
+        </div>
+        <div style={{ marginTop: 16 }}>
+          <div className="kvr"><span>단일·복합 조건</span><span className="num">48 / 50</span></div>
+          <div className="kvr"><span>연속 대화</span><span className="num">57 / 60</span></div>
+          <div className="kvr"><span>예외 상황</span><span className="num">38 / 40</span></div>
+        </div>
+      </section>
+      <section className="tile span7 trend" style={{ animationDelay: '60ms' }}>
+        <h3>검수 회차별 합격률 <span>예시 데이터</span></h3>
+        <svg viewBox="0 0 400 140" preserveAspectRatio="none">
+          <line x1="0" y1="52" x2="400" y2="52" stroke="var(--n4)" strokeDasharray="4 4" />
+          <polyline className="ln" points={pts.map(p => p.join(',')).join(' ')} fill="none" stroke="var(--m600)" strokeWidth="3" strokeLinejoin="round" />
+          {pts.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r="4" fill="var(--n1)" stroke="var(--m600)" strokeWidth="2" />)}
+        </svg>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--n7)' }}><span>1회차 88.1</span><span>2회차 91.4</span><span>3회차 93.8</span><span>4회차 95.2</span><span>5회차 96.3</span></div>
+      </section>
+      <section className="tile span4" style={{ animationDelay: '120ms' }}>
+        <h3>영역별 통과율 <span>%</span></h3>
+        {CATS.map(([n, v]) => <div key={n} className="hbar"><span>{n}</span><div className="track"><div className={'fill' + (v < 95 ? ' low' : '')} style={{ width: v + '%' }} /></div><b className="num">{v}</b></div>)}
+      </section>
+      <section className="tile span3" style={{ animationDelay: '180ms' }}>
+        <h3>성능 검수 <span>예시</span></h3>
+        <div className="big num">2.4<small>초</small></div>
+        <div className="cap">체감 응답 시간 (측정 방법은 계약 전 협의)</div>
+        <div className="kvr" style={{ marginTop: 12 }}><span>동시 요청</span><span className="num">50건 시험</span></div>
+        <div className="kvr"><span>장애 복구</span><span>시나리오 3종</span></div>
+      </section>
+      <section className="tile span12" style={{ animationDelay: '240ms' }}>
+        <h3>보완 대기 시나리오 <span>{SCEN.length}건 · 행을 누르면 기대 결과와 실제 결과를 비교해요</span></h3>
+        <div className="list">
+          {SCEN.map(s => <button key={s.id} className="row" onClick={() => openScen(s)}><div><b>{s.t}</b><span>{s.id} · {s.cat}</span></div><span className={'pill ' + (s.act.startsWith('통과') ? 'ok' : 'warn')}>{s.act.startsWith('통과') ? '재검수 대기' : '보완 필요'}</span></button>)}
+        </div>
+      </section>
+    </div>
+  );
+};
+
+/* ───── 2. 환각 차단 로그 ───── */
+const Guard = ({ openLog, selId }) => {
+  const [f, setF] = useState('all');
+  const rows = LOGS.filter(l => f === 'all' || l.res === f);
+  return (
+    <div className="bento">
+      <section className="tile span3"><h3>오늘 검증한 문장</h3><div className="big num">1,284</div><div className="cap">DB 대조를 거친 답변 문장 수</div></section>
+      <section className="tile span3"><h3>차단 후 재생성</h3><div className="big num">37</div><div className="cap">값 불일치·정책 위반 문장</div></section>
+      <section className="tile span3"><h3>중대 결함</h3><div className="big num">0</div><div className="cap">DB에 없는 의사·병원·평가 노출</div></section>
+      <section className="tile span3"><h3>링크 유효성</h3><div className="big num">100<small>%</small></div><div className="cap">상세 링크 응답 확인</div></section>
+      <section className="tile span12">
+        <h3>검증 로그 <span>대화 원문은 가명 처리된 요약만 표시</span></h3>
+        <div className="filters">
+          {[['all', '전체'], ['block', '차단'], ['pass', '통과']].map(([k, l]) => <button key={k} className={'fchip' + (f === k ? ' on' : '')} onClick={() => setF(k)}>{l}</button>)}
+        </div>
+        <table className="t"><thead><tr><th>시각</th><th>사용자 질문 요약</th><th>검증 사유</th><th>결과</th></tr></thead>
+          <tbody>{rows.map(l => (
+            <tr key={l.id} className={'r' + (selId === l.id ? ' sel' : '')} onClick={() => openLog(l)}>
+              <td className="num mono">{l.time}</td><td className="q">{l.q}</td><td style={{ color: 'var(--n8)' }}>{l.why}</td>
+              <td>{l.res === 'pass' ? <span className="pill ok"><P n="check" b /> 통과</span> : <span className="pill err"><P n="warning" b /> 차단</span>}</td>
+            </tr>))}</tbody></table>
+      </section>
+    </div>
+  );
+};
+
+/* ───── 3. 질환 사전 ───── */
+const Lexicon = ({ toast }) => {
+  const [terms, setTerms] = useState(TERMS);
+  const [sel, setSel] = useState(0);
+  const [q, setQ] = useState('');
+  const [add, setAdd] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [queue, setQueue] = useState([]);
+  const t = terms[sel];
+  const list = terms.map((x, i) => [x, i]).filter(([x]) => (x.k + x.syn.join('')).includes(q));
+  const remove = s => setTerms(ts => ts.map((x, i) => i === sel ? { ...x, syn: x.syn.filter(y => y !== s) } : x));
+  const addSyn = () => { if (!add.trim()) return; setTerms(ts => ts.map((x, i) => i === sel ? { ...x, syn: [...x.syn, add.trim()] } : x)); setAdd(''); toast('동의어를 추가했어요. 다음 색인 갱신에 반영돼요.'); };
+  const draft = () => { setBusy(true); setTimeout(() => { setBusy(false); setQueue([{ w: '허리 삐끗', to: '요추 염좌' }, { w: '손목 터널', to: '수근관 증후군' }]); toast('초안 2건을 만들었어요. 사람이 확인한 뒤 반영해요.'); }, 1400); };
+  const decide = (w, ok) => { setQueue(qs => qs.filter(x => x.w !== w)); toast(ok ? '"' + w + '"을 사전에 반영했어요.' : '"' + w + '"은 반영하지 않았어요.'); };
+  return (
+    <div className="bento">
+      <section className="tile span4">
+        <h3>표준질환 <span className="num">{terms.length}개 표시 · 전체 수백 개</span></h3>
+        <div className="search"><i className="ph ph-magnifying-glass" /><input placeholder="질환·동의어 검색" value={q} onChange={e => setQ(e.target.value)} /></div>
+        {list.map(([x, i]) => <button key={x.k} className={'term' + (i === sel ? ' on' : '')} onClick={() => setSel(i)}><div><b>{x.k}</b><br /><span>{x.dept.join(' · ')}</span></div><span className="num">{x.n}명</span></button>)}
+      </section>
+      <section className="tile span5">
+        <h3>{t.k} <span>동의어 {t.syn.length}개</span></h3>
+        <div className="syn">{t.syn.map(s => <span key={s} className="s">{s}<button onClick={() => remove(s)} aria-label={s + ' 삭제'}><P n="x" b /></button></span>)}</div>
+        <div className="add"><input placeholder="동의어 추가" value={add} onChange={e => setAdd(e.target.value)} onKeyDown={e => e.key === 'Enter' && addSyn()} /><button className="ghost" onClick={addSyn}><P n="plus" /> 추가하기</button></div>
+        <div style={{ marginTop: 16 }}>
+          <div className="kvr"><span>연관 진료과</span><span>{t.dept.join(', ')}</span></div>
+          <div className="kvr"><span>세부진료분야 매핑</span><span>{t.sub}</span></div>
+          <div className="kvr"><span>연결된 의사</span><span className="num">{t.n}명</span></div>
+        </div>
+      </section>
+      <section className="tile span3">
+        <h3>검수 대기 초안 <span className="num">{queue.length}건</span></h3>
+        <button className="cta" data-loading={busy ? 'true' : 'false'} disabled={busy} onClick={draft} style={{ width: '100%', justifyContent: 'center' }}>초안 만들기</button>
+        <div className="cap">클라이언트 DB의 세부진료분야에서 LLM이 초안을 만들어요.</div>
+        {queue.map(x => <div key={x.w} className="queue"><div><b>{x.w}</b><br /><span className="mono">→ {x.to}</span></div>
+          <div style={{ display: 'flex', gap: 4 }}><button className="ghost sm" onClick={() => decide(x.w, true)}>반영</button><button className="ghost sm" onClick={() => decide(x.w, false)}>제외</button></div></div>)}
+        {queue.length === 0 && !busy && <div className="cap" style={{ marginTop: 12 }}>대기 중인 초안이 없어요.</div>}
+      </section>
+    </div>
+  );
+};
+
+/* ───── 4. 사용량·가명처리 ───── */
+const Usage = ({ toast }) => {
+  const [rows, setRows] = useState([
+    { id: 'u_7f3a91', sym: '허리 통증 · 강남', d: 'D-12' }, { id: 'u_2c58e0', sym: '아이 비염 · 야간', d: 'D-9' },
+    { id: 'u_b91d44', sym: '무릎 재활 · 분당', d: 'D-5' }, { id: 'u_04ae7c', sym: '당뇨 전문 · 송파', d: 'D-2' },
+  ]);
+  const [confirm, setConfirm] = useState(null);
+  const days = [['월', 62], ['화', 74], ['수', 81], ['목', 68], ['금', 90], ['토', 38], ['일', 31]];
+  return (
+    <div className="bento">
+      <section className="tile span7">
+        <h3>일별 LLM 호출 <span>단위: 천 건 · 예시 데이터</span></h3>
+        <div className="vbars">{days.map(([d, v], i) => <div key={d} className="vbar"><div className={i === 4 ? '' : 'mute'} style={{ height: v + '%', animationDelay: i * 60 + 'ms' }} /><span>{d}</span></div>)}</div>
+      </section>
+      <section className="tile span5">
+        <h3>이번 달 사용 한도 <span>예시</span></h3>
+        <div className="big num">64<small>%</small></div>
+        <div className="meter"><div style={{ width: '64%' }} /></div>
+        <div className="cap">한도 초과 시 안내 문구와 함께 대기열로 전환해요.</div>
+        <div className="kvr" style={{ marginTop: 12 }}><span>질문 이해</span><span className="num">입력 41%</span></div>
+        <div className="kvr"><span>답변 생성</span><span className="num">입력 38%</span></div>
+        <div className="kvr"><span>근거 대조</span><span className="num">입력 21%</span></div>
+      </section>
+      <section className="tile span12">
+        <h3>대화 로그 <span>가명 ID 처리 · 증상 텍스트는 암호화 저장</span></h3>
+        <table className="t"><thead><tr><th>가명 ID</th><th>대화 요약</th><th>저장 텍스트</th><th>보관 만료</th><th></th></tr></thead>
+          <tbody>{rows.map(r => <tr key={r.id}><td className="mono">{r.id}</td><td className="q">{r.sym}</td><td><span className="mask">암호화된 본문 저장</span></td><td><span className={'pill' + (r.d === 'D-2' ? ' warn' : '')}>{r.d}</span></td>
+            <td style={{ textAlign: 'right' }}><button className="ghost sm" onClick={() => setConfirm(r)}><P n="trash" /> 파기 예약</button></td></tr>)}
+            {rows.length === 0 && <tr><td colSpan="5" style={{ color: 'var(--n7)' }}>보관 중인 대화가 없어요.</td></tr>}</tbody></table>
+        <div style={{ marginTop: 12 }}><button className="ghost" onClick={() => toast('가명 처리된 로그를 CSV로 내려받아요(데모).')}><P n="download-simple" /> 로그 내보내기</button></div>
+      </section>
+      {confirm && <div className="center" onClick={() => setConfirm(null)}><div className="dlg" style={{ borderRadius: 12 }} onClick={e => e.stopPropagation()}>
+        <h4>대화 {confirm.id}를 파기할까요?</h4><p style={{ color: 'var(--n8)' }}>파기하면 암호화된 본문과 가명 매핑이 함께 삭제돼요. 되돌릴 수 없어요.</p>
+        <div className="dlg-act"><button className="ghost" onClick={() => setConfirm(null)}>취소하기</button>
+          <button className="cta" onClick={() => { setRows(rs => rs.filter(x => x.id !== confirm.id)); setConfirm(null); toast('파기를 예약했어요.'); }}>파기하기</button></div>
+      </div></div>}
+    </div>
+  );
+};
+
+const App = () => {
+  const [view, setView] = useState('main');
+  const [drawer, setDrawer] = useState(null);
+  const [toastMsg, setToastMsg] = useState('');
+  const [round, setRound] = useState('5');
+  const toast = m => { setToastMsg(m); setTimeout(() => setToastMsg(''), 2200); };
+  const idx = KEYS.indexOf(view);
+  const go = k => { setView(k); setDrawer(null); };
+  return (
+    <div className="shell" style={{ width: '100%' }}>
+      <header className="topnav">
+        <div className="brand"><i className="ph-bold ph-chats-circle" />닥터링크 운영 콘솔</div>
+        <nav className="tabs">{NAV.map((n, i) => <button key={n} className={'tab' + (view === KEYS[i] ? ' active' : '')} onClick={() => go(KEYS[i])}><P n={ICO[i]} />{n}</button>)}</nav>
+        <div className="nav-right">
+          <select className="sel" value={round} onChange={e => setRound(e.target.value)}><option value="5">5회차 검수</option><option value="4">4회차 검수</option><option value="3">3회차 검수</option></select>
+          <button className="cta" onClick={() => toast('검증 시나리오 240개 자동 채점을 시작했어요(데모).')}><P n="play" b /> 검수 실행하기</button>
+        </div>
+      </header>
+      <div className="hero" style={{ position: 'relative' }}>
+        <svg className="heroart" viewBox="0 0 360 120" aria-hidden="true" style={{ position: 'absolute', right: 24, top: 8, width: 360, height: 120, opacity: .95 }}>
+          <defs><linearGradient id="hg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="var(--m200)" /><stop offset="1" stopColor="var(--m50)" /></linearGradient></defs>
+          <rect x="4" y="6" width="352" height="108" rx="16" fill="url(#hg)" />
+          <path d="M30 86 C90 40 140 100 200 56 S300 30 340 62" fill="none" stroke="var(--m500)" strokeWidth="2.5" strokeLinecap="round" />
+          <circle cx="90" cy="64" r="6" fill="var(--m600)" /><circle cx="200" cy="56" r="6" fill="var(--m600)" /><circle cx="300" cy="40" r="6" fill="var(--m700)" />
+          <rect x="56" y="22" width="64" height="18" rx="9" fill="var(--n1)" /><rect x="168" y="84" width="72" height="18" rx="9" fill="var(--n1)" /><rect x="262" y="14" width="56" height="18" rx="9" fill="var(--n1)" />
+          <path d="M178 30 l10 4 v10 c0 8-6 13-10 15 c-4-2-10-7-10-15 v-10z" fill="var(--m600)" opacity=".85" />
+        </svg>
+        <h1>{HERO[idx][0]}</h1><p>{HERO[idx][1]}</p><span className="live"><b />{round}회차 데이터 · 2026.10.14 기준</span></div>
+      <main className="page" style={{ width: '100%' }}>
+        {view === 'main' && <Board openScen={setDrawer} toast={toast} />}
+        {view === 'guard' && <Guard openLog={setDrawer} selId={drawer && drawer.id} />}
+        {view === 'lexicon' && <Lexicon toast={toast} />}
+        {view === 'usage' && <Usage toast={toast} />}
+      </main>
+      {drawer && (
+        <div className="scrim" onClick={() => setDrawer(null)}>
+          <aside className="drawer" onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="mono">{drawer.id}</span>
+              <button className="ghost sm" onClick={() => setDrawer(null)}><P n="x" b /> 닫기</button>
+            </div>
+            {drawer.exp !== undefined ? <>
+              <h4>{drawer.t}</h4><div className="cap">{drawer.cat} · {drawer.sev} 결함</div>
+              <div className="dsec"><div className="lab">기대 결과</div><div className="box">{drawer.exp}</div></div>
+              <div className="dsec"><div className="lab">실제 결과</div><div className="box bad">{drawer.act}</div></div>
+              <div className="dsec" style={{ display: 'flex', gap: 8 }}>
+                <button className="cta" onClick={() => { setDrawer(null); toast('보완 작업으로 등록했어요.'); }}>보완 등록하기</button>
+                <button className="ghost" onClick={() => { setDrawer(null); toast('재검수 대기 목록에 넣었어요.'); }}>재검수에 넣기</button>
+              </div>
+            </> : <>
+              <h4>{drawer.q}</h4><div className="cap">{drawer.time} · {drawer.res === 'pass' ? '통과' : '차단 후 재생성'}</div>
+              <div className="dsec"><div className="lab">LLM 초안</div><div className={'box' + (drawer.res === 'block' ? ' bad' : '')}>{drawer.res === 'block' ? <del>{drawer.draft}</del> : drawer.draft}</div></div>
+              <div className="dsec"><div className="lab">사용자에게 나간 문장</div><div className="box">{drawer.fin}</div></div>
+              <div className="dsec"><div className="lab">DB 대조 항목</div>
+                {drawer.ok.map(o => <div key={o} className="kvr"><span><P n="check" b /> {o}</span><span>일치</span></div>)}
+                {drawer.bad.map(o => <div key={o} className="kvr"><span><P n="warning" b /> {o}</span><span style={{ color: 'var(--s2-text)' }}>불일치</span></div>)}</div>
+            </>}
+          </aside>
+        </div>
+      )}
+      {toastMsg && <div className="toast"><P n="check-circle" /> {toastMsg}</div>}
+    </div>
+  );
+};
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
