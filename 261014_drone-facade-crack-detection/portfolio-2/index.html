@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>외벽 점검 단지 현황 및 배치 분석 콘솔 — 구현 데모</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/@phosphor-icons/web@2.1.1/src/index.js"></script>
+<style>
+/* ── 컬러 역할 토큰 P2 — 메인 1 · 서브 2 · 나머지 무채색 (gen-color-tokens.js 산출, hue 22°, light) ── */
+:root{
+  /* 메인 — 브랜드 마크·primary CTA(화면당 1)·활성 nav·링크·주 차트·포커스. 앵커 m600 = plan primary */
+  --m50:#fcf3ee;
+  --m100:#f8e7dd;
+  --m200:#f2cfbb;
+  --m300:#eab291;
+  --m400:#e19163;
+  --m500:#d87237;
+  --m600:#d0530b;
+  --m700:#ab4409;
+  --m800:#853507;
+  --m900:#5e2505;
+  /* 무채색 — 배경(n0~n2)·테두리/비활성(n3~n5)·아이콘/보조텍스트(n6~n8)·본문/다크필(n9~n10). 아바타·태그·아이콘박스·KPI배경·보조 차트는 전부 여기 */
+  --n0:#ffffff;
+  --n1:#f2f2f3;
+  --n2:#f0f0ef;
+  --n3:#e6e5e5;
+  --n4:#d7d6d5;
+  --n5:#bab7b5;
+  --n6:#989390;
+  --n7:#777b86;
+  --n8:#5a5653;
+  --n9:#3a3736;
+  --n10:#201e1e;
+  /* 서브 — 상태 의미가 있을 때만. 배지=bg+text, 점/셀/바=solid */
+  --s1:#1f894b; --s1-bg:#e2f3e9; --s1-text:#14713b; /* 성공/진행/정상/상승 */
+  --s2:#cf3f3f; --s2-bg:#f9e7e7; --s2-text:#ad1f1f; /* 오류/위험/실패/하락/환불 */
+}
+/* ⚠ s3(경고/주의) — 메인 hue 22°와 16° 겹침 → 제거, 해당 상태는 무채색(n9/n10 필 + 아이콘)으로 표현 */
+
+/* ── 상태 레이어 P2 — 모양은 페이지가, 상태는 여기서 (gen-component-kit.js 산출, 색은 토큰만) ── */
+/* state-layer elevation=elevated theme=light */
+button:focus-visible,a:focus-visible,[role="button"]:focus-visible,[role="tab"]:focus-visible,[tabindex]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--m500);outline-offset:2px;}
+button:not(:disabled):active,[role="button"]:not([aria-disabled="true"]):active{transform:scale(.98);}
+button:disabled,button[aria-disabled="true"],[role="button"][aria-disabled="true"]{cursor:not-allowed;filter:grayscale(1) opacity(.55);transform:none;}
+[data-loading="true"]{position:relative;color:transparent!important;pointer-events:none;}
+[data-loading="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid #ffffff;border-right-color:transparent;animation:k-spin .7s linear infinite;mix-blend-mode:difference;}
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{outline:none;border-color:var(--m500);box-shadow:0 0 0 3px color-mix(in srgb, var(--m500) 28%, transparent);}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{border-color:var(--s2);}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.6;}
+.num,[data-num],td.num,th.num{font-variant-numeric:tabular-nums;}
+@keyframes k-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Pretendard',system-ui,sans-serif;background:var(--n1);color:var(--n9);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+a{text-decoration:none;color:inherit}
+button{font-family:inherit;font-size:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select{font-family:inherit;font-size:14px;color:var(--n9)}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--n4);border-radius:8px}
+
+@keyframes riseIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes sweep{0%{left:0;opacity:0}10%{opacity:.8}90%{opacity:.8}100%{left:100%;opacity:0}}
+@keyframes pulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--m500) 50%,transparent)}70%{box-shadow:0 0 0 8px transparent}100%{box-shadow:0 0 0 0 transparent}}
+@keyframes shimmer{0%{background-position:-300px 0}100%{background-position:300px 0}}
+@keyframes drawLine{from{stroke-dashoffset:var(--len,600)}to{stroke-dashoffset:0}}
+@keyframes spinSlow{to{transform:rotate(360deg)}}
+
+/* 상단 글로벌 내비 (sticky 64px) */
+.app-header{position:sticky;top:0;z-index:20;height:64px;background:var(--n0);border-bottom:1px solid var(--n3);display:flex;align-items:center;gap:20px;padding:0 32px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:17px;letter-spacing:-0.02em}
+.brand .mark{width:32px;height:32px;border-radius:12px;background:var(--m600);color:var(--n0);display:grid;place-items:center;font-size:18px}
+.project-switcher{height:38px;padding:0 14px;border-radius:999px;background:var(--n1);display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;border:1px solid var(--n3)}
+.project-switcher:hover{border-color:var(--n5)}
+.global-nav{display:flex;gap:2px;margin:0 auto}
+.nav-link{height:40px;padding:0 16px;border-radius:999px;display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:var(--n7);white-space:nowrap}
+.nav-link:hover{background:var(--n1);color:var(--n9)}
+.nav-link.active{background:var(--m50);color:var(--m700)}
+.header-actions{display:flex;align-items:center;gap:8px}
+.icon-btn{width:40px;height:40px;border-radius:999px;display:grid;place-items:center;font-size:19px;color:var(--n8);position:relative}
+.icon-btn:hover{background:var(--n1)}
+.icon-btn .dot{position:absolute;right:9px;top:9px;width:8px;height:8px;border-radius:50%;background:var(--m600);animation:pulse 2s infinite}
+.avatar{width:38px;height:38px;border-radius:50%;background:var(--n2);color:var(--n8);display:grid;place-items:center;font-weight:700;font-size:14px}
+
+/* 보조 탭 행 */
+.tab-bar{background:var(--n0);border-bottom:1px solid var(--n3);padding:0 32px;display:flex;gap:6px}
+.tab{height:46px;padding:0 14px;font-weight:600;font-size:14px;color:var(--n7);border-bottom:2px solid transparent;margin-bottom:-1px;display:flex;align-items:center;gap:6px}
+.tab:hover{color:var(--n9)}
+.tab.active{color:var(--n10);border-bottom-color:var(--m600)}
+
+.content{max-width:1320px;margin:0 auto;padding:32px 32px 60px}
+.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:26px;animation:riseIn .5s both}
+.eyebrow{font-size:13px;font-weight:600;color:var(--m700);margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.page-title{font-size:46px;line-height:1.12;font-weight:700;letter-spacing:-0.025em;color:var(--n10)}
+.page-sub{color:var(--n7);margin-top:10px;max-width:620px;font-size:15px}
+.btn{height:44px;padding:0 20px;border-radius:999px;border:1px solid var(--n4);background:var(--n0);display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:var(--n9)}
+.btn:hover{border-color:var(--n7)}
+.btn.primary{background:var(--m600);border-color:var(--m600);color:var(--n0)}
+.btn.primary:hover{background:var(--m700)}
+.btn.sm{height:34px;padding:0 14px;font-size:13px}
+.card{background:var(--n0);border-radius:24px;box-shadow:0 1px 2px rgba(32,30,30,.05),0 10px 28px rgba(32,30,30,.06);padding:28px}
+.card h3{font-size:17px;font-weight:700;letter-spacing:-0.01em}
+.card .hint{color:var(--n7);font-size:13px;margin-top:2px}
+
+/* hero + kpi-side */
+.board{display:grid;grid-template-columns:1fr 340px;gap:22px}
+.hero-viz{position:relative;overflow:hidden;animation:riseIn .55s .05s both}
+.hv-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.seg{display:inline-flex;background:var(--n1);border-radius:999px;padding:4px}
+.seg button{height:32px;padding:0 15px;border-radius:999px;font-weight:600;font-size:13px;color:var(--n7)}
+.seg button.on{background:var(--n0);color:var(--n10);box-shadow:0 1px 4px rgba(32,30,30,.12)}
+.heat-wrap{display:grid;grid-template-columns:34px 1fr;gap:10px;position:relative}
+.heat-wrap .floors{display:flex;flex-direction:column;justify-content:space-between;font-size:11.5px;color:var(--n6);text-align:right;padding:2px 0}
+.heat-svg{width:100%;height:auto;display:block;border-radius:14px;overflow:hidden}
+.sweepline{position:absolute;top:0;bottom:0;width:2px;background:var(--m400);left:0;animation:sweep 5s linear infinite;pointer-events:none;margin-left:44px}
+.legend{display:flex;gap:16px;align-items:center;font-size:12px;color:var(--n7);margin-top:12px}
+.legend i{display:inline-block;width:14px;height:14px;border-radius:4px;margin-right:5px;vertical-align:-3px}
+.kpi-side{display:flex;flex-direction:column;gap:14px}
+.stat-card{background:var(--n0);border-radius:24px;box-shadow:0 1px 2px rgba(32,30,30,.05),0 10px 28px rgba(32,30,30,.06);padding:20px 22px;animation:riseIn .5s both}
+.stat-card.hl{background:var(--m50)}
+.stat-label{font-size:13px;color:var(--n7);font-weight:600;display:flex;justify-content:space-between}
+.stat-value{font-size:34px;font-weight:700;letter-spacing:-0.025em;line-height:1.15;margin-top:4px;font-variant-numeric:tabular-nums;color:var(--n10)}
+.stat-value small{font-size:14px;color:var(--n7);font-weight:600;margin-left:4px;letter-spacing:0}
+.stat-foot{display:flex;justify-content:space-between;align-items:flex-end;margin-top:6px;font-size:12.5px;color:var(--n7)}
+.sparkline{width:96px;height:30px}
+.pick-card{border-radius:24px;background:var(--n10);color:var(--n0);padding:20px 22px;animation:riseIn .5s .2s both}
+.pick-card .t{font-size:12.5px;color:var(--n5);font-weight:600}
+.pick-card .v{font-size:22px;font-weight:700;margin:4px 0 12px}
+.pick-card .btn{background:var(--n0);color:var(--n10);border-color:var(--n0);height:38px}
+
+.widget-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:22px}
+.widget-grid .card{animation:riseIn .5s both}
+.donut-wrap{display:flex;align-items:center;gap:20px;margin-top:14px}
+.donut-legend{font-size:13px;display:flex;flex-direction:column;gap:8px}
+.donut-legend i{display:inline-block;width:11px;height:11px;border-radius:4px;margin-right:7px}
+.hbar{margin-top:14px;display:flex;flex-direction:column;gap:14px}
+.hbar .row{display:grid;grid-template-columns:48px 1fr 40px;gap:10px;align-items:center;font-size:13px}
+.hbar .track{display:flex;height:16px;border-radius:8px;overflow:hidden;background:var(--n2);transform-origin:left;animation:barGrow .9s cubic-bezier(.2,.7,.2,1) both}
+.hbar .track span{display:block;height:100%}
+
+/* 큐 */
+.q-top{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-bottom:22px}
+.worker{display:flex;align-items:center;gap:14px}
+.worker .ic{width:46px;height:46px;border-radius:16px;background:var(--n2);display:grid;place-items:center;font-size:22px;color:var(--n8)}
+.worker .ic.live{background:var(--m50);color:var(--m700)}
+.wdot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--m600);margin-right:6px;animation:pulse 1.8s infinite}
+.tbl{width:100%;border-collapse:collapse;font-size:14px}
+.tbl th{text-align:left;font-size:12.5px;color:var(--n7);font-weight:600;padding:12px 14px;border-bottom:1px solid var(--n3)}
+.tbl td{padding:14px;border-bottom:1px solid var(--n2);vertical-align:middle}
+.tbl tr:last-child td{border-bottom:0}
+.prog{height:10px;border-radius:6px;background:var(--n2);overflow:hidden;min-width:180px}
+.prog i{display:block;height:100%;background:var(--m600);border-radius:6px;transition:width .6s}
+.prog.done i{background:var(--n8)}
+.prog.fail i{background:var(--s2)}
+.pill{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 11px;border-radius:999px;font-size:12.5px;font-weight:600}
+.pill.run{background:var(--m50);color:var(--m700)}
+.pill.done{background:var(--s1-bg);color:var(--s1-text)}
+.pill.fail{background:var(--s2-bg);color:var(--s2-text)}
+.pill.wait{background:var(--n2);color:var(--n7)}
+.skel{height:12px;border-radius:6px;background:linear-gradient(90deg,var(--n2) 25%,var(--n3) 50%,var(--n2) 75%);background-size:600px 100%;animation:shimmer 1.3s infinite linear}
+
+/* 규칙 */
+.rules{display:grid;grid-template-columns:1fr 440px;gap:22px}
+.slider{width:100%;accent-color:var(--m600);margin:12px 0 4px}
+.sample{position:relative;border-radius:18px;overflow:hidden;background:var(--n3);aspect-ratio:3/2}
+.sample svg{width:100%;height:100%;display:block}
+.sbox{position:absolute;border:2px solid var(--m600);border-radius:6px;transition:opacity .3s}
+.sbox.hi{border-color:var(--s2)}
+.sbox span{position:absolute;left:-2px;top:-20px;background:var(--n10);color:var(--n0);font-size:11px;font-weight:700;padding:1px 7px;border-radius:6px;white-space:nowrap}
+.num-in{width:92px;height:36px;border-radius:12px;border:1px solid var(--n4);padding:0 10px;text-align:right;background:var(--n0)}
+.sel,.txt-in{height:36px;border-radius:12px;border:1px solid var(--n4);padding:0 10px;background:var(--n0)}
+.hist-grid{display:grid;grid-template-columns:1fr 420px;gap:22px}
+.rep-item{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--n2)}
+.rep-item:last-child{border-bottom:0}
+.rep-item .ic{width:42px;height:42px;border-radius:14px;background:var(--n2);display:grid;place-items:center;font-size:21px;color:var(--n8)}
+.toast{position:fixed;right:28px;bottom:28px;z-index:60;background:var(--n10);color:var(--n0);border-radius:16px;padding:13px 18px;font-weight:600;font-size:14px;display:flex;align-items:center;gap:10px;animation:riseIn .3s both;box-shadow:0 14px 36px rgba(32,30,30,.25)}
+.tip{position:absolute;pointer-events:none;background:var(--n10);color:var(--n0);font-size:12px;font-weight:600;padding:5px 10px;border-radius:10px;white-space:nowrap;z-index:5;transform:translate(-50%,-120%)}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <pattern id="wall2" width="24" height="16" patternUnits="userSpaceOnUse"><rect width="24" height="16" style="fill:var(--n3)"/><path d="M0 8H24M12 0V8M0 16V8" style="stroke:var(--n4);fill:none" stroke-width=".6"/></pattern>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--n0);stop-opacity:.4"/><stop offset="1" style="stop-color:var(--n8);stop-opacity:.15"/></linearGradient>
+    <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--m400);stop-opacity:.35"/><stop offset="1" style="stop-color:var(--m400);stop-opacity:0"/></linearGradient>
+  </defs>
+</svg>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useMemo, useRef } = React;
+function rng(seed){let t=seed+0x6D2B79F5;return()=>{t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296}}
+const BLD=['301동','302동','303동','304동'];
+const FLOORS=15, BAYS=10;
+/* 동별 입면 히트맵 (파손이 몰린 구간을 군집으로 생성) */
+const HEAT={};
+BLD.forEach((b,bi)=>{
+  const r=rng(900+bi*31);const blobs=Array.from({length:3},()=>({y:r()*FLOORS,x:r()*BAYS,s:1.4+r()*1.8,a:2+r()*2.2}));
+  HEAT[b]=Array.from({length:FLOORS},(_,y)=>Array.from({length:BAYS},(_,x)=>{
+    let v=0;blobs.forEach(o=>{v+=o.a*Math.exp(-(((y-o.y)**2)+((x-o.x)**2))/(2*o.s*o.s))});
+    v+=r()*.35;return Math.round(v*10)/10}));
+});
+const lvl=v=>v<.9?0:v<1.6?1:v<2.4?2:v<3.2?3:4;
+const LVL_FILL=['var(--n2)','var(--n3)','var(--m200)','var(--m400)','var(--m600)'];
+const sumOf=b=>HEAT[b].flat().reduce((a,v)=>a+(v>=.9?Math.round(v):0),0);
+const SEV=[{k:'심각',v:31,c:'var(--s2)'},{k:'주의',v:112,c:'var(--m500)'},{k:'경미',v:197,c:'var(--m200)'}];
+
+const NAV=[['main','ph-chart-bar','단지 파손 현황 인사이트'],['queue','ph-queue','배치 분석 큐·진행 현황'],['rules','ph-sliders-horizontal','탐지 기준·심각도 규칙 설정'],['history','ph-clock-counter-clockwise','점검 메타데이터·보고서 이력']];
+
+function useCount(target,ms=900,key){
+  const [v,setV]=useState(0);
+  useEffect(()=>{let raf,t0;const step=t=>{t0=t0||t;const p=Math.min(1,(t-t0)/ms);setV(Math.round(target*(1-Math.pow(1-p,3))));if(p<1)raf=requestAnimationFrame(step)};raf=requestAnimationFrame(step);return()=>cancelAnimationFrame(raf)},[target,key]);
+  return v;
+}
+function Spark({pts,id}){
+  const w=96,h=30,mx=Math.max(...pts),mn=Math.min(...pts);
+  const d=pts.map((p,i)=>`${i?'L':'M'}${(i/(pts.length-1)*w).toFixed(1)} ${(h-3-(p-mn)/(mx-mn||1)*(h-6)).toFixed(1)}`).join(' ');
+  return <svg className="sparkline" viewBox={`0 0 ${w} ${h}`}><path d={d} fill="none" style={{stroke:'var(--m600)',strokeDasharray:300,['--len']:300,animation:'drawLine 1.2s ease both'}} strokeWidth="2" strokeLinecap="round"/></svg>;
+}
+function Stat({label,value,unit,foot,pts,hl,delay}){
+  const n=useCount(value);
+  return <div className={'stat-card '+(hl?'hl':'')} style={{animationDelay:delay+'ms'}}>
+    <div className="stat-label"><span>{label}</span></div>
+    <div className="stat-value">{n.toLocaleString()}<small>{unit}</small></div>
+    <div className="stat-foot"><span>{foot}</span><Spark pts={pts}/></div></div>;
+}
+const poly=(cx,cy,r,a0,a1)=>{const p=a=>[cx+r*Math.cos(a),cy+r*Math.sin(a)];const[x0,y0]=p(a0),[x1,y1]=p(a1);return `M${x0} ${y0} A${r} ${r} 0 ${a1-a0>Math.PI?1:0} 1 ${x1} ${y1}`};
+
+function App(){
+  const [page,setPage]=useState('main');
+  const [tab,setTab]=useState('heat');
+  const [bld,setBld]=useState('301동');
+  const [cell,setCell]=useState(null);
+  const [tip,setTip]=useState(null);
+  const [toast,setToast]=useState(null);
+  const say=t=>{setToast(t);setTimeout(()=>setToast(null),2200)};
+  const [jobs,setJobs]=useState([
+    {n:'301동 남측면',t:1280,d:1280,s:'done'},{n:'301동 북측면',t:1344,d:1344,s:'done'},{n:'301동 동측면',t:980,d:980,s:'done'},
+    {n:'302동 남측면',t:1410,d:1052,s:'run'},{n:'302동 북측면',t:1390,d:884,s:'run'},{n:'302동 서측면',t:1020,d:431,s:'run'},
+    {n:'303동 남측면',t:1250,d:622,s:'fail'},{n:'303동 북측면',t:1180,d:0,s:'wait'},{n:'304동 남측면',t:1330,d:0,s:'wait'},{n:'304동 동측면',t:1006,d:0,s:'wait'},
+  ]);
+  const [paused,setPaused]=useState(false);
+  useEffect(()=>{
+    if(paused)return;
+    const id=setInterval(()=>setJobs(js=>js.map(j=>j.s==='run'?(j.d+22>=j.t?{...j,d:j.t,s:'done'}:{...j,d:j.d+22}):j)),1000);
+    return()=>clearInterval(id);
+  },[paused]);
+  const doneN=jobs.reduce((a,j)=>a+j.d,0), totN=jobs.reduce((a,j)=>a+j.t,0);
+  const retry=n=>{setJobs(js=>js.map(j=>j.n===n?{...j,s:'run'}:j));say(`${n} 분석을 이어서 실행합니다`)};
+  const startNext=()=>{setJobs(js=>{const i=js.findIndex(j=>j.s==='wait');if(i<0)return js;const c=[...js];c[i]={...c[i],s:'run'};return c});say('대기 중인 그룹을 시작합니다')};
+
+  const grid=HEAT[bld];
+  const heatTab=()=>{
+    const cw=56,ch=26;
+    return <div>
+      <div className="heat-wrap">
+        <div className="floors">{[15,12,9,6,3,1].map(f=><span key={f}>{f}층</span>)}</div>
+        <div style={{position:'relative'}}>
+          <svg className="heat-svg" viewBox={`0 0 ${BAYS*cw} ${FLOORS*ch}`} onMouseLeave={()=>setTip(null)}>
+            {grid.map((row,y)=>row.map((v,x)=>{
+              const L=lvl(v);const sel=cell&&cell.y===y&&cell.x===x;
+              return <rect key={y+'-'+x} x={x*cw} y={y*ch} width={cw} height={ch} style={{fill:LVL_FILL[L],cursor:'pointer',transition:'fill .3s'}}
+                onMouseEnter={e=>setTip({x:(x+.5)/BAYS*100,y:y/FLOORS*100,t:`${FLOORS-y}층 · ${x+1}번 칸 · ${v>=.9?Math.round(v):0}건`})}
+                onClick={()=>setCell({y,x,v})} stroke={sel?'var(--n10)':'none'} strokeWidth={sel?3:0}/>}))}
+          </svg>
+          {tip&&<div className="tip" style={{left:tip.x+'%',top:tip.y+'%'}}>{tip.t}</div>}
+          <div className="sweepline"></div>
+        </div>
+      </div>
+      <div className="legend"><span>파손 밀도</span>{['없음','','낮음','높음','매우 높음'].map((l,i)=>l&&<span key={i}><i style={{background:LVL_FILL[i]}}></i>{l}</span>)}<span style={{marginLeft:'auto'}}>칸을 선택하면 오른쪽에서 확인합니다</span></div>
+    </div>;
+  };
+  const bars=(rowsData)=>(<div className="hbar" style={{marginTop:6}}>
+    {rowsData.map((r,i)=>{const tot=r.hi+r.mid+r.lo;return <div className="row" key={r.k} style={{gridTemplateColumns:'60px 1fr 46px'}}>
+      <span style={{fontWeight:600}}>{r.k}</span>
+      <div className="track" style={{height:26,animationDelay:i*90+'ms'}}><span style={{width:r.hi/180*100+'%',background:'var(--s2)'}}></span><span style={{width:r.mid/180*100+'%',background:'var(--m500)'}}></span><span style={{width:r.lo/180*100+'%',background:'var(--m200)'}}></span></div>
+      <b className="num">{tot}</b></div>})}
+    <div className="legend"><span><i style={{background:'var(--s2)'}}></i>심각</span><span><i style={{background:'var(--m500)'}}></i>주의</span><span><i style={{background:'var(--m200)'}}></i>경미</span></div></div>);
+  const byBld=BLD.map((b,i)=>({k:b,hi:[9,6,8,5][i]*1+2,mid:[34,28,30,20][i],lo:[52,48,45,40][i]}));
+  const byFace=['남측면','북측면','동측면','서측면','옥상'].map((k,i)=>({k:k.replace('측면','측'),hi:[10,5,6,7,3][i],mid:[40,22,26,18,6][i],lo:[56,50,44,38,9][i]}));
+  const donut=()=>{let a=-Math.PI/2;const tot=SEV.reduce((s,x)=>s+x.v,0);
+    return <div style={{display:'flex',alignItems:'center',gap:30,padding:'16px 0 4px'}}>
+      <svg width="220" height="220" viewBox="0 0 120 120"><g style={{transformOrigin:'60px 60px',animation:'spinSlow 1.4s cubic-bezier(.2,.7,.2,1) reverse both'}}>{SEV.map(s=>{const a1=a+s.v/tot*Math.PI*2;const d=poly(60,60,44,a,a1-.03);a=a1;return <path key={s.k} d={d} fill="none" style={{stroke:s.c}} strokeWidth="16" strokeLinecap="butt"/>})}</g>
+        <text x="60" y="58" textAnchor="middle" style={{fontSize:16,fontWeight:700,fill:'var(--n10)'}}>{tot}건</text><text x="60" y="72" textAnchor="middle" style={{fontSize:7,fill:'var(--n7)'}}>301~304동 합계</text></svg>
+      <div className="donut-legend" style={{fontSize:15,gap:14}}>{SEV.map(s=><div key={s.k}><i style={{background:s.c}}></i>{s.k} <b className="num" style={{marginLeft:6}}>{s.v}건</b></div>)}</div></div>};
+  const heroByTab={
+    heat:{title:`${bld} 입면 파손 밀도`,hint:'층·칸 단위로 탐지 건수를 합산한 지도입니다',body:heatTab()},
+    bld:{title:'동별 심각도 분포',hint:'동마다 심각·주의·경미 건수를 쌓아 비교합니다',body:bars(byBld)},
+    face:{title:'면별 심각도 분포',hint:'남·북·동·서측면과 옥상 파라펫을 비교합니다',body:bars(byFace)},
+    sev:{title:'심각도 구성',hint:'단지 전체 탐지 건수의 등급 비율입니다',body:donut()},
+  };
+  const hv=heroByTab[tab];
+
+  const MainPage=()=>(<div>
+    <div className="page-head">
+      <div><div className="eyebrow"><i className="ph ph-buildings"></i>푸른숲 3단지 · 외벽 점검 2026-10</div>
+        <h1 className="page-title">단지 전체 파손이<br/>어디에 몰려 있는지 봅니다</h1>
+        <p className="page-sub">드론 사진 1.5만 장의 탐지 결과를 동·면·층 단위로 합쳐, 보수가 필요한 구간부터 확인할 수 있습니다.</p></div>
+      <button className="btn primary" onClick={()=>setPage('history')}><i className="ph ph-file-xls"></i>보고서 만들기</button>
+    </div>
+    <div className="tab-bar" style={{padding:0,background:'transparent',borderBottom:'1px solid var(--n3)',marginBottom:22}}>
+      {[['heat','입면 히트맵'],['bld','동별 분포'],['face','면별 분포'],['sev','심각도 구성']].map(([k,l])=><button key={k} className={'tab '+(tab===k?'active':'')} onClick={()=>setTab(k)}>{l}</button>)}
+    </div>
+    <div className="board">
+      <section className="card hero-viz">
+        <div className="hv-head"><div><h3>{hv.title}</h3><div className="hint">{hv.hint}</div></div>
+          {tab==='heat'&&<div className="seg">{BLD.map(b=><button key={b} className={bld===b?'on':''} onClick={()=>{setBld(b);setCell(null)}}>{b}</button>)}</div>}</div>
+        {hv.body}
+      </section>
+      <div className="kpi-side">
+        <Stat label="분석 완료 사진" value={11420} unit="장" foot="전체 15,284장 중" pts={[3,5,6,9,12,15,18,22]} delay={80}/>
+        <Stat label="탐지된 파손" value={340} unit="건" foot="심각 31건 포함" pts={[2,3,3,6,8,9,13,14]} hl delay={140}/>
+        <Stat label="검수 대기" value={118} unit="건" foot="점검자 4명 배정" pts={[20,18,16,15,12,12,9,7]} delay={200}/>
+        <div className="pick-card"><div className="t">{cell?'선택한 칸':'이번 주 우선 확인'}</div>
+          <div className="v">{cell?`${bld} ${FLOORS-cell.y}층 · ${cell.x+1}번 칸`:'302동 남측 7~9층'}</div>
+          <div style={{fontSize:13,color:'var(--n5)',marginBottom:12}}>{cell?`탐지 ${cell.v>=.9?Math.round(cell.v):0}건 · 관련 사진 ${Math.max(1,Math.round(cell.v*2))}장`:'균열 군집 · 심각 4건 · 사진 18장'}</div>
+          <button className="btn" onClick={()=>say('해당 구간의 원본 사진 목록이 열립니다')}><i className="ph ph-image"></i>원본 사진 보기</button></div>
+      </div>
+    </div>
+    <div className="widget-grid">
+      <div className="card" style={{animationDelay:'.1s',borderRadius:24,boxShadow:'0 1px 2px rgba(32,30,30,0.05), 0 10px 28px rgba(32,30,30,0.10)'}}><h3>심각도 구성</h3><div className="hint">단지 전체 탐지 건수</div>
+        <div className="donut-wrap"><svg width="132" height="132" viewBox="0 0 120 120">{(()=>{let a=-Math.PI/2;const tot=340;return SEV.map(s=>{const a1=a+s.v/tot*Math.PI*2;const d=poly(60,60,46,a,a1-.04);a=a1;return <path key={s.k} d={d} fill="none" style={{stroke:s.c}} strokeWidth="14"/>})})()}</svg>
+          <div className="donut-legend">{SEV.map(s=><div key={s.k}><i style={{background:s.c}}></i>{s.k} <b className="num">{s.v}</b></div>)}</div></div></div>
+      <div className="card" style={{animationDelay:'.18s',borderRadius:24,boxShadow:'0 1px 2px rgba(32,30,30,0.05), 0 10px 28px rgba(32,30,30,0.10)'}}><h3>동별 탐지 건수</h3><div className="hint">심각·주의·경미 누적</div>
+        <div className="hbar">{byBld.map((r,i)=><div className="row" key={r.k}><span style={{fontWeight:600}}>{r.k}</span><div className="track" style={{animationDelay:i*90+'ms'}}><span style={{width:r.hi/1.1+'%',background:'var(--s2)'}}></span><span style={{width:r.mid/1.1+'%',background:'var(--m500)'}}></span><span style={{width:r.lo/1.1+'%',background:'var(--m200)'}}></span></div><b className="num">{r.hi+r.mid+r.lo}</b></div>)}</div></div>
+      <div className="card" style={{animationDelay:'.26s',borderRadius:24,boxShadow:'0 1px 2px rgba(32,30,30,0.05), 0 10px 28px rgba(32,30,30,0.10)'}}><h3>일자별 분석 진행</h3><div className="hint">10월 3일 ~ 10일 처리량</div>
+        <svg viewBox="0 0 300 130" style={{width:'100%',marginTop:14}}>
+          <path d="M0 110 L40 96 L80 88 L120 70 L160 74 L200 48 L240 38 L300 22 L300 130 L0 130Z" style={{fill:'url(#areaFill)'}}/>
+          <path d="M0 110 L40 96 L80 88 L120 70 L160 74 L200 48 L240 38 L300 22" fill="none" style={{stroke:'var(--m600)',strokeDasharray:500,['--len']:500,animation:'drawLine 1.4s ease both'}} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+          {['10/3','10/5','10/7','10/10'].map((t,i)=><text key={t} x={i*96+4} y="126" style={{fontSize:9,fill:'var(--n6)'}}>{t}</text>)}</svg></div>
+    </div>
+  </div>);
+
+  const QueuePage=()=>(<div>
+    <div className="page-head"><div><div className="eyebrow"><i className="ph ph-queue"></i>배치 분석</div><h1 className="page-title">분석 작업이 어디까지<br/>진행됐는지 확인합니다</h1></div>
+      <div style={{display:'flex',gap:10}}><button className="btn" onClick={()=>{setPaused(p=>!p);say(paused?'분석을 이어서 실행합니다':'분석을 일시 정지합니다')}}><i className={'ph '+(paused?'ph-play':'ph-pause')}></i>{paused?'이어서 실행':'일시 정지'}</button><button className="btn primary" onClick={startNext}><i className="ph ph-lightning"></i>대기 그룹 시작</button></div></div>
+    <div className="q-top">
+      <div className="card"><div className="stat-label"><span>전체 진행</span></div><div className="stat-value num">{Math.round(doneN/totN*100)}<small>%</small></div><div className="prog" style={{marginTop:10}}><i style={{width:doneN/totN*100+'%'}}></i></div><div className="hint" style={{marginTop:8}}>{doneN.toLocaleString()} / {totN.toLocaleString()}장</div></div>
+      <div className="card"><div className="stat-label"><span>처리 중 작업자</span></div>
+        <div className="worker" style={{marginTop:10}}>{[0,1,2].map(i=><div key={i} className={'ic '+(!paused&&i<jobs.filter(j=>j.s==='run').length?'live':'')}><i className="ph ph-cpu"></i></div>)}</div>
+        <div className="hint" style={{marginTop:10}}><span className="wdot"></span>GPU 작업자 3대 · 큐 {jobs.filter(j=>j.s==='wait').length}건 대기</div></div>
+      <div className="card"><div className="stat-label"><span>실패 · 재개 대기</span></div><div className="stat-value num">{jobs.filter(j=>j.s==='fail').length}<small>건</small></div><div className="hint" style={{marginTop:8}}>중단된 지점부터 이어서 실행합니다</div></div>
+    </div>
+    <div className="card" style={{padding:'12px 18px'}}>
+      <table className="tbl"><thead><tr><th>그룹</th><th>진행</th><th>사진 수</th><th>상태</th><th></th></tr></thead>
+        <tbody>{jobs.map(j=><tr key={j.n}>
+          <td style={{fontWeight:700}}>{j.n}</td>
+          <td>{j.s==='wait'?<div className="skel" style={{width:180}}></div>:<div className={'prog '+(j.s==='done'?'done':j.s==='fail'?'fail':'')}><i style={{width:j.d/j.t*100+'%'}}></i></div>}</td>
+          <td className="num">{j.d.toLocaleString()} / {j.t.toLocaleString()}</td>
+          <td><span className={'pill '+j.s}>{j.s==='run'&&<span className="wdot" style={{margin:0}}></span>}{{run:'분석 중',done:'완료',fail:'실패',wait:'대기'}[j.s]}</span></td>
+          <td style={{textAlign:'right'}}>{j.s==='fail'&&<button className="btn sm" onClick={()=>retry(j.n)}><i className="ph ph-arrow-clockwise"></i>이어서 실행</button>}{j.s==='wait'&&<button className="btn sm" onClick={()=>retry(j.n)}>먼저 실행</button>}</td></tr>)}</tbody></table>
+    </div>
+  </div>);
+
+  /* 규칙 화면 — 샘플 사진 미리 적용 */
+  const [thr,setThr]=useState(.55);
+  const [rule,setRule]=useState({crack:[1800,900],spall:[600,250],stain:[1500,700],rebar:[100,60]});
+  const [saved,setSaved]=useState(false);
+  const SAMPLE=[{id:1,t:'균열',x:14,y:18,w:26,h:22,c:.91,len:2100,k:'crack'},{id:2,t:'박리·탈락',x:58,y:30,w:16,h:18,c:.78,len:520,k:'spall'},{id:3,t:'백태',x:30,y:64,w:22,h:14,c:.61,len:900,k:'stain'},{id:4,t:'균열',x:70,y:68,w:18,h:16,c:.47,len:700,k:'crack'},{id:5,t:'철근 노출',x:46,y:10,w:10,h:12,c:.52,len:120,k:'rebar'}];
+  const sevOf=d=>d.len>=rule[d.k][0]?'심각':d.len>=rule[d.k][1]?'주의':'경미';
+  const shown=SAMPLE.filter(d=>d.c>=thr);
+  const RulesPage=()=>(<div>
+    <div className="page-head"><div><div className="eyebrow"><i className="ph ph-sliders-horizontal"></i>단지별 규칙</div><h1 className="page-title">탐지 기준과 심각도 등급을<br/>직접 조정합니다</h1></div>
+      <button className="btn primary" data-loading={saved} onClick={()=>{setSaved(true);setTimeout(()=>{setSaved(false);say('푸른숲 3단지 규칙이 저장됩니다')},900)}}><i className="ph ph-floppy-disk"></i>규칙 저장</button></div>
+    <div className="rules">
+      <div className="card">
+        <h3>탐지 신뢰도 임계값</h3><div className="hint">값이 낮을수록 더 많은 후보가 표시됩니다</div>
+        <input type="range" className="slider" min="30" max="95" value={Math.round(thr*100)} onChange={e=>setThr(e.target.value/100)}/>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:13,color:'var(--n7)'}}><span>0.30</span><b className="num" style={{color:'var(--n10)',fontSize:20}}>{thr.toFixed(2)}</b><span>0.95</span></div>
+        <h3 style={{marginTop:26}}>심각도 등급 규칙</h3><div className="hint">탐지 길이(px)가 기준 이상이면 해당 등급으로 분류합니다</div>
+        <table className="tbl" style={{marginTop:8}}><thead><tr><th>유형</th><th>심각 기준</th><th>주의 기준</th></tr></thead>
+          <tbody>{[['crack','균열'],['spall','박리·탈락'],['stain','백태·누수 흔적'],['rebar','철근 노출']].map(([k,l])=><tr key={k}><td style={{fontWeight:600}}>{l}</td>
+            {[0,1].map(i=><td key={i}><input type="number" className="num-in" value={rule[k][i]} onChange={e=>setRule(r=>{const v=[...r[k]];v[i]=+e.target.value;return{...r,[k]:v}})}/> <span style={{color:'var(--n6)',fontSize:12}}>px 이상</span></td>)}</tr>)}</tbody></table>
+        <div style={{marginTop:16,display:'flex',gap:10}}><select className="sel" defaultValue="푸른숲 3단지"><option>푸른숲 3단지</option><option>한빛 2단지</option></select><button className="btn sm" onClick={()=>{setThr(.55);setRule({crack:[1800,900],spall:[600,250],stain:[1500,700],rebar:[100,60]});say('기본값으로 되돌립니다')}}>기본값으로 되돌리기</button></div>
+      </div>
+      <div className="card"><h3>샘플 사진 미리 적용</h3><div className="hint">기준을 바꾸면 결과가 바로 달라집니다 · 표시 {shown.length}건 / 후보 {SAMPLE.length}건</div>
+        <div className="sample" style={{marginTop:14}}><FacadeB/>
+          {shown.map(d=>{const s=sevOf(d);return <div key={d.id} className={'sbox '+(s==='심각'?'hi':'')} style={{left:d.x+'%',top:d.y+'%',width:d.w+'%',height:d.h+'%'}}><span>{d.t} · {s}</span></div>})}</div>
+        <table className="tbl" style={{marginTop:10}}><tbody>{shown.map(d=><tr key={d.id}><td>{d.t}</td><td className="num">신뢰도 {d.c.toFixed(2)}</td><td><span className={'pill '+(sevOf(d)==='심각'?'fail':'wait')}>{sevOf(d)}</span></td></tr>)}</tbody></table>
+      </div>
+    </div>
+  </div>);
+
+  /* 이력 화면 */
+  const [meta,setMeta]=useState([
+    {g:'301동 남측면',d:'2026-10-03',by:'김서윤',m:132},{g:'301동 북측면',d:'2026-10-03',by:'박도현',m:148},{g:'302동 남측면',d:'2026-10-05',by:'이하준',m:156},
+    {g:'302동 북측면',d:'2026-10-05',by:'이하준',m:141},{g:'303동 남측면',d:'2026-10-07',by:'최민재',m:128},{g:'304동 동측면',d:'2026-10-10',by:'김서윤',m:117}]);
+  const [reps,setReps]=useState([
+    {f:'푸른숲3단지_301동_외벽점검.xlsx',d:'2026-10-09',z:'301동 전체 · 3개 시트',s:'18.4MB'},{f:'푸른숲3단지_302동_남측면.xlsx',d:'2026-10-08',z:'302동 남측면',s:'6.1MB'},{f:'푸른숲3단지_샘플_이미지제외.xlsx',d:'2026-10-06',z:'301동 북측면',s:'0.4MB'}]);
+  const [gen,setGen]=useState(false);
+  const mk=()=>{setGen(true);setTimeout(()=>{setGen(false);setReps(r=>[{f:`푸른숲3단지_${bld}_외벽점검.xlsx`,d:'2026-10-10',z:`${bld} 전체 · 이미지 포함`,s:'16.9MB'},...r]);say('새 엑셀 보고서가 이력에 추가됩니다')},1300)};
+  const HistoryPage=()=>(<div>
+    <div className="page-head"><div><div className="eyebrow"><i className="ph ph-clock-counter-clockwise"></i>점검 기록</div><h1 className="page-title">촬영일·점검자·소요 시간을<br/>그룹마다 기록합니다</h1></div>
+      <button className="btn primary" data-loading={gen} onClick={mk}><i className="ph ph-file-xls"></i>{bld} 보고서 생성</button></div>
+    <div className="hist-grid">
+      <div className="card" style={{padding:'14px 18px'}}><table className="tbl"><thead><tr><th>그룹</th><th>촬영일</th><th>점검자</th><th>소요 시간(분)</th></tr></thead>
+        <tbody>{meta.map((r,i)=><tr key={r.g}><td style={{fontWeight:700}}>{r.g}</td>
+          <td><input type="date" className="txt-in" value={r.d} onChange={e=>setMeta(m=>m.map((x,j)=>j===i?{...x,d:e.target.value}:x))}/></td>
+          <td><select className="sel" value={r.by} onChange={e=>setMeta(m=>m.map((x,j)=>j===i?{...x,by:e.target.value}:x))}>{['김서윤','박도현','이하준','최민재'].map(n=><option key={n}>{n}</option>)}</select></td>
+          <td><input type="number" className="num-in" value={r.m} onChange={e=>setMeta(m=>m.map((x,j)=>j===i?{...x,m:+e.target.value}:x))}/></td></tr>)}</tbody></table>
+        <div style={{padding:'12px 4px 4px'}}><button className="btn sm" onClick={()=>say('점검 기록 6건이 저장됩니다')}><i className="ph ph-floppy-disk"></i>기록 저장</button></div></div>
+      <div className="card"><h3>보고서 이력</h3><div className="hint">생성한 엑셀 파일을 다시 내려받을 수 있습니다</div>
+        <div style={{marginTop:10}}>{reps.map(r=><div className="rep-item" key={r.f}><div className="ic"><i className="ph ph-file-xls"></i></div><div style={{flex:1,minWidth:0}}><div style={{fontWeight:700,fontSize:14,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.f}</div><div style={{fontSize:12.5,color:'var(--n7)'}}>{r.d} · {r.z} · {r.s}</div></div>
+          <button className="icon-btn" title="다운로드" onClick={()=>say(`${r.f} 다운로드를 시작합니다`)}><i className="ph ph-download-simple"></i></button></div>)}</div></div>
+    </div>
+  </div>);
+
+  return (<div data-archetype="topbar-analytics">
+    <header className="app-header">
+      <div className="brand"><span className="mark"><i className="ph-bold ph-scan"></i></span>외벽점검 콘솔</div>
+      <button className="project-switcher" onClick={()=>say('다른 단지로 전환합니다')}><i className="ph ph-buildings"></i>푸른숲 3단지<i className="ph ph-caret-down"></i></button>
+      <nav className="global-nav">
+        {NAV.map(([k,ic,l])=><button key={k} className={'nav-link '+(page===k?'active':'')} onClick={()=>setPage(k)}><i className={'ph '+ic}></i>{l}</button>)}
+      </nav>
+      <div className="header-actions">
+        <button className="icon-btn" onClick={()=>say('분석 실패 1건 알림이 있습니다')}><i className="ph ph-bell"></i><span className="dot"></span></button>
+        <div className="avatar">김</div>
+      </div>
+    </header>
+    <main className="content">
+      {page==='main'&&MainPage()}{page==='queue'&&QueuePage()}{page==='rules'&&RulesPage()}{page==='history'&&HistoryPage()}
+    </main>
+    {toast&&<div className="toast"><i className="ph ph-check-circle"></i>{toast}</div>}
+  </div>);
+}
+
+/* 샘플 외벽 사진 (규칙 미리보기용 — 절차적 SVG) */
+function FacadeB(){
+  const els=[];const r=rng(77);
+  for(let c=0;c<4;c++)for(let q=0;q<2;q++){const x=18+c*70,y=14+q*88;els.push(<g key={c+'-'+q}><rect x={x} y={y} width="48" height="58" rx="2" style={{fill:'var(--n6)'}}/><rect x={x+3} y={y+3} width="42" height="52" style={{fill:'var(--n5)'}}/><rect x={x-6} y={y+60} width="60" height="5" style={{fill:'var(--n4)'}}/></g>)}
+  for(let i=0;i<5;i++)els.push(<ellipse key={'e'+i} cx={r()*300} cy={r()*200} rx={18+r()*28} ry={6+r()*10} style={{fill:'var(--n4)',opacity:.5}}/>);
+  els.push(<path key="c1" d="M42 40 L60 55 L72 70 L90 78" style={{stroke:'var(--n10)',fill:'none'}} strokeWidth="1.6"/>);
+  els.push(<polygon key="s1" points="176,66 190,58 204,70 196,84 180,82" style={{fill:'var(--n7)'}}/>);
+  els.push(<ellipse key="w1" cx="105" cy="146" rx="26" ry="9" style={{fill:'var(--n2)',opacity:.9}}/>);
+  els.push(<path key="c2" d="M214 140 L228 152 L240 160" style={{stroke:'var(--n10)',fill:'none'}} strokeWidth="1.2"/>);
+  els.push(<rect key="r1" x="140" y="20" width="26" height="22" style={{fill:'var(--n8)'}}/>);
+  return <svg viewBox="0 0 300 200" preserveAspectRatio="xMidYMid slice"><rect width="300" height="200" style={{fill:'url(#wall2)'}}/>{els}<rect width="300" height="200" style={{fill:'url(#sheen)'}}/></svg>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
