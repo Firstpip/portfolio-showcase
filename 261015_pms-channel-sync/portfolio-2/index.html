@@ -204,7 +204,7 @@ textarea.field { resize: vertical; line-height: 1.5; }
 <body data-house-side="admin">
 <div id="root"></div>
 <!-- HOUSE_KIT -->
-<!-- house-kit house-v1 kit=9d6b8ac36a97 — 하우스 부품. inject-house-kit.js 가 관리한다 -->
+<!-- house-kit house-v1 kit=4d21ed06a2e1 — 하우스 부품. inject-house-kit.js 가 관리한다 -->
 <script type="text/babel" data-house-kit="house-v1">
 /* ═══════════════════════════════════════════════════════════════════════
  * 하우스 부품(house-kit) — 모든 하우스 모드 포트폴리오가 같은 부품을 쓴다.
@@ -528,11 +528,41 @@ textarea.field { resize: vertical; line-height: 1.5; }
     );
   }
 
-  /* ── 시연 안내(투어): 단계를 누르면 그 화면으로 가고 관리 화면이면 역할도 바꾼다. 저절로 펼치지 않는다(캡처 호환) ── */
+  /* ── 시연 안내(투어): 단계를 누르면 그 화면으로 가고(같은 화면이면 params 로 상태를 바꾼다) 관리 화면이면 역할도 바꾼다.
+     저절로 펼치지 않는다(캡처 호환) — 단 주소가 #tour 로 끝나면(사용자 쪽 마지막 단계에서 넘어온 것) 1단계를 펼친 채 시작한다.
+     사용자 쪽에는 키트가 마지막 단계 "관리자 화면으로"(실제 이동)를 붙인다 — plan 의 tour 에 적지 않는다(2026-10-16). ── */
+  const TOUR_HASH = '#tour';
+  const fileHref = (h) => (window.location.protocol === 'file:' && /\/(?:#.*)?$/.test(h) ? h.replace(/\/(#.*)?$/, '/index.html$1') : h);
+  function tourSteps(d) {
+    const base = (d.tour || []).filter(s => s && (s.route || s.href));
+    const admin = d.sides && d.sides.admin && d.sides.admin.href;
+    const hasHandoff = base.some(s => s.href);
+    if (d.side === 'user' && admin && !/^#/.test(admin) && !hasHandoff) {
+      base.push({ title: '관리자 화면으로', side: '관리', href: admin.replace(/#.*$/, '') + TOUR_HASH, look: '같은 제품의 운영 콘솔로 넘어갑니다. 관리자 쪽 시연 안내가 1단계부터 이어서 열립니다.' });
+    }
+    return base;
+  }
   function TourButton({ onReset }) {
-    const d = DEMO(); const steps = d.tour || []; const [open, setOpen] = useState(false); const [cur, setCur] = useState(-1); const [askReset, setAskReset] = useState(false);
+    const d = DEMO(); const steps = useMemo(() => tourSteps(d), []); const [open, setOpen] = useState(false); const [cur, setCur] = useState(-1); const [askReset, setAskReset] = useState(false);
+    const listRef = useRef(null);
+    const goStep = (i) => {
+      const s = steps[i]; if (!s) return; setCur(i); if (s.role) setRole(s.role);
+      if (s.href && !s.route) { window.location.href = fileHref(s.href); return; }
+      go(s.route, s.params || {}); if (window.innerWidth < 768) setOpen(false);
+    };
+    // 넘어온 쪽에서 이어서 열기: 주소가 #tour 면 펼친 채 1단계로. 해시는 지워 새로고침에 다시 열리지 않게 한다.
+    useEffect(() => {
+      if (!steps.length || window.location.hash !== TOUR_HASH) return;
+      try { history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e) {}
+      setOpen(true); goStep(0);
+    }, []);
+    // 현재 단계가 목록 스크롤 밖이면 보이게 끌어온다(2026-10-16 대표 지적 — 다음 버튼만 누르면 현재 단계가 안 보였다)
+    useLayoutEffect(() => {
+      if (!open || cur < 0 || !listRef.current) return;
+      const el = listRef.current.querySelector(`[data-step="${cur}"]`);
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, [open, cur]);
     if (!steps.length) return null;
-    const goStep = (i) => { const s = steps[i]; if (!s) return; setCur(i); if (s.role) setRole(s.role); if (s.href && !s.route) { window.location.href = s.href; return; } go(s.route, s.params); if (window.innerWidth < 768) setOpen(false); };
     return (
       <>
         <button type="button" onClick={() => setOpen(v => !v)} aria-expanded={open} className="flex h-8 items-center gap-1.5 rounded-[9px] bg-white px-3 text-[13.5px] font-bold whitespace-nowrap text-brand-2 hover:bg-accent-50">
@@ -544,9 +574,9 @@ textarea.field { resize: vertical; line-height: 1.5; }
               <div className="min-w-0 flex-1"><h2 className="text-[19px] font-bold tracking-[-0.02em]">시연 안내</h2><p className="mt-0.5 text-[14px] text-ink-2">{steps.length}단계, 약 {d.tourMinutes}분 · 누르면 그 화면으로 갑니다</p></div>
               <button type="button" onClick={() => setOpen(false)} className="h-9 rounded-[10px] px-3 text-[14px] font-semibold text-ink-3 hover:bg-line-2">닫기</button>
             </div>
-            <ol className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-3">
+            <ol ref={listRef} className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-3">
               {steps.map((s, i) => (
-                <li key={i}>
+                <li key={i} data-step={i} data-kind={s.href && !s.route ? 'href' : 'route'}>
                   <button type="button" onClick={() => goStep(i)} aria-current={cur === i ? 'step' : undefined} className={cx('flex w-full gap-3 rounded-2xl px-3 py-3 text-left transition-colors', cur === i ? 'bg-accent-50' : 'hover:bg-surface-2')}>
                     <span className={cx('tnum mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[13px] font-bold', cur === i ? 'bg-accent text-white' : i < cur ? 'bg-ok-50 text-ok' : i === 0 && cur < 0 ? 'bg-accent-50 text-accent-700' : 'bg-line-2 text-ink-3')}>{i + 1}</span>
                     <span className="min-w-0"><span className="flex flex-wrap items-center gap-1.5"><span className="text-[15.5px] font-bold">{s.title}</span>{s.side && <span className="text-[12px] font-semibold text-ink-4">{s.side}</span>}</span><span className="mt-0.5 block text-[14px] leading-[1.55] text-ink-2">{s.look}</span></span>
@@ -584,7 +614,7 @@ textarea.field { resize: vertical; line-height: 1.5; }
           <span className="hidden text-[13px] font-semibold tracking-[0.02em] text-white/60 md:inline">시연 데모</span>
           <nav aria-label="시연 화면" className="flex items-center gap-1 rounded-[12px] bg-white/10 p-1">
             {Object.keys(d.sides).map(k => (
-              <a key={k} href={d.sides[k].href} aria-current={side === k ? 'page' : undefined} className={tab(side === k)} onClick={(e) => { if (side === k) e.preventDefault(); }}>{d.sides[k].label}</a>
+              <a key={k} href={fileHref(d.sides[k].href)} aria-current={side === k ? 'page' : undefined} className={tab(side === k)} onClick={(e) => { if (side === k) e.preventDefault(); }}>{d.sides[k].label}</a>
             ))}
           </nav>
           {side === 'admin' ? (
@@ -730,12 +760,21 @@ window.HOUSE_DEMO = {
     { key: "manager", label: "전체 운영 관리자", name: "윤관리", title: "운영 관리자", scope: "전체 숙소" },
     { key: "staff", label: "숙소 담당자", name: "박담당", title: "숙소 담당자", scope: "해온재 게스트하우스" },
   ],
-  tour: [{"title":"연동 상태 점검","look":"채널별 연결 상태와 마지막 정상 시각을 한 화면에서 봅니다. 경고가 붙은 채널 카드를 눌러 보세요.","route":"main","role":"manager"},{"title":"빠진 예약 보충","look":"끊김이 감지된 채널에서 보충 동기화를 실행합니다. 실행 후 불러온 예약 건수를 확인하세요.","route":"main","role":"manager"},{"title":"웹훅 처리 기록","look":"수신한 알림의 처리 결과를 시간순으로 확인합니다. 결과 칩으로 중복 건만 걸러 보세요.","route":"webhooks","role":"manager"},{"title":"순서 뒤바뀜 확인","look":"순서가 뒤바뀐 알림이 최신 상태 기준으로 반영된 기록을 봅니다. 행을 열어 처리 단계를 확인하세요.","route":"webhooks","role":"manager"},{"title":"실패 유형 분류","look":"실패 건이 인증·호출 제한·시간 초과 유형으로 나뉘어 있습니다. 유형 칩을 눌러 목록을 좁혀 보세요.","route":"retry","role":"manager"},{"title":"선택 재처리","look":"여러 건을 선택해 재처리하고 건별 결과를 확인합니다. 처리 중인 건은 버튼이 비활성인지 보세요.","route":"retry","role":"manager"},{"title":"기록 대조","look":"기간을 지정해 내부 기록과 채널 기록을 대조합니다. 차이 유형 탭을 바꿔 보세요.","route":"reconcile","role":"manager"},{"title":"역할별 보기","look":"시연 막대에서 보는 사람을 바꾸면 숙소 담당자는 자기 숙소만 봅니다. 권한 밖 메뉴가 막히는지 확인하세요.","route":"main","role":"staff"}],
+  tour: [
+    {"title": "연동 상태 점검", "look": "채널별 연결 상태와 마지막 정상 시각을 한 화면에서 봅니다. 경고가 붙은 채널 카드를 눌러 보세요.", "route": "main", "role": "manager", "params": {"prop": "all"}},
+    {"title": "빠진 예약 보충", "look": "해온재 Agoda 채널의 보충 동기화 대화상자가 열려 있습니다. 구간을 고르고 실행해 불러온 예약 건수를 확인하세요.", "route": "main", "role": "manager", "params": {"prop": "p1", "fill": "p1-Agoda"}},
+    {"title": "웹훅 처리 기록", "look": "중복으로 건너뛴 알림만 걸러 둔 기록입니다. 같은 고유 키가 두 번 와도 예약에는 한 번만 반영된 것을 확인하세요.", "route": "webhooks", "role": "manager", "params": {"f": "중복 건너뜀"}},
+    {"title": "순서 뒤바뀜 확인", "look": "순서가 뒤바뀐 알림의 처리 단계가 열려 있습니다. 버전 비교로 최신 상태 기준으로 반영된 흐름을 확인하세요.", "route": "webhooks", "role": "manager", "params": {"f": "순서 보정", "open": "wh-7a09d0"}},
+    {"title": "실패 유형 분류", "look": "호출 제한 유형만 걸러 둔 실패 목록입니다. 유형 칩을 바꿔 인증·시간 초과 건도 확인해 보세요.", "route": "retry", "role": "manager", "params": {"kind": "호출 제한"}},
+    {"title": "선택 재처리", "look": "호출 제한 건이 모두 선택돼 있습니다. 위의 재처리 버튼을 눌러 건별 결과를 확인하고, 처리 중인 건은 버튼이 비활성인지 보세요.", "route": "retry", "role": "manager", "params": {"kind": "호출 제한", "pick": "all"}},
+    {"title": "기록 대조", "look": "기간을 지정해 내부 기록과 채널 기록을 대조합니다. 차이 유형 탭을 바꿔 보세요.", "route": "reconcile", "role": "manager"},
+    {"title": "역할별 보기", "look": "보는 사람이 숙소 담당자로 바뀌어 해온재 게스트하우스만 보입니다. 기록 대조 메뉴가 막히는지 확인하세요.", "route": "main", "role": "staff", "params": {"prop": "p1"}},
+  ],
   tourMinutes: 4, maker: "제작 ㈜퍼스트핍 · www.firstpip.co.kr", adminTitle: "연동 관제",
   photos: [{"url":"../house-photos/photo-1.jpg","small":"../house-photos/photo-1.jpg","w":3000,"h":1998,"alt":"bedroom, indoors, interior design, bed, furniture, hotel, bedroom, bedroom, bedroom, bedroom, interior design, furniture","credit":"lequangutc89","source":"pixabay"},{"url":"../house-photos/photo-2.jpg","small":"../house-photos/photo-2.jpg","w":5315,"h":3543,"alt":"bedroom, interior design, bed, room, furniture, interior, indoors, bedroom interior, bedroom furniture, hotel room, hous","credit":"peterweideman","source":"pixabay"},{"url":"../house-photos/photo-3.jpg","small":"../house-photos/photo-3.jpg","w":6000,"h":4000,"alt":"bed room, bed, real estate, interior, house, pillow, home","credit":"23555986","source":"pixabay"},{"url":"../house-photos/photo-4.jpg","small":"../house-photos/photo-4.jpg","w":4608,"h":3456,"alt":"roses, coffee, petal of a rose, romantic, nature, pillows, linen, bed, coffee, linen, bed, bed, bed, bed, bed","credit":"monileoni","source":"pixabay"},{"url":"../house-photos/photo-5.jpg","small":"../house-photos/photo-5.jpg","w":4000,"h":3000,"alt":"beds, youth hostel, bunk beds, sleep, accommodation, bedroom, youth hostel, youth hostel, youth hostel, youth hostel, bu","credit":"Hans","source":"pixabay"},{"url":"../house-photos/photo-6.jpg","small":"../house-photos/photo-6.jpg","w":6003,"h":4002,"alt":"bed, room, hostel, hostel, hostel, hostel, hostel, hostel","credit":"gery","source":"pixabay"},{"url":"../house-photos/photo-7.jpg","small":"../house-photos/photo-7.jpg","w":2880,"h":1920,"alt":"bunk beds, accommodation, house, beech, bunk beds, bunk beds, bunk beds, bunk beds, bunk beds","credit":"misska420","source":"pixabay"}],
 };
-const { Icon, Button, AButton, A, Segmented, Pill, Mark, Empty, KV, SectionTitle, CHIP_ON, CHIP_OFF, Modal, toast, Toaster, DemoLink, DemoBar, SiteHeader, SiteFooter, ConsoleShell, PageHead, NoAccess, Logo, Field, useRoute, go, useRole, useNow, fmtWon, fmtNum, fmtDate, josa, cx } = window.HK;
-const { useState, useMemo } = React;
+const { Icon, Button, AButton, A, Segmented, Pill, Mark, Empty, KV, SectionTitle, CHIP_ON, CHIP_OFF, Modal, toast, Toaster, DemoLink, DemoBar, SiteHeader, SiteFooter, ConsoleShell, PageHead, NoAccess, Logo, Field, useRoute, go, useRole, useNow, fmtWon, fmtNum, fmtDate, josa, cx, useParams } = window.HK;
+const { useState, useMemo, useEffect } = React;
 const CH = ["Airbnb", "Booking.com", "Agoda", "Trip.com"];
 const PROPS = [{ key: "p1", name: "해온재 게스트하우스" }, { key: "p2", name: "바람언덕 펜션" }];
 const SEED_CH = [
@@ -788,7 +827,10 @@ const scopeProp = (role, prop) => role.key === "staff" ? "p1" : prop;
 const pn = (k) => PROPS.find(p => p.key === k).name;
 
 function StatusPage({ chs, setChs }) {
-  const role = useRole(); const [prop, setProp] = useState("all"); const [ask, setAsk] = useState(null); const [span, setSpan] = useState("6");
+  const role = useRole(); const params = useParams();
+  const fillOf = (id) => (id && chs.find(c => c.id === id)) || null;
+  const [prop, setProp] = useState((params && params.prop) || "all"); const [ask, setAsk] = useState(() => fillOf(params && params.fill)); const [span, setSpan] = useState("6");
+  useEffect(() => { setProp((params && params.prop) || "all"); setAsk(fillOf(params && params.fill)); }, [params]);
   const sp = scopeProp(role, prop); const list = chs.filter(c => sp === "all" || c.prop === sp);
   const bad = list.filter(c => c.conn !== "ok" || !c.hook);
   const fill = () => {
@@ -825,7 +867,10 @@ function StatusPage({ chs, setChs }) {
 }
 
 function WebhooksPage({ hooks, setHooks }) {
-  const role = useRole(); const [f, setF] = useState("전체"); const [open, setOpen] = useState(null);
+  const role = useRole(); const params = useParams();
+  const idxOf = (id) => { const i = id ? hooks.findIndex(h => h.id === id) : -1; return i >= 0 ? i : null; };
+  const [f, setF] = useState((params && params.f) || "전체"); const [open, setOpen] = useState(() => idxOf(params && params.open));
+  useEffect(() => { setF((params && params.f) || "전체"); setOpen(idxOf(params && params.open)); }, [params]);
   const sp = scopeProp(role, "all"); const base = hooks.filter(h => sp === "all" || h.prop === sp);
   const list = base.filter(h => f === "전체" || h.res === f);
   const resume = (i) => { setHooks(hooks.map((h, k) => k === i ? { ...h, res: "처리됨", ack: "방금" } : h)); setOpen(null); toast("미처리 알림을 다시 처리했어요. 예약에는 한 번만 반영됩니다", "ok"); };
@@ -855,7 +900,10 @@ function WebhooksPage({ hooks, setHooks }) {
 }
 
 function RetryPage({ fails, setFails }) {
-  const role = useRole(); const [kind, setKind] = useState("전체"); const [pick, setPick] = useState([]); const [busy, setBusy] = useState(false);
+  const role = useRole(); const params = useParams();
+  const pickOf = (k) => (params && params.pick === "all") ? fails.filter(x => (role.key !== "staff" || x.prop === "p1") && (k === "전체" || x.kind === k) && x.st === "대기").map(x => x.id) : [];
+  const [kind, setKind] = useState((params && params.kind) || "전체"); const [pick, setPick] = useState(() => pickOf((params && params.kind) || "전체")); const [busy, setBusy] = useState(false);
+  useEffect(() => { const k = (params && params.kind) || "전체"; setKind(k); setPick(pickOf(k)); }, [params]);
   const base = fails.filter(x => role.key !== "staff" || x.prop === "p1"); const list = base.filter(x => kind === "전체" || x.kind === kind);
   const toggle = (id) => setPick(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
   const run = () => {
