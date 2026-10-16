@@ -204,7 +204,7 @@ textarea.field { resize: vertical; line-height: 1.5; }
 <body data-house-side="user">
 <div id="root"></div>
 <!-- HOUSE_KIT -->
-<!-- house-kit house-v1 kit=9d6b8ac36a97 — 하우스 부품. inject-house-kit.js 가 관리한다 -->
+<!-- house-kit house-v1 kit=4d21ed06a2e1 — 하우스 부품. inject-house-kit.js 가 관리한다 -->
 <script type="text/babel" data-house-kit="house-v1">
 /* ═══════════════════════════════════════════════════════════════════════
  * 하우스 부품(house-kit) — 모든 하우스 모드 포트폴리오가 같은 부품을 쓴다.
@@ -528,11 +528,41 @@ textarea.field { resize: vertical; line-height: 1.5; }
     );
   }
 
-  /* ── 시연 안내(투어): 단계를 누르면 그 화면으로 가고 관리 화면이면 역할도 바꾼다. 저절로 펼치지 않는다(캡처 호환) ── */
+  /* ── 시연 안내(투어): 단계를 누르면 그 화면으로 가고(같은 화면이면 params 로 상태를 바꾼다) 관리 화면이면 역할도 바꾼다.
+     저절로 펼치지 않는다(캡처 호환) — 단 주소가 #tour 로 끝나면(사용자 쪽 마지막 단계에서 넘어온 것) 1단계를 펼친 채 시작한다.
+     사용자 쪽에는 키트가 마지막 단계 "관리자 화면으로"(실제 이동)를 붙인다 — plan 의 tour 에 적지 않는다(2026-10-16). ── */
+  const TOUR_HASH = '#tour';
+  const fileHref = (h) => (window.location.protocol === 'file:' && /\/(?:#.*)?$/.test(h) ? h.replace(/\/(#.*)?$/, '/index.html$1') : h);
+  function tourSteps(d) {
+    const base = (d.tour || []).filter(s => s && (s.route || s.href));
+    const admin = d.sides && d.sides.admin && d.sides.admin.href;
+    const hasHandoff = base.some(s => s.href);
+    if (d.side === 'user' && admin && !/^#/.test(admin) && !hasHandoff) {
+      base.push({ title: '관리자 화면으로', side: '관리', href: admin.replace(/#.*$/, '') + TOUR_HASH, look: '같은 제품의 운영 콘솔로 넘어갑니다. 관리자 쪽 시연 안내가 1단계부터 이어서 열립니다.' });
+    }
+    return base;
+  }
   function TourButton({ onReset }) {
-    const d = DEMO(); const steps = d.tour || []; const [open, setOpen] = useState(false); const [cur, setCur] = useState(-1); const [askReset, setAskReset] = useState(false);
+    const d = DEMO(); const steps = useMemo(() => tourSteps(d), []); const [open, setOpen] = useState(false); const [cur, setCur] = useState(-1); const [askReset, setAskReset] = useState(false);
+    const listRef = useRef(null);
+    const goStep = (i) => {
+      const s = steps[i]; if (!s) return; setCur(i); if (s.role) setRole(s.role);
+      if (s.href && !s.route) { window.location.href = fileHref(s.href); return; }
+      go(s.route, s.params || {}); if (window.innerWidth < 768) setOpen(false);
+    };
+    // 넘어온 쪽에서 이어서 열기: 주소가 #tour 면 펼친 채 1단계로. 해시는 지워 새로고침에 다시 열리지 않게 한다.
+    useEffect(() => {
+      if (!steps.length || window.location.hash !== TOUR_HASH) return;
+      try { history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e) {}
+      setOpen(true); goStep(0);
+    }, []);
+    // 현재 단계가 목록 스크롤 밖이면 보이게 끌어온다(2026-10-16 대표 지적 — 다음 버튼만 누르면 현재 단계가 안 보였다)
+    useLayoutEffect(() => {
+      if (!open || cur < 0 || !listRef.current) return;
+      const el = listRef.current.querySelector(`[data-step="${cur}"]`);
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, [open, cur]);
     if (!steps.length) return null;
-    const goStep = (i) => { const s = steps[i]; if (!s) return; setCur(i); if (s.role) setRole(s.role); if (s.href && !s.route) { window.location.href = s.href; return; } go(s.route, s.params); if (window.innerWidth < 768) setOpen(false); };
     return (
       <>
         <button type="button" onClick={() => setOpen(v => !v)} aria-expanded={open} className="flex h-8 items-center gap-1.5 rounded-[9px] bg-white px-3 text-[13.5px] font-bold whitespace-nowrap text-brand-2 hover:bg-accent-50">
@@ -544,9 +574,9 @@ textarea.field { resize: vertical; line-height: 1.5; }
               <div className="min-w-0 flex-1"><h2 className="text-[19px] font-bold tracking-[-0.02em]">시연 안내</h2><p className="mt-0.5 text-[14px] text-ink-2">{steps.length}단계, 약 {d.tourMinutes}분 · 누르면 그 화면으로 갑니다</p></div>
               <button type="button" onClick={() => setOpen(false)} className="h-9 rounded-[10px] px-3 text-[14px] font-semibold text-ink-3 hover:bg-line-2">닫기</button>
             </div>
-            <ol className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-3">
+            <ol ref={listRef} className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-3">
               {steps.map((s, i) => (
-                <li key={i}>
+                <li key={i} data-step={i} data-kind={s.href && !s.route ? 'href' : 'route'}>
                   <button type="button" onClick={() => goStep(i)} aria-current={cur === i ? 'step' : undefined} className={cx('flex w-full gap-3 rounded-2xl px-3 py-3 text-left transition-colors', cur === i ? 'bg-accent-50' : 'hover:bg-surface-2')}>
                     <span className={cx('tnum mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[13px] font-bold', cur === i ? 'bg-accent text-white' : i < cur ? 'bg-ok-50 text-ok' : i === 0 && cur < 0 ? 'bg-accent-50 text-accent-700' : 'bg-line-2 text-ink-3')}>{i + 1}</span>
                     <span className="min-w-0"><span className="flex flex-wrap items-center gap-1.5"><span className="text-[15.5px] font-bold">{s.title}</span>{s.side && <span className="text-[12px] font-semibold text-ink-4">{s.side}</span>}</span><span className="mt-0.5 block text-[14px] leading-[1.55] text-ink-2">{s.look}</span></span>
@@ -584,7 +614,7 @@ textarea.field { resize: vertical; line-height: 1.5; }
           <span className="hidden text-[13px] font-semibold tracking-[0.02em] text-white/60 md:inline">시연 데모</span>
           <nav aria-label="시연 화면" className="flex items-center gap-1 rounded-[12px] bg-white/10 p-1">
             {Object.keys(d.sides).map(k => (
-              <a key={k} href={d.sides[k].href} aria-current={side === k ? 'page' : undefined} className={tab(side === k)} onClick={(e) => { if (side === k) e.preventDefault(); }}>{d.sides[k].label}</a>
+              <a key={k} href={fileHref(d.sides[k].href)} aria-current={side === k ? 'page' : undefined} className={tab(side === k)} onClick={(e) => { if (side === k) e.preventDefault(); }}>{d.sides[k].label}</a>
             ))}
           </nav>
           {side === 'admin' ? (
@@ -732,14 +762,13 @@ window.HOUSE_DEMO = {
   me: { name: "한서윤" },
   roles: [ { key: "manager", label: "운영 관리자", name: "윤관리", title: "운영 관리자", scope: "전체" } ],
   tour: [
-    { title: "홈 화면", look: "오늘 예약할 수 있는 숙소 사진과 배너를 봅니다. 배너를 눌러 숙소로 이동해 봅니다.", route: "home" },
-    { title: "숙소 찾기", look: "지역과 인원 조건으로 목록을 좁힙니다. 카드를 눌러 객실 안내를 확인해 봅니다.", route: "lodging" },
-    { title: "객실 비교", look: "객실별 인원과 이용 안내를 비교합니다. 마음에 드는 객실의 예약 신청 버튼을 눌러 봅니다.", route: "lodging" },
-    { title: "예약 신청", look: "체크인·체크아웃 날짜와 인원을 고릅니다. 신청 버튼을 눌러 접수 결과를 확인합니다.", route: "booking" },
-    { title: "신청 결과", look: "접수 번호와 신청 내용을 확인합니다. 내 예약 메뉴로 이동해 봅니다.", route: "booking" },
-    { title: "내 예약", look: "예약 상태 알약으로 진행 단계를 확인합니다. 이용 전 예약의 취소 요청을 눌러 봅니다.", route: "myreservation" },
-    { title: "리뷰 작성", look: "이용완료 예약에 별점과 후기를 남깁니다. 숙소 리뷰 목록에서 결과를 확인합니다.", route: "review" },
-    { title: "관리자로 이동", look: "상단 시연 막대에서 관리자 화면을 엽니다. 같은 예약이 처리 목록에 보이는지 확인합니다.", route: "myreservation" }
+    {"title": "홈 화면", "look": "오늘 예약할 수 있는 숙소 사진과 배너를 봅니다. 배너를 눌러 숙소로 이동해 봅니다.", "route": "home"},
+    {"title": "숙소 찾기", "look": "지역을 속초, 인원을 2명 이상으로 좁힌 목록입니다. 칩을 바꿔 결과가 달라지는 모습을 봅니다.", "route": "lodging", "params": {"region": "속초", "pax": "2"}},
+    {"title": "객실 비교", "look": "소담 펜션 별채의 객실별 인원과 이용 안내를 비교합니다. 마음에 드는 객실의 예약 신청 버튼을 눌러 봅니다.", "route": "lodging", "params": {"lodge": "L1"}},
+    {"title": "예약 신청", "look": "별채 온돌 4인실이 골라진 신청 양식입니다. 체크인·체크아웃과 인원을 바꿔 보고 접수 버튼을 눌러 봅니다.", "route": "booking", "params": {"lodge": "L1", "room": "R1"}},
+    {"title": "신청 결과", "look": "신청이 접수된 결과 화면입니다. 접수 번호와 신청 내용을 확인하고 내 예약으로 이동해 봅니다.", "route": "booking", "params": {"lodge": "L1", "room": "R1", "submit": 1}},
+    {"title": "내 예약", "look": "예약 상태 알약으로 진행 단계를 확인합니다. 이용 전 예약의 취소 요청을 눌러 봅니다.", "route": "myreservation"},
+    {"title": "리뷰 작성", "look": "이용완료 예약이 있는 달무리 호텔에 별점과 후기를 남깁니다. 숙소 리뷰 목록에서 결과를 확인합니다.", "route": "review", "params": {"lodge": "L3"}},
   ],
   tourMinutes: 5,
   maker: "제작 ㈜퍼스트핍 · www.firstpip.co.kr",
@@ -867,8 +896,9 @@ function Home({ res }) {
 /* ── 숙소 찾기 ── */
 function Lodging() {
   const params = useParams();
-  const [region, setRegion] = useState('전체');
-  const [pax, setPax] = useState('0');
+  const [region, setRegion] = useState((params && params.region) || '전체');
+  const [pax, setPax] = useState((params && params.pax) || '0');
+  useEffect(() => { setRegion((params && params.region) || '전체'); setPax((params && params.pax) || '0'); }, [params]);
   const sel = params && params.lodge ? lodgeOf(params.lodge) : null;
   const list = LODGES.filter(l => (region === '전체' || l.region === region) && l.rooms.some(r => r.cap >= Number(pax)));
   if (sel) return <LodgeDetail l={sel} />;
@@ -959,6 +989,9 @@ function Booking({ addRes }) {
     addRes(item); setDone(item);
     toast(`예약 신청이 접수됐어요. 접수 번호 ${id}`, 'ok');
   };
+  // 시연 안내 단계: params 로 숙소·객실을 고르고, submit 이 있으면 접수 결과 화면까지 보여 준다
+  useEffect(() => { const pl = (params && params.lodge) || 'L1'; setLodge(pl); setRoom((params && params.room) || lodgeOf(pl).rooms[0].id); setErr({}); if (!(params && params.submit)) setDone(null); }, [params]);
+  useEffect(() => { if (params && params.submit && !done && lodge === (params.lodge || 'L1') && room === (params.room || lodgeOf(lodge).rooms[0].id)) submit(); }, [params, lodge, room]);
   if (done) {
     return (
       <div className="mx-auto max-w-[760px] px-4 py-8 sm:px-6">

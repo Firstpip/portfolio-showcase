@@ -204,7 +204,7 @@ textarea.field { resize: vertical; line-height: 1.5; }
 <body data-house-side="admin">
 <div id="root"></div>
 <!-- HOUSE_KIT -->
-<!-- house-kit house-v1 kit=9d6b8ac36a97 — 하우스 부품. inject-house-kit.js 가 관리한다 -->
+<!-- house-kit house-v1 kit=4d21ed06a2e1 — 하우스 부품. inject-house-kit.js 가 관리한다 -->
 <script type="text/babel" data-house-kit="house-v1">
 /* ═══════════════════════════════════════════════════════════════════════
  * 하우스 부품(house-kit) — 모든 하우스 모드 포트폴리오가 같은 부품을 쓴다.
@@ -528,11 +528,41 @@ textarea.field { resize: vertical; line-height: 1.5; }
     );
   }
 
-  /* ── 시연 안내(투어): 단계를 누르면 그 화면으로 가고 관리 화면이면 역할도 바꾼다. 저절로 펼치지 않는다(캡처 호환) ── */
+  /* ── 시연 안내(투어): 단계를 누르면 그 화면으로 가고(같은 화면이면 params 로 상태를 바꾼다) 관리 화면이면 역할도 바꾼다.
+     저절로 펼치지 않는다(캡처 호환) — 단 주소가 #tour 로 끝나면(사용자 쪽 마지막 단계에서 넘어온 것) 1단계를 펼친 채 시작한다.
+     사용자 쪽에는 키트가 마지막 단계 "관리자 화면으로"(실제 이동)를 붙인다 — plan 의 tour 에 적지 않는다(2026-10-16). ── */
+  const TOUR_HASH = '#tour';
+  const fileHref = (h) => (window.location.protocol === 'file:' && /\/(?:#.*)?$/.test(h) ? h.replace(/\/(#.*)?$/, '/index.html$1') : h);
+  function tourSteps(d) {
+    const base = (d.tour || []).filter(s => s && (s.route || s.href));
+    const admin = d.sides && d.sides.admin && d.sides.admin.href;
+    const hasHandoff = base.some(s => s.href);
+    if (d.side === 'user' && admin && !/^#/.test(admin) && !hasHandoff) {
+      base.push({ title: '관리자 화면으로', side: '관리', href: admin.replace(/#.*$/, '') + TOUR_HASH, look: '같은 제품의 운영 콘솔로 넘어갑니다. 관리자 쪽 시연 안내가 1단계부터 이어서 열립니다.' });
+    }
+    return base;
+  }
   function TourButton({ onReset }) {
-    const d = DEMO(); const steps = d.tour || []; const [open, setOpen] = useState(false); const [cur, setCur] = useState(-1); const [askReset, setAskReset] = useState(false);
+    const d = DEMO(); const steps = useMemo(() => tourSteps(d), []); const [open, setOpen] = useState(false); const [cur, setCur] = useState(-1); const [askReset, setAskReset] = useState(false);
+    const listRef = useRef(null);
+    const goStep = (i) => {
+      const s = steps[i]; if (!s) return; setCur(i); if (s.role) setRole(s.role);
+      if (s.href && !s.route) { window.location.href = fileHref(s.href); return; }
+      go(s.route, s.params || {}); if (window.innerWidth < 768) setOpen(false);
+    };
+    // 넘어온 쪽에서 이어서 열기: 주소가 #tour 면 펼친 채 1단계로. 해시는 지워 새로고침에 다시 열리지 않게 한다.
+    useEffect(() => {
+      if (!steps.length || window.location.hash !== TOUR_HASH) return;
+      try { history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e) {}
+      setOpen(true); goStep(0);
+    }, []);
+    // 현재 단계가 목록 스크롤 밖이면 보이게 끌어온다(2026-10-16 대표 지적 — 다음 버튼만 누르면 현재 단계가 안 보였다)
+    useLayoutEffect(() => {
+      if (!open || cur < 0 || !listRef.current) return;
+      const el = listRef.current.querySelector(`[data-step="${cur}"]`);
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, [open, cur]);
     if (!steps.length) return null;
-    const goStep = (i) => { const s = steps[i]; if (!s) return; setCur(i); if (s.role) setRole(s.role); if (s.href && !s.route) { window.location.href = s.href; return; } go(s.route, s.params); if (window.innerWidth < 768) setOpen(false); };
     return (
       <>
         <button type="button" onClick={() => setOpen(v => !v)} aria-expanded={open} className="flex h-8 items-center gap-1.5 rounded-[9px] bg-white px-3 text-[13.5px] font-bold whitespace-nowrap text-brand-2 hover:bg-accent-50">
@@ -544,9 +574,9 @@ textarea.field { resize: vertical; line-height: 1.5; }
               <div className="min-w-0 flex-1"><h2 className="text-[19px] font-bold tracking-[-0.02em]">시연 안내</h2><p className="mt-0.5 text-[14px] text-ink-2">{steps.length}단계, 약 {d.tourMinutes}분 · 누르면 그 화면으로 갑니다</p></div>
               <button type="button" onClick={() => setOpen(false)} className="h-9 rounded-[10px] px-3 text-[14px] font-semibold text-ink-3 hover:bg-line-2">닫기</button>
             </div>
-            <ol className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-3">
+            <ol ref={listRef} className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-3">
               {steps.map((s, i) => (
-                <li key={i}>
+                <li key={i} data-step={i} data-kind={s.href && !s.route ? 'href' : 'route'}>
                   <button type="button" onClick={() => goStep(i)} aria-current={cur === i ? 'step' : undefined} className={cx('flex w-full gap-3 rounded-2xl px-3 py-3 text-left transition-colors', cur === i ? 'bg-accent-50' : 'hover:bg-surface-2')}>
                     <span className={cx('tnum mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[13px] font-bold', cur === i ? 'bg-accent text-white' : i < cur ? 'bg-ok-50 text-ok' : i === 0 && cur < 0 ? 'bg-accent-50 text-accent-700' : 'bg-line-2 text-ink-3')}>{i + 1}</span>
                     <span className="min-w-0"><span className="flex flex-wrap items-center gap-1.5"><span className="text-[15.5px] font-bold">{s.title}</span>{s.side && <span className="text-[12px] font-semibold text-ink-4">{s.side}</span>}</span><span className="mt-0.5 block text-[14px] leading-[1.55] text-ink-2">{s.look}</span></span>
@@ -584,7 +614,7 @@ textarea.field { resize: vertical; line-height: 1.5; }
           <span className="hidden text-[13px] font-semibold tracking-[0.02em] text-white/60 md:inline">시연 데모</span>
           <nav aria-label="시연 화면" className="flex items-center gap-1 rounded-[12px] bg-white/10 p-1">
             {Object.keys(d.sides).map(k => (
-              <a key={k} href={d.sides[k].href} aria-current={side === k ? 'page' : undefined} className={tab(side === k)} onClick={(e) => { if (side === k) e.preventDefault(); }}>{d.sides[k].label}</a>
+              <a key={k} href={fileHref(d.sides[k].href)} aria-current={side === k ? 'page' : undefined} className={tab(side === k)} onClick={(e) => { if (side === k) e.preventDefault(); }}>{d.sides[k].label}</a>
             ))}
           </nav>
           {side === 'admin' ? (
@@ -736,21 +766,21 @@ window.HOUSE_DEMO = {
     { key: "partner", label: "제휴 담당자", name: "배담당", title: "제휴 담당자", scope: "사업체·예약만" }
   ],
   tour: [
-    { title: "대시보드", look: "오늘 처리할 가입과 예약 건수, 기간별 추이를 봅니다. 기간을 바꿔 차트가 달라지는지 확인합니다.", route: "dashboard" },
-    { title: "가입 승인", look: "승인 대기 회원 목록을 확인합니다. 한 명을 승인하고 되돌리기 토스트를 눌러 봅니다.", route: "members" },
-    { title: "반려 처리", look: "반려 사유를 입력해 가입을 반려합니다. 사유가 비어 있을 때 오류 표시를 확인합니다.", route: "members" },
-    { title: "사업체 등록", look: "사업체 기본 정보와 객실을 확인합니다. 예약 가능 토글을 눌러 봅니다.", route: "properties" },
-    { title: "예약 처리", look: "신청된 예약을 상태별로 확인합니다. 한 건을 확정하고 처리 이력이 남는 것을 봅니다.", route: "reservations" },
-    { title: "충돌 경고", look: "같은 객실에 겹치는 신청 건의 경고 표시를 확인합니다. 한 건을 취소 처리해 봅니다.", route: "reservations" },
-    { title: "광고·공지", look: "배너 노출 기간을 지정하고 공지를 등록합니다. 노출 일정 표에서 겹침을 확인합니다.", route: "ads" },
-    { title: "역할 전환", look: "시연 막대에서 보는 사람을 제휴 담당자로 바꿉니다. 메뉴와 버튼이 달라지는 것을 확인합니다.", route: "dashboard" }
+    {"title": "대시보드", "look": "오늘 처리할 가입과 예약 건수, 최근 30일 가입 추이를 봅니다. 기간을 바꿔 차트가 달라지는지 확인합니다.", "route": "dashboard", "params": {"range": "30"}},
+    {"title": "가입 승인", "look": "승인 대기 회원 목록입니다. 한 명을 승인하고 되돌리기 토스트를 눌러 봅니다.", "route": "members", "params": {"tab": "대기"}},
+    {"title": "반려 처리", "look": "이도현 님의 반려 대화상자가 열려 있습니다. 사유를 비운 채 반려를 눌러 오류 표시를 확인하고 사유를 적어 처리합니다.", "route": "members", "params": {"tab": "대기", "reject": "M3"}},
+    {"title": "사업체 등록", "look": "사업체 기본 정보와 객실을 확인합니다. 예약 가능 토글을 눌러 봅니다.", "route": "properties"},
+    {"title": "예약 처리", "look": "예약대기 상태만 추린 목록입니다. 한 건을 확정하고 처리 이력이 남는 것을 봅니다.", "route": "reservations", "params": {"tab": "예약대기"}},
+    {"title": "충돌 경고", "look": "같은 객실에 일정이 겹치는 신청의 취소 대화상자가 열려 있습니다. 일정 겹침 알약을 확인하고 취소 처리해 봅니다.", "route": "reservations", "params": {"tab": "전체", "ask": "R-261122-06"}},
+    {"title": "광고·공지", "look": "배너 노출 기간을 지정하고 공지를 등록합니다. 노출 일정 표에서 겹침을 확인합니다.", "route": "ads"},
+    {"title": "역할 전환", "look": "보는 사람이 제휴 담당자로 바뀝니다. 회원 승인·광고 메뉴가 사라지고 7일 추이만 보이는 것을 확인합니다.", "route": "dashboard", "role": "partner", "params": {"range": "7"}},
   ],
   tourMinutes: 5,
   maker: "제작 ㈜퍼스트핍 · www.firstpip.co.kr",
   photos: [{"url":"../house-photos/photo-1.jpg","small":"../house-photos/photo-1.jpg","w":5315,"h":3543,"alt":"bedroom, interior design, bed, room, furniture, interior, indoors, bedroom interior, bedroom furniture, hotel room, hous","credit":"peterweideman","source":"pixabay"},{"url":"../house-photos/photo-2.jpg","small":"../house-photos/photo-2.jpg","w":6000,"h":4000,"alt":"hotel, overnight stay, bedroom, bed, bed linen, furniture, room, sleep, stay, comfortable, double bed, hotel room, beds,","credit":"webandi","source":"pixabay"},{"url":"../house-photos/photo-3.jpg","small":"../house-photos/photo-3.jpg","w":6000,"h":4000,"alt":"bed, hotel, room, bedroom, bed linen, furniture, sleep, stay, comfortable, double bed, hotel room, beds, pension, pillow","credit":"webandi","source":"pixabay"},{"url":"../house-photos/photo-4.jpg","small":"../house-photos/photo-4.jpg","w":4473,"h":3355,"alt":"room, bed, bedroom, bed linen, furniture, hotel, sleep, stay, comfortable, double bed, hotel room, beds, pension, pillow","credit":"webandi","source":"pixabay"},{"url":"../house-photos/photo-5.jpg","small":"../house-photos/photo-5.jpg","w":4482,"h":2967,"alt":"vancouver, canada, pan pacific hotel, lobby, brown hotel, vancouver, lobby, lobby, lobby, lobby, lobby","credit":"Michelle-Maria","source":"pixabay"},{"url":"../house-photos/photo-6.jpg","small":"../house-photos/photo-6.jpg","w":4919,"h":3279,"alt":"indoors, vacation, table, wine, glasses, view, boutique hotel, hotel room, hotel room, hotel room, hotel room, hotel roo","credit":"palacioerick","source":"pixabay"},{"url":"../house-photos/photo-7.jpg","small":"../house-photos/photo-7.jpg","w":1920,"h":1280,"alt":"hotel, hall, interior, furniture, lobby, interior design, decoration, tourism, travel, lifestyle, design, hotel, hotel, ","credit":"GregoryButler","source":"pixabay"},{"url":"../house-photos/photo-8.jpg","small":"../house-photos/photo-8.jpg","w":7652,"h":5104,"alt":"luxury hotel, vacation, piano bar, chandelier, holiday, resort, tourism, leisure, recreation, brown piano, brown hotel, ","credit":"Michelle-Maria","source":"pixabay"}],
 };
-const { Icon, Button, AButton, A, Segmented, Pill, Empty, KV, SectionTitle, Modal, toast, Toaster, DemoBar, ConsoleShell, PageHead, NoAccess, Field, useRoute, go, useRole, fmtWon, fmtNum, cx } = window.HK;
-const { useState, useMemo } = React;
+const { Icon, Button, AButton, A, Segmented, Pill, Empty, KV, SectionTitle, Modal, toast, Toaster, DemoBar, ConsoleShell, PageHead, NoAccess, Field, useRoute, go, useRole, fmtWon, fmtNum, cx, useParams } = window.HK;
+const { useState, useMemo, useEffect } = React;
 
 /* ── 가상 데이터 ── */
 const PH = window.HOUSE_DEMO.photos;
@@ -798,7 +828,9 @@ const Thumb = ({ i, alt }) => <div className="h-12 w-16 shrink-0 overflow-hidden
 
 /* ── 대시보드 ── */
 function Dashboard({ members, res, notice }) {
-  const [range, setRange] = useState('30');
+  const params = useParams();
+  const [range, setRange] = useState((params && params.range) || '30');
+  useEffect(() => { setRange((params && params.range) || '30'); }, [params]);
   const pend = members.filter(m => m.status === '대기').length;
   const wait = res.filter(r => r.status === '예약대기').length;
   const cancel = res.filter(r => r.status === '취소 처리 대기').length;
@@ -853,8 +885,11 @@ function Dashboard({ members, res, notice }) {
 
 /* ── 회원 승인 ── */
 function Members({ members, setMembers }) {
-  const [tab, setTab] = useState('대기');
-  const [rej, setRej] = useState(null); const [reason, setReason] = useState(''); const [err, setErr] = useState('');
+  const params = useParams();
+  const byId = (id) => (id && members.find(m => m.id === id)) || null;
+  const [tab, setTab] = useState((params && params.tab) || '대기');
+  const [rej, setRej] = useState(() => byId(params && params.reject)); const [reason, setReason] = useState(''); const [err, setErr] = useState('');
+  useEffect(() => { setTab((params && params.tab) || '대기'); setRej(byId(params && params.reject)); setErr(''); }, [params]);
   const set = (id, status) => setMembers(members.map(m => (m.id === id ? { ...m, status } : m)));
   const list = members.filter(m => tab === '전체' || m.status === tab);
   const approve = (m) => { set(m.id, '승인'); toast(`${m.name} 님의 가입을 승인했어요. 승인 알림이 발송됩니다.`, 'ok', undefined, () => set(m.id, '대기')); };
@@ -904,8 +939,11 @@ function Properties({ lodges, setLodges }) {
 
 /* ── 예약 현황 ── */
 function Reservations({ res, setRes, log, setLog }) {
-  const [tab, setTab] = useState('전체');
-  const [ask, setAsk] = useState(null);
+  const params = useParams();
+  const askOf = (id) => (id && res.find(r => r.id === id)) || null;
+  const [tab, setTab] = useState((params && params.tab) || '전체');
+  const [ask, setAsk] = useState(() => askOf(params && params.ask));
+  useEffect(() => { setTab((params && params.tab) || '전체'); setAsk(askOf(params && params.ask)); }, [params]);
   const list = res.filter(r => tab === '전체' || r.status === tab);
   const upd = (r, status, msg) => { setRes(res.map(x => (x.id === r.id ? { ...x, status } : x))); setLog([`${r.id} · ${status} 처리 (윤관리)`, ...log].slice(0, 4)); toast(msg, status === '예약취소' ? 'warn' : 'ok'); };
   return (
