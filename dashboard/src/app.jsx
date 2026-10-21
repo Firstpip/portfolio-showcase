@@ -11,6 +11,11 @@ const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 const TABLE = 'wishket_projects';
 const TEAM_TABLE = 'team_members';
 const MILESTONES_TABLE = 'project_milestones';
+// 결과물(쇼케이스) 방문 + 위시켓 '지원서 열람' (2026-10-21, migration 20261021120000_showcase_visits)
+const VISITS_TABLE = 'showcase_visits';
+const VISIT_SUMMARY_VIEW = 'showcase_visit_summary';
+const PROPOSAL_VIEWS_TABLE = 'proposal_views';
+const VisitCtx = React.createContext({ summary: {}, views: {} });
 
 // ─── Constants ───
 const STATUS_META = {
@@ -434,6 +439,111 @@ function daysBetween(d1, d2) {
   const ua = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
   const ub = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
   return Math.floor((ub - ua) / 86400000);
+}
+
+// ─── 결과물 방문 신호 ───
+// "그 클라이언트 본인"이라는 확증은 불가능하다 — 위시켓 프로필은 로그인 사용자 누구나 볼 수 있다.
+// 그래서 세션마다 정황으로 등급만 매긴다:
+//   높음: 지원 이후 · 위시켓에서 넘어옴 · 20초 이상 보거나 3번 이상 조작
+//   중간: 지원 이후 · (위시켓 또는 출처 없음 — 링크를 복사해 사내 공유한 경우 포함)
+//   낮음: 지원 전 방문, 또는 다른 사이트에서 넘어옴
+function appliedAtOf(project) {
+  const h = (project?.history || []).find(e => e && e.status === 'applied' && e.date);
+  const d = new Date(h ? h.date : project?.created_at);
+  return isNaN(d) ? null : d;
+}
+function visitSessions(rows, project) {
+  const applied = appliedAtOf(project);
+  const by = new Map();
+  for (const r of rows) {
+    const s = by.get(r.session_id) || { id: r.session_id, start: r.created_at, end: r.last_seen_at, portfolios: new Set(), dwell: 0, ix: 0, scroll: 0, fromWishket: false, noRef: true };
+    if (r.created_at < s.start) s.start = r.created_at;
+    if (r.last_seen_at > s.end) s.end = r.last_seen_at;
+    s.portfolios.add(r.portfolio);
+    s.dwell += r.dwell_ms || 0;
+    s.ix += r.interactions || 0;
+    s.scroll = Math.max(s.scroll, r.max_scroll_pct || 0);
+    if (/wishket\.com/i.test(r.referrer_origin || '')) s.fromWishket = true;
+    if (r.referrer_origin) s.noRef = false;
+    by.set(r.session_id, s);
+  }
+  return [...by.values()].map(s => {
+    const after = !applied || new Date(s.start) >= applied;
+    const engaged = s.dwell >= 20000 || s.ix >= 3;
+    s.level = after && s.fromWishket && engaged ? 'high' : after && (s.fromWishket || s.noRef) ? 'mid' : 'low';
+    return s;
+  }).sort((a, b) => (a.start < b.start ? 1 : -1));
+}
+const VISIT_LEVEL = {
+  high: { label: '높음', color: 'var(--green)' },
+  mid:  { label: '중간', color: 'var(--yellow)' },
+  low:  { label: '낮음', color: 'var(--text2)' },
+};
+const fmtDwell = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? `${s}초` : `${Math.floor(s / 60)}분 ${s % 60}초`; };
+const fmtWhen = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+const fmtViewedOn = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v || ''); return m ? `${+m[2]}/${+m[3]}` : ''; };
+
+// 목록 행 배지 — 외부 방문 세션 수 + 지원서 열람일
+function VisitBadge({ slug }) {
+  const { summary, views } = React.useContext(VisitCtx);
+  const sv = summary[slug], pv = views[slug];
+  if (!sv && !pv?.viewed_on) return null;
+  return (
+    <>
+      {pv?.viewed_on && <span style={{ fontSize:'0.7rem', color:'var(--accent2)', fontWeight:500 }} title={`위시켓 지원서 열람 ${pv.viewed_on}`}>📨{fmtViewedOn(pv.viewed_on)}</span>}
+      {sv && <span style={{ fontSize:'0.7rem', color: sv.wishket_visits > 0 ? 'var(--green)' : 'var(--text2)', fontWeight:500 }}
+        title={`결과물 외부 방문 ${sv.sessions}세션 (위시켓 경유 ${sv.wishket_visits}회) · 마지막 ${fmtWhen(sv.last_external_at)}`}>👀{sv.sessions}</span>}
+    </>
+  );
+}
+
+// 상세 모달 패널 — 열람일 + 세션별 방문 (등급·체류·조작)
+function VisitPanel({ project }) {
+  const { views } = React.useContext(VisitCtx);
+  const pv = views[project.slug];
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    supabase.from(VISITS_TABLE)
+      .select('portfolio,session_id,referrer_origin,created_at,last_seen_at,dwell_ms,max_scroll_pct,interactions,is_bot,is_automation,is_internal')
+      .eq('slug', project.slug).order('created_at', { ascending:false }).limit(200)
+      .then(({ data, error }) => { if (!alive) return; if (error) setErr(error); else setRows(data || []); });
+    return () => { alive = false; };
+  }, [project.slug]);
+  if (err) return null;   // 테이블 미배포 등 — 패널만 숨긴다
+  const external = (rows || []).filter(r => !r.is_bot && !r.is_automation && !r.is_internal);
+  const excluded = (rows || []).length - external.length;
+  const sessions = rows ? visitSessions(external, project) : [];
+  if (rows && !sessions.length && !pv && !excluded) return null;
+  return (
+    <div style={{ marginBottom:'0.75rem', padding:'0.6rem 0.75rem', borderRadius:8, background:'var(--surface2)', border:'1px solid var(--border)', fontSize:'0.8rem' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6, fontWeight:600 }}>
+        <span>👀 결과물 방문</span>
+        <span style={{ marginLeft:'auto', fontWeight:400, color:'var(--text2)' }}>
+          {pv ? (pv.viewed_on ? `📨 지원서 열람 ${pv.viewed_on}` : '📨 지원서 열람 전') : ''}
+        </span>
+      </div>
+      {!rows ? <div style={{ color:'var(--text2)' }}>불러오는 중…</div>
+        : !sessions.length ? <div style={{ color:'var(--text2)' }}>외부 방문 없음{excluded ? ` (팀·자동화·봇 ${excluded}건 제외)` : ''}</div>
+        : (
+          <>
+            {sessions.slice(0, 8).map(s => (
+              <div key={s.id} style={{ display:'flex', alignItems:'center', flexWrap:'wrap', columnGap:8, rowGap:2, padding:'3px 0', borderTop:'1px solid var(--border)' }}>
+                <span style={{ color: VISIT_LEVEL[s.level].color, fontWeight:600, minWidth:30 }} title="본인 방문 가능성 (정황 추정)">{VISIT_LEVEL[s.level].label}</span>
+                <span style={{ fontFamily:'monospace', color:'var(--text2)', whiteSpace:'nowrap' }}>{fmtWhen(s.start)}</span>
+                <span style={{ whiteSpace:'nowrap' }}>{[...s.portfolios].sort().map(n => `P${n}`).join('·')}</span>
+                <span style={{ color:'var(--text2)', whiteSpace:'nowrap' }}>{fmtDwell(s.dwell)} · 조작 {s.ix} · 스크롤 {s.scroll}%</span>
+                <span style={{ marginLeft:'auto', color:'var(--text2)', whiteSpace:'nowrap' }}>{s.fromWishket ? '위시켓' : s.noRef ? '직접' : '기타'}</span>
+              </div>
+            ))}
+            <div style={{ marginTop:4, color:'var(--text2)', fontSize:'0.75rem' }}>
+              {sessions.length > 8 ? `외 ${sessions.length - 8}세션 · ` : ''}등급은 정황 추정 — 위시켓 프로필은 다른 사용자도 볼 수 있음{excluded ? ` · 팀·자동화·봇 ${excluded}건 제외` : ''}
+            </div>
+          </>
+        )}
+    </div>
+  );
 }
 
 // DB 에 저장된 URL 을 그대로 href 에 넣으면 javascript: 같은 스킴도 실행 가능 → http(s) 만 통과 (2026-09-20)
@@ -2754,6 +2864,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
             </div>
           )}
 
+          {((project.portfolio_links||[]).length > 0) && <VisitPanel project={project} />}
+
           {/* 작업페이지 바로가기 — 수주 후 단계 프로젝트에 한해 노출 */}
           {HAS_MILESTONES.includes(project.current_status) && !milestonesSetupNeeded && (
             <button onClick={openProjectViewGuarded}
@@ -3750,6 +3862,7 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                     <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                       <span style={{ fontSize:'0.8rem', color:'var(--text2)', fontFamily:'monospace' }}>{r.slug}</span>
                       {(r.portfolio_links||[]).length > 0 && <span style={{ fontSize:'0.7rem', color:'var(--green)', fontWeight:500 }} title={`포트폴리오 링크 ${r.portfolio_links.length}개`}>🔗{r.portfolio_links.length}</span>}
+                      <VisitBadge slug={r.slug} />
                     </div>
                     {HAS_MILESTONES.includes(r.current_status) && !milestonesSetupNeeded && (
                       <div style={{ marginTop:6 }}>
@@ -4067,6 +4180,21 @@ function App({ session }) {
     }
   }, [toast]);
 
+  // 결과물 방문 요약 + 지원서 열람 — 테이블이 아직 없거나 실패해도 조용히 빈 값 (보조 정보라 토스트 없음)
+  const [visitData, setVisitData] = useState({ summary: {}, views: {} });
+  const loadVisits = useCallback(async () => {
+    const [s, v] = await Promise.all([
+      supabase.from(VISIT_SUMMARY_VIEW).select('*'),
+      supabase.from(PROPOSAL_VIEWS_TABLE).select('slug,viewed_on,checked_at'),
+    ]);
+    const summary = {}, views = {};
+    (s.error ? [] : s.data || []).forEach(r => { summary[r.slug] = r; });
+    (v.error ? [] : v.data || []).forEach(r => { views[r.slug] = r; });
+    setVisitData({ summary, views });
+  }, []);
+  // 팀 브라우저 표식 — 같은 출처(firstpip.github.io)의 쇼케이스 페이지(assets/sv.js)가 읽어 내부 방문으로 분류한다
+  useEffect(() => { try { localStorage.setItem('fp_internal', '1'); } catch {} }, []);
+
   const loadData = useCallback(async () => {
     const { data:rows, error } = await supabase.from(TABLE).select('*').order('created_at', { ascending:false });
     if (error) { toast('데이터 로드 실패: '+friendlyError(error),'error'); setData([]); return; }
@@ -4138,6 +4266,7 @@ function App({ session }) {
     loadData();
     loadTeamMembers();
     loadMilestones();
+    loadVisits();
     const channel = supabase.channel(`wishket-realtime-${Math.random().toString(36).slice(2, 10)}`)
       .on('postgres_changes',{ event:'*', schema:'public', table:MILESTONES_TABLE },(payload) => {
         setMilestones(prev => {
@@ -4197,7 +4326,7 @@ function App({ session }) {
         setConnected(ok);
       });
     // 탭 복귀·네트워크 복구 시에도 재동기화 (슬립 중 놓친 변경 반영)
-    const resync = () => { if (document.visibilityState === 'visible') { loadData(); loadMilestones(); } };
+    const resync = () => { if (document.visibilityState === 'visible') { loadData(); loadMilestones(); loadVisits(); } };
     document.addEventListener('visibilitychange', resync);
     window.addEventListener('online', resync);
     return () => {
@@ -4205,7 +4334,7 @@ function App({ session }) {
       document.removeEventListener('visibilitychange', resync);
       window.removeEventListener('online', resync);
     };
-  }, [loadData, loadTeamMembers, loadMilestones]);
+  }, [loadData, loadTeamMembers, loadMilestones, loadVisits]);
 
   // Team CRUD
   const handleAddMember = useCallback(async (fields) => {
@@ -4858,6 +4987,7 @@ function App({ session }) {
   const activeMembers = teamMembers.filter(m => m.is_active);
 
   return (
+    <VisitCtx.Provider value={visitData}>
     <div>
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
       <ConfirmModal state={confirmState} onCancel={() => { confirmState?.onCancel?.(); setConfirmState(null); }} />
@@ -5175,6 +5305,7 @@ function App({ session }) {
         퍼스트핍 워크룸
       </div>
     </div>
+    </VisitCtx.Provider>
   );
 }
 
