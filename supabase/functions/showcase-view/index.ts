@@ -69,17 +69,17 @@ async function registerTeam(req: Request, b: Record<string, unknown>) {
   const ip = manual || clientIp(req), hash = await ipHash(req, ip);
   if (!ip || !hash) return;
   const now = new Date().toISOString();
-  const { data: cur } = await sb.from("team_networks").select("hits,district").eq("ip_hash", hash).maybeSingle();
+  const { data: cur } = await sb.from("team_networks").select("hits,isp").eq("ip_hash", hash).maybeSingle();
   const row: Record<string, unknown> = { ip_hash: hash, ip, last_seen_at: now };
   if (!manual) row.hits = (cur?.hits ?? 0) + 1;   // 수동 등록은 '대시보드 사용 횟수'가 아니다
   if (manual && typeof b.label === "string") row.label = b.label.slice(0, 60);
   if (manual && typeof b.pinned === "boolean") row.pinned = b.pinned;
-  if (!cur?.district) {
-    // 위치는 처음 한 번만 — ip-api 는 한국 IP 를 구 단위(city)까지 준다. 실패해도 등록은 한다.
+  if (!cur?.isp) {
+    // 통신사만 처음 한 번 — IP 위치(시·구)는 실측으로 틀려서(시청역 회선이 청주로 나옴) 조회하지 않는다. 실패해도 등록은 한다.
     try {
-      const g = await (await fetch(`http://ip-api.com/json/${ip}?fields=status,regionName,city,isp`, { signal: AbortSignal.timeout(3000) })).json();
-      if (g.status === "success") Object.assign(row, { region: g.regionName, district: g.city, isp: g.isp });
-    } catch { /* 위치 없이 등록 */ }
+      const g = await (await fetch(`http://ip-api.com/json/${ip}?fields=status,isp`, { signal: AbortSignal.timeout(3000) })).json();
+      if (g.status === "success") row.isp = g.isp;
+    } catch { /* 통신사 없이 등록 */ }
   }
   await sb.from("team_networks").upsert(row, { onConflict: "ip_hash" });
   // 등록 전에 들어온 같은 네트워크의 방문도 팀으로 소급
