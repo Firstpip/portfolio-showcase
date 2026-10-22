@@ -4268,6 +4268,9 @@ function App({ session }) {
   }, []);
   // 팀 브라우저 표식 — 같은 출처(firstpip.github.io)의 쇼케이스 페이지(assets/sv.js)가 읽어 내부 방문으로 분류한다
   useEffect(() => { try { localStorage.setItem('fp_internal', '1'); } catch {} }, []);
+  // 팀 네트워크 등록 — 지금 공인 IP 를 team_networks 에 등록/갱신 → 같은 와이파이의 모든 기기·브라우저가 팀 방문으로 빠진다.
+  //   브라우저 표식은 브라우저마다·시크릿 창·Safari 정리로 새기 쉬워 IP 단위로 보강 (2026-10-22). 실패는 무시.
+  useEffect(() => { supabase.functions.invoke('showcase-view', { body: { t: 'team' } }).catch(() => {}); }, []);
 
   const loadData = useCallback(async () => {
     const { data:rows, error } = await supabase.from(TABLE).select('*').order('created_at', { ascending:false });
