@@ -1079,6 +1079,177 @@ function StatCard({ title, value, sub, color, delay }) {
 
 
 // ─── MonthlyChart ───
+// ─── 지원 퍼널 (2026-10-22, migration 20261022150000_wishket_funnel_events) ───
+// 위시켓 수주가 줄어든 원인이 '어느 단계'에서 생겼는지 보기 위한 표. 원천은 위시켓 알림(지원·열람·미팅·계약) —
+// 워크룸 row 는 지원종료 정리로 지워져 분모가 남지 않으므로 쓰지 않는다.
+// 정의 (지원 건 하나를 지원월 코호트에 넣고, 같은 공고 제목의 이후 이벤트를 잇는다 — 'apply' 알림엔 공고 id 가 없다):
+//   열람 = 지원 후 7일 안 · 미팅 = 30일 안(미팅 제안/일정 안내) · 계약 = 60일 안 체결
+//   기간이 아직 다 지나지 않은 지원이 20% 넘게 섞인 칸은 '진행 중' — 덜 익은 코호트가 하락처럼 보이는 착시 방지.
+//   결과물 '높음' = 지원 후 30일 안에 그 공고 결과물에 '높음' 방문(visitSessions)이 있었나 — 방문 수집이 10/21 부터라 그 이후 지원만.
+// 표본이 작다(월 40~80 지원, 계약 0~4) — 월별 계약률은 흔들림이 크니 90일 비교와 건수를 함께 볼 것.
+const FUNNEL_H = { view: 7, meeting: 30, contract: 60, high: 30 };   // 일
+const FUNNEL_MATURE = 0.8;
+const SHOWCASE_TRACK_START = Date.parse('2026-10-21T00:00:00+09:00');
+const DAY = 86400000;
+
+function buildFunnelCohorts(events, projects, visitCtx) {
+  const byTitle = new Map();
+  for (const e of events) {
+    let m = byTitle.get(e.project_title);
+    if (!m) byTitle.set(e.project_title, (m = { view: [], meeting: [], contract: [] }));
+    if (m[e.kind]) m[e.kind].push(Date.parse(e.occurred_at));
+  }
+  // 공고 → 워크룸 slug (결과물 방문 단계용): 열람 알림의 공고 id → wishket_url, 없으면 제목 일치
+  const slugById = new Map(), slugByTitle = new Map(), projBySlug = new Map();
+  for (const p of projects) {
+    projBySlug.set(p.slug, p);
+    const id = (String(p.wishket_url || '').match(/\/project\/(?:view\/)?(\d+)/) || [])[1];
+    if (id) slugById.set(id, p.slug);
+    if (p.title) slugByTitle.set(p.title.trim(), p.slug);
+  }
+  const idByTitle = new Map();
+  for (const e of events) if (e.wishket_project_id && !idByTitle.has(e.project_title)) idByTitle.set(e.project_title, e.wishket_project_id);
+  const highCache = new Map();
+  const highAt = (slug) => {
+    if (!highCache.has(slug)) {
+      const rows = visitCtx.visitsBySlug?.[slug], p = projBySlug.get(slug);
+      const hs = rows && p ? visitSessions(rows, p, visitCtx.views?.[slug], visitCtx.ipFirst).filter(v => v.level === 'high') : [];
+      highCache.set(slug, hs.map(v => Date.parse(v.start)));
+    }
+    return highCache.get(slug);
+  };
+  const first = (arr, t0, days) => { const hit = (arr || []).filter(t => t >= t0 - 3600000 && t <= t0 + days * DAY); return hit.length ? Math.min(...hit) : null; };
+  return events.filter(e => e.kind === 'apply').map(e => {
+    const t0 = Date.parse(e.occurred_at), m = byTitle.get(e.project_title) || {};
+    const slug = slugById.get(idByTitle.get(e.project_title)) || slugByTitle.get(e.project_title);
+    return {
+      t0, title: e.project_title,
+      view: first(m.view, t0, FUNNEL_H.view) != null,
+      meeting: first(m.meeting, t0, FUNNEL_H.meeting) != null,
+      contract: first(m.contract, t0, FUNNEL_H.contract) != null,
+      high: t0 >= SHOWCASE_TRACK_START ? (slug ? first(highAt(slug), t0, FUNNEL_H.high) != null : null) : undefined,
+    };
+  });
+}
+
+// rs 중 stage 기간이 다 지난 건만으로 비율. 덜 익은 건이 20% 넘으면 null(진행 중)
+function funnelRate(rs, stage, base = null, now = Date.now()) {
+  const pool = rs.filter(r => (base ? r[base] : true) && (stage !== 'high' || r.high !== undefined));
+  if (!pool.length) return null;
+  const mature = pool.filter(r => r.t0 + FUNNEL_H[stage] * DAY <= now && r[stage] !== null);
+  if (mature.length < pool.length * FUNNEL_MATURE) return { pending: true, n: pool.length };
+  const k = mature.filter(r => r[stage]).length;
+  return { k, n: mature.length, pct: mature.length ? (100 * k / mature.length) : 0 };
+}
+
+function FunnelCell({ r, strong }) {
+  if (r === null) return <span style={{ color:'var(--text2)' }}>—</span>;
+  if (r.pending) return <span style={{ color:'var(--text2)', fontSize:'0.75rem' }} title={`기간이 아직 다 지나지 않음 (${r.n}건)`}>진행 중</span>;
+  return (
+    <span style={{ whiteSpace:'nowrap' }}>
+      <b style={{ fontWeight: strong ? 700 : 600 }}>{r.pct.toFixed(0)}%</b>
+      <span style={{ color:'var(--text2)', fontSize:'0.75rem' }}> {r.k}/{r.n}</span>
+    </span>
+  );
+}
+
+function FunnelAnalysis({ data }) {
+  const visitCtx = React.useContext(VisitCtx);
+  const [events, setEvents] = useState(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    supabase.from('wishket_funnel_events').select('kind,project_title,wishket_project_id,occurred_at').order('occurred_at').limit(20000)
+      .then(({ data: ev, error }) => { if (error) setErr(true); else setEvents(ev || []); });
+  }, []);
+  const cohorts = useMemo(() => (events ? buildFunnelCohorts(events, data, visitCtx) : []), [events, data, visitCtx]);
+  if (err) return null;   // 테이블 미배포 등 — 카드만 숨긴다
+  const now = Date.now();
+  // 최근 8개월 (KST 월 키)
+  const [y0, m0] = kstDateStr().split('-').map(Number);
+  const months = [];
+  for (let i = 7; i >= 0; i--) { const idx = y0 * 12 + (m0 - 1) - i; months.push(`${Math.floor(idx / 12)}-${String(idx % 12 + 1).padStart(2, '0')}`); }
+  const monthOf = (t) => new Date(t + 9 * 3600000).toISOString().slice(0, 7);
+  const byMonth = Object.fromEntries(months.map(k => [k, cohorts.filter(c => monthOf(c.t0) === k)]));
+  // 최근 90일 vs 직전 90일 — 단계마다 '기간이 다 지난' 가장 최근 90일 지원끼리 비교한다.
+  //   예: 미팅(30일)은 30~120일 전 지원 vs 120~210일 전 지원. 그냥 최근 90일을 쓰면 미팅·계약은 늘 '진행 중'이 된다.
+  const win = (from, to) => cohorts.filter(c => c.t0 >= now - to * DAY && c.t0 < now - from * DAY);
+  const fmtD = (daysAgo) => { const d = new Date(now - daysAgo * DAY + 9 * 3600000); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; };
+  const stages = [
+    { key: 'view', label: '열람', sub: '7일 안' },
+    { key: 'high', label: '결과물 높음', sub: '10/21~' },
+    { key: 'meeting', label: '미팅', sub: '30일 안' },
+    { key: 'contract', label: '계약', sub: '60일 안' },
+  ];
+  const conv = [
+    { key: 'meeting', base: 'view', label: '열람→미팅' },
+    { key: 'contract', base: 'meeting', label: '미팅→계약' },
+  ];
+  const th = { padding:'0.4rem 0.5rem', textAlign:'right', fontWeight:600, color:'var(--text2)', fontSize:'0.75rem', whiteSpace:'nowrap', borderBottom:'1px solid var(--border)' };
+  const td = { padding:'0.4rem 0.5rem', textAlign:'right', fontSize:'0.85rem', borderBottom:'1px solid var(--border)' };
+  const stickyCol = { textAlign:'left', position:'sticky', left:0, background:'var(--surface)', zIndex:1 };   // 모바일 가로 스크롤 중에도 월이 보이게
+  return (
+    <div style={{ background:'var(--surface)', borderRadius:12, padding:'1.5rem', border:'1px solid var(--border)', marginTop:'1rem' }}>
+      <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:'1rem', flexWrap:'wrap', gap:8 }}>
+        <h3 style={{ fontSize:'1rem', fontWeight:600, margin:0 }}>지원 퍼널</h3>
+        <span style={{ fontSize:'0.75rem', color:'var(--text2)' }}>지원월 기준 · 위시켓 알림 원천 (삭제된 공고 포함)</span>
+      </div>
+      {!events ? <div style={{ fontSize:'0.85rem', color:'var(--text2)' }}>불러오는 중…</div> : (
+        <>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:8, marginBottom:'1.25rem' }}>
+            {[...stages.filter(s => s.key !== 'high'), ...conv].map(s => {
+              const h = FUNNEL_H[s.key];
+              const [cur, prev] = [win(h, h + 90), win(h + 90, h + 180)].map(rs => funnelRate(rs, s.key, s.base || null, now));
+              const delta = cur && prev && !cur.pending && !prev.pending ? cur.pct - prev.pct : null;
+              return (
+                <div key={s.label} style={{ padding:'0.6rem 0.75rem', borderRadius:8, background:'var(--surface2)', border:'1px solid var(--border)' }}>
+                  <div style={{ fontSize:'0.75rem', color:'var(--text2)' }} title={`${fmtD(h + 90)}~${fmtD(h)} 지원 (기간이 다 지난 최근 90일) vs 그 직전 90일`}>
+                    {s.label}{s.sub ? ` (${s.sub})` : ''} · {fmtD(h + 90)}~{fmtD(h)} 지원
+                  </div>
+                  <div style={{ fontSize:'1.15rem', marginTop:2 }}><FunnelCell r={cur} strong /></div>
+                  <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginTop:2 }}>
+                    직전 90일 {prev && !prev.pending ? `${prev.pct.toFixed(0)}%` : '—'}
+                    {delta != null && <span style={{ marginLeft:6, fontWeight:600, color: delta < 0 ? 'var(--red)' : 'var(--green)' }}>{delta > 0 ? '▲' : delta < 0 ? '▼' : ''}{Math.abs(delta).toFixed(0)}%p</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ overflowX:'auto' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', minWidth:640 }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, ...stickyCol }}>지원월</th>
+                  <th style={th}>지원</th>
+                  {stages.map(s => <th key={s.key} style={th}>{s.label}<div style={{ fontWeight:400 }}>{s.sub}</div></th>)}
+                  {conv.map(s => <th key={s.label} style={th}>{s.label}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {months.map(k => {
+                  const rs = byMonth[k];
+                  return (
+                    <tr key={k}>
+                      <td style={{ ...td, ...stickyCol, fontFamily:'monospace', color:'var(--text2)' }}>{k}</td>
+                      <td style={{ ...td, fontWeight:600 }}>{rs.length || '—'}</td>
+                      {stages.map(s => <td key={s.key} style={td}>{rs.length ? <FunnelCell r={funnelRate(rs, s.key, null, now)} /> : '—'}</td>)}
+                      {conv.map(s => <td key={s.label} style={td}>{rs.length ? <FunnelCell r={funnelRate(rs, s.key, s.base, now)} /> : '—'}</td>)}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ marginTop:8, fontSize:'0.75rem', color:'var(--text2)', lineHeight:1.6 }}>
+            위 카드는 단계마다 기간이 다 지난 가장 최근 90일 지원을 그 직전 90일과 비교합니다(그래서 단계별 날짜 범위가 다름).
+            같은 공고 제목으로 지원 이후 이벤트를 잇습니다. '진행 중' = 기간이 아직 다 지나지 않은 지원이 많아 비율을 내지 않음.
+            결과물 '높음'은 방문 수집이 시작된 10/21 이후 지원만. 월 지원 수십 건·계약 몇 건 규모라 월별 계약률은 흔들림이 큽니다 — 90일 비교와 건수를 함께 보세요.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function MonthlyChart({ data, convStats }) {
   // 월별 **수주** 추이만 그린다 (2026-10-01). 이전엔 지원 건수 막대 위에 수주를 겹쳤는데, 미팅 없이 떨어진 건은
   // 지원종료 자동정리로 row 가 사라져 오래된 달일수록 지원 막대가 실제보다 낮았다(퍼널에서 지원 단계를 뺀 것과 같은 이유).
@@ -5425,7 +5596,7 @@ function App({ session }) {
           color:'var(--text2)', cursor:'pointer', fontSize:'0.85rem', fontWeight:500, padding:'0.4rem 0',
         }}>
           <span style={{ transition:'transform 0.2s', transform:showStats?'rotate(90deg)':'rotate(0)', display:'inline-block' }}>&#9654;</span>
-          상세 통계 {showStats?'':'(월별 수주 · 예산 구간별 전환율)'}
+          상세 통계 {showStats?'':'(지원 퍼널 · 월별 수주 · 예산 구간별 전환율)'}
         </button>
         {showStats && (
           <div style={{ animation:'fadeIn 0.25s ease-out' }}>
@@ -5444,6 +5615,7 @@ function App({ session }) {
                 </div>
               );
             })()}
+            <FunnelAnalysis data={data} />
             <MonthlyChart data={data} convStats={convStats} />
             <BudgetAnalysis data={data} convStats={convStats} />
           </div>
