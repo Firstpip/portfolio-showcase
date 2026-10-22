@@ -559,12 +559,13 @@ function VisitBadge({ project }) {
   );
 }
 
-// 상세 모달 패널 — 열람일 + 방문별 등급·근거·체류·조작
+// 상세 모달 패널 — 열람일 + 등급별 방문 횟수. 등급을 누르면 그 등급의 방문(근거·체류·조작)이 바로 밑에 펼쳐진다.
 function VisitPanel({ project }) {
   const { views, ipFirst } = React.useContext(VisitCtx);
   const pv = views[project.slug];
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
+  const [openLevel, setOpenLevel] = useState(null);   // 펼친 등급 (한 번에 하나)
   useEffect(() => {
     let alive = true;
     supabase.from(VISITS_TABLE)
@@ -591,9 +592,22 @@ function VisitPanel({ project }) {
         : !visits.length ? <div style={{ color:'var(--text2)' }}>외부 방문 없음{excluded ? ` (팀·자동화·봇 ${excluded}건 제외)` : ''}</div>
         : (
           <>
-            {visits.slice(0, 8).map(v => (
-              <div key={v.id} style={{ display:'flex', alignItems:'center', flexWrap:'wrap', columnGap:8, rowGap:2, padding:'3px 0', borderTop:'1px solid var(--border)' }}>
-                <span style={{ color: VISIT_LEVEL[v.level].color, fontWeight:600, minWidth:30 }} title="본인 방문 가능성 (정황 추정)">{VISIT_LEVEL[v.level].label}</span>
+            <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+              {['high', 'mid', 'low'].map(lv => {
+                const n = visits.filter(v => v.level === lv).length, on = openLevel === lv;
+                return (
+                  <button key={lv} disabled={!n} aria-expanded={on} onClick={() => setOpenLevel(on ? null : lv)}
+                    title="본인 방문 가능성 (정황 추정) — 눌러서 방문 보기"
+                    style={{ display:'inline-flex', alignItems:'center', gap:5, padding:'0.25rem 0.6rem', borderRadius:6, fontSize:'0.8rem',
+                      border:`1px solid ${on ? VISIT_LEVEL[lv].color : 'var(--border)'}`, background: on ? 'var(--surface)' : 'transparent',
+                      color: n ? VISIT_LEVEL[lv].color : 'var(--text2)', fontWeight:600, cursor: n ? 'pointer' : 'default', opacity: n ? 1 : 0.5 }}>
+                    {VISIT_LEVEL[lv].label} {n}회{n ? <span style={{ fontSize:'0.65rem' }}>{on ? '▲' : '▼'}</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+            {openLevel && visits.filter(v => v.level === openLevel).map(v => (
+              <div key={v.id} style={{ display:'flex', alignItems:'center', flexWrap:'wrap', columnGap:8, rowGap:2, padding:'3px 0', borderTop:'1px solid var(--border)', marginTop:4 }}>
                 <span style={{ fontFamily:'monospace', color:'var(--text2)', whiteSpace:'nowrap' }}>{fmtWhen(v.start)}</span>
                 <span style={{ whiteSpace:'nowrap' }}>{[...v.portfolios].sort().map(n => `P${n}`).join('·')}</span>
                 <span style={{ color:'var(--text2)', whiteSpace:'nowrap' }}>{fmtDwell(v.dwell)} · 조작 {v.ix} · 스크롤 {v.scroll}%</span>
@@ -601,8 +615,8 @@ function VisitPanel({ project }) {
                 <span style={{ marginLeft:'auto', color:'var(--text2)', whiteSpace:'nowrap' }}>{v.fromWishket ? '위시켓' : v.otherRef ? '기타' : '직접'}</span>
               </div>
             ))}
-            <div style={{ marginTop:4, color:'var(--text2)', fontSize:'0.75rem' }}>
-              {visits.length > 8 ? `외 ${visits.length - 8}회 · ` : ''}등급은 정황 추정 — 열람 직후 방문·재방문일수록 높음, 위시켓 프로필은 다른 사용자도 볼 수 있음{excluded ? ` · 팀·자동화·봇 ${excluded}건 제외` : ''}
+            <div style={{ marginTop:6, color:'var(--text2)', fontSize:'0.75rem' }}>
+              등급은 정황 추정 — 열람 직후 방문·재방문일수록 높음, 위시켓 프로필은 다른 사용자도 볼 수 있음{excluded ? ` · 팀·자동화·봇 ${excluded}건 제외` : ''}
             </div>
           </>
         )}
@@ -1537,8 +1551,64 @@ function TeamMgrModal({ members, projects, onClose, onAdd, onUpdate, onDeactivat
               </div>
             </div>
           )}
+          <TeamNetworksSection />
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── 팀 네트워크 (2026-10-22, migration 20261022130000_team_networks) ───
+// 결과물 방문에서 팀을 빼는 공인 IP 목록. 대시보드를 열면 그 네트워크가 자동 등록되고(30일 만료),
+// 여기서 장소 이름을 붙이고 '고정'하면 만료 없이 유지된다. IP 위치 조회는 틀려서 쓰지 않는다 — 이름이 정답.
+const TEAM_NET_ACTIVE_DAYS = 30;   // showcase-view TEAM_ACTIVE_MS 와 같은 값
+function TeamNetworksSection() {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+  const load = useCallback(() => {
+    supabase.from('team_networks').select('ip_hash,ip,isp,label,pinned,hits,last_seen_at')
+      .then(({ data, error }) => { if (error) setErr(error); else setRows(data || []); });
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const save = async (hash, patch) => {
+    setRows(rs => rs.map(r => r.ip_hash === hash ? { ...r, ...patch } : r));
+    const { error } = await supabase.from('team_networks').update(patch).eq('ip_hash', hash);
+    if (error) load();   // 실패하면 서버 값으로 되돌린다
+  };
+  if (err) return null;   // 테이블 미배포 등 — 섹션만 숨긴다
+  const daysLeft = (r) => TEAM_NET_ACTIVE_DAYS - Math.floor((Date.now() - new Date(r.last_seen_at)) / 86400000);
+  const sorted = (rows || []).slice().sort((a, b) => (b.pinned - a.pinned) || (a.last_seen_at < b.last_seen_at ? 1 : -1));
+  return (
+    <div style={{ marginTop:'1.5rem' }}>
+      <div style={{ fontSize:'0.8rem', fontWeight:600, color:'var(--text2)', marginBottom:4 }}>팀 네트워크 {rows ? `(${rows.length})` : ''}</div>
+      <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginBottom:8 }}>
+        결과물 방문 집계에서 빠지는 공인 IP — 대시보드를 연 와이파이가 자동 등록되고 {TEAM_NET_ACTIVE_DAYS}일 안 쓰면 풀립니다. 자주 쓰는 곳은 이름을 붙이고 고정하세요.
+      </div>
+      {!rows ? <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>불러오는 중…</div> : (
+        <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+          {sorted.map(r => {
+            const left = daysLeft(r), expired = !r.pinned && left <= 0;
+            return (
+              <div key={r.ip_hash} style={{ padding:'0.5rem 0.75rem', borderRadius:8, background:'var(--surface2)', border:'1px solid var(--border)', display:'flex', alignItems:'center', flexWrap:'wrap', columnGap:8, rowGap:4, opacity:expired ? 0.55 : 1 }}>
+                <input defaultValue={r.label || ''} placeholder="장소 이름 (예: 패스트파이브 서울숲)" aria-label={`${r.ip} 장소 이름`}
+                  onBlur={e => { const v = e.target.value.trim(); if (v !== (r.label || '')) save(r.ip_hash, { label: v || null }); }}
+                  onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                  style={{ flex:'1 1 160px', minWidth:0, padding:'0.3rem 0.5rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface)', color:'var(--text)', fontSize:'0.85rem' }} />
+                <span style={{ fontFamily:'monospace', fontSize:'0.8rem', color:'var(--text2)', whiteSpace:'nowrap' }}>{r.ip}</span>
+                <span style={{ fontSize:'0.75rem', color:'var(--text2)', whiteSpace:'nowrap' }}>{r.isp || ''} · 최근 {fmtWhen(r.last_seen_at)} · 접속 {r.hits}회</span>
+                <span style={{ marginLeft:'auto', display:'inline-flex', alignItems:'center', gap:6, whiteSpace:'nowrap' }}>
+                  <span style={{ fontSize:'0.75rem', fontWeight:600, color: r.pinned ? 'var(--green)' : expired ? 'var(--text2)' : 'var(--yellow)' }}>
+                    {r.pinned ? '고정' : expired ? '만료' : `${left}일 남음`}
+                  </span>
+                  <button onClick={() => save(r.ip_hash, { pinned: !r.pinned })}
+                    style={btn.secondary({ fontSize:'0.75rem', padding:'0.2rem 0.5rem' })}>{r.pinned ? '고정 해제' : '고정'}</button>
+                </span>
+              </div>
+            );
+          })}
+          {!sorted.length && <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>등록된 네트워크 없음</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -3849,6 +3919,8 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                 <div style={{ display:'flex', gap:6, alignItems:'center', marginTop:3, minWidth:0 }}>
                   <span style={{ fontSize:'0.75rem', color:'var(--text2)', fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0 }}>{r.slug}</span>
                   {links > 0 && <span style={{ fontSize:'0.72rem', color:'var(--green)', fontWeight:500, flexShrink:0 }}>🔗{links}</span>}
+                  {/* 지원서 열람 + 결과물 방문 — 데스크톱 표와 같은 배지 (slug 가 길면 slug 쪽이 줄어든다) */}
+                  <span style={{ display:'inline-flex', alignItems:'center', gap:6, flexShrink:0 }}><VisitBadge project={r} /></span>
                 </div>
                 {(() => {
                   const parts = [];
