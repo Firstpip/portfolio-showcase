@@ -15,7 +15,7 @@ const MILESTONES_TABLE = 'project_milestones';
 const VISITS_TABLE = 'showcase_visits';
 const VISIT_SUMMARY_VIEW = 'showcase_visit_summary';
 const PROPOSAL_VIEWS_TABLE = 'proposal_views';
-const VisitCtx = React.createContext({ summary: {}, views: {} });
+const VisitCtx = React.createContext({ summary: {}, views: {}, visitsBySlug: {}, ipFirst: {} });
 
 // ─── Constants ───
 const STATUS_META = {
@@ -442,38 +442,89 @@ function daysBetween(d1, d2) {
 }
 
 // ─── 결과물 방문 신호 ───
-// "그 클라이언트 본인"이라는 확증은 불가능하다 — 위시켓 프로필은 로그인 사용자 누구나 볼 수 있다.
-// 그래서 세션마다 정황으로 등급만 매긴다:
-//   높음: 지원 이후 · 위시켓에서 넘어옴 · 20초 이상 보거나 3번 이상 조작
-//   중간: 지원 이후 · (위시켓 또는 출처 없음 — 링크를 복사해 사내 공유한 경우 포함)
-//   낮음: 지원 전 방문, 또는 다른 사이트에서 넘어옴
+// "그 클라이언트 본인"이라는 확증은 불가능하다 — '결과물 확인하기'는 위시켓 프로필에 공개된 포트폴리오 항목의
+// 링크라, 지원서를 읽은 클라이언트와 프로필을 둘러보는 사람이 같은 URL 을 누른다(referrer 도 origin 뿐).
+// 그래서 '방문'마다 정황으로 등급만 매긴다 (2026-10-22 개정).
+//   방문 = 같은 IP 해시에서 30분 안에 이어진 세션 묶음. 위시켓 링크는 새 탭으로 열려 P1·P2 가 세션 2개가 되므로
+//          세션 단위로 세면 한 번 들른 사람이 둘로 쪼개진다. (IP 해시 솔트는 고정 — 날짜를 넘어도 같은 사람)
+//   위에서부터 처음 맞는 조건으로 정한다:
+//   낮음: 지원 전 · 다른 사이트 경유 · 이 공고보다 '먼저' 다른 공고를 2개 이상 봄(프로필 둘러보기)
+//         · 지원서 열람 전(아직 열람 전이거나 열람 시각보다 앞섬 — 클라이언트는 지원서를 열어야 링크를 본다)
+//         · 바로 나감(체류 5초 미만 · 조작 0 · 스크롤 30% 미만 — 실수 클릭·메일 보안 스캐너)
+//   높음: 이미 '높음'이던 사람의 재방문 · 열람 -2분~+60분 사이 방문 · 열람 이후 위시켓 경유 + 20초/조작 3회
+//         (단, 이 공고보다 먼저 다른 공고 1개를 본 사람은 '중간'까지)
+//   중간: 그 외 열람 이후 방문 (출처 없음 = 링크를 사내 공유한 경우 포함)
+//   이 공고를 본 '뒤에' 다른 결과물을 둘러본 건 감점하지 않는다 — 관심 있는 클라이언트의 행동이다.
+//   기준값(60분·5초·30분)은 실데이터 없이 정한 초기값 — 미팅 전환 건과 대조해 조정할 것.
+//   열람 시각은 1시간 주기 동기화라 늦게 채워질 수 있다 — 등급은 열 때마다 다시 계산되므로 그때 바로잡힌다.
 function appliedAtOf(project) {
   const h = (project?.history || []).find(e => e && e.status === 'applied' && e.date);
   const d = new Date(h ? h.date : project?.created_at);
   return isNaN(d) ? null : d;
 }
-function visitSessions(rows, project) {
+const fmtGap = (ms) => { const m = Math.max(0, Math.round(ms / 60000)); return m < 60 ? `${m}분` : m < 1440 ? `${Math.floor(m / 60)}시간${m % 60 ? ` ${m % 60}분` : ''}` : `${Math.floor(m / 1440)}일`; };
+const VISIT_GAP = 30 * 60000;                                            // 같은 사람의 세션을 한 방문으로 묶는 간격
+const VIEW_WINDOW_BEFORE = 2 * 60000, VIEW_WINDOW_AFTER = 60 * 60000;   // 알림 시각은 분 단위 — 앞쪽 2분 여유
+// 메신저·SNS 앱 내부 브라우저 — 링크가 대화방으로 공유됐다는 흔적 (클라이언트 쪽 내부 검토 신호)
+const IN_APP_RE = /KAKAOTALK|Line\/|NAVER\(inapp|DaumApps|FBAN|FBAV|FB_IAB|Instagram|Slack|Teams\//i;
+
+// rows: 이 공고의 외부 방문 행 / ipFirst: { ip_hash: { slug: 그 IP 의 해당 공고 첫 방문 ISO } } (전체 공고)
+function visitSessions(rows, project, pv, ipFirst = {}) {
   const applied = appliedAtOf(project);
-  const by = new Map();
-  for (const r of rows) {
-    const s = by.get(r.session_id) || { id: r.session_id, start: r.created_at, end: r.last_seen_at, portfolios: new Set(), dwell: 0, ix: 0, scroll: 0, fromWishket: false, noRef: true };
-    if (r.created_at < s.start) s.start = r.created_at;
-    if (r.last_seen_at > s.end) s.end = r.last_seen_at;
-    s.portfolios.add(r.portfolio);
-    s.dwell += r.dwell_ms || 0;
-    s.ix += r.interactions || 0;
-    s.scroll = Math.max(s.scroll, r.max_scroll_pct || 0);
-    if (/wishket\.com/i.test(r.referrer_origin || '')) s.fromWishket = true;
-    if (r.referrer_origin) s.noRef = false;
-    by.set(r.session_id, s);
+  const viewedAt = pv?.viewed_at ? new Date(pv.viewed_at) : null;
+  const notViewedYet = !!pv && !pv.viewed_on;
+  const asc = [...rows].sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+  const open = new Map(), visits = [];
+  for (const r of asc) {
+    const who = r.ip_hash || `s:${r.session_id}`;
+    let v = open.get(who);
+    if (!v || new Date(r.created_at) - new Date(v.end) > VISIT_GAP) {
+      v = { id: `${who}|${r.created_at}`, who, ip: r.ip_hash, start: r.created_at, end: r.last_seen_at || r.created_at, portfolios: new Set(), sessions: new Set(), dwell: 0, ix: 0, scroll: 0, fromWishket: false, otherRef: false, inApp: false };
+      open.set(who, v); visits.push(v);
+    }
+    if ((r.last_seen_at || r.created_at) > v.end) v.end = r.last_seen_at || r.created_at;
+    v.portfolios.add(r.portfolio);
+    v.sessions.add(r.session_id);
+    v.dwell += r.dwell_ms || 0;
+    v.ix += r.interactions || 0;
+    v.scroll = Math.max(v.scroll, r.max_scroll_pct || 0);
+    if (/wishket\.com/i.test(r.referrer_origin || '')) v.fromWishket = true;
+    else if (r.referrer_origin) v.otherRef = true;
+    if (IN_APP_RE.test(r.ua || '')) v.inApp = true;
   }
-  return [...by.values()].map(s => {
-    const after = !applied || new Date(s.start) >= applied;
-    const engaged = s.dwell >= 20000 || s.ix >= 3;
-    s.level = after && s.fromWishket && engaged ? 'high' : after && (s.fromWishket || s.noRef) ? 'mid' : 'low';
-    return s;
-  }).sort((a, b) => (a.start < b.start ? 1 : -1));
+  const highWho = new Set();   // 시간순으로 판정하며 '높음'이던 사람을 기억 → 재방문
+  for (const v of visits) {
+    const start = new Date(v.start);
+    const seen = (v.ip && ipFirst[v.ip]) || {};
+    const others = Object.entries(seen).filter(([slug]) => slug !== project.slug);
+    const before = others.filter(([, t]) => new Date(t) < start).length;
+    const afterward = others.length - before;
+    const sinceView = viewedAt ? start - viewedAt : null;
+    const engaged = v.dwell >= 20000 || v.ix >= 3;
+    const bounced = v.dwell < 5000 && v.ix === 0 && v.scroll < 30;
+    const reasons = [];
+    if (sinceView != null && sinceView >= -VIEW_WINDOW_BEFORE) reasons.push(`열람 +${fmtGap(sinceView)}`);
+    if (v.inApp) reasons.push('메신저 공유');
+    if (afterward) reasons.push(`다른 결과물 ${afterward}개도 탐색`);
+    let level, lead = null;
+    if (applied && start < applied) { level = 'low'; lead = '지원 전'; }
+    else if (v.otherRef && !v.fromWishket) { level = 'low'; lead = '외부 사이트 경유'; }
+    else if (before >= 2) { level = 'low'; lead = `다른 공고 ${before}개 먼저 방문`; }
+    else if (notViewedYet || (sinceView != null && sinceView < -VIEW_WINDOW_BEFORE)) { level = 'low'; lead = '지원서 열람 전'; }
+    else if (bounced) { level = 'low'; lead = '바로 나감'; }
+    else if (highWho.has(v.who)) { level = 'high'; lead = '재방문'; }
+    else if (sinceView != null && sinceView >= -VIEW_WINDOW_BEFORE && (sinceView <= VIEW_WINDOW_AFTER || (v.fromWishket && engaged))) {
+      level = before ? 'mid' : 'high';
+      if (before) lead = '다른 공고 1개 먼저 방문';
+    } else level = 'mid';
+    if (lead) reasons.unshift(lead);
+    if (level === 'high') highWho.add(v.who);
+    v.level = level;
+    v.reasons = reasons;
+  }
+  return visits.sort((a, b) => (a.start < b.start ? 1 : -1));
 }
+const fmtViewedAt = (pv) => pv?.viewed_at ? fmtWhen(pv.viewed_at) : fmtViewedOn(pv?.viewed_on);
 const VISIT_LEVEL = {
   high: { label: '높음', color: 'var(--green)' },
   mid:  { label: '중간', color: 'var(--yellow)' },
@@ -483,30 +534,41 @@ const fmtDwell = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60
 const fmtWhen = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 const fmtViewedOn = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v || ''); return m ? `${+m[2]}/${+m[3]}` : ''; };
 
-// 목록 행 배지 — 외부 방문 세션 수 + 지원서 열람일
-function VisitBadge({ slug }) {
-  const { summary, views } = React.useContext(VisitCtx);
+// 목록 행 배지 — 지원서 열람일 + 결과물 방문
+//   '높음' 방문(클라이언트 방문 가능성 높음)이 있으면 그 첫 방문 날짜를 초록으로 강조 → 목록만 보고 판단 가능.
+//   없으면 외부 방문 횟수만 회색으로 (프로필을 둘러본 사람이 섞인 숫자라 강조하지 않는다).
+function VisitBadge({ project }) {
+  const { summary, views, visitsBySlug, ipFirst } = React.useContext(VisitCtx);
+  const slug = project.slug;
   const sv = summary[slug], pv = views[slug];
-  if (!sv && !pv?.viewed_on) return null;
+  const rows = visitsBySlug[slug];
+  const visits = React.useMemo(() => (rows ? visitSessions(rows, project, pv, ipFirst) : null), [rows, project, pv, ipFirst]);
+  if (!sv && !rows && !pv?.viewed_on) return null;
+  const highs = (visits || []).filter(v => v.level === 'high');
+  const first = highs[highs.length - 1];   // 시작 역순 정렬 → 마지막이 첫 방문
+  const total = visits ? visits.length : sv?.sessions;
   return (
     <>
-      {pv?.viewed_on && <span style={{ fontSize:'0.7rem', color:'var(--accent2)', fontWeight:500 }} title={`위시켓 지원서 열람 ${pv.viewed_on}`}>📨{fmtViewedOn(pv.viewed_on)}</span>}
-      {sv && <span style={{ fontSize:'0.7rem', color: sv.wishket_visits > 0 ? 'var(--green)' : 'var(--text2)', fontWeight:500 }}
-        title={`결과물 외부 방문 ${sv.sessions}세션 (위시켓 경유 ${sv.wishket_visits}회) · 마지막 ${fmtWhen(sv.last_external_at)}`}>👀{sv.sessions}</span>}
+      {pv?.viewed_on && <span style={{ fontSize:'0.7rem', color:'var(--accent2)', fontWeight:500 }} title={`위시켓 지원서 열람 ${pv.viewed_at ? fmtWhen(pv.viewed_at) : pv.viewed_on}`}>📨{fmtViewedOn(pv.viewed_on)}</span>}
+      {first
+        ? <span style={{ fontSize:'0.7rem', color:'var(--green)', fontWeight:700 }}
+            title={`클라이언트 방문 가능성 높음 — 첫 방문 ${fmtWhen(first.start)}${first.reasons.length ? ` (${first.reasons.join(' · ')})` : ''} · '높음' ${highs.length}회 / 외부 ${total}회 방문`}>👀{fmtWhen(first.start).split(' ')[0]}</span>
+        : total > 0 && <span style={{ fontSize:'0.7rem', color:'var(--text2)', fontWeight:500 }}
+            title={`결과물 외부 방문 ${total}회${sv ? ` · 마지막 ${fmtWhen(sv.last_external_at)}` : ''} — 클라이언트로 볼 만한 방문은 아직 없음`}>👀{total}</span>}
     </>
   );
 }
 
-// 상세 모달 패널 — 열람일 + 세션별 방문 (등급·체류·조작)
+// 상세 모달 패널 — 열람일 + 방문별 등급·근거·체류·조작
 function VisitPanel({ project }) {
-  const { views } = React.useContext(VisitCtx);
+  const { views, ipFirst } = React.useContext(VisitCtx);
   const pv = views[project.slug];
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
   useEffect(() => {
     let alive = true;
     supabase.from(VISITS_TABLE)
-      .select('portfolio,session_id,referrer_origin,created_at,last_seen_at,dwell_ms,max_scroll_pct,interactions,is_bot,is_automation,is_internal')
+      .select('portfolio,session_id,ip_hash,ua,referrer_origin,created_at,last_seen_at,dwell_ms,max_scroll_pct,interactions,is_bot,is_automation,is_internal')
       .eq('slug', project.slug).order('created_at', { ascending:false }).limit(200)
       .then(({ data, error }) => { if (!alive) return; if (error) setErr(error); else setRows(data || []); });
     return () => { alive = false; };
@@ -514,31 +576,33 @@ function VisitPanel({ project }) {
   if (err) return null;   // 테이블 미배포 등 — 패널만 숨긴다
   const external = (rows || []).filter(r => !r.is_bot && !r.is_automation && !r.is_internal);
   const excluded = (rows || []).length - external.length;
-  const sessions = rows ? visitSessions(external, project) : [];
-  if (rows && !sessions.length && !pv && !excluded) return null;
+  // 같은 IP 가 다른 공고 결과물을 언제 봤는가 — 프로필을 둘러보는 사람을 가려낸다 (맵은 목록 로드 때 한 번 만든다)
+  const visits = rows ? visitSessions(external, project, pv, ipFirst) : [];
+  if (rows && !visits.length && !pv && !excluded) return null;
   return (
     <div style={{ marginBottom:'0.75rem', padding:'0.6rem 0.75rem', borderRadius:8, background:'var(--surface2)', border:'1px solid var(--border)', fontSize:'0.8rem' }}>
       <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6, fontWeight:600 }}>
         <span>👀 결과물 방문</span>
         <span style={{ marginLeft:'auto', fontWeight:400, color:'var(--text2)' }}>
-          {pv ? (pv.viewed_on ? `📨 지원서 열람 ${pv.viewed_on}` : '📨 지원서 열람 전') : ''}
+          {pv ? (pv.viewed_on ? `📨 지원서 열람 ${fmtViewedAt(pv)}` : '📨 지원서 열람 전') : ''}
         </span>
       </div>
       {!rows ? <div style={{ color:'var(--text2)' }}>불러오는 중…</div>
-        : !sessions.length ? <div style={{ color:'var(--text2)' }}>외부 방문 없음{excluded ? ` (팀·자동화·봇 ${excluded}건 제외)` : ''}</div>
+        : !visits.length ? <div style={{ color:'var(--text2)' }}>외부 방문 없음{excluded ? ` (팀·자동화·봇 ${excluded}건 제외)` : ''}</div>
         : (
           <>
-            {sessions.slice(0, 8).map(s => (
-              <div key={s.id} style={{ display:'flex', alignItems:'center', flexWrap:'wrap', columnGap:8, rowGap:2, padding:'3px 0', borderTop:'1px solid var(--border)' }}>
-                <span style={{ color: VISIT_LEVEL[s.level].color, fontWeight:600, minWidth:30 }} title="본인 방문 가능성 (정황 추정)">{VISIT_LEVEL[s.level].label}</span>
-                <span style={{ fontFamily:'monospace', color:'var(--text2)', whiteSpace:'nowrap' }}>{fmtWhen(s.start)}</span>
-                <span style={{ whiteSpace:'nowrap' }}>{[...s.portfolios].sort().map(n => `P${n}`).join('·')}</span>
-                <span style={{ color:'var(--text2)', whiteSpace:'nowrap' }}>{fmtDwell(s.dwell)} · 조작 {s.ix} · 스크롤 {s.scroll}%</span>
-                <span style={{ marginLeft:'auto', color:'var(--text2)', whiteSpace:'nowrap' }}>{s.fromWishket ? '위시켓' : s.noRef ? '직접' : '기타'}</span>
+            {visits.slice(0, 8).map(v => (
+              <div key={v.id} style={{ display:'flex', alignItems:'center', flexWrap:'wrap', columnGap:8, rowGap:2, padding:'3px 0', borderTop:'1px solid var(--border)' }}>
+                <span style={{ color: VISIT_LEVEL[v.level].color, fontWeight:600, minWidth:30 }} title="본인 방문 가능성 (정황 추정)">{VISIT_LEVEL[v.level].label}</span>
+                <span style={{ fontFamily:'monospace', color:'var(--text2)', whiteSpace:'nowrap' }}>{fmtWhen(v.start)}</span>
+                <span style={{ whiteSpace:'nowrap' }}>{[...v.portfolios].sort().map(n => `P${n}`).join('·')}</span>
+                <span style={{ color:'var(--text2)', whiteSpace:'nowrap' }}>{fmtDwell(v.dwell)} · 조작 {v.ix} · 스크롤 {v.scroll}%</span>
+                {v.reasons.length > 0 && <span style={{ color: v.level === 'high' ? 'var(--green)' : 'var(--text2)', whiteSpace:'nowrap' }}>{v.reasons.join(' · ')}</span>}
+                <span style={{ marginLeft:'auto', color:'var(--text2)', whiteSpace:'nowrap' }}>{v.fromWishket ? '위시켓' : v.otherRef ? '기타' : '직접'}</span>
               </div>
             ))}
             <div style={{ marginTop:4, color:'var(--text2)', fontSize:'0.75rem' }}>
-              {sessions.length > 8 ? `외 ${sessions.length - 8}세션 · ` : ''}등급은 정황 추정 — 위시켓 프로필은 다른 사용자도 볼 수 있음{excluded ? ` · 팀·자동화·봇 ${excluded}건 제외` : ''}
+              {visits.length > 8 ? `외 ${visits.length - 8}회 · ` : ''}등급은 정황 추정 — 열람 직후 방문·재방문일수록 높음, 위시켓 프로필은 다른 사용자도 볼 수 있음{excluded ? ` · 팀·자동화·봇 ${excluded}건 제외` : ''}
             </div>
           </>
         )}
@@ -3862,7 +3926,7 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                     <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                       <span style={{ fontSize:'0.8rem', color:'var(--text2)', fontFamily:'monospace' }}>{r.slug}</span>
                       {(r.portfolio_links||[]).length > 0 && <span style={{ fontSize:'0.7rem', color:'var(--green)', fontWeight:500 }} title={`포트폴리오 링크 ${r.portfolio_links.length}개`}>🔗{r.portfolio_links.length}</span>}
-                      <VisitBadge slug={r.slug} />
+                      <VisitBadge project={r} />
                     </div>
                     {HAS_MILESTONES.includes(r.current_status) && !milestonesSetupNeeded && (
                       <div style={{ marginTop:6 }}>
@@ -4181,16 +4245,26 @@ function App({ session }) {
   }, [toast]);
 
   // 결과물 방문 요약 + 지원서 열람 — 테이블이 아직 없거나 실패해도 조용히 빈 값 (보조 정보라 토스트 없음)
-  const [visitData, setVisitData] = useState({ summary: {}, views: {} });
+  const [visitData, setVisitData] = useState({ summary: {}, views: {}, visitsBySlug: {}, ipFirst: {} });
   const loadVisits = useCallback(async () => {
-    const [s, v] = await Promise.all([
+    // 외부 방문 원본(목록 배지의 '높음' 판정 + 교차 방문 맵용) — 세션 판정에 필요한 열만, 최근 순 상한
+    const [s, v, x] = await Promise.all([
       supabase.from(VISIT_SUMMARY_VIEW).select('*'),
-      supabase.from(PROPOSAL_VIEWS_TABLE).select('slug,viewed_on,checked_at'),
+      supabase.from(PROPOSAL_VIEWS_TABLE).select('slug,viewed_on,viewed_at,checked_at'),
+      supabase.from(VISITS_TABLE).select('slug,portfolio,session_id,ip_hash,ua,referrer_origin,created_at,last_seen_at,dwell_ms,max_scroll_pct,interactions')
+        .eq('is_bot', false).eq('is_automation', false).eq('is_internal', false)
+        .order('created_at', { ascending:false }).limit(5000),
     ]);
-    const summary = {}, views = {};
+    const summary = {}, views = {}, visitsBySlug = {}, ipFirst = {};
     (s.error ? [] : s.data || []).forEach(r => { summary[r.slug] = r; });
     (v.error ? [] : v.data || []).forEach(r => { views[r.slug] = r; });
-    setVisitData({ summary, views });
+    (x.error ? [] : x.data || []).forEach(r => {
+      (visitsBySlug[r.slug] ||= []).push(r);
+      if (!r.ip_hash) return;
+      const m = (ipFirst[r.ip_hash] ||= {});
+      if (!m[r.slug] || r.created_at < m[r.slug]) m[r.slug] = r.created_at;   // IP 별 공고 첫 방문 — '먼저 둘러봤나' 판정용
+    });
+    setVisitData({ summary, views, visitsBySlug, ipFirst });
   }, []);
   // 팀 브라우저 표식 — 같은 출처(firstpip.github.io)의 쇼케이스 페이지(assets/sv.js)가 읽어 내부 방문으로 분류한다
   useEffect(() => { try { localStorage.setItem('fp_internal', '1'); } catch {} }, []);
