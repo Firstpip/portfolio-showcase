@@ -37,8 +37,7 @@ const int = (v: unknown, lo: number, hi: number) => {
 const clientIp = (req: Request) =>
   (req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for") || "").split(",")[0].trim();
 
-async function ipHash(req: Request): Promise<string | null> {
-  const ip = clientIp(req);
+async function ipHash(req: Request, ip = clientIp(req)): Promise<string | null> {
   const salt = Deno.env.get("SV_SALT");
   if (!ip || !salt) return null;
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${salt}|${ip}`));
@@ -52,21 +51,29 @@ async function isTeamNetwork(hash: string): Promise<boolean> {
 }
 
 // 대시보드 로그인 세션(또는 운영자 service_role)만 팀 IP 를 등록할 수 있다 — 외부인이 자기 IP 를 '팀'으로 숨기는 것 차단
-async function registerTeam(req: Request) {
+//   service_role 은 b.ip·b.label·b.pinned 로 지금 접속 IP 가 아닌 주소도 등록할 수 있다 (사무실·재택 IP 수동 등록)
+const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+async function registerTeam(req: Request, b: Record<string, unknown>) {
   const token = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   if (!token) return;
+  let operator = false;
   const { data, error } = await sb.auth.getUser(token);
   if (error || !data?.user) {
     // 사용자 세션이 아니면 service_role 키인지 — 관리자 API 가 통하는지로 판별 (키 문자열은 환경마다 형식이 달라 비교 불가)
     const admin = createClient(Deno.env.get("SUPABASE_URL")!, token, { auth: { persistSession: false } });
     const { error: e2 } = await admin.auth.admin.listUsers({ page: 1, perPage: 1 });
     if (e2) return;
+    operator = true;
   }
-  const ip = clientIp(req), hash = await ipHash(req);
+  const manual = operator && typeof b.ip === "string" && IPV4_RE.test(b.ip) ? b.ip : null;
+  const ip = manual || clientIp(req), hash = await ipHash(req, ip);
   if (!ip || !hash) return;
   const now = new Date().toISOString();
   const { data: cur } = await sb.from("team_networks").select("hits,district").eq("ip_hash", hash).maybeSingle();
-  const row: Record<string, unknown> = { ip_hash: hash, ip, hits: (cur?.hits ?? 0) + 1, last_seen_at: now };
+  const row: Record<string, unknown> = { ip_hash: hash, ip, last_seen_at: now };
+  if (!manual) row.hits = (cur?.hits ?? 0) + 1;   // 수동 등록은 '대시보드 사용 횟수'가 아니다
+  if (manual && typeof b.label === "string") row.label = b.label.slice(0, 60);
+  if (manual && typeof b.pinned === "boolean") row.pinned = b.pinned;
   if (!cur?.district) {
     // 위치는 처음 한 번만 — ip-api 는 한국 IP 를 구 단위(city)까지 준다. 실패해도 등록은 한다.
     try {
@@ -94,7 +101,7 @@ Deno.serve(async (req) => {
   } catch { return done(); }
 
   if (b.t === "team") {
-    try { await registerTeam(req); } catch (e) { console.error("showcase-view team", e instanceof Error ? e.message : e); }
+    try { await registerTeam(req, b); } catch (e) { console.error("showcase-view team", e instanceof Error ? e.message : e); }
     return done();
   }
 
