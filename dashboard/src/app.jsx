@@ -1250,6 +1250,130 @@ function FunnelAnalysis({ data }) {
   );
 }
 
+// ─── 미팅 후 미선정 사유 (2026-10-23, migration 20261023120000_lost_reasons) ───
+// 지원 퍼널에서 '미팅 → 계약' 이 가장 크게 무너졌는데 그 이유는 어디에도 남지 않았다. 미선정 건은 삭제 버튼·자동정리로
+// row 가 사라지므로, 감사 로그 삭제 스냅샷에서 '미팅까지 갔다가 수주 없이 삭제된 건'을 뽑아(lost_after_meeting) 사유를 받는다.
+// 사유는 여러 개 고를 수 있고, 모르면 '모름'도 기록이다 — 빈칸과 구분해야 집계가 정직하다.
+const LOST_REASONS = [
+  { key: 'price',       label: '가격' },
+  { key: 'schedule',    label: '일정·납기' },
+  { key: 'capability',  label: '기술·역량 신뢰' },
+  { key: 'reference',   label: '레퍼런스 부족' },
+  { key: 'competitor',  label: '경쟁사 선정' },
+  { key: 'client_hold', label: '클라이언트 보류·취소' },
+  { key: 'scope',       label: '요구사항 불일치' },
+  { key: 'impression',  label: '미팅 인상·소통' },
+  { key: 'unknown',     label: '모름' },
+];
+const LOST_LABEL = Object.fromEntries(LOST_REASONS.map(r => [r.key, r.label]));
+
+function LostReasonRow({ item, saved, onSave }) {
+  const [sel, setSel] = useState(saved?.reasons || []);
+  const [note, setNote] = useState(saved?.note || '');
+  const [busy, setBusy] = useState(false);
+  const dirty = JSON.stringify([...sel].sort()) !== JSON.stringify([...(saved?.reasons || [])].sort()) || note !== (saved?.note || '');
+  const toggle = (k) => setSel(s => s.includes(k) ? s.filter(x => x !== k) : [...s, k]);
+  return (
+    <div style={{ padding:'0.6rem 0.75rem', borderRadius:8, background:'var(--surface2)', border:'1px solid var(--border)' }}>
+      <div style={{ display:'flex', alignItems:'baseline', gap:8, flexWrap:'wrap', marginBottom:6 }}>
+        <span style={{ fontWeight:600, fontSize:'0.85rem', flex:'1 1 200px', minWidth:0 }}>{item.title || item.slug}</span>
+        <span style={{ fontSize:'0.75rem', color:'var(--text2)', whiteSpace:'nowrap' }}>
+          {item.budget ? `${item.budget} · ` : ''}미팅 {item.meeting_at ? String(item.meeting_at).slice(0, 10) : '—'} · 정리 {String(item.deleted_at).slice(0, 10)}{item.direct ? ' · 직거래' : ''}
+        </span>
+      </div>
+      <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:6 }}>
+        {LOST_REASONS.map(r => {
+          const on = sel.includes(r.key);
+          return (
+            <button key={r.key} onClick={() => toggle(r.key)} aria-pressed={on}
+              style={{ padding:'0.2rem 0.55rem', borderRadius:12, fontSize:'0.75rem', cursor:'pointer',
+                border:`1px solid ${on ? 'var(--accent)' : 'var(--border)'}`, background: on ? 'var(--surface-accent-mid)' : 'transparent', color: on ? 'var(--text)' : 'var(--text2)' }}>
+              {r.label}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display:'flex', gap:6 }}>
+        <input value={note} onChange={e => setNote(e.target.value)} placeholder="메모 (선택)" title="예: 클라이언트가 2,000만 이하 원함"
+          style={{ flex:1, minWidth:0, padding:'0.3rem 0.5rem', borderRadius:6, border:'1px solid var(--border)', background:'var(--surface)', color:'var(--text)', fontSize:'0.8rem' }} />
+        <button disabled={!sel.length || !dirty || busy} onClick={async () => { setBusy(true); await onSave(item, sel, note.trim()); setBusy(false); }}
+          style={btn.secondary({ fontSize:'0.75rem', padding:'0.3rem 0.7rem', opacity: (!sel.length || !dirty) ? 0.5 : 1 })}>
+          {busy ? '저장 중…' : saved ? '수정' : '저장'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function LostReasonsCard({ session }) {
+  const [items, setItems] = useState(null);
+  const [saved, setSaved] = useState({});
+  const [err, setErr] = useState(false);
+  const [showDone, setShowDone] = useState(false);
+  const [showAllPending, setShowAllPending] = useState(false);   // 미기록은 처음 3건만 — 카드가 길어지지 않게
+  useEffect(() => {
+    Promise.all([supabase.rpc('lost_after_meeting'), supabase.from('lost_reasons').select('*')]).then(([l, r]) => {
+      if (l.error || r.error) { setErr(true); return; }
+      setItems((l.data || []).filter(x => !x.direct));   // 직거래는 위시켓 퍼널 밖
+      setSaved(Object.fromEntries((r.data || []).map(x => [x.slug, x])));
+    });
+  }, []);
+  const save = async (item, reasons, note) => {
+    const row = { slug: item.slug, title: item.title, reasons, note: note || null, recorded_by: session?.user?.email || null, recorded_at: new Date().toISOString() };
+    const { error } = await supabase.from('lost_reasons').upsert(row, { onConflict: 'slug' });
+    if (!error) setSaved(s => ({ ...s, [item.slug]: row }));
+  };
+  if (err) return null;   // 테이블·함수 미배포 등
+  const pending = (items || []).filter(x => !saved[x.slug]);
+  const done = (items || []).filter(x => saved[x.slug]);
+  const counts = {};
+  for (const x of done) for (const k of saved[x.slug].reasons || []) counts[k] = (counts[k] || 0) + 1;
+  const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  return (
+    <div style={{ background:'var(--surface)', borderRadius:12, padding:'1.5rem', border:'1px solid var(--border)', marginTop:'1rem' }}>
+      <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginBottom:'0.75rem', flexWrap:'wrap', gap:8 }}>
+        <h3 style={{ fontSize:'1rem', fontWeight:600, margin:0 }}>미팅 후 미선정 사유</h3>
+        <span style={{ fontSize:'0.75rem', color:'var(--text2)' }}>미팅까지 갔다가 수주 없이 정리된 위시켓 건 · {items ? `기록 ${done.length}/${items.length}` : ''}</span>
+      </div>
+      {!items ? <div style={{ fontSize:'0.85rem', color:'var(--text2)' }}>불러오는 중…</div> : (
+        <>
+          {ranked.length > 0 ? (
+            <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:'1rem' }}>
+              {ranked.map(([k, n]) => (
+                <div key={k} style={{ display:'flex', alignItems:'center', gap:12 }}>
+                  <div style={{ width:110, fontSize:'0.8rem', color:'var(--text2)', textAlign:'right', flexShrink:0 }}>{LOST_LABEL[k] || k}</div>
+                  <div style={{ flex:1, background:'var(--surface2)', borderRadius:4, height:20, overflow:'hidden' }}>
+                    <div style={{ width:`${Math.max(100 * n / done.length, 4)}%`, height:'100%', background: k === 'unknown' ? 'var(--text2)' : 'var(--red)', borderRadius:4 }} />
+                  </div>
+                  <div style={{ width:70, fontSize:'0.8rem', color:'var(--text2)', flexShrink:0 }}>{n}건 · {Math.round(100 * n / done.length)}%</div>
+                </div>
+              ))}
+              <div style={{ fontSize:'0.75rem', color:'var(--text2)' }}>한 건에 사유 여러 개 가능 — 비율은 기록된 {done.length}건 대비</div>
+            </div>
+          ) : <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:'0.75rem' }}>아직 기록된 사유가 없습니다. 기억나는 건부터 골라 주세요 — 모르면 '모름'도 기록입니다.</div>}
+          {pending.length > 0 && <div style={{ fontSize:'0.8rem', fontWeight:600, color:'var(--text2)', margin:'0.25rem 0 6px' }}>사유 미기록 {pending.length}건</div>}
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            {(showAllPending ? pending : pending.slice(0, 3)).map(x => <LostReasonRow key={x.slug} item={x} saved={null} onSave={save} />)}
+          </div>
+          {pending.length > 3 && (
+            <button onClick={() => setShowAllPending(v => !v)} style={btn.ghost({ fontSize:'0.8rem', marginTop:8, padding:'0.2rem 0', display:'block' })}>
+              {showAllPending ? '▲ 미기록 접기' : `▼ 미기록 ${pending.length - 3}건 더 보기`}
+            </button>
+          )}
+          {done.length > 0 && (
+            <button onClick={() => setShowDone(v => !v)} style={btn.ghost({ fontSize:'0.8rem', marginTop:8, padding:'0.2rem 0' })}>
+              {showDone ? '▲' : '▼'} 기록한 건 {done.length}개 {showDone ? '접기' : '보기·수정'}
+            </button>
+          )}
+          {showDone && <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:6 }}>
+            {done.map(x => <LostReasonRow key={x.slug} item={x} saved={saved[x.slug]} onSave={save} />)}
+          </div>}
+        </>
+      )}
+    </div>
+  );
+}
+
 function MonthlyChart({ data, convStats }) {
   // 월별 **수주** 추이만 그린다 (2026-10-01). 이전엔 지원 건수 막대 위에 수주를 겹쳤는데, 미팅 없이 떨어진 건은
   // 지원종료 자동정리로 row 가 사라져 오래된 달일수록 지원 막대가 실제보다 낮았다(퍼널에서 지원 단계를 뺀 것과 같은 이유).
@@ -5596,7 +5720,7 @@ function App({ session }) {
           color:'var(--text2)', cursor:'pointer', fontSize:'0.85rem', fontWeight:500, padding:'0.4rem 0',
         }}>
           <span style={{ transition:'transform 0.2s', transform:showStats?'rotate(90deg)':'rotate(0)', display:'inline-block' }}>&#9654;</span>
-          상세 통계 {showStats?'':'(지원 퍼널 · 월별 수주 · 예산 구간별 전환율)'}
+          상세 통계 {showStats?'':'(지원 퍼널 · 미선정 사유 · 월별 수주 · 예산 구간별 전환율)'}
         </button>
         {showStats && (
           <div style={{ animation:'fadeIn 0.25s ease-out' }}>
@@ -5616,6 +5740,7 @@ function App({ session }) {
               );
             })()}
             <FunnelAnalysis data={data} />
+            <LostReasonsCard session={session} />
             <MonthlyChart data={data} convStats={convStats} />
             <BudgetAnalysis data={data} convStats={convStats} />
           </div>
