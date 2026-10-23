@@ -1266,6 +1266,8 @@ const LOST_REASONS = [
   { key: 'unknown',     label: '모름' },
 ];
 const LOST_LABEL = Object.fromEntries(LOST_REASONS.map(r => [r.key, r.label]));
+// 2026-10-23 숨김 — 사용자 결정(사유를 기록하지 않음). 테이블·RPC 는 남겨 두었으니 true 로 되돌리면 다시 보인다.
+const SHOW_LOST_REASONS = false;
 
 function LostReasonRow({ item, saved, onSave }) {
   const [sel, setSel] = useState(saved?.reasons || []);
@@ -5720,7 +5722,7 @@ function App({ session }) {
           color:'var(--text2)', cursor:'pointer', fontSize:'0.85rem', fontWeight:500, padding:'0.4rem 0',
         }}>
           <span style={{ transition:'transform 0.2s', transform:showStats?'rotate(90deg)':'rotate(0)', display:'inline-block' }}>&#9654;</span>
-          상세 통계 {showStats?'':'(지원 퍼널 · 미선정 사유 · 월별 수주 · 예산 구간별 전환율)'}
+          상세 통계 {showStats?'':'(지원 퍼널 · 월별 수주 · 예산 구간별 전환율)'}
         </button>
         {showStats && (
           <div style={{ animation:'fadeIn 0.25s ease-out' }}>
@@ -5740,7 +5742,7 @@ function App({ session }) {
               );
             })()}
             <FunnelAnalysis data={data} />
-            <LostReasonsCard session={session} />
+            {SHOW_LOST_REASONS && <LostReasonsCard session={session} />}
             <MonthlyChart data={data} convStats={convStats} />
             <BudgetAnalysis data={data} convStats={convStats} />
           </div>
