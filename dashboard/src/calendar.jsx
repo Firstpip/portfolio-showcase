@@ -892,7 +892,7 @@ function mountCalendar(root, ctx) {
   async function openPush(){
     const env = pushEnv();
     const head = `<h2>알림 설정<button class="x" aria-label="닫기">✕</button></h2>`;
-    const what = `<div class="hint" style="margin-bottom:.9rem">받는 알림: 참석하는 미팅·일정 시작 전, 평일 아침 8:30 오늘 근무지·일정, 오늘·내일 팀 근무지와 내 일정이 바뀌었을 때(바꾼 사람 제외).</div>`;
+    const what = `<div class="hint" style="margin-bottom:.9rem">받는 알림: 근무일 저녁 6:30 다음 근무일 안내(평소와 다를 때만), 오늘·내일 팀 근무지와 내 일정이 바뀌었을 때(바꾼 사람 제외, 밤 10시~아침 7시 30분 변경은 아침에).</div>`;
     const stat = (c, t) => `<div class="pstat" style="--c:${c}"><i></i>${t}</div>`;
     let body;
     if (env.ios && !env.standalone) {
@@ -909,11 +909,10 @@ function mountCalendar(root, ctx) {
     } else {
       let sub = null; try { sub = await currentSub(); if (sub && env.perm === 'granted' && (!pushRow || pushRow.endpoint !== sub.endpoint)) await saveSub(sub); } catch (e) { console.warn(e); }
       if (sub && pushRow && env.perm === 'granted') {
-        const L = pushRow.lead_minutes;
+        // morning_brief 컬럼 = '저녁 안내' 켜기/끄기 (이름은 첫 설계 때 것)
         body = stat('var(--green)', '이 기기에서 알림을 받고 있어요') + `
-          <div class="fld"><label>미팅·일정 알림</label><div class="sub" id="p-lead">${[[10,'10분 전'],[30,'30분 전'],[60,'1시간 전']].map(([v,l]) => `<button type="button" data-lead="${v}" aria-pressed="${L===v}">${l}</button>`).join('')}</div></div>
-          <div class="fld"><label class="ck"><input type="checkbox" id="p-brief" ${pushRow.morning_brief?'checked':''}>평일 아침 8:30 오늘 근무지·일정</label></div>
-          <div class="fld"><label class="ck"><input type="checkbox" id="p-change" ${pushRow.change_alerts?'checked':''}>팀 근무지·내 일정 변경 알림</label></div>
+          <div class="fld"><label class="ck"><input type="checkbox" id="p-brief" ${pushRow.morning_brief?'checked':''}>저녁 6:30 다음 근무일 안내 <small style="color:var(--text2)">· 근무지가 평소와 다르거나 일정·팀원 부재가 있을 때만</small></label></div>
+          <div class="fld"><label class="ck"><input type="checkbox" id="p-change" ${pushRow.change_alerts?'checked':''}>팀 근무지·내 일정 변경 알림 <small style="color:var(--text2)">· 밤 10시~아침 7시 30분 변경은 아침에</small></label></div>
           <div class="hint">설정은 기기마다 따로입니다. 다른 기기에서도 받으려면 그 기기에서 켜 주세요.</div>
           <div class="actions"><button class="btn" id="p-test">테스트 알림</button><button class="btn danger" id="p-off">이 기기 알림 끄기</button></div>`;
       } else {
@@ -926,7 +925,6 @@ function mountCalendar(root, ctx) {
     if (q('p-on')) q('p-on').onclick = enablePush;
     if (q('p-off')) q('p-off').onclick = disablePush;
     if (q('p-test')) q('p-test').onclick = testPush;
-    $('sheet').querySelectorAll('[data-lead]').forEach(b => b.onclick = () => setPushPref({ lead_minutes:Number(b.dataset.lead) }));
     if (q('p-brief')) q('p-brief').onchange = e => setPushPref({ morning_brief:e.target.checked });
     if (q('p-change')) q('p-change').onchange = e => setPushPref({ change_alerts:e.target.checked });
   }

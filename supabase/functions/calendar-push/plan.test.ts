@@ -27,55 +27,59 @@ const base = (): Snapshot => ({
 });
 const keys = (r: ReturnType<typeof planNotifications>) => r.notes.map((n) => n.key).sort();
 
-Deno.test("미팅 알림: 30분 전부터 15분 안에만, 기기 리드별로", () => {
+Deno.test("미팅 시작 전 알림은 보내지 않음 (사용자 결정)", () => {
   const s = base();
-  eq(keys(planNotifications(s, at("2026-11-03", "13:29"))).filter((k) => k.startsWith("m:e1")), [], "29분 전 아님 → 31분 전");
-  eq(keys(planNotifications(s, at("2026-11-03", "13:30"))).filter((k) => k.startsWith("m:e1")), ["m:e1@2026-11-03@30:m1", "m:e1@2026-11-03@30:m2"], "정확히 30분 전");
-  eq(keys(planNotifications(s, at("2026-11-03", "13:44"))).filter((k) => k.startsWith("m:e1")), ["m:e1@2026-11-03@30:m1", "m:e1@2026-11-03@30:m2"], "14분 지연까지 허용");
-  eq(keys(planNotifications(s, at("2026-11-03", "13:45"))).filter((k) => k.startsWith("m:e1@2026-11-03@30")), [], "15분 지나면 안 보냄");
-  eq(keys(planNotifications(s, at("2026-11-03", "13:50"))).filter((k) => k.startsWith("m:e1")), ["m:e1@2026-11-03@10:m2"], "10분 리드 기기");
-  eq(keys(planNotifications(s, at("2026-11-03", "14:00"))).filter((k) => k.startsWith("m:e1")), [], "시작 후엔 안 보냄");
-  const n = planNotifications(s, at("2026-11-03", "13:30")).notes.find((x) => x.key === "m:e1@2026-11-03@30:m1")!;
-  eq([n.title, n.body], ["📅 30분 후 킥오프", "14:00 가나다물류 킥오프 · 대면 · 고객사"], "문구");
+  for (const t of ["13:30", "13:50", "10:30"]) eq(planNotifications(s, at("2026-11-03", t)).notes.filter((n) => n.key.startsWith("m:")).length, 0, `미팅 알림 없음 ${t}`);
 });
 
-Deno.test("미팅 알림: 수주 미팅(KST 변환), 1시간 리드, 반복·건너뛴 회차", () => {
-  const s = base();
-  eq(keys(planNotifications(s, at("2026-11-03", "10:30"))).filter((k) => k.startsWith("m:w:")), ["m:w:w1@2026-11-03@30:m2"], "수주 미팅 11:00 KST");
-  eq(keys(planNotifications(s, at("2026-11-09", "09:00"))).filter((k) => k.startsWith("m:e2")), ["m:e2@2026-11-09@60:m3"], "반복 회차 1시간 전(정규만)");
-  eq(keys(planNotifications(s, at("2026-11-16", "09:30"))).filter((k) => k.startsWith("m:e2")), [], "건너뛴 회차");
-});
-
-Deno.test("미팅 알림: 연차인 날은 보내지 않음", () => {
-  const s = base(); s.leaves = [{ member_id: M1, from_date: "2026-11-03", to_date: "2026-11-03", kind: "off" }];
-  eq(keys(planNotifications(s, at("2026-11-03", "13:30"))).filter((k) => k.startsWith("m:e1")), ["m:e1@2026-11-03@30:m2"], "김동욱 연차");
-});
-
-Deno.test("아침 브리핑: 평일 08:30~10:00, 근무지·일정·팀 부재", () => {
+Deno.test("저녁 안내: 근무일 18:30~20:00, 다음 근무일 기준", () => {
   const s = base();
   s.leaves = [{ member_id: M3, from_date: "2026-11-03", to_date: "2026-11-03", kind: "off" }];
-  eq(planNotifications(s, at("2026-11-03", "08:29")).notes.filter((n) => n.kind === "brief").length, 0, "08:29 전");
-  const r = planNotifications(s, at("2026-11-03", "08:30")).notes.filter((n) => n.kind === "brief");
-  eq(r.map((n) => n.member).sort(), [M1, M2], "브리핑 켠 사람만(심정규는 끔)");
+  eq(planNotifications(s, at("2026-11-02", "18:29")).notes.filter((n) => n.kind === "brief").length, 0, "18:29 전");
+  eq(planNotifications(s, at("2026-11-02", "20:00")).notes.filter((n) => n.kind === "brief").length, 0, "20:00 이후");
+  const r = planNotifications(s, at("2026-11-02", "18:30")).notes.filter((n) => n.kind === "brief");
+  eq(r.map((n) => n.member).sort(), [M1, M2], "저녁 안내 켠 사람만(심정규는 끔), 내일 연차인 심정규는 원래 제외");
   const me = r.find((n) => n.member === M2)!;
-  eq(me.title, "☀️ 11/3 (화) 오늘 일정", "제목");
-  eq(me.body, "근무지: 외근 (가나다물류 킥오프)\n일정 3건: 종일 제안서 마감, 11:00 호텔 QR 앱, 14:00 가나다물류 킥오프\n팀: 김동욱 외근 (가나다물류 킥오프), 심정규 연차", "본문(대면 미팅 자동 외근)");
-  eq(planNotifications(s, at("2026-11-07", "08:30")).notes.filter((n) => n.kind === "brief").length, 0, "토요일");
-  eq(planNotifications(s, at("2026-12-25", "08:30")).notes.filter((n) => n.kind === "brief").length, 0, "공휴일");
+  eq([me.key, me.title], ["e:2026-11-03:m2", "🌙 내일 11/3 (화)"], "키·제목");
+  eq(me.body, "근무지: 외근 (가나다물류 킥오프) (평소와 다름)\n일정 3건: 종일 제안서 마감, 11:00 호텔 QR 앱, 14:00 가나다물류 킥오프\n팀: 김동욱 외근 (가나다물류 킥오프), 심정규 연차", "본문");
 });
 
-Deno.test("아침 브리핑: 직접 고른 근무지·반차·팀 근무지 예외·적용 시작일", () => {
+Deno.test("저녁 안내: 금요일 → 월요일, 공휴일 전날 → 그다음 평일, 쉬는 날 저녁엔 없음", () => {
   const s = base();
+  s.events.push({ id: "e5", type: "internal", title: "월요 점검", event_date: "2026-11-09", start_time: "09:30:00", all_day: false, people: [M1], exdates: [] });
+  const fri = planNotifications(s, at("2026-11-06", "18:35")).notes.filter((n) => n.kind === "brief" && n.member === M1);
+  eq(fri.map((n) => [n.key, n.title]), [["e:2026-11-09:m1", "🌙 다음 근무일 11/9 (월)"]], "금요일 저녁 → 월요일");
+  eq(planNotifications(s, at("2026-11-07", "18:35")).notes.filter((n) => n.kind === "brief").length, 0, "토요일 저녁엔 없음");
+  s.holidays["2026-11-10"] = "임시공휴일";
+  s.events.push({ id: "e6", type: "internal", title: "수요 점검", event_date: "2026-11-11", start_time: "09:30:00", all_day: false, people: [M1], exdates: [] });
+  eq(planNotifications(s, at("2026-11-09", "18:35")).notes.filter((n) => n.kind === "brief" && n.member === M1).map((n) => n.key), ["e:2026-11-11:m1"], "공휴일 전날 → 그다음 평일");
+});
+
+Deno.test("저녁 안내: 평소와 같은 날은 보내지 않음, 다르면 보냄", () => {
+  const s = base(); s.events = []; s.wishket = [];
+  eq(planNotifications(s, at("2026-11-03", "18:30")).notes.filter((n) => n.kind === "brief").length, 0, "패턴대로·일정 없음·팀 정상 → 없음");
   s.teamOverrides = [{ work_date: "2026-11-04", loc: "other", branch: "패스트파이브 강남 3호점", note: null }];
-  s.memberOverrides = [{ member_id: M1, work_date: "2026-11-04", loc: "home", branch: null }];
-  s.leaves = [{ member_id: M2, from_date: "2026-11-04", to_date: "2026-11-04", kind: "pm" }];
+  eq(planNotifications(s, at("2026-11-03", "18:30")).notes.find((n) => n.member === M1 && n.kind === "brief")!.body, "근무지: 패스트파이브 강남 3호점 (평소와 다름)", "팀 근무지 하루 예외");
+  s.teamOverrides = []; s.memberOverrides = [{ member_id: M1, work_date: "2026-11-04", loc: "out", branch: null }];
+  const r = planNotifications(s, at("2026-11-03", "18:30")).notes.filter((n) => n.kind === "brief");
+  eq(r.find((n) => n.member === M1)!.body.split("\n")[0], "근무지: 외근 (평소와 다름)", "내 개인 근무지");
+  eq(r.find((n) => n.member === M2)!.body, "근무지: 재택근무\n팀: 김동욱 외근", "팀원이 다른 곳이면 다른 사람에게도");
+  s.memberOverrides = []; s.leaves = [{ member_id: M2, from_date: "2026-11-04", to_date: "2026-11-04", kind: "pm" }];
   s.routines.push({ valid_from: "2026-11-04", days: { 1: "cityhall", 2: "cityhall", 3: "forest", 4: "cityhall", 5: "cityhall" } });
-  const r = planNotifications(s, at("2026-11-04", "08:31")).notes.filter((n) => n.kind === "brief");
-  eq(r.find((n) => n.member === M1)!.body.split("\n")[0], "근무지: 재택근무", "개인 재택");
-  eq(r.find((n) => n.member === M2)!.body.split("\n")[0], "근무지: 오후반차 · 패스트파이브 강남 3호점", "반차 + 하루 예외가 패턴보다 우선");
-  s.teamOverrides = [];
-  eq(planNotifications(s, at("2026-11-04", "08:31")).notes.find((n) => n.member === M2 && n.kind === "brief")!.body.split("\n")[0], "근무지: 오후반차 · 패스트파이브 서울숲", "11/4부터 수요일 패턴");
-  eq(planNotifications(s, at("2026-10-28", "08:31")).notes.find((n) => n.member === M2 && n.kind === "brief")!.body.split("\n")[0], "근무지: 재택근무", "과거 수요일은 예전 패턴");
+  eq(planNotifications(s, at("2026-11-03", "18:30")).notes.find((n) => n.member === M2 && n.kind === "brief")!.body, "근무지: 오후반차 · 패스트파이브 서울숲 (평소와 다름)", "반차 + 패턴이 바뀌는 날");
+  eq(planNotifications(s, at("2026-10-27", "18:30")).notes.find((n) => n.member === M1 && n.kind === "brief"), undefined, "과거 수요일(예전 패턴, 평소와 같음) → 없음");
+});
+
+Deno.test("변경 알림: 밤 22:00~07:30 은 보내지 않고 처리 위치도 그대로", () => {
+  const s = base();
+  s.teamOverrides = [{ work_date: "2026-11-03", loc: "forest", branch: null, note: null }];
+  s.audit = [{ id: 31, table_name: "team_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { work_date: "2026-11-03", loc: "forest" } }];
+  for (const [d, t] of [["2026-11-02", "22:00"], ["2026-11-02", "23:30"], ["2026-11-03", "07:29"]]) {
+    const r = planNotifications(s, at(d, t));
+    eq([r.notes.filter((n) => n.kind === "change").length, r.cursor], [0, null], `조용한 시간 ${d} ${t}`);
+  }
+  const m = planNotifications(s, at("2026-11-03", "07:30"));
+  eq([m.notes.filter((n) => n.kind === "change").map((n) => n.title)[0], m.cursor], ["🏢 오늘 팀 근무지 변경", 31], "아침 07:30 에 '오늘' 기준으로 발송");
 });
 
 Deno.test("변경 알림: 팀 근무지 — 오늘~모레만, 바꾼 사람 제외", () => {

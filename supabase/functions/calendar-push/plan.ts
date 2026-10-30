@@ -1,10 +1,14 @@
 // 알림 계획 — DB 스냅샷과 지금 시각으로 '지금 보낼 알림' 목록을 만든다.
+// 보내는 알림은 두 가지 (2026-10-30 사용자 결정: 미팅 시작 전 알림은 두지 않는다)
+//   ① 저녁 안내: 근무일 저녁 18:30~20:00 첫 실행에 '다음 근무일' 근무지·일정·팀 부재. 평소와 같은 날은 보내지 않는다.
+//   ② 변경 알림: 감사 로그 기준. 밤 22:00~07:30 사이에는 보내지 않고 쌓아 두었다가 07:30 이후 첫 실행에 보낸다.
 // DB·네트워크에 의존하지 않는 순수 함수라 따로 테스트한다 (plan.test.ts).
 // 근무지 규칙은 화면(dashboard/src/calendar.jsx)과 같다:
 //   종일 휴가 > 직접 고른 근무지 > 대면 미팅 외근 > 팀 근무지(하루 예외 > 적용 시작일별 주간 패턴)
 
 export type Member = { id: string; name: string; user_id: string | null };
-export type Sub = { id: string; member_id: string | null; lead_minutes: number; morning_brief: boolean; change_alerts: boolean };
+// morning_brief 컬럼 = '저녁 안내' 켜기/끄기 (이름은 첫 설계 때 것). lead_minutes 는 미팅 알림을 없애며 쓰지 않는다.
+export type Sub = { id: string; member_id: string | null; lead_minutes?: number; morning_brief: boolean; change_alerts: boolean };
 export type Row = Record<string, any>;
 export type Snapshot = {
   members: Member[];
@@ -19,8 +23,8 @@ export type Snapshot = {
   audit: Row[];           // project_audit_log (처리 위치 이후, id 오름차순)
 };
 export type Note = {
-  key: string; member: string; kind: "meeting" | "brief" | "change";
-  lead?: number; title: string; body: string; url: string; tag: string; ttl: number; urgency: "high" | "normal";
+  key: string; member: string; kind: "brief" | "change";
+  title: string; body: string; url: string; tag: string; ttl: number; urgency: "high" | "normal";
 };
 
 const KST = 9 * 3600e3;
@@ -28,7 +32,6 @@ const WD = ["일", "월", "화", "수", "목", "금", "토"];
 export const kstKey = (ms: number) => new Date(ms + KST).toISOString().slice(0, 10);
 export const kstMin = (ms: number) => { const d = new Date(ms + KST); return d.getUTCHours() * 60 + d.getUTCMinutes(); };
 export const kstHm = (ms: number) => new Date(ms + KST).toISOString().slice(11, 16);
-const atKst = (k: string, hm: string) => Date.parse(`${k}T${hm}:00+09:00`);
 export const addDay = (k: string, n: number) => new Date(Date.parse(`${k}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
 const dow = (k: string) => new Date(`${k}T00:00:00Z`).getUTCDay();
 export const fmtD = (k: string) => `${+k.slice(5, 7)}/${+k.slice(8, 10)} (${WD[dow(k)]})`;
@@ -66,6 +69,8 @@ function firstWithin(e: Row, from: string, days: number, holidays: Record<string
 export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cursor: number | null } {
   const today = kstKey(now), tomorrow = addDay(today, 1), nowMin = kstMin(now);
   const isOff = (k: string) => !!s.holidays[k] || [0, 6].includes(dow(k));
+  const nextWorkday = (k: string) => { let d = addDay(k, 1); for (let i = 0; i < 30 && isOff(d); i++) d = addDay(d, 1); return d; };
+  const quiet = nowMin >= 22 * 60 || nowMin < 7 * 60 + 30;   // 밤 22:00~07:30
   const memberName = (id: string | null | undefined) => s.members.find((m) => m.id === id)?.name || "누군가";
   const byUser: Record<string, string> = {};
   for (const m of s.members) if (m.user_id) byUser[m.user_id] = m.id;
@@ -122,46 +127,34 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
   const notes: Note[] = [];
   const subsOf = (pid: string) => s.subs.filter((x) => x.member_id === pid);
 
-  // ① 미팅 알림 — 시작 N분 전부터 15분 안(주기 지연 대비), 시작 전까지만
-  for (const m of s.members) {
-    const leads = [...new Set(subsOf(m.id).map((x) => x.lead_minutes))];
-    if (!leads.length) continue;
-    for (const k of [today, tomorrow]) {
-      const lv = leaveOf(m.id, k); if (lv && !HALF[lv.kind]) continue;
-      for (const it of timedItems(m.id, k)) {
-        const startMs = atKst(k, it.start);
-        for (const L of leads) {
-          const fire = startMs - L * 60e3;
-          if (now < fire || now >= Math.min(fire + 15 * 60e3, startMs)) continue;
-          notes.push({ key: `m:${it.id}@${k}@${L}:${m.id}`, member: m.id, kind: "meeting", lead: L,
-            title: `📅 ${L >= 60 ? "1시간" : L + "분"} 후 ${it.label}`, body: `${it.start} ${it.title}${it.place ? " · " + it.place : ""}`,
-            url: URL_CAL, tag: `m:${it.id}@${k}`, ttl: 3600, urgency: "high" });
-        }
-      }
-    }
-  }
-
-  // ② 아침 브리핑 — 평일 08:30~10:00 사이 첫 실행에 한 번
-  if (!isOff(today) && nowMin >= 8 * 60 + 30 && nowMin < 10 * 60) {
+  // ① 저녁 안내 — 근무일 저녁, 다음 근무일 기준 (금요일 → 월요일, 공휴일 전날 → 그다음 평일)
+  //   평소와 같은 날(팀이 주간 패턴대로, 나도 팀과 같은 곳, 일정 없음, 팀원 모두 정상)은 보내지 않는다 — 매일 같은 알림은 무시하게 된다.
+  if (!isOff(today) && nowMin >= 18 * 60 + 30 && nowMin < 20 * 60) {
+    const k = nextWorkday(today);
+    const teamChanged = s.teamOverrides.some((o) => o.work_date === k) || s.routines.some((r) => r.valid_from === k);
     for (const m of s.members) {
-      if (!subsOf(m.id).some((x) => x.morning_brief)) continue;
-      const place = placeOf(m.id, today);
-      if (!place) continue; // 종일 휴가
-      const items = timedItems(m.id, today), allday = alldayItems(m.id, today);
+      if (!subsOf(m.id).some((x) => x.morning_brief)) continue;   // 컬럼 이름은 morning_brief 지만 '저녁 안내' 켜기/끄기로 쓴다
+      const place = placeOf(m.id, k);
+      if (!place) continue; // 다음 근무일 종일 휴가
+      const items = timedItems(m.id, k), allday = alldayItems(m.id, k);
       const list = [...allday.map((t) => `종일 ${t}`), ...items.map((it) => `${it.start} ${it.title}`)];
       const away = s.members.filter((o) => o.id !== m.id).map((o) => {
-        const lv = leaveOf(o.id, today); if (lv && !HALF[lv.kind]) return `${o.name} ${LOC[lv.kind].label}`;
-        const p = placeOf(o.id, today); return p?.away ? `${o.name} ${p.text}` : null;
+        const lv = leaveOf(o.id, k); if (lv && !HALF[lv.kind]) return `${o.name} ${LOC[lv.kind].label}`;
+        const p = placeOf(o.id, k); return p?.away ? `${o.name} ${p.text}` : null;
       }).filter(Boolean);
-      const lines = [`근무지: ${place.text}`, list.length ? `일정 ${list.length}건: ${list.slice(0, 3).join(", ")}${list.length > 3 ? ` 외 ${list.length - 3}건` : ""}` : "일정 없음"];
+      if (!teamChanged && !place.away && !list.length && !away.length) continue;
+      const lines = [`근무지: ${place.text}${teamChanged || place.away ? " (평소와 다름)" : ""}`];
+      if (list.length) lines.push(`일정 ${list.length}건: ${list.slice(0, 3).join(", ")}${list.length > 3 ? ` 외 ${list.length - 3}건` : ""}`);
       if (away.length) lines.push(`팀: ${away.join(", ")}`);
-      notes.push({ key: `b:${today}:${m.id}`, member: m.id, kind: "brief", title: `☀️ ${fmtD(today)} 오늘 일정`, body: lines.join("\n"),
-        url: URL_CAL, tag: `b:${today}`, ttl: 3 * 3600, urgency: "normal" });
+      notes.push({ key: `e:${k}:${m.id}`, member: m.id, kind: "brief", title: `🌙 ${k === tomorrow ? "내일" : "다음 근무일"} ${fmtD(k)}`, body: lines.join("\n"),
+        url: URL_CAL, tag: `e:${k}`, ttl: 14 * 3600, urgency: "normal" });
     }
   }
 
-  // ③ 변경 알림 — 감사 로그를 변경 기록으로 읽는다. 바꾼 본인에게는 보내지 않는다.
+  // ② 변경 알림 — 감사 로그를 변경 기록으로 읽는다. 바꾼 본인에게는 보내지 않는다.
+  //   밤에는 처리하지 않고(처리 위치도 그대로) 아침 07:30 이후 첫 실행에서 한꺼번에 — 그때 기준 '오늘·내일'로 다시 판단한다.
   let cursor: number | null = null;
+  if (quiet) return { notes, cursor };
   const watchers = (exclude: string | undefined) => s.members.filter((m) => m.id !== exclude && subsOf(m.id).some((x) => x.change_alerts)).map((m) => m.id);
   const dayWord = (k: string) => (k === today ? "오늘" : k === tomorrow ? "내일" : fmtD(k));
   for (const a of s.audit) {

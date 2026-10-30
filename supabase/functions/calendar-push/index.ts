@@ -4,7 +4,7 @@ import webpush from "web-push";
 import { addDay, kstKey, planNotifications, type Snapshot } from "./plan.ts";
 
 // 사내 캘린더 웹 푸시 (2026-10-30)
-//   - pg_cron 이 5분마다 {source:'cron'} 으로 부른다 → 지금 보낼 알림을 계산해 보낸다(미팅 N분 전·아침 브리핑·변경).
+//   - pg_cron 이 5분마다 {source:'cron'} 으로 부른다 → 지금 보낼 알림을 계산해 보낸다(근무일 저녁 다음 근무일 안내·변경 알림).
 //     같은 알림은 push_sent 키로 한 번만 나간다 — 누가 직접 여러 번 불러도 중복 발송 없음.
 //   - 대시보드 '테스트 알림' 은 {test:true} + 로그인 JWT → 그 사용자 기기로만 1건.
 // 발송: web-push 로 암호화·VAPID 서명만 만들고(generateRequestDetails) 전송은 fetch 로 한다(Deno 네이티브).
@@ -84,16 +84,17 @@ async function runScheduled() {
     cursor = last[0]?.id ?? 0;
     await sb.from("push_state").upsert({ name: "audit_cursor", value: { id: cursor }, updated_at: new Date().toISOString() });
   }
+  // 다음 근무일은 연휴면 며칠 뒤일 수 있어 2주치를 읽는다 (팀 3명이라 양은 적다)
   const [members, routines, teamOverrides, memberOverrides, leaves, events, holidays, wishket, audit] = await Promise.all([
     must<any[]>(sb.from("team_members").select("id,name,user_id,is_active")),
     must<any[]>(sb.from("team_work_routines").select("valid_from,days")),
-    must<any[]>(sb.from("team_work_overrides").select("work_date,loc,branch,note").gte("work_date", addDay(today, -1)).lte("work_date", addDay(today, 8))),
-    must<any[]>(sb.from("member_work_overrides").select("member_id,work_date,loc,branch").gte("work_date", today).lte("work_date", addDay(today, 2))),
-    must<any[]>(sb.from("team_leaves").select("member_id,from_date,to_date,kind").is("deleted_at", null).lte("from_date", addDay(today, 2)).gte("to_date", today)),
-    must<any[]>(sb.from("calendar_events").select("*").is("deleted_at", null).lte("event_date", addDay(today, 8))),
+    must<any[]>(sb.from("team_work_overrides").select("work_date,loc,branch,note").gte("work_date", addDay(today, -1)).lte("work_date", addDay(today, 14))),
+    must<any[]>(sb.from("member_work_overrides").select("member_id,work_date,loc,branch").gte("work_date", today).lte("work_date", addDay(today, 14))),
+    must<any[]>(sb.from("team_leaves").select("member_id,from_date,to_date,kind").is("deleted_at", null).lte("from_date", addDay(today, 14)).gte("to_date", today)),
+    must<any[]>(sb.from("calendar_events").select("*").is("deleted_at", null).lte("event_date", addDay(today, 14))),
     must<any[]>(sb.from("calendar_holidays").select("holiday_date,name")),
     must<any[]>(sb.from("wishket_projects").select("slug,title,meeting_at,meeting_type,assigned_main,assigned_sub,current_status")
-      .gte("meeting_at", new Date(now - 864e5).toISOString()).lte("meeting_at", new Date(now + 3 * 864e5).toISOString())),
+      .gte("meeting_at", new Date(now - 864e5).toISOString()).lte("meeting_at", new Date(now + 15 * 864e5).toISOString())),
     must<any[]>(sb.from("project_audit_log").select("id,table_name,op,actor_id,before,after").gt("id", cursor).in("table_name", CAL_TABLES).order("id").limit(500)),
   ]);
   const snap: Snapshot = {
@@ -112,7 +113,7 @@ async function runScheduled() {
   for (const n of notes) {
     if (!claimed.has(n.key)) continue;
     const targets = subs.filter((s) => s.member_id === n.member
-      && (n.kind === "meeting" ? s.lead_minutes === n.lead : n.kind === "brief" ? s.morning_brief : s.change_alerts));
+      && (n.kind === "brief" ? s.morning_brief : s.change_alerts));
     const r = await deliver(targets, { title: n.title, body: n.body, url: n.url, tag: n.tag }, n.ttl, n.urgency);
     sent += r.sent; failed += r.failed;
   }
