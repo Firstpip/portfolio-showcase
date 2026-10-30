@@ -1,3 +1,4 @@
+import { CalendarPage } from './calendar.jsx';
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
 // ─── Supabase ───
@@ -659,6 +660,18 @@ function writeNotifySent(v) {
 }
 const leadLabel = (m) => m >= 1440 ? `${m/1440}일 전` : m >= 60 ? `${m/60}시간 전` : `${m}분 전`;
 
+// ─── 사내 캘린더 기능 플래그 (2026-10-30) ───
+// 완성 전까지 기본 숨김. ?cal=1 로 켜면 이 브라우저에 기억되고 ?cal=0 으로 끈다. localhost·file: 에서는 항상 켜짐.
+const CAL_ENABLED = (() => {
+  try {
+    const q = new URLSearchParams(window.location.search).get('cal');
+    if (q === '1') localStorage.setItem('fp_cal_enabled', '1');
+    if (q === '0') localStorage.removeItem('fp_cal_enabled');
+    return window.location.protocol === 'file:' || ['localhost', '127.0.0.1'].includes(window.location.hostname)
+      || localStorage.getItem('fp_cal_enabled') === '1';
+  } catch { return false; }
+})();
+
 // ─── Hash routing ───
 const SORT_KEYS = ['created_at','meeting_at','budget','title','status'];
 // 표 화면의 필터 상태를 해시 쿼리로 읽고 쓴다 — 새로고침·뒤로가기·링크 공유에서 보존 (2026-09-20)
@@ -689,6 +702,7 @@ function buildTableHash({ filter, search, memberFilter, sortKey, sortOrder }) {
 
 function parseHash() {
   const h = (window.location.hash || '').replace(/^#/, '');
+  if (CAL_ENABLED && /^calendar(?:[/?]|$)/.test(h)) return { name: 'calendar' };
   const m = h.match(/^project\/([^/]+)\/tasks$/);
   if (m) {
     let slug;
@@ -700,6 +714,7 @@ function parseHash() {
 }
 function navigate(route) {
   if (route.name === 'project') window.location.hash = `project/${encodeURIComponent(route.slug)}/tasks`;
+  else if (route.name === 'calendar') window.location.hash = 'calendar';
   else window.location.hash = '';
 }
 
@@ -5368,6 +5383,22 @@ function App({ session }) {
 
   if (!data) return <Loading />;
 
+  // 사내 캘린더 route (#calendar) — 화면·저장은 calendar.jsx 가 담당, 여기서는 워크룸 데이터만 넘긴다
+  if (route.name === 'calendar') {
+    return (
+      <CalendarPage
+        supabase={supabase}
+        teamMembers={teamMembers}
+        projects={data}
+        currentMember={currentMember}
+        securedStatuses={SECURED_STATUSES}
+        isDirect={isDirectContract}
+        onBack={() => navigate({ name:'table' })}
+        onOpenProject={(slug) => { const p = data.find(d => d.slug === slug); navigate({ name:'table' }); if (p) setSelectedProject(p); }}
+      />
+    );
+  }
+
   // Project view route
   if (route.name === 'project') {
     const proj = data.find(d => d.slug === route.slug);
@@ -5497,6 +5528,10 @@ function App({ session }) {
         <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
           <button onClick={() => setShowQuickAdd(true)}
             style={btn.primary({ padding:'0.4rem 0.85rem', display:'flex', alignItems:'center', gap:4 })}>＋ 등록</button>
+          {CAL_ENABLED && (
+            <button onClick={() => navigate({ name:'calendar' })} title="사내 캘린더 — 팀 근무지·휴가·미팅"
+              style={btn.secondary({ padding:'0.4rem 0.7rem' })}>📅 캘린더</button>
+          )}
           <button onClick={() => setShowDeleted(true)} title="최근 삭제 (복원)"
             style={btn.secondary({ padding:'0.4rem 0.55rem', lineHeight:1 })}>🗑</button>
           <button onClick={toggleTheme} title={theme === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}
