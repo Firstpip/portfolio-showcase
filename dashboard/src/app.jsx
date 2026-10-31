@@ -660,17 +660,9 @@ function writeNotifySent(v) {
 }
 const leadLabel = (m) => m >= 1440 ? `${m/1440}일 전` : m >= 60 ? `${m/60}시간 전` : `${m}분 전`;
 
-// ─── 사내 캘린더 기능 플래그 (2026-10-30) ───
-// 완성 전까지 기본 숨김. ?cal=1 로 켜면 이 브라우저에 기억되고 ?cal=0 으로 끈다. localhost·file: 에서는 항상 켜짐.
-const CAL_ENABLED = (() => {
-  try {
-    const q = new URLSearchParams(window.location.search).get('cal');
-    if (q === '1') localStorage.setItem('fp_cal_enabled', '1');
-    if (q === '0') localStorage.removeItem('fp_cal_enabled');
-    return window.location.protocol === 'file:' || ['localhost', '127.0.0.1'].includes(window.location.hostname)
-      || localStorage.getItem('fp_cal_enabled') === '1';
-  } catch { return false; }
-})();
+// ─── 사내 캘린더 (2026-10-30 추가, 2026-10-31 전원 공개) ───
+// 공개 전엔 ?cal=1 플래그 뒤에 있었다. 알림·홈 화면 앱 주소의 ?cal=1 은 이제 아무 일도 하지 않는다.
+const CAL_ENABLED = true;
 
 // ─── Hash routing ───
 const SORT_KEYS = ['created_at','meeting_at','budget','title','status'];

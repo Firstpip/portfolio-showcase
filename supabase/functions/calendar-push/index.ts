@@ -14,6 +14,9 @@ const ALLOWED_ORIGINS = new Set(["https://firstpip.github.io", "http://127.0.0.1
 const CAL_TABLES = ["team_work_routines", "team_work_overrides", "member_work_overrides", "team_leaves", "calendar_events"];
 const SENT_KEEP_DAYS = 14;
 const MAX_FAILS = 10; // 404/410 이 아닌 실패가 이만큼 쌓이면 구독 정리
+// 방금 쌓인 감사 기록은 다음 실행으로 미룬다 — 한 번의 저장이 기록 여러 건(반복 일정 나누기 등)으로 남을 때
+// 실행이 그 사이에 끼어 반쪽만 처리하지 않게. 그 기록부터 뒤는 이번에 보지 않는다(처리 위치도 그 앞까지만).
+const AUDIT_SETTLE_MS = 30_000;
 
 const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 const VAPID = {
@@ -95,8 +98,10 @@ async function runScheduled() {
     must<any[]>(sb.from("calendar_holidays").select("holiday_date,name")),
     must<any[]>(sb.from("wishket_projects").select("slug,title,meeting_at,meeting_type,assigned_main,assigned_sub,current_status")
       .gte("meeting_at", new Date(now - 864e5).toISOString()).lte("meeting_at", new Date(now + 15 * 864e5).toISOString())),
-    must<any[]>(sb.from("project_audit_log").select("id,table_name,op,actor_id,before,after").gt("id", cursor).in("table_name", CAL_TABLES).order("id").limit(500)),
+    must<any[]>(sb.from("project_audit_log").select("id,at,table_name,op,actor_id,before,after").gt("id", cursor).in("table_name", CAL_TABLES).order("id").limit(500)),
   ]);
+  const fresh = audit.findIndex((a) => Date.parse(a.at) > now - AUDIT_SETTLE_MS);
+  if (fresh >= 0) audit.length = fresh;
   const snap: Snapshot = {
     members: members.filter((m) => m.is_active !== false), subs, routines, teamOverrides, memberOverrides, leaves, events,
     holidays: Object.fromEntries(holidays.map((h) => [h.holiday_date, h.name])), wishket, audit,
