@@ -116,3 +116,28 @@ Deno.test("구독이 없는 사람에게는 계획하지 않음", () => {
   const s = base(); s.subs = [];
   eq(planNotifications(s, at("2026-11-03", "13:30")).notes.length, 0, "구독 없음");
 });
+
+Deno.test("변경 알림: 반복 일정 나누기는 한 건만 '변경', 한 회차 삭제는 '취소'·되돌림은 '추가'", () => {
+  const s = base();
+  const rep = s.events.find((e) => e.id === "e2")!; // 주간 회의 월 10:00, M1·M2·M3
+  const child = { id: "e2c", type: "internal", title: "주간 회의", event_date: "2026-11-09", start_time: "15:00:00", all_day: false, people: [M1, M3], parent_id: "e2", exdates: [], change_note: "11/9 (월) 주간 회의 · 이 회차만 · 시간 10:00 → 15:00" };
+  s.events.push(child);
+  s.audit = [
+    { id: 41, table_name: "calendar_events", op: "INSERT", actor_id: "u1", before: null, after: child },
+    { id: 42, table_name: "calendar_events", op: "UPDATE", actor_id: "u1", before: rep, after: { ...rep, exdates: [...rep.exdates, "2026-11-09"], change_note: "11/9 (월) 회차를 따로 고침" } },
+  ];
+  const c = planNotifications(s, at("2026-11-04", "15:00")).notes.filter((n) => n.kind === "change");
+  eq(c.map((n) => n.key).sort(), ["c:41:m2", "c:41:m3"], "나누기: 새 일정 쪽 한 건만, 빠진 최기용에게도");
+  eq([c[0].title, c[0].body], ["✏️ 일정 변경", "11/9 (월) 15:00 주간 회의 — 김동욱\n11/9 (월) 주간 회의 · 이 회차만 · 시간 10:00 → 15:00"], "나누기 문구");
+
+  const s2 = base(); const rep2 = s2.events.find((e) => e.id === "e2")!;
+  const skipped = { ...rep2, exdates: [...rep2.exdates, "2026-11-09"], change_note: "이 회차 삭제 · 11/9 (월) 주간 회의" };
+  s2.audit = [
+    { id: 51, table_name: "calendar_events", op: "UPDATE", actor_id: "u1", before: rep2, after: skipped },
+    { id: 52, table_name: "calendar_events", op: "UPDATE", actor_id: "u1", before: skipped, after: { ...rep2, change_note: "삭제 되돌림 · 11/9 (월) 주간 회의" } },
+  ];
+  const d = planNotifications(s2, at("2026-11-04", "15:00")).notes.filter((n) => n.kind === "change" && n.member === M2);
+  eq(d.map((n) => [n.title, n.body]), [["✖️ 일정 취소", "11/9 (월) 10:00 주간 회의 — 김동욱"], ["➕ 일정 추가", "11/9 (월) 10:00 주간 회의 — 김동욱"]], "한 회차 삭제·되돌림 (다음 회차가 아니라 그 회차 날짜)");
+  s2.audit = [{ id: 53, table_name: "calendar_events", op: "UPDATE", actor_id: "u1", before: rep2, after: { ...rep2, exdates: [...rep2.exdates, "2026-11-30"] } }];
+  eq(planNotifications(s2, at("2026-11-04", "15:00")).notes.filter((n) => n.kind === "change").length, 0, "8일 뒤 이후 회차 삭제는 알림 없음");
+});

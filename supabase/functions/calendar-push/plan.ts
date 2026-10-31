@@ -176,14 +176,29 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       const softDel = a.op === "UPDATE" && !b.deleted_at && f.deleted_at, undel = a.op === "UPDATE" && b.deleted_at && !f.deleted_at;
       if (a.op === "DELETE" && b.deleted_at) continue;
       const fields = ["title", "event_date", "start_time", "end_time", "place", "people", "exdates", "repeat", "repeat_until", "meeting_type", "all_day", "deleted_at"];
-      if (a.op === "UPDATE" && !fields.some((c) => JSON.stringify(b[c] ?? null) !== JSON.stringify(f[c] ?? null))) continue;
-      const when = firstWithin(r, today, 7, s.holidays) || (a.op === "UPDATE" ? firstWithin(b, today, 7, s.holidays) : null);
+      const changed = fields.filter((c) => JSON.stringify(b[c] ?? null) !== JSON.stringify(f[c] ?? null));
+      if (a.op === "UPDATE" && !changed.length) continue;
+      // 반복 일정 나누기(이 회차만·이후 전부): 화면이 새 일정(parent_id)을 넣은 뒤 원래 반복의 exdates·repeat_until 을 줄인다.
+      //   → 새 일정 쪽 한 건만 '변경'으로 보내고, 바로 뒤따르는 원래 반복 쪽 갱신은 건너뛴다.
+      const split = a.op === "INSERT" && !!f.parent_id;
+      if (a.op === "UPDATE" && !softDel && !undel && changed.every((c) => c === "exdates" || c === "repeat_until")
+        && s.audit.some((x) => x.table_name === "calendar_events" && x.op === "INSERT" && x.after?.parent_id === f.id && Number(x.id) < Number(a.id) && Number(a.id) - Number(x.id) <= 3)) continue;
+      // 반복 일정 한 회차만 삭제·되돌림: exdates 만 바뀜 → 그 회차 날짜로 '취소'·'추가'
+      const exOnly = a.op === "UPDATE" && changed.length === 1 && changed[0] === "exdates";
+      const exAdded = exOnly ? (f.exdates || []).filter((k: string) => !(b.exdates || []).includes(k)) : [];
+      const exRemoved = exOnly ? (b.exdates || []).filter((k: string) => !(f.exdates || []).includes(k)) : [];
+      const inRange = (k: string) => k >= today && k <= addDay(today, 7);
+      const when = exOnly ? [...exAdded, ...exRemoved].filter(inRange).sort()[0]
+        : firstWithin(r, today, 7, s.holidays) || (a.op === "UPDATE" ? firstWithin(b, today, 7, s.holidays) : null);
       if (!when) continue;
-      const people = new Set<string>([...(a.op === "INSERT" || undel ? [] : (b.people || [])), ...(r.people || [])]);
+      const parent = split ? s.events.find((e) => e.id === f.parent_id) : null;
+      const people = new Set<string>([...(a.op === "INSERT" || undel ? [] : (b.people || [])), ...(parent?.people || []), ...(r.people || [])]);
       const pids = [...people].filter((p) => p !== actor && subsOf(p).some((x) => x.change_alerts));
       const time = r.all_day ? "종일" : hm(r.start_time);
-      const verb = softDel || a.op === "DELETE" ? ["✖️", "취소"] : (a.op === "INSERT" || undel) ? ["➕", "추가"] : ["✏️", "변경"];
-      const detail = a.op === "UPDATE" && !softDel && !undel && f.change_note && f.change_note !== b.change_note ? `\n${f.change_note}` : "";
+      const verb = softDel || a.op === "DELETE" || (exOnly && exAdded.includes(when)) ? ["✖️", "취소"]
+        : split ? ["✏️", "변경"] : (a.op === "INSERT" || undel || exOnly) ? ["➕", "추가"] : ["✏️", "변경"];
+      const detail = split && f.change_note ? `\n${f.change_note}`
+        : a.op === "UPDATE" && !softDel && !undel && !exOnly && f.change_note && f.change_note !== b.change_note ? `\n${f.change_note}` : "";
       push(pids, `${verb[0]} 일정 ${verb[1]}`, `${fmtD(when)} ${time} ${r.title} — ${who}${detail}`, `ev:${r.id}`);
     }
   }
