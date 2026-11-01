@@ -557,19 +557,19 @@ function mountCalendar(root, ctx) {
     if (type==='event' || type==='meeting') {
       const rsRow = ed && m0.repeat ? `<div class="fld"><label>바꿀 범위</label><div class="sub" id="f-rs"><button type="button" data-rs="one" aria-pressed="true">이 회차만 · ${fmtD(ed.k)}</button><button type="button" data-rs="future" aria-pressed="false">이 회차부터 이후 전부</button></div></div>` : '';
       body = rsRow + `<div class="fld"><label for="f-title">제목</label><input id="f-title" placeholder="${type==='meeting'?'예: 가나다물류 킥오프':'예: 주간 회의, 제안서 마감'}"></div>
-        ${type==='meeting' ? `<div class="fld"><label>미팅 성격</label><div class="kinds" id="f-kinds">${Object.entries(KIND).map(([k,v],i)=>`<button type="button" data-kind="${k}" style="--c:var(--blue)" aria-pressed="${i===0}">${v.label}${v.desc?`<small>${v.desc}</small>`:''}</button>`).join('')}</div></div>
-          <div class="fld"><label for="f-proj">프로젝트 연결 (선택 · 수주 후 건만)</label><select id="f-proj"><option value="">연결 안 함</option>${PROJECTS.map(w=>`<option value="${w.slug}">${esc(w.title)}</option>`).join('')}</select><div class="hint">지원~미팅 단계(위시켓) 건의 수주 미팅은 워크룸에서 등록합니다. 여기서는 그 외 미팅(진행 중 프로젝트·직거래·입찰·협력사)을 등록합니다.</div></div>`
-          : `<div class="fld"><label for="f-kind">종류</label><select id="f-kind"><option value="internal">사내 (회의·행사)</option><option value="deadline">마감</option><option value="other">기타</option></select></div>`}
+        ${type==='meeting' ? '' : `<div class="fld"><label for="f-kind">종류</label><select id="f-kind"><option value="internal">사내 (회의·행사)</option><option value="deadline">마감</option><option value="other">기타</option></select></div>`}
         <div class="row2"><div class="fld"><label for="f-date">날짜</label><input id="f-date" type="date" value="${date}"></div>
           <div class="fld"><label for="f-repeat">반복</label><select id="f-repeat"><option value="">안 함</option><option value="weekly">매주 (공휴일 건너뜀)</option></select></div></div>
         <div class="fld" id="until-row" hidden><label for="f-until">반복 종료 (선택 · 비우면 계속)</label><input id="f-until" type="date"></div>
         <div class="fld"><div class="lblrow"><label for="f-start">시간</label><label class="tgl"><input type="checkbox" id="f-allday" role="switch"><i></i>종일</label></div>
           <div class="trow" id="timerow"><input id="f-start" type="time" value="10:00" aria-label="시작"><span aria-hidden="true">–</span><input id="f-end" type="time" value="11:00" aria-label="종료"></div>
           <div class="allday-box" id="allday-box" hidden>하루 종일</div></div>
+        <div class="fld"><label>${type==='meeting'?'참석':'대상'}</label><div class="chips grid3" id="f-people">${pcheck(pre.people||[ME])}</div></div>
         ${type==='meeting' ? `<div class="fld"><label>방식</label><div class="seg full" id="f-mt">${Object.entries(MT).map(([k,v],i)=>`<button type="button" data-mt="${k}" aria-pressed="${i===1}">${v}</button>`).join('')}</div></div>`:''}
         <div class="fld"><label for="f-place">장소 / 링크</label><input id="f-place" placeholder="예: 고객사 (강남), 시청역2호점 미팅룸, Google Meet"></div>
-        <div class="fld"><label>${type==='meeting'?'참석':'대상'}</label><div class="chips grid3" id="f-people">${pcheck(pre.people||[ME])}</div></div>
         ${type==='meeting' ? `<div class="fld" id="autoout-row"><label class="ck"><input type="checkbox" id="f-autoout" checked><span>참석자를 그날 <b>외근</b>으로 표시 (대면 · 사무실 밖)</span></label></div>`:''}
+        ${type==='meeting' ? `<div class="fld"><label>미팅 성격</label><div class="kinds" id="f-kinds">${Object.entries(KIND).map(([k,v],i)=>`<button type="button" data-kind="${k}" style="--c:var(--blue)" aria-pressed="${i===0}">${v.label}${v.desc?`<small>${v.desc}</small>`:''}</button>`).join('')}</div></div>
+          <div class="fld"><label for="f-proj">프로젝트 연결 (선택 · 수주 후 건만)</label><select id="f-proj"><option value="">연결 안 함</option>${PROJECTS.map(w=>`<option value="${w.slug}">${esc(w.title)}</option>`).join('')}</select><div class="hint">지원~미팅 단계(위시켓) 건의 수주 미팅은 워크룸에서 등록합니다. 여기서는 그 외 미팅(진행 중 프로젝트·직거래·입찰·협력사)을 등록합니다.</div></div>`:''}
         <div class="fld"><label for="f-note">메모</label><textarea id="f-note" rows="2" placeholder="준비물, 안건, 주의사항"></textarea></div>
         <div class="hint" id="ev-warn"></div>`;
     } else if (type==='loc') {
