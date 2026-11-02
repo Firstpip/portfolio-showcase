@@ -1,4 +1,6 @@
 import { CalendarPage } from './calendar.jsx';
+// 날짜 규칙(한국 달력일) — 'YYYY-MM-DD' 를 만들거나 비교하는 코드는 전부 이 모듈을 쓴다 (src/dates.mjs 머리말 참조)
+import { kstParts, kstToIso, kstDateStr, kstStartOfDay, isYmd, addDaysYmd, daysBetweenYmd, daysBetweenKst, scheduleFrom } from './dates.mjs';
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
 // ─── Supabase ───
@@ -281,14 +283,9 @@ function totalWeeksBetween(startDate, deadline) {
 
 // 착수일 기준 현재 몇 주차인지 계산 (1-based, 착수 전이면 null)
 function getCurrentWeek(startDate) {
-  if (!startDate) return null;
-  const start = new Date(startDate);
-  if (isNaN(start.getTime())) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  start.setHours(0, 0, 0, 0);
-  const diffDays = Math.floor((today - start) / (1000 * 60 * 60 * 24));
-  if (diffDays < 0) return null;
+  if (!isYmd(startDate)) return null;
+  const diffDays = daysBetweenYmd(startDate, kstDateStr());   // 오늘(한국 달력일) − 착수일
+  if (diffDays == null || diffDays < 0) return null;
   return Math.floor(diffDays / 7) + 1;
 }
 
@@ -321,24 +318,8 @@ function useTheme() {
 }
 
 // ─── Utils ───
-// ─── 미팅 시각 유틸 — 모든 미팅 시각은 Asia/Seoul 고정 (브라우저 시간대 무관, 2026-09-18) ───
-const KST_TZ = 'Asia/Seoul';
-const _kstFmt = new Intl.DateTimeFormat('sv-SE', { timeZone:KST_TZ, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23' });
-// ISO → { date:'YYYY-MM-DD', time:'HH:MM' } (KST). 무효값이면 null
-function kstParts(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (isNaN(d)) return null;
-  const s = _kstFmt.format(d);   // 'YYYY-MM-DD HH:MM'
-  return { date:s.slice(0,10), time:s.slice(11,16) };
-}
-// KST 날짜+시각 → ISO(UTC). 한국은 DST 없음 → +09:00 고정
-function kstToIso(date, time) {
-  if (!date || !time) return null;
-  const d = new Date(`${date}T${time}:00+09:00`);
-  return isNaN(d) ? null : d.toISOString();
-}
-function kstDateStr(d = new Date()) { return _kstFmt.format(d).slice(0,10); }
+// ─── 미팅 시각 유틸 — 모든 미팅 시각은 Asia/Seoul 고정 (브라우저 시간대 무관, 2026-09-18).
+//     kstParts·kstToIso·kstDateStr 는 2026-11-02 에 src/dates.mjs 로 옮겼다(날짜 규칙을 한곳에 두고 node 로 검증하기 위해).
 function formatMeetingAt(iso) { const p = kstParts(iso); return p ? `${p.date} ${p.time}` : null; }
 // 예정/완료 뱃지 — 시각 비교가 아니라 프로젝트 상태 기준 (상태와 표시 불일치 방지)
 function getMeetingStatus(meetingAt, currentStatus) {
@@ -434,13 +415,8 @@ function friendlyError(error) {
   if (/JWT|token|auth/i.test(msg)) return '인증이 만료되었습니다. 다시 로그인해주세요.';
   return msg || '요청을 처리할 수 없습니다.';
 }
-function daysBetween(d1, d2) {
-  const a = new Date(d1), b = new Date(d2);
-  if (isNaN(a) || isNaN(b)) return 0;
-  const ua = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
-  const ub = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
-  return Math.floor((ub - ua) / 86400000);
-}
+// 두 시각/날짜 사이의 한국 달력일 차이. 'YYYY-MM-DD'·ISO·Date 섞여도 된다. (예전엔 브라우저 로컬 달력일이었다)
+function daysBetween(d1, d2) { return daysBetweenKst(d1, d2); }
 
 // ─── 결과물 방문 신호 ───
 // "그 클라이언트 본인"이라는 확증은 불가능하다 — '결과물 확인하기'는 위시켓 프로필에 공개된 포트폴리오 항목의
@@ -460,8 +436,10 @@ function daysBetween(d1, d2) {
 //   열람 시각은 1시간 주기 동기화라 늦게 채워질 수 있다 — 등급은 열 때마다 다시 계산되므로 그때 바로잡힌다.
 function appliedAtOf(project) {
   const h = (project?.history || []).find(e => e && e.status === 'applied' && e.date);
-  const d = new Date(h ? h.date : project?.created_at);
-  return isNaN(d) ? null : d;
+  const v = h ? h.date : project?.created_at;
+  // history[].date·created_at 은 달력일 — 'YYYY-MM-DD' 를 new Date() 로 열면 UTC 자정(= KST 09:00)이 되어 그날 새벽 방문이 '지원 전'으로 샌다
+  const d = isYmd(v) ? kstStartOfDay(v) : (v ? new Date(v) : null);
+  return !d || isNaN(d) ? null : d;
 }
 const fmtGap = (ms) => { const m = Math.max(0, Math.round(ms / 60000)); return m < 60 ? `${m}분` : m < 1440 ? `${Math.floor(m / 60)}시간${m % 60 ? ` ${m % 60}분` : ''}` : `${Math.floor(m / 1440)}일`; };
 const VISIT_GAP = 30 * 60000;                                            // 같은 사람의 세션을 한 방문으로 묶는 간격
@@ -1175,7 +1153,7 @@ function FunnelAnalysis({ data }) {
   const [y0, m0] = kstDateStr().split('-').map(Number);
   const months = [];
   for (let i = 7; i >= 0; i--) { const idx = y0 * 12 + (m0 - 1) - i; months.push(`${Math.floor(idx / 12)}-${String(idx % 12 + 1).padStart(2, '0')}`); }
-  const monthOf = (t) => new Date(t + 9 * 3600000).toISOString().slice(0, 7);
+  const monthOf = (t) => kstDateStr(new Date(t)).slice(0, 7);
   const byMonth = Object.fromEntries(months.map(k => [k, cohorts.filter(c => monthOf(c.t0) === k)]));
   // 최근 90일 vs 직전 90일 — 단계마다 '기간이 다 지난' 가장 최근 90일 지원끼리 비교한다.
   //   예: 미팅(30일)은 30~120일 전 지원 vs 120~210일 전 지원. 그냥 최근 90일을 쓰면 미팅·계약은 늘 '진행 중'이 된다.
@@ -2341,7 +2319,7 @@ function PhaseDetail({ milestone, teamMembers, saving, onUpdate, onDelete, weekO
       </div>
       {draft.actual_start && draft.actual_end && (
         <div style={{ fontSize:'0.8rem', color:'var(--accent2)', fontWeight:600, textAlign:'right' }}>
-          {daysBetween(draft.actual_start + 'T00:00:00', draft.actual_end + 'T00:00:00')}일 소요
+          {daysBetween(draft.actual_start, draft.actual_end)}일 소요
         </div>
       )}
 
@@ -2622,11 +2600,8 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
       {onFieldSave && (() => {
         const changed = editStart !== (project?.start_date || '') || editDeadline !== (project?.deadline || '');
         const computeDeadline = (startVal) => {
-          if (!startVal || totalWeeks === 0) return '';
-          const d = new Date(startVal);
-          if (isNaN(d.getTime())) return '';
-          d.setDate(d.getDate() + totalWeeks * 7 - 1);   // N주 = 착수일 포함 7N일 → 마감은 7N-1일 뒤 (totalWeeksBetween 과 정합)
-          return d.toISOString().split('T')[0];
+          if (!isYmd(startVal) || totalWeeks === 0) return '';
+          return addDaysYmd(startVal, totalWeeks * 7 - 1) || '';   // N주 = 착수일 포함 7N일 → 마감은 7N-1일 뒤 (totalWeeksBetween 과 정합)
         };
         const handleStartChange = (val) => {
           setEditStart(val);
@@ -2637,10 +2612,8 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         // 마감일이 착수일보다 빠르면 totalWeeksBetween=0이 되어 타임라인이 말없이 사라지므로 저장 차단.
         const dateInvalid = !!editStart && !!editDeadline && editDeadline < editStart;
         const dlDiff = (() => {
-          if (!editDeadline) return null;
-          const today = new Date(); today.setHours(0,0,0,0);
-          const dl = new Date(editDeadline); dl.setHours(0,0,0,0);
-          return Math.round((dl - today) / 86400000);
+          if (!isYmd(editDeadline)) return null;
+          return daysBetweenYmd(kstDateStr(), editDeadline);   // 마감일 − 오늘(한국 달력일)
         })();
         const dlColor = dlDiff != null ? (dlDiff < 0 ? 'var(--red)' : dlDiff <= 7 ? 'var(--yellow)' : 'var(--text2)') : null;
         const dlLabel = (dlDiff != null && !POST_DEV.includes(project?.current_status)) ? (dlDiff < 0 ? `+${-dlDiff}일 초과` : dlDiff === 0 ? '오늘 마감' : `D-${dlDiff}`) : null;
@@ -3396,9 +3369,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                       <div style={{ ...labelS }}>마감일</div>
                       <input type="date" value={editDeadline} onChange={e => { setEditDeadline(e.target.value); setDeadlineChanged(e.target.value!==(project.deadline||'')); }} style={inputS} />
                       {editDeadline && !POST_DEV.includes(project.current_status) && (() => {
-                        const today = new Date(); today.setHours(0,0,0,0);
-                        const dl = new Date(editDeadline); dl.setHours(0,0,0,0);
-                        const diff = Math.round((dl - today) / 86400000);
+                        const diff = daysBetweenYmd(kstDateStr(), editDeadline);   // 마감일 − 오늘(한국 달력일)
+                        if (diff == null) return null;
                         if (diff < 0) return <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--red)', opacity:0.9 }}>→ {-diff}일 초과</div>;
                         if (diff === 0) return <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--yellow)', opacity:0.9 }}>→ 오늘 마감</div>;
                         return <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--text2)', opacity:0.7 }}>→ D-{diff}</div>;
@@ -4827,25 +4799,23 @@ function App({ session }) {
     const tpl = MILESTONE_TEMPLATES[templateKey];
     if (!tpl) return;
     const assignee = defaultAssigneeFor(slug);
-    // Cumulative planned dates from today, using phase default_days
-    const toISODate = (d) => d.toISOString().split('T')[0];
-    let cursor = new Date(); cursor.setHours(0,0,0,0);
-    const rows = tpl.phases.map((p,i) => {
-      const start = new Date(cursor);
-      const end = new Date(cursor); end.setDate(end.getDate() + (p.default_days||1));
-      cursor = new Date(end);
-      return {
-        project_slug: slug,
-        phase_key: p.key,
-        phase_label: p.label,
-        order_idx: i,
-        status: 'planned',
-        blocked: false,
-        planned_start: toISODate(start),
-        planned_end: toISODate(end),
-        assignee,
-      };
-    });
+    // 일정 앵커: 착수일(start_date)이 있으면 그날, 없으면 오늘 — 둘 다 한국 달력일.
+    //   예전엔 브라우저 로컬 자정을 toISOString() 으로 바꿔 한국에선 전날(15:00Z)로 찍혔다 (2026-11-02 row 703 실측: 11/02 → 11/01).
+    //   수주 전환 직후엔 보통 착수일이 아직 없어 '오늘'이 되고, 착수일을 먼저 적고 템플릿 버튼을 누르면 착수일부터 깔린다.
+    const projectRow = (data || []).find(d => d.slug === slug);
+    const anchor = isYmd(projectRow?.start_date) ? projectRow.start_date : kstDateStr();
+    const plan = scheduleFrom(anchor, tpl.phases.map(p => p.default_days));
+    const rows = tpl.phases.map((p,i) => ({
+      project_slug: slug,
+      phase_key: p.key,
+      phase_label: p.label,
+      order_idx: i,
+      status: 'planned',
+      blocked: false,
+      planned_start: plan[i].planned_start,
+      planned_end: plan[i].planned_end,
+      assignee,
+    }));
     const { data:inserted, error } = await supabase.from(MILESTONES_TABLE).insert(rows).select();
     if (error) {
       if (error.code==='42P01' || error.message?.includes('does not exist') || error.message?.includes('relation')) {
@@ -4856,7 +4826,7 @@ function App({ session }) {
     }
     setMilestones(prev => ({ ...prev, [slug]: [...(inserted||[])].sort((a,b)=>a.order_idx-b.order_idx) }));
     toast(`📋 ${tpl.label} 템플릿 적용 (${rows.length}개 작업)`,'success');
-  }), [toast, defaultAssigneeFor]);
+  }), [toast, defaultAssigneeFor, data]);
 
   // 다중 세션 history lost-update 방지 — 서버 RPC로 원자적 append + 동반 컬럼 set, 권위행 반환.
   // entries: history에 추가할 항목(객체 1개 또는 배열). fields: 함께 set할 컬럼(없으면 {}). date는 서버가 KST로 stamp.
@@ -5051,7 +5021,7 @@ function App({ session }) {
 
     const doSave = async () => {
       const prevPlan = project.weekly_plan ?? null;
-      const { error } = await supabase.from(TABLE).update({ weekly_plan: weeklyPlan, updated_at:new Date().toISOString().split('T')[0] }).eq('slug', slug);
+      const { error } = await supabase.from(TABLE).update({ weekly_plan: weeklyPlan, updated_at: kstDateStr() }).eq('slug', slug);
       if (error) {
         if (error.code === '42703' || /weekly_plan/.test(error.message||'')) {
           toast('weekly_plan 컬럼이 없습니다. 작업 트래커 설정 SQL을 다시 실행하세요 (전체 화면 → DB 설정).','error');
@@ -5106,7 +5076,7 @@ function App({ session }) {
     const linkedCount = (milestones[slug]||[]).filter(m => m.week_number != null).length;
     const prevPlan = data.find(d => d.slug===slug)?.weekly_plan ?? null;
     const doClear = async () => {
-      const { error } = await supabase.from(TABLE).update({ weekly_plan: null, updated_at:new Date().toISOString().split('T')[0] }).eq('slug', slug);
+      const { error } = await supabase.from(TABLE).update({ weekly_plan: null, updated_at: kstDateStr() }).eq('slug', slug);
       if (error) {
         if (error.code === '42703' || /weekly_plan/.test(error.message||'')) {
           toast('weekly_plan 컬럼이 없습니다. 설정 SQL을 다시 실행하세요.','error');
@@ -5152,7 +5122,7 @@ function App({ session }) {
   const handleCloseRegenerate = useCallback(()   => setRegenerateProject(null), []);
 
   const handleFieldSave = useCallback(async (project, fields) => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = kstDateStr();   // updated_at 은 한국 달력일 — 서버 RPC(append_project_history)와 같은 기준
     // 옵티미스틱: 로컬에 즉시 반영 (체감 지연 제거)
     setData(prev => prev.map(d => d.slug===project.slug ? {...d, ...fields, updated_at:today} : d));
     setSelectedProject(prev => prev && prev.slug===project.slug ? {...prev, ...fields, updated_at:today} : prev);
@@ -5172,7 +5142,7 @@ function App({ session }) {
   }, [toast]);
 
   const handleMemoSave = useCallback(async (project, memo) => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = kstDateStr();   // updated_at 은 한국 달력일 — 서버 RPC(append_project_history)와 같은 기준
     // 옵티미스틱: 즉시 반영, 실패 시 롤백
     setData(prev => prev.map(d => d.slug===project.slug ? {...d, memo, updated_at:today} : d));
     const { error } = await supabase.from(TABLE).update({ memo, updated_at:today }).eq('slug',project.slug);
