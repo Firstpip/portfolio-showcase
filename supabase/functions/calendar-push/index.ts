@@ -60,15 +60,18 @@ async function sendOne(sub: SubRow, p: Payload, ttl: number, urgency: "high" | "
   }
 }
 
+// 구독들에게 1건씩 보낸다. 실패 횟수는 이번 실행 안에서도 누적(failCount 맵)해서 MAX_FAILS 정리가 제대로 되게 (2026-11-03)
+const failCount = new Map<string, number>();
 async function deliver(subs: SubRow[], p: Payload, ttl: number, urgency: "high" | "normal") {
-  let sent = 0, failed = 0;
+  let sent = 0, failed = 0; const retry: string[] = [];
   for (const s of subs) {
     const r = await sendOne(s, p, ttl, urgency);
-    if (r === "ok") { sent++; await sb.from("push_subscriptions").update({ last_sent_at: new Date().toISOString(), fail_count: 0 }).eq("id", s.id); }
-    else if (r === "gone" || s.fail_count + 1 >= MAX_FAILS) { failed++; await sb.from("push_subscriptions").delete().eq("id", s.id); }
-    else { failed++; await sb.from("push_subscriptions").update({ fail_count: s.fail_count + 1 }).eq("id", s.id); }
+    const fc = failCount.get(s.id) ?? s.fail_count;
+    if (r === "ok") { sent++; failCount.set(s.id, 0); await sb.from("push_subscriptions").update({ last_sent_at: new Date().toISOString(), fail_count: 0 }).eq("id", s.id); }
+    else if (r === "gone" || fc + 1 >= MAX_FAILS) { failed++; await sb.from("push_subscriptions").delete().eq("id", s.id); }
+    else { failed++; retry.push(s.id); failCount.set(s.id, fc + 1); await sb.from("push_subscriptions").update({ fail_count: fc + 1 }).eq("id", s.id); }
   }
-  return { sent, failed };
+  return { sent, failed, retry };
 }
 
 async function must<T>(q: PromiseLike<{ data: T | null; error: unknown }>): Promise<T> {
@@ -76,30 +79,50 @@ async function must<T>(q: PromiseLike<{ data: T | null; error: unknown }>): Prom
   if (error) throw error;
   return (data ?? []) as T;
 }
+const getState = async <T>(name: string): Promise<T | null> => (await must<{ value: T }[]>(sb.from("push_state").select("value").eq("name", name)))[0]?.value ?? null;
+const setState = (name: string, value: unknown) => sb.from("push_state").upsert({ name, value, updated_at: new Date().toISOString() });
+
+// 재시도 대기열: 일시 실패(5xx·429·네트워크)한 알림을 다음 실행들에서 다시 보낸다. 받을 구독·만료 시각·남은 횟수를 함께 둔다.
+//   (알림 키는 먼저 잡고 보내는 구조라, 대기열이 없으면 한 번 실패한 알림은 영영 빠진다)
+type Retry = { subs: string[]; p: Payload; ttl: number; urgency: "high" | "normal"; until: number; tries: number };
+const RETRY_MAX = 6;
+
+// 감사 로그를 처리 위치 뒤로 쪽(500행) 단위로 끝까지 읽는다 — 위시켓 대량 수정이 있어도 캘린더 변경이 밀리지 않게 (최대 6쪽)
+async function readAudit(cursor: number) {
+  const out: any[] = [];
+  for (let page = 0; page < 6; page++) {
+    const after = out.length ? out[out.length - 1].id : cursor;
+    const rows = await must<any[]>(sb.from("project_audit_log").select("id,at,table_name,op,actor_id,before,after").gt("id", after).in("table_name", CAL_TABLES).order("id").limit(500));
+    out.push(...rows);
+    if (rows.length < 500) break;
+  }
+  return out;
+}
 
 async function runScheduled() {
   const now = Date.now(), today = kstKey(now);
   const subs = await must<SubRow[]>(sb.from("push_subscriptions").select("id,endpoint,p256dh,auth,member_id,lead_minutes,morning_brief,change_alerts,fail_count"));
   // 감사 로그 처리 위치. 처음 실행이면 지금 위치로 잡고(과거 변경을 한꺼번에 보내지 않게) 넘어간다.
-  const state = await must<{ value: { id: number } }[]>(sb.from("push_state").select("value").eq("name", "audit_cursor"));
-  let cursor: number | null = state[0]?.value?.id ?? null;
+  let cursor: number | null = (await getState<{ id: number }>("audit_cursor"))?.id ?? null;
   if (cursor === null) {
     const last = await must<{ id: number }[]>(sb.from("project_audit_log").select("id").order("id", { ascending: false }).limit(1));
     cursor = last[0]?.id ?? 0;
-    await sb.from("push_state").upsert({ name: "audit_cursor", value: { id: cursor }, updated_at: new Date().toISOString() });
+    await setState("audit_cursor", { id: cursor });
   }
-  // 다음 근무일은 연휴면 며칠 뒤일 수 있어 2주치를 읽는다 (팀 3명이라 양은 적다)
+  // 다음 근무일은 연휴면 며칠 뒤일 수 있어 2주치를 읽는다. 일정은 어제 이후 + 아직 끝나지 않은 반복만(전부 읽으면 쌓일수록 조회 한도에 잘림)
+  const yday = addDay(today, -1);
   const [members, routines, teamOverrides, memberOverrides, leaves, events, holidays, wishket, audit] = await Promise.all([
     must<any[]>(sb.from("team_members").select("id,name,user_id,is_active")),
     must<any[]>(sb.from("team_work_routines").select("valid_from,days")),
-    must<any[]>(sb.from("team_work_overrides").select("work_date,loc,branch,note").gte("work_date", addDay(today, -1)).lte("work_date", addDay(today, 14))),
+    must<any[]>(sb.from("team_work_overrides").select("work_date,loc,branch,note").gte("work_date", yday).lte("work_date", addDay(today, 14))),
     must<any[]>(sb.from("member_work_overrides").select("member_id,work_date,loc,branch").gte("work_date", today).lte("work_date", addDay(today, 14))),
-    must<any[]>(sb.from("team_leaves").select("member_id,from_date,to_date,kind").is("deleted_at", null).lte("from_date", addDay(today, 14)).gte("to_date", today)),
-    must<any[]>(sb.from("calendar_events").select("*").is("deleted_at", null).lte("event_date", addDay(today, 14))),
+    must<any[]>(sb.from("team_leaves").select("id,member_id,from_date,to_date,kind").is("deleted_at", null).lte("from_date", addDay(today, 14)).gte("to_date", today)),
+    must<any[]>(sb.from("calendar_events").select("*").is("deleted_at", null).lte("event_date", addDay(today, 14))
+      .or(`event_date.gte.${yday},and(repeat.not.is.null,or(repeat_until.is.null,repeat_until.gte.${yday}))`)),
     must<any[]>(sb.from("calendar_holidays").select("holiday_date,name")),
     must<any[]>(sb.from("wishket_projects").select("slug,title,meeting_at,meeting_type,assigned_main,assigned_sub,current_status")
       .gte("meeting_at", new Date(now - 864e5).toISOString()).lte("meeting_at", new Date(now + 15 * 864e5).toISOString())),
-    must<any[]>(sb.from("project_audit_log").select("id,at,table_name,op,actor_id,before,after").gt("id", cursor).in("table_name", CAL_TABLES).order("id").limit(500)),
+    readAudit(cursor),
   ]);
   const fresh = audit.findIndex((a) => Date.parse(a.at) > now - AUDIT_SETTLE_MS);
   if (fresh >= 0) audit.length = fresh;
@@ -109,23 +132,39 @@ async function runScheduled() {
   };
   const { notes, cursor: nextCursor } = planNotifications(snap, now);
 
+  // 지난 실행에서 일시 실패한 알림부터 다시
+  const queue: Retry[] = [];
+  let sent = 0, failed = 0, retried = 0;
+  for (const q of (await getState<Retry[]>("retry_queue")) || []) {
+    if (q.until < now) continue;
+    const targets = subs.filter((x) => q.subs.includes(x.id));
+    if (!targets.length) continue;
+    const r = await deliver(targets, q.p, Math.max(60, Math.round((q.until - now) / 1000)), q.urgency);
+    sent += r.sent; failed += r.failed; retried++;
+    if (r.retry.length && q.tries + 1 < RETRY_MAX) queue.push({ ...q, subs: r.retry, tries: q.tries + 1 });
+  }
+
   // 중복 방지: 키를 먼저 넣고, 새로 들어간 키만 보낸다(동시에 두 번 돌아도 한 번만)
   let claimed = new Set<string>();
   if (notes.length) {
     const rows = await must<{ key: string }[]>(sb.from("push_sent").upsert(notes.map((n) => ({ key: n.key })), { onConflict: "key", ignoreDuplicates: true }).select("key"));
     claimed = new Set(rows.map((r) => r.key));
   }
-  let sent = 0, failed = 0;
   for (const n of notes) {
     if (!claimed.has(n.key)) continue;
-    const targets = subs.filter((s) => s.member_id === n.member
-      && (n.kind === "brief" ? s.morning_brief : s.change_alerts));
-    const r = await deliver(targets, { title: n.title, body: n.body, url: n.url, tag: n.tag }, n.ttl, n.urgency);
+    const targets = subs.filter((s) => s.member_id === n.member && (n.kind === "brief" ? s.morning_brief : s.change_alerts));
+    const payload = { title: n.title, body: n.body, url: n.url, tag: n.tag };
+    const r = await deliver(targets, payload, n.ttl, n.urgency);
     sent += r.sent; failed += r.failed;
+    if (r.retry.length) queue.push({ subs: r.retry, p: payload, ttl: n.ttl, urgency: n.urgency, until: now + n.ttl * 1000, tries: 1 });
   }
-  if (nextCursor !== null && nextCursor > cursor) await sb.from("push_state").upsert({ name: "audit_cursor", value: { id: nextCursor }, updated_at: new Date().toISOString() });
+  await setState("retry_queue", queue);
+  if (nextCursor !== null && nextCursor > cursor) await setState("audit_cursor", { id: nextCursor });
   await sb.from("push_sent").delete().lt("sent_at", new Date(now - SENT_KEEP_DAYS * 864e5).toISOString());
-  return { planned: notes.length, claimed: claimed.size, sent, failed, cursor: Math.max(cursor, nextCursor ?? 0) };
+  const result = { planned: notes.length, claimed: claimed.size, sent, failed, retried, queued: queue.length, cursor: Math.max(cursor, nextCursor ?? 0) };
+  // 마지막 실행 기록 — 알림 설정 창이 'n분 전 정상 실행'을 보여 주고, 오래 멈추면 경고한다 (calendar_push_status RPC)
+  await setState("heartbeat", { at: new Date(now).toISOString(), ...result });
+  return result;
 }
 
 Deno.serve(async (req) => {
