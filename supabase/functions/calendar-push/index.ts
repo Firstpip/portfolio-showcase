@@ -4,14 +4,15 @@ import webpush from "web-push";
 import { addDay, kstKey, planNotifications, type Snapshot } from "./plan.ts";
 
 // 사내 캘린더 웹 푸시 (2026-10-30)
-//   - pg_cron 이 5분마다 {source:'cron'} 으로 부른다 → 지금 보낼 알림을 계산해 보낸다(근무일 저녁 다음 근무일 안내·변경 알림).
+//   - pg_cron 이 5분마다 {source:'cron'} 으로 부른다 → 지금 보낼 알림을 계산해 보낸다(근무일 오후 다음 근무일 안내·변경 알림).
 //     같은 알림은 push_sent 키로 한 번만 나간다 — 누가 직접 여러 번 불러도 중복 발송 없음.
 //   - 대시보드 '테스트 알림' 은 {test:true} + 로그인 JWT → 그 사용자 기기로만 1건.
 // 발송: web-push 로 암호화·VAPID 서명만 만들고(generateRequestDetails) 전송은 fetch 로 한다(Deno 네이티브).
 // 비밀값: VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT (supabase secrets). SUPABASE_* 는 런타임이 넣어 준다.
 
 const ALLOWED_ORIGINS = new Set(["https://firstpip.github.io", "http://127.0.0.1:8765", "http://localhost:8765"]);
-const CAL_TABLES = ["team_work_routines", "team_work_overrides", "member_work_overrides", "team_leaves", "calendar_events"];
+// 위시켓 프로젝트는 대면 미팅 외근(근무지) 변화를 알리려고 함께 읽는다 (2026-11-03)
+const CAL_TABLES = ["team_work_routines", "team_work_overrides", "member_work_overrides", "team_leaves", "calendar_events", "wishket_projects"];
 const SENT_KEEP_DAYS = 14;
 const MAX_FAILS = 10; // 404/410 이 아닌 실패가 이만큼 쌓이면 구독 정리
 // 방금 쌓인 감사 기록은 다음 실행으로 미룬다 — 한 번의 저장이 기록 여러 건(반복 일정 나누기 등)으로 남을 때
