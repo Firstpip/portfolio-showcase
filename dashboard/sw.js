@@ -14,6 +14,8 @@ self.addEventListener('push', (e) => {
   e.waitUntil(self.registration.showNotification(d.title || '퍼스트핍 워크룸', {
     body: d.body || '',
     tag: d.tag || undefined,
+    // 같은 대상(tag)의 새 알림이 옛 알림을 바꿀 때도 다시 소리·진동 — '추가' 뒤 '취소'를 놓치지 않게 (2026-11-03)
+    renotify: !!d.tag,
     icon: 'icons/icon-192.png',
     badge: 'icons/badge-72.png',
     data: { url: d.url || './?cal=1#calendar' },

@@ -66,13 +66,15 @@ function mountCalendar(root, ctx) {
   // span = 지금 목표 기간, have = 실제로 다 읽은 기간. 기간이 바뀐 사이에 끝난 옛 읽기 결과는 버린다(좁은 결과가 덮어쓰지 않게).
   let span = null, have = null, spanJob = Promise.resolve(false);
   const initSpan = () => ({ from: key(addDays(TODAY, -100)), to: key(addDays(TODAY, 200)) });
-  const ranged = (q, fn) => async () => { const r = span; const { data, error } = await q(r); if (error) throw error; if (r !== span) return; fn(data); };
+  // 테이블마다 요청 번호를 매겨 가장 나중에 보낸 읽기 결과만 반영 — 늦게 도착한 옛 읽기가 그 뒤 실시간 갱신을 덮어쓰지 않게 (2026-11-03)
+  const seq = {};
+  const ranged = (t, q, fn) => async () => { const r = span, my = (seq[t] = (seq[t] || 0) + 1); const { data, error } = await q(r); if (error) throw error; if (my !== seq[t] || r !== span || destroyed) return; fn(data); };
   const LOADERS = {
     [T.routines]: async () => { const { data, error } = await sb.from(T.routines).select('*').order('valid_from'); if (error) throw error; ROUTINES = data.map(MAP.routine); },
-    [T.team]:     ranged(r => sb.from(T.team).select('*').gte('work_date', r.from).lte('work_date', r.to), d => { teamOverrides = d.map(MAP.team); }),
-    [T.member]:   ranged(r => sb.from(T.member).select('*').gte('work_date', r.from).lte('work_date', r.to), d => { personOverrides = d.map(MAP.member); }),
-    [T.leaves]:   ranged(r => sb.from(T.leaves).select('*').is('deleted_at', null).lte('from_date', r.to).gte('to_date', r.from), d => { leaves = d.map(MAP.leave); }),
-    [T.events]:   ranged(r => sb.from(T.events).select('*').is('deleted_at', null).lte('event_date', r.to)
+    [T.team]:     ranged(T.team, r => sb.from(T.team).select('*').gte('work_date', r.from).lte('work_date', r.to), d => { teamOverrides = d.map(MAP.team); }),
+    [T.member]:   ranged(T.member, r => sb.from(T.member).select('*').gte('work_date', r.from).lte('work_date', r.to), d => { personOverrides = d.map(MAP.member); }),
+    [T.leaves]:   ranged(T.leaves, r => sb.from(T.leaves).select('*').is('deleted_at', null).lte('from_date', r.to).gte('to_date', r.from), d => { leaves = d.map(MAP.leave); }),
+    [T.events]:   ranged(T.events, r => sb.from(T.events).select('*').is('deleted_at', null).lte('event_date', r.to)
                     .or(`event_date.gte.${r.from},and(repeat.not.is.null,or(repeat_until.is.null,repeat_until.gte.${r.from}))`), d => { manual = d.map(MAP.event); }),
     [T.holidays]: async () => { const { data, error } = await sb.from(T.holidays).select('holiday_date,name'); if (error) throw error; HOLIDAYS = Object.fromEntries(data.map(h => [h.holiday_date, h.name])); },
   };
@@ -81,21 +83,23 @@ function mountCalendar(root, ctx) {
     if (!span) span = initSpan();
     const r = span;
     try { await Promise.all(Object.values(LOADERS).map(f => f())); setupNeeded = false; if (r === span) have = r; }
-    catch (e) { if (missing(e)) setupNeeded = true; else { console.warn('캘린더 로드 실패:', e); toast(friendly(e)); } }
+    catch (e) { if (missing(e)) setupNeeded = true; else { console.warn('캘린더 로드 실패:', e); if (!destroyed) toast(friendly(e)); } }
+    if (destroyed) return;
     loaded = true; $('cal-loading').hidden = true; $('cal-body').hidden = setupNeeded; render();
   }
   // a~b 가 읽은 기간 밖이면 넓혀서 다시 읽는다. 넓힐 때는 그 방향으로 여유(앞 3달·뒤 6달)를 더 잡아 자주 읽지 않게.
   const covered = (a, b) => !!have && a >= have.from && b <= have.to;
+  let destroyed = false, spanFailAt = 0;   // 실패하면 10초 동안은 다시 묻지 않음(오프라인에서 ‹ › 마다 요청·오류 알림이 쌓이지 않게)
   function ensureSpan(a, b){
     if (covered(a, b) || setupNeeded) return Promise.resolve(false);
-    spanJob = spanJob.then(async () => {
-      if (covered(a, b)) return false;
+    spanJob = spanJob.catch(() => false).then(async () => {
+      if (covered(a, b) || destroyed) return false;
       const base = have || span || initSpan();
       const next = { from: a < base.from ? key(addDays(parse(a), -92)) : base.from, to: b > base.to ? key(addDays(parse(b), 183)) : base.to };
-      span = next; $('shell').classList.add('fetching');
-      try { await Promise.all([T.team, T.member, T.leaves, T.events].map(t => LOADERS[t]())); if (span === next) have = next; return true; }
-      catch (e) { console.warn('캘린더 기간 읽기 실패:', e); toast(friendly(e)); return false; }
-      finally { $('shell').classList.remove('fetching'); }
+      span = next; $('shell')?.classList.add('fetching');
+      try { await Promise.all([T.team, T.member, T.leaves, T.events].map(t => LOADERS[t]())); if (span === next) have = next; spanFailAt = 0; return true; }
+      catch (e) { console.warn('캘린더 기간 읽기 실패:', e); spanFailAt = Date.now(); if (!destroyed) toast(friendly(e)); return false; }
+      finally { $('shell')?.classList.remove('fetching'); }
     });
     return spanJob;
   }
@@ -278,8 +282,8 @@ function mountCalendar(root, ctx) {
     ks.sort(); return [ks[0], ks[ks.length-1]];
   }
   function render(){
-    if (!loaded) return;
-    const [na, nb] = neededSpan(); if (!covered(na, nb)) ensureSpan(na, nb).then(ch => { if (ch) render(); });
+    if (!loaded || destroyed) return;
+    const [na, nb] = neededSpan(); if (!covered(na, nb) && Date.now() - spanFailAt > 10000) ensureSpan(na, nb).then(ch => { if (ch) render(); });
     renderBanner(); renderHeader(); renderMobile();
     // 데스크톱: 사이드바(오늘 · 주간 근무 · 다가오는 미팅) + 월/주/목록
     // 사이드바는 탭 하나만 보여 줘 안쪽 스크롤 없이 한 화면에 들어오게 한다 (2026-11-03)
@@ -412,11 +416,12 @@ function mountCalendar(root, ctx) {
     root.dataset.k = k;
     bindEv(root); bindPeopleRows(root, k); bindQuick(root, k);
     root.querySelector('[data-add]').onclick = () => openAdd('meeting', { date:k });
-    const more = root.querySelector('[data-more]'); if (more) more.onclick = () => openDay(k);
+    const more = root.querySelector('[data-more]'); if (more) more.onclick = () => openDay(k, true);
   }
   function renderDayInto(root, k, compact=false){ root.innerHTML = dayHtml(k, false, compact); bindDay(root, k); }
   // 데스크톱: 날짜 모달. 모달 안에서 추가·수정 시트를 열었다 닫으면 같은 날짜 모달로 돌아옵니다.
-  function openDay(k){ state.sel = k; openSheet('', k); render(); }
+  // keepSel: 사이드바(오늘 카드·다가오는 미팅·주간 근무)에서 열 때는 주·목록 보기가 다른 주로 옮겨 가지 않게 선택일을 그대로 둔다
+  function openDay(k, keepSel=false){ if (!keepSel) state.sel = k; openSheet('', k); render(); }
   // 날짜별 소제목(오늘·내일·N일 후 + 날짜) 아래에 시간을 크게 — 훑어보기 쉽게 (2026-11-03)
   function renderUpcoming(){
     const up = upcomingMeetings(5);   // 5건 · 날짜 5개여도 1366×640 노트북 화면에 스크롤 없이 들어감
@@ -429,7 +434,7 @@ function mountCalendar(root, ctx) {
         h += `<button class="ev up" style="--c:${u.tag==='수주'?'var(--yellow)':'var(--blue)'}" data-day="${u.k}"><span class="t tnum">${u.t}</span><span class="b"><span class="ti"><span class="tag">${u.tag}</span><wbr>${esc(u.title)}</span><span class="su"><span class="who">${names(u.people)}</span>${u.place?'· '+esc(u.place):''}</span></span></button>`; });
       h += '</div>'; }
     $('upcard').innerHTML = h;
-    $('upcard').querySelectorAll('[data-day]').forEach(b => b.onclick = () => openDay(b.dataset.day));
+    $('upcard').querySelectorAll('[data-day]').forEach(b => b.onclick = () => openDay(b.dataset.day, true));
   }
   // 데스크톱: 주간 근무 보드 — 요일마다 팀 근무지(전체 이름) 한 줄 + 다른 사람만 아래에. 표 대신 행 단위라 좁은 폭에서도 읽힘.
   function routineSummary(r){
@@ -451,7 +456,7 @@ function mountCalendar(root, ctx) {
     root.querySelectorAll('[data-wb]').forEach(b => b.onclick = () => { state.bweek = key(addDays(parse(state.bweek), 7*Number(b.dataset.wb))); render(); });
     root.querySelectorAll('[data-tl]').forEach(b => b.onclick = () => openAdd('loc', { date:b.dataset.tl, scope:'team' }));
     root.querySelectorAll('.wb-ex').forEach(b => b.onclick = () => openAdd('loc', { person:b.dataset.p, date:b.dataset.k, scope:'person' }));
-    root.querySelectorAll('[data-day]').forEach(b => b.onclick = () => openDay(b.dataset.day));
+    root.querySelectorAll('[data-day]').forEach(b => b.onclick = () => openDay(b.dataset.day, true));
   }
   // 변경 기록: 화면에 상시 노출하지 않고 추적이 필요할 때만 시트로 조회 — project_audit_log(감사 트리거)에서 읽음
   const AUDIT_TITLE = { team_work_routines:'주간 패턴', team_work_overrides:'팀 근무지', member_work_overrides:'개인 근무지', team_leaves:'휴가', calendar_events:'일정' };
@@ -538,11 +543,12 @@ function mountCalendar(root, ctx) {
     let h = WD.slice(1).concat(WD[0]).map(w=>`<div class="wh ${w==='토'?'sat':w==='일'?'sun':''}">${w}</div>`).join('');
     // 그 달 마지막 날이 든 주까지 온전한 주 단위로 그린다 (마지막 줄이 한 칸만 남지 않게)
     const last = new Date(a.getFullYear(), a.getMonth()+1, 0), cells = Math.round((addDays(monday(last),7) - start) / 864e5);
-    // 팀 근무지 글자는 평소(주간 패턴에서 가장 많은 요일의 근무지)와 다른 날만 — 매일 같은 '시청역' 반복을 없앤다 (2026-11-03)
-    const bases = new Set();
+    // 팀 근무지 글자는 그달 평소 근무지(그달 1일 기준 주간 패턴에서 가장 많은 요일의 근무지)와 다른 날만 — 매일 같은 '시청역' 반복을 없앤다.
+    //   달 중간에 패턴이 바뀌거나 앞뒤 달 칸이어도 기준은 하나 — 아래 안내 문구와 늘 맞게 (2026-11-03)
+    const monthBase = baseLoc(routineAt(key(first)));
     for (let i=0;i<cells;i++){ const d=addDays(start,i), k=key(d), dw=d.getDay();
       const hol=HOLIDAYS[k], off=isOffDay(k), evs=eventsOf(k).filter(e=>e.type!=='holiday'), t=teamLoc(k);
-      const base = off ? null : baseLoc(routineAt(k)); if (base && d.getMonth()===a.getMonth()) bases.add(base);
+      const base = monthBase;
       const tloc = off ? '' : t.src==='override'
         ? `<span class="tloc" style="background:color-mix(in srgb,${LOC[t.code].color} 24%,transparent);color:${LOC[t.code].color}" title="이날만 바뀐 팀 근무지">${esc(teamLocName(t))}</span>`
         : t.code===base ? ''
@@ -555,7 +561,7 @@ function mountCalendar(root, ctx) {
       h += `<button class="mc tnum ${d.getMonth()!==a.getMonth()?'out':''} ${k===state.sel?'sel':''} ${k===TK?'today':''} ${k<TK?'past':''}" data-k="${k}" aria-label="${esc(label)}"><span class="n"><span class="dn ${dw===6?'sat':(dw===0||hol)?'sun':''}">${d.getDate()}</span>${hol?`<span class="h">${esc(hol)}</span>`:ex?`<span class="ex">${ex}</span>`:''}</span>${tloc}${items}${bars}</button>`; }
     root.innerHTML = h;
     const foot = $(phone ? 'm-mfoot' : 'mfoot');
-    if (foot) foot.innerHTML = bases.size ? `근무지 표시가 없는 평일은 <b>${[...bases].map(c => esc(LOC[c].full)).join(' 또는 ')}</b> (주간 패턴)` : '';
+    if (foot) foot.innerHTML = `근무지 표시가 없는 평일은 <b>${esc(LOC[monthBase].full)}</b>`;
     root.querySelectorAll('.mc').forEach(b => b.onclick = () => { const k = b.dataset.k;
       if (phone) { selectDay(k); scrollToTop(); } else openDay(k); });
   }
@@ -692,8 +698,12 @@ function mountCalendar(root, ctx) {
         <div class="hint warn" id="f-conflict" hidden></div>
         <div class="actions foot"><button type="button" class="btn" id="f-cancel">취소</button><button type="submit" class="btn primary">${ed?'수정 저장':'저장'}</button></div></form>`);
     const sh = $('sheet'); sh.classList.add('form');
-    sh.querySelectorAll('[data-t]').forEach(b => b.onclick = () => openAdd(b.dataset.t, pre));
-    sh.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => openAdd('loc', { ...pre, scope:b.dataset.scope }));
+    // 종류·범위 탭을 바꿔도 쓰던 내용(제목·날짜·시간·참석·장소·메모)을 옮겨 간다 — 전에는 확인 없이 사라졌다 (2026-11-03)
+    const carryNow = () => ({ title:$('f-title')?.value, date:$('f-date')?.value, start:$('f-start')?.value, end:$('f-end')?.value, allday:$('f-allday')?.checked,
+      place:$('f-place')?.value, note:$('f-note')?.value, people:[...sh.querySelectorAll('.chip[data-pc][aria-pressed="true"]')].map(x=>x.dataset.pc) });
+    const switchTo = (t, extra={}) => { const c = carryNow(); openAdd(t, { ...pre, ...extra, date: c.date || pre.date, people: c.people.length ? c.people : pre.people, carry: c }); };
+    sh.querySelectorAll('[data-t]').forEach(b => b.onclick = () => switchTo(b.dataset.t));
+    sh.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => switchTo('loc', { scope:b.dataset.scope }));
     const rsOne = () => sh.querySelector('[data-rs="one"]')?.getAttribute('aria-pressed')==='true';
     const syncAllday = () => { const on = !!$('f-allday')?.checked; if ($('timerow')) { $('timerow').hidden = on; $('allday-box').hidden = !on; } };
     const syncRepeat = () => { const rep = $('f-repeat'); if (!rep) return; rep.disabled = rsOne(); $('until-row').hidden = !rep.value || rsOne(); };
@@ -715,6 +725,9 @@ function mountCalendar(root, ctx) {
       $('f-place').value = m0.place||''; $('f-note').value = m0.note||'';
       sh.querySelectorAll('[data-pc]').forEach(b => b.setAttribute('aria-pressed', m0.people.includes(b.dataset.pc)));
     }
+    if (pre.carry && !ed) { const c = pre.carry;
+      [['f-title','title'],['f-start','start'],['f-end','end'],['f-place','place'],['f-note','note']].forEach(([id,k]) => { if ($(id) && c[k]) $(id).value = c[k]; });
+      if ($('f-allday') && c.allday) { $('f-allday').checked = true; syncAllday(); } }
     const ad = $('f-allday'); if (ad) ad.onchange = () => { syncAllday(); evWarn(); };
     if ($('f-repeat')) { $('f-repeat').onchange = syncRepeat; syncRepeat(); }
     ['f-date','f-start','f-end','f-place'].forEach(i => { if ($(i)) $(i).addEventListener('input', evWarn); });
@@ -727,7 +740,7 @@ function mountCalendar(root, ctx) {
     $('f-date').addEventListener('input', ph); $('f-date').addEventListener('change', ph); ph();
     // 읽은 기간 밖 날짜를 고르면 그 기간을 읽고 나서 겹침·휴가 경고를 다시 계산
     ['f-date','f-to'].forEach(i => $(i)?.addEventListener('change', () => { const a = $('f-date').value, b = $('f-to')?.value || a; if (!a) return;
-      ensureSpan(a < b ? a : b, a < b ? b : a).then(ch => { if (ch) { render(); evWarn(); sh._leaveWarn?.(); } }); }));
+      const form = $('f'); ensureSpan(a < b ? a : b, a < b ? b : a).then(() => { if ($('f') !== form) return; render(); evWarn(); sh._leaveWarn?.(); }); }));
     function evWarn(){ const w = $('ev-warn'); if (!w) return;
       const k=$('f-date').value, people=[...sh.querySelectorAll('.chip[data-pc][aria-pressed="true"]')].map(b=>b.dataset.pc), mt=sh.querySelector('[data-mt][aria-pressed="true"]')?.dataset.mt;
       const me = { allday:$('f-allday').checked, start:$('f-start').value, end:$('f-end').value };
@@ -749,7 +762,7 @@ function mountCalendar(root, ctx) {
         $('leave-warn').className = 'hint' + (clash.length?' warn':''); $('leave-warn').textContent = clash.length ? `이 기간에 참석 미팅이 있습니다: ${clash.join(', ')}` : '이 기간에 겹치는 미팅이 없습니다.'; };
       sh._leaveWarn = warn; ['f-date','f-to','f-person'].forEach(i=>$(i).addEventListener('change', warn)); warn(); }
     // 동시 수정 확인: 입력창을 연 뒤 다른 사람이 같은 대상을 바꿨으면 한 번 알리고, 다시 누르면 덮어씁니다.
-    const baseOf = () => ed ? JSON.stringify(m0)
+    const baseOf = () => ed ? JSON.stringify((type==='leave' ? leaves : manual).find(x => x.id===m0.id) || null)
       : type==='loc' ? JSON.stringify(scope==='team' ? teamOverrides.find(o=>o.date===date)||null : personOverrides.find(o=>o.person===person && o.date===date)||null) : '';
     const base = baseOf();
     const conflict = () => { const f = $('f'); if (f.dataset.force || baseOf()===base) return false;
@@ -757,7 +770,9 @@ function mountCalendar(root, ctx) {
       f.dataset.force = '1'; render(); return true; };
     $('f-cancel').onclick = closeSheet;
     $('f').onsubmit = e => { e.preventDefault(); save(type, scope, ed, conflict); };
-    sh._snap = formSnap();
+    // 옮겨 온 내용이 있으면 처음부터 '작성 중'으로 본다 — 바깥 클릭·Esc 에 확인을 묻게
+    const carried = pre.carry && !ed && ['title','place','note'].some(k => pre.carry[k]);
+    sh._snap = carried ? '\u0000carried' : formSnap();
     setTimeout(() => sh.querySelector('form input:not([type=checkbox]):not([disabled]),form select:not([disabled])')?.focus(), 50);
   }
   // 저장: 값 검증은 화면에서 먼저, 최종 검증(겹치는 휴가·시간 순서 등)은 DB 제약이 한 번 더 합니다.
@@ -930,8 +945,9 @@ function mountCalendar(root, ctx) {
   // 폰 ＋ 버튼 (2026-11-03): 아래로 스크롤하는 동안 숨기고 위로 올리면 다시 — 맨 오른쪽(일요일) 칸을 가리지 않게.
   // 하단 달력 화살표는 그 줄 오른쪽 여백(.calnav)으로 버튼 자리를 피한다.
   let fabY = window.scrollY;
-  on(window, 'scroll', () => { const y = window.scrollY, dy = y - fabY; if (y <= 120) { $('fab').classList.remove('away'); fabY = y; return; }
-    if (Math.abs(dy) < 6) return; $('fab').classList.toggle('away', dy > 0); fabY = y; }, { passive:true });
+  const fabAway = v => { const f = $('fab'); if (!f) return; f.classList.toggle('away', v); f.tabIndex = v ? -1 : 0; };
+  on(window, 'scroll', () => { const y = window.scrollY, dy = y - fabY; if (y <= 120) { fabAway(false); fabY = y; return; }
+    if (Math.abs(dy) < 6) return; fabAway(dy > 0); fabY = y; }, { passive:true });
   on(document, 'keydown', e => { if (e.metaKey || e.ctrlKey || e.altKey || e.target.matches('input,select,textarea') || !$('ovl').hidden) return;
     if (e.key==='ArrowLeft') step(-1); if (e.key==='ArrowRight') step(1); if (e.key==='t') $('btn-today').click(); if (e.key==='n') openAdd('meeting'); });
 
@@ -1026,7 +1042,12 @@ function mountCalendar(root, ctx) {
       }
     }
     if (!ME) body = stat('var(--yellow)', '팀원 계정과 연결된 사람만 알림을 켤 수 있어요') + `<div class="hint">워크룸 메뉴의 팀 관리에서 로그인 계정을 연결해 주세요.</div>`;
-    openSheet(head + body);
+    openSheet(head + body + `<div class="hint" id="p-health" style="margin-top:.6rem"></div>`);
+    // 알림 서버(5분마다 실행) 상태 — '평소와 다를 때만' 오는 알림이라 멈춰도 모를 수 있어 마지막 실행 시각을 보여 주고 15분 넘으면 경고 (2026-11-03)
+    sb.rpc('calendar_push_status').then(({ data, error }) => { const el = $('p-health'); if (!el || error || !data?.at) return;
+      const m = Math.max(0, Math.round((Date.now() - Date.parse(data.at)) / 60000));
+      if (m <= 15) el.textContent = `알림 서버 정상 · ${m < 1 ? '방금' : m + '분 전'} 실행`;
+      else { el.className = 'hint warn'; el.textContent = `알림 서버가 ${m >= 120 ? Math.round(m / 60) + '시간' : m + '분'}째 실행되지 않았어요. 관리자에게 알려 주세요.`; } });
     const q = id => $(id);
     if (q('p-on')) q('p-on').onclick = enablePush;
     if (q('p-off')) q('p-off').onclick = disablePush;
@@ -1057,12 +1078,12 @@ function mountCalendar(root, ctx) {
   const tick = setInterval(() => { const d = new Date(); d.setHours(0,0,0,0); if (key(d)!==TK) { const wasToday = state.sel===TK; TODAY = d; TK = key(d); if (wasToday) state.sel = TK; render(); } }, 60000);
   cleanups.push(() => clearInterval(tick));
   // 탭·앱으로 돌아올 때: 실시간 반영이 있으니 2분 넘게 숨겨져 있었을 때만 다시 읽는다 (아이폰 홈 화면 앱은 숨으면 연결이 멈춤)
-  let hiddenAt = 0;
+  let hiddenAt = document.hidden ? Date.now() : 0;   // 백그라운드 탭에서 열렸으면 그때부터 숨김으로 친다
   on(document, 'visibilitychange', () => {
     if (document.visibilityState==='hidden') { hiddenAt = Date.now(); return; }
     if (loaded && !setupNeeded && hiddenAt && Date.now() - hiddenAt > 120000) loadAll(); });
   setContext(ctx);
   if (pushEnv().supported) swReg();   // 미리 등록해 두면 '알림 켜기'가 빨라진다(캐시는 안 함)
   loadAll().then(syncPush);
-  return { setContext, destroy(){ cleanups.splice(0).forEach(f => { try { f(); } catch (_) {} }); root.innerHTML = ''; } };
+  return { setContext, destroy(){ destroyed = true; cleanups.splice(0).forEach(f => { try { f(); } catch (_) {} }); root.innerHTML = ''; } };
 }

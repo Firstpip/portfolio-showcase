@@ -11,6 +11,15 @@ if (!window.supabase) {
   throw new Error('Supabase SDK not loaded');
 }
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
+// 로그아웃할 때 이 기기의 캘린더 알림 구독도 끊는다 — 공용 PC 등에서 로그아웃한 뒤에도 팀 일정·근무지 알림이 뜨지 않게 (2026-11-03)
+async function signOutClean() {
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration?.();
+    const sub = await reg?.pushManager?.getSubscription();
+    if (sub) { await supabase.from('push_subscriptions').delete().eq('endpoint', sub.endpoint); await sub.unsubscribe(); }
+  } catch (e) { console.warn('알림 구독 해제 실패:', e); }
+  await supabase.auth.signOut();
+}
 const TABLE = 'wishket_projects';
 const TEAM_TABLE = 'team_members';
 const MILESTONES_TABLE = 'project_milestones';
@@ -4754,7 +4763,7 @@ function App({ session }) {
     // - 네트워크 복구(online): 바로 전체
     // - 탭 복귀: 실시간 채널이 있는 프로젝트·마일스톤은 2분 넘게 숨겨졌을 때만(짧은 탭 전환은 실시간 반영으로 충분),
     //   실시간 채널이 없는 방문 기록은 돌아올 때마다 읽되 30초에 한 번까지만
-    let hiddenAt = 0, visitsAt = Date.now();
+    let hiddenAt = document.hidden ? Date.now() : 0, visitsAt = Date.now();   // 백그라운드 탭에서 열렸으면 그때부터 숨김으로 친다
     const resync = (e) => {
       if (e?.type === 'online') { loadData(); loadMilestones(); loadVisits(); visitsAt = Date.now(); return; }
       if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
@@ -5518,7 +5527,7 @@ function App({ session }) {
             onTeamMgr={() => setShowTeamMgr(true)}
             onDeleted={() => setShowDeleted(true)}
             onShortcuts={() => setShowShortcuts(true)}
-            onSignOut={() => supabase.auth.signOut()}
+            onSignOut={signOutClean}
           />
         </div>
       </div>
