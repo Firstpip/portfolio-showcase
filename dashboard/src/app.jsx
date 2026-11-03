@@ -4750,8 +4750,17 @@ function App({ session }) {
         if (!ok) wasDisconnectedRef.current = true;
         setConnected(ok);
       });
-    // 탭 복귀·네트워크 복구 시에도 재동기화 (슬립 중 놓친 변경 반영)
-    const resync = () => { if (document.visibilityState === 'visible') { loadData(); loadMilestones(); loadVisits(); } };
+    // 탭 복귀·네트워크 복구 시 재동기화 (2026-11-03 조정)
+    // - 네트워크 복구(online): 바로 전체
+    // - 탭 복귀: 실시간 채널이 있는 프로젝트·마일스톤은 2분 넘게 숨겨졌을 때만(짧은 탭 전환은 실시간 반영으로 충분),
+    //   실시간 채널이 없는 방문 기록은 돌아올 때마다 읽되 30초에 한 번까지만
+    let hiddenAt = 0, visitsAt = Date.now();
+    const resync = (e) => {
+      if (e?.type === 'online') { loadData(); loadMilestones(); loadVisits(); visitsAt = Date.now(); return; }
+      if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+      if (hiddenAt && Date.now() - hiddenAt > 120000) { loadData(); loadMilestones(); }
+      if (Date.now() - visitsAt > 30000) { visitsAt = Date.now(); loadVisits(); }
+    };
     document.addEventListener('visibilitychange', resync);
     window.addEventListener('online', resync);
     return () => {
