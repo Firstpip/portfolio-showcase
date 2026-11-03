@@ -46,8 +46,8 @@ Deno.test("안내: 근무일 16:00~17:30 첫 실행, 다음 근무일 기준, �
   const r = brief(s, "2026-11-02");
   eq(r.map((n) => n.member).sort(), [M1, M2], "켠 사람만(심정규 꺼짐)");
   const me = r.find((n) => n.member === M2)!;
-  eq([me.key, ...tb(me)], ["e:2026-11-03:m2", "🚕 내일 외근 (가나다물류 킥오프) · 11/3 (화)",
-    "일정: 종일 제안서 마감, 11:00 호텔 QR 앱, 14:00 가나다물류 킥오프\n팀원: 김동욱 외근 (가나다물류 킥오프), 심정규 연차"], "제목에 내 근무지, 본문엔 제목에 없는 것만");
+  eq([me.key, ...tb(me)], ["e:2026-11-03:m2", "🚕 내일 14:00 외근 (가나다물류 킥오프) · 11/3 (화)",
+    "일정: 종일 제안서 마감, 11:00 호텔 QR 앱, 14:00 가나다물류 킥오프\n팀원: 김동욱 14:00 외근 (가나다물류 킥오프), 심정규 연차"], "제목에 내 근무지, 본문엔 제목에 없는 것만");
 });
 
 Deno.test("안내: 금요일 → 월요일, 공휴일 전날 → 그다음 평일, 쉬는 날엔 없음", () => {
@@ -185,7 +185,7 @@ Deno.test("변경: 팀원 개인 근무지 — 전원(바꾼 사람 제외), 남
   s.audit = [{ id: 35, at: "", table_name: "member_work_overrides", op: "DELETE", actor_id: "u1", before: { member_id: M1, work_date: "2026-11-04", loc: "out", branch: null }, after: null }];
   eq(tb(change(s, "2026-11-03", "17:40")[0]), ["🏠 김동욱 내일 재택", "11/4 (수) · 원래 근무지로"], "해제 → 원래대로(수요일 팀 재택)");
   s.events = [{ id: "e7", type: "meeting", title: "고객사 킥오프", event_date: "2026-11-04", start_time: "14:00:00", all_day: false, meeting_type: "inperson", people: [M1], auto_out: true, exdates: [] }];
-  eq(tb(change(s, "2026-11-03", "17:40")[0]), ["🚕 김동욱 내일 외근 (고객사 킥오프)", "11/4 (수) · 원래 근무지로"], "해제했는데 대면 미팅이 있으면 그 외근이 '원래'");
+  eq(tb(change(s, "2026-11-03", "17:40")[0]), ["🚕 김동욱 내일 14:00 외근 (고객사 킥오프)", "11/4 (수) · 원래 근무지로"], "해제했는데 대면 미팅이 있으면 그 외근이 '원래'");
   s.events = [];
   s.audit = [{ id: 36, at: "", table_name: "member_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { member_id: M1, work_date: "2026-11-10", loc: "home", branch: null } }];
   eq(change(s, "2026-11-03", "17:40").length, 0, "범위 밖");
@@ -215,8 +215,8 @@ Deno.test("변경: 대면 미팅 외근 — 비참석자에게 근무지 알림,
   s.events = [ev];
   s.audit = [{ id: 51, at: "", table_name: "calendar_events", op: "INSERT", actor_id: "u1", before: null, after: ev }];
   let r = change(s, "2026-11-04", "17:40");
-  eq(r.map((n) => `${n.member}|${n.title}`).sort(), ["m2|➕ 고객사 킥오프 추가", "m3|🚕 김동욱 내일 외근 (고객사 킥오프)", "m3|🚕 최기용 내일 외근 (고객사 킥오프)"], "참석자는 일정, 비참석자는 근무지");
-  eq(r.find((n) => n.key === "c:51:m3:m1:2026-11-05")!.body, "11/5 (목) · 14:00–15:00 대면 미팅", "근무지 알림 본문(본인 등록이라 '누가' 생략)");
+  eq(r.map((n) => `${n.member}|${n.title}`).sort(), ["m2|➕ 고객사 킥오프 추가", "m3|🚕 김동욱 내일 14:00 외근 (고객사 킥오프)", "m3|🚕 최기용 내일 14:00 외근 (고객사 킥오프)"], "참석자는 일정, 비참석자는 근무지");
+  eq(r.find((n) => n.key === "c:51:m3:m1:2026-11-05")!.body, "11/5 (목) · 대면 미팅 ~15:00", "근무지 알림 본문(본인 등록이라 '누가' 생략)");
   eq(r.find((n) => n.member === M2)!.body, "11/5 (목) 14:00–15:00 · 김동욱 추가", "일정 알림 본문");
   s.events = [];
   s.audit = [{ id: 52, at: "", table_name: "calendar_events", op: "UPDATE", actor_id: "u1", before: ev, after: { ...ev, deleted_at: "x" } }];
@@ -224,7 +224,7 @@ Deno.test("변경: 대면 미팅 외근 — 비참석자에게 근무지 알림,
   eq(r.map(tb).sort(), [["🏢 김동욱 내일 시청역2호점", "11/5 (목) · 미팅이 취소·변경돼 외근 해제"], ["🏢 최기용 내일 시청역2호점", "11/5 (목) · 미팅이 취소·변경돼 외근 해제 · 김동욱 변경"]], "외근 해제");
   s.events = [ev]; s.memberOverrides = [{ member_id: M1, work_date: "2026-11-05", loc: "cityhall", branch: null }];
   s.audit = [{ id: 53, at: "", table_name: "calendar_events", op: "INSERT", actor_id: "u2", before: null, after: ev }];
-  eq(change(s, "2026-11-04", "17:40").filter((n) => n.member === M3).map((n) => n.title), ["🚕 최기용 내일 외근 (고객사 킥오프)"], "개인 근무지를 정한 사람 제외");
+  eq(change(s, "2026-11-04", "17:40").filter((n) => n.member === M3).map((n) => n.title), ["🚕 최기용 내일 14:00 외근 (고객사 킥오프)"], "개인 근무지를 정한 사람 제외");
   s.memberOverrides = []; const vid = { ...ev, id: "e8", meeting_type: "video" }; s.events = [vid];
   s.audit = [{ id: 54, at: "", table_name: "calendar_events", op: "INSERT", actor_id: "u1", before: null, after: vid }];
   eq(change(s, "2026-11-04", "17:40").filter((n) => n.member === M3).length, 0, "화상 미팅");
@@ -240,8 +240,8 @@ Deno.test("변경: 위시켓 대면 미팅 — 바꾼 사람 뺀 전원(담당�
   s.wishket = [w1];
   s.audit = [{ id: 71, at: "", table_name: "wishket_projects", op: "UPDATE", actor_id: "u1", before: w0, after: w1 }];
   const r = change(s, "2026-11-04", "17:40");
-  eq(r.map((n) => `${n.member}|${n.title}`).sort(), ["m2|🚕 최기용 내일 외근 (창호 견적)", "m3|🚕 최기용 내일 외근 (창호 견적)"], "담당자 포함");
-  eq(r[0].body, "11/5 (목) · 14:00 수주 미팅 · 김동욱 변경", "본문");
+  eq(r.map((n) => `${n.member}|${n.title}`).sort(), ["m2|🚕 최기용 내일 14:00 외근 (창호 견적)", "m3|🚕 최기용 내일 14:00 외근 (창호 견적)"], "담당자 포함");
+  eq(r[0].body, "11/5 (목) · 수주 미팅 · 김동욱 변경", "본문");
   s.audit = [{ id: 72, at: "", table_name: "wishket_projects", op: "UPDATE", actor_id: "u1", before: w1, after: { ...w1, title: "창호 견적 시스템" } }];
   eq(change(s, "2026-11-04", "17:40").length, 0, "무관한 수정");
 });
@@ -318,4 +318,13 @@ Deno.test("변경: 반복 일정 — 나누기(시각 기준 짝)·한 회차 �
 Deno.test("구독이 없는 사람에게는 계획하지 않음", () => {
   const s = base(); s.subs = [];
   eq(planNotifications(s, at("2026-11-03", "16:00")).notes.length, 0, "구독 없음");
+});
+
+Deno.test("대면 미팅 외근: 시간 있는 미팅은 그 시각부터(가장 이른 것), 종일 미팅은 하루 전체", () => {
+  const s = empty(base());
+  const mk = (id: string, start: string | null, title: string) => ({ id, type: "meeting", title, event_date: "2026-11-04", start_time: start, all_day: !start, meeting_type: "inperson", people: [M1], auto_out: true, exdates: [] });
+  s.events = [mk("a", "16:00:00", "B사 미팅"), mk("b", "14:00:00", "A사 미팅")];
+  eq(brief(s, "2026-11-03").find((n) => n.member === M2)!.title, "👥 내일 김동욱 14:00 외근 (A사 미팅) · 11/4 (수)", "가장 이른 시각");
+  s.events.push(mk("c", null, "종일 워크숍"));
+  eq(brief(s, "2026-11-03").find((n) => n.member === M2)!.title, "👥 내일 김동욱 외근 (종일 워크숍) · 11/4 (수)", "종일이 있으면 하루 전체");
 });

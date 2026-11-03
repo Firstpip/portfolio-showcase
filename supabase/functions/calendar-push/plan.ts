@@ -102,12 +102,16 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
   }
   const teamFull = (t: { code: string; branch: string | null } | null) => !t ? "휴무" : t.code === "other" && t.branch ? t.branch : LOC[t.code]?.full || t.code;
   const leaveOf = (pid: string, k: string) => s.leaves.find((l) => l.member_id === pid && l.from_date <= k && l.to_date >= k);
-  function outMeeting(pid: string, k: string) {
-    const w = s.wishket.find((w) => w.meeting_type === "inperson" && w.meeting_at && kstKey(Date.parse(w.meeting_at)) === k
-      && [w.assigned_main, w.assigned_sub].includes(pid) && !atOffice(w.meeting_place));
-    if (w) return w.title as string;
-    const e = s.events.find((e) => e.type === "meeting" && e.meeting_type === "inperson" && e.auto_out && (e.people || []).includes(pid) && occursOn(e, k, s.holidays));
-    return e ? (e.title as string) : null;
+  // 그날 대면 미팅 외근: 시간이 있는 미팅이면 그 시각부터(그 전엔 팀 근무지), 종일 미팅이면 하루 전체 (2026-11-03 — 오전 출근 후 오후 미팅을 하루 외근으로 보던 문제)
+  //   여러 건이면 종일이 하나라도 있으면 종일, 아니면 가장 이른 시각.
+  function outMeeting(pid: string, k: string): { title: string; at: string | null } | null {
+    const hits: { title: string; at: string | null }[] = [];
+    for (const w of s.wishket) if (w.meeting_type === "inperson" && w.meeting_at && kstKey(Date.parse(w.meeting_at)) === k
+      && [w.assigned_main, w.assigned_sub].includes(pid) && !atOffice(w.meeting_place)) hits.push({ title: w.title, at: kstHm(Date.parse(w.meeting_at)) });
+    for (const e of s.events) if (e.type === "meeting" && e.meeting_type === "inperson" && e.auto_out && (e.people || []).includes(pid) && occursOn(e, k, s.holidays))
+      hits.push({ title: e.title, at: e.all_day || !e.start_time ? null : hm(e.start_time) });
+    if (!hits.length) return null;
+    return hits.find((h) => h.at === null) || hits.sort((a, b) => a.at!.localeCompare(b.at!))[0];
   }
   // 그 날 그 사람이 있는 곳(사람이 읽을 문장). 종일 휴가면 null.
   function placeOf(pid: string, k: string): { text: string; away: boolean; code: string; half: boolean } | null {
@@ -119,7 +123,7 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
     let text: string, away = false, code = t.code;
     if (ov && !(ov.loc === t.code && (ov.loc !== "other" || (ov.branch || "") === (t.branch || "")))) {
       text = ov.loc === "other" && ov.branch ? ov.branch : LOC[ov.loc]?.full || ov.loc; away = true; code = ov.loc;
-    } else if (!ov && outMeeting(pid, k)) { text = `외근 (${outMeeting(pid, k)})`; away = true; code = "out"; }
+    } else if (!ov && outMeeting(pid, k)) { const om = outMeeting(pid, k)!; text = `${om.at ? om.at + " " : ""}외근 (${om.title})`; away = true; code = "out"; }
     else text = teamFull(t);
     if (lv) { text = `${LOC[lv.kind].label} · ${text}`; away = true; }
     return { text, away, code, half: !!lv };
@@ -307,7 +311,7 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       const pids = [...new Set([b.assigned_main, b.assigned_sub, f.assigned_main, f.assigned_sub].filter(Boolean))] as string[];
       const title = (f.title || b.title || "수주 미팅") as string;
       meetingLocNotes(a, actor, pids, watchers(actor), (pid, k) => hadB && wkOut(b, pid, k), (pid, k) => hasF && wkOut(f, pid, k),
-        () => `${kstHm(Date.parse(f.meeting_at))} 수주 미팅`);
+        () => "수주 미팅");
     } else if (a.table_name === "team_work_routines") {
       if (!hasF || !f.valid_from || f.valid_from > addDay(today, 7)) continue;
       const cur = s.routines.find((x) => x.valid_from === f.valid_from) || f;
@@ -336,7 +340,8 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       if (!split || pu) {
         const crowd = new Set<string>([...(base?.people || []), ...(f.people || [])]);
         meetingLocNotes(a, actor, [...crowd], watchers(actor).filter((t) => !crowd.has(t)),
-          (pid, k) => evOut(base, pid, k), (pid, k) => (is && evOut(f, pid, k)) || (!!pu && evOut(pu.after, pid, k)), () => `${timeOf(f)} 대면 미팅`);
+          (pid, k) => evOut(base, pid, k), (pid, k) => (is && evOut(f, pid, k)) || (!!pu && evOut(pu.after, pid, k)),
+          () => f.all_day ? "종일 대면 미팅" : f.end_time ? `대면 미팅 ~${hm(f.end_time)}` : "대면 미팅");
       }
       // 일정 알림 — 참석자(전·후)에게. 기준 회차: 바꾸기 전 회차가 7일 안이면 그 날(옮긴 경우 '날짜 a → b'), 아니면 바꾼 뒤 회차
       const inEv = (k: string | null) => !!k && k >= today && k <= addDay(today, 7);

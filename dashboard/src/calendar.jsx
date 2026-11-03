@@ -224,11 +224,14 @@ function mountCalendar(root, ctx) {
   // 대면 미팅 장소가 우리 사무실이면 외근이 아님
   const atOffice = place => !!place && ['패스트파이브','시청역','서울숲','사무실'].some(w => place.includes(w));
   // pid 가 k 날 사무실 밖 대면 미팅에 가는지. 수동 미팅은 '외근 표시' 체크한 것, 위시켓은 대면이면서 장소가 사무실이 아닌 것.
+  // 대면 미팅 외근: 시간이 있는 미팅이면 그 시각(at)부터 외근이고 그 전엔 팀 근무지, 종일 미팅이면(at=null) 하루 전체 외근.
+  //   여러 건이면 종일이 하나라도 있으면 종일, 아니면 가장 이른 시각 (2026-11-03 — 오전 출근 후 오후 미팅을 하루 외근으로 보던 문제)
   function outMeetingOf(pid, k){
-    const w = WORKROOM.find(w => w.meeting_type==='inperson' && w.meeting_at.slice(0,10)===k && [w.main,w.sub].includes(pid) && !atOffice(w.place));
-    if (w) return { title:w.title };
-    const m = manual.find(m => m.type==='meeting' && m.mt==='inperson' && m.autoOut && m.people.includes(pid) && occursOn(m,k));
-    return m ? { title:m.title } : null;
+    const hits = [];
+    WORKROOM.forEach(w => { if (w.meeting_type==='inperson' && w.meeting_at.slice(0,10)===k && [w.main,w.sub].includes(pid) && !atOffice(w.place)) hits.push({ title:w.title, at:w.meeting_at.slice(11,16) }); });
+    manual.forEach(m => { if (m.type==='meeting' && m.mt==='inperson' && m.autoOut && m.people.includes(pid) && occursOn(m,k)) hits.push({ title:m.title, at: m.allday || !m.start ? null : m.start }); });
+    if (!hits.length) return null;
+    return hits.find(h => h.at===null) || hits.sort((a,b) => a.at.localeCompare(b.at))[0];
   }
   // 그 날 그 사람의 근무지. 우선순위: 종일 휴가 > 직접 고른 근무지 > 대면 미팅 외근 > 팀 근무지. 반차는 근무지를 유지하고 half 로 표시.
   // 직접 고른 근무지가 팀 근무지와 같으면 예외가 아니라 same 으로 봅니다(팀 근무지를 나중에 바꿔도 꼬이지 않음).
@@ -241,14 +244,20 @@ function mountCalendar(root, ctx) {
     let r;
     if (ov) r = (ov.loc===t.code && (ov.loc!=='other' || (ov.branch||'')===(t.branch||''))) ? { code:t.code, src:'team', same:true, note:ov.note, ref:ov, pinned:true }
                                                                                          : { code:ov.loc, src:'personal', same:false, note:ov.note, branch:ov.branch, ref:ov };
-    else { const om = outMeetingOf(pid, k); r = om ? { code:'out', src:'meeting', auto:true, note:om.title } : { code:t.code, src:'team', same:true }; }
+    else { const om = outMeetingOf(pid, k);
+      // 시간 있는 미팅: 근무지는 팀 근무지 그대로(출근 인원에 포함) + outAt 시각부터 외근
+      r = !om ? { code:t.code, src:'team', same:true }
+        : om.at ? { code:t.code, src:'team', same:true, outAt:om.at, note:om.title }
+        : { code:'out', src:'meeting', auto:true, note:om.title }; }
     if (lv) r = { ...r, same:false, half:lv.kind, leaveRef:lv, note:[lv.note, r.note].filter(Boolean).join(' · ') };
     return r;
   }
   // 표시용 장소명과 색. 반차면 "오후반차 · 시청역"
   function placeName(l, k){ return l.src==='team' ? teamLocName(teamLoc(k)) : (l.code==='other' && l.branch) ? l.branch.replace('패스트파이브 ','') : LOC[l.code].label; }
-  const locText = (l, k) => l.half ? `${LOC[l.half].label} · ${placeName(l,k)}` : placeName(l,k);
-  const locColor = l => l.half ? 'var(--red)' : LOC[l.code].color;
+  const locText = (l, k) => l.half ? `${LOC[l.half].label} · ${placeName(l,k)}${l.outAt ? ` · ${l.outAt} 외근` : ''}` : l.outAt ? `${placeName(l,k)} · ${l.outAt} 외근` : placeName(l,k);
+  const locColor = l => l.half ? 'var(--red)' : l.outAt ? LOC.out.color : LOC[l.code].color;
+  // 팀과 다른 점이 있어 따로 보여 줄 사람(근무지가 다르거나, 반차, 시간 있는 미팅으로 도중에 외근)
+  const isEx = l => !!l && (!l.same || !!l.outAt);
   const leaveDays = (from, to, kind) => { let n = 0; for (let d=parse(from); key(d)<=to; d=addDays(d,1)) if (!isOffDay(key(d))) n++; return HALF[kind] ? n/2 : n; };
   function rawEventsOf(k){
     const out = [];
@@ -349,7 +358,7 @@ function mountCalendar(root, ctx) {
   }
   // 사람별 위치 칩: 팀과 같으면 실제 장소명을 흐린 칩으로, 다르면(반차 포함) 색 칩으로
   function locChip(l, k){ if (!l) return `<span class="loc same"><i></i>휴무</span>`;
-    if (l.same) { const t = teamLoc(k); return `<span class="loc same editable" title="팀 근무지와 같음 · 눌러서 이 사람만 바꾸기"><i style="background:${LOC[t.code].color}"></i>${esc(teamLocName(t))}</span>`; }
+    if (l.same && !l.outAt) { const t = teamLoc(k); return `<span class="loc same editable" title="팀 근무지와 같음 · 눌러서 이 사람만 바꾸기"><i style="background:${LOC[t.code].color}"></i>${esc(teamLocName(t))}</span>`; }
     const c = locColor(l); return `<span class="loc editable" style="color:${c};border-color:color-mix(in srgb,${c} 45%,transparent);background:color-mix(in srgb,${c} 12%,transparent)"><i></i>${esc(locText(l,k))}${l.auto?' · 미팅':''}</span>`; }
   function peopleRows(k){
     return PEOPLE.map(p => { const l = locOf(p.id,k);
@@ -371,7 +380,7 @@ function mountCalendar(root, ctx) {
     const l = locOf(ME,k), t = teamLoc(k), when = k===TK ? '오늘' : fmtD(k);
     if (l.src==='leave') return `<div class="mystat"><span class="h">${when} 내 근무</span><div class="leave">${LOC[l.code].label}${l.note?' · '+esc(l.note):''}</div></div>`;
     const head = l.half ? `${when} ${l.half==='pm'?'오전':'오후'} 근무지` : `${when} 내 근무`;
-    const sub = l.half ? `${LOC[l.half].label}라 나머지 반나절만 정합니다` : l.auto ? `대면 미팅(${esc(l.note)})이 있어 자동으로 외근입니다` : '팀 근무지는 그대로, 나만 바뀝니다';
+    const sub = l.half ? `${LOC[l.half].label}라 나머지 반나절만 정합니다` : l.outAt ? `${l.outAt} 대면 미팅(${esc(l.note)})부터 외근으로 표시됩니다` : l.auto ? `종일 대면 미팅(${esc(l.note)})이 있어 자동으로 외근입니다` : '팀 근무지는 그대로, 나만 바뀝니다';
     const cur = l.src==='team' ? 'team' : l.code;
     const opts = [['team', t.code==='home' ? '재택' : `${teamLocName(t)} 출근`, LOC[t.code].color]];
     if (t.code!=='out') opts.push(['out','외근','var(--yellow)']);
@@ -383,7 +392,7 @@ function mountCalendar(root, ctx) {
   function bindQuick(root,k){ root.querySelectorAll('[data-q]').forEach(b => b.onclick = () => { const c=b.dataset.q, t=teamLoc(k), when = k===TK?'오늘':fmtD(k);
     if (c==='more') return openAdd('loc', { person:ME, date:k, scope:'person' });
     if (b.getAttribute('aria-pressed')==='true' || !ME) return;
-    const auto = outMeetingOf(ME,k);
+    const om = outMeetingOf(ME,k), auto = om && !om.at;   // 하루 전체 자동 외근(종일 미팅)일 때만 '사무실에 있음'을 따로 기록
     const lb = c==='team' ? (t.code==='home' ? '재택' : `${teamLocName(t)} 출근`) : LOC[c].label;
     // 팀 근무지로 돌아갈 때 대면 미팅 자동 외근이 있으면 '사무실에 있음'을 직접 기록해 둡니다.
     const keep = c==='team' ? !!auto : !(c==='out' && auto);
@@ -447,8 +456,8 @@ function mountCalendar(root, ctx) {
     for (let i=0;i<5;i++){ const d=addDays(s,i), k=key(d), hol=HOLIDAYS[k], t=teamLoc(k);
       const dcol = `<button class="wb-d" data-day="${k}" title="이 날 자세히"><span class="w">${WD[d.getDay()]}</span><span class="n tnum">${d.getDate()}</span></button>`;
       if (!t) { h += `<div class="wb-row ${k===TK?'today':''} ${k<TK?'past':''}">${dcol}<div class="wb-main"><span class="wb-hol">${esc(hol||'휴무')}</span></div></div>`; continue; }
-      const L = LOC[t.code], ex = PEOPLE.map(p=>({p,l:locOf(p.id,k)})).filter(x=>x.l && !x.l.same);
-      const pill = `<button class="wb-team" data-tl="${k}" style="--c:${L.color}" title="${esc(teamLocFull(t))}${t.note?' · '+esc(t.note):''} · 눌러서 이날 팀 근무지 변경"><span class="ic">${L.ic}</span><span class="nm">${esc(teamLocFull(t).replace('패스트파이브 ',''))}</span><em>${t.src==='override'?'이날만 · ':''}${ex.length?`${PEOPLE.length-ex.length}명`:'전원'}</em></button>`;
+      const L = LOC[t.code], ex = PEOPLE.map(p=>({p,l:locOf(p.id,k)})).filter(x=>isEx(x.l)), away = ex.filter(x => !x.l.same);
+      const pill = `<button class="wb-team" data-tl="${k}" style="--c:${L.color}" title="${esc(teamLocFull(t))}${t.note?' · '+esc(t.note):''} · 눌러서 이날 팀 근무지 변경"><span class="ic">${L.ic}</span><span class="nm">${esc(teamLocFull(t).replace('패스트파이브 ',''))}</span><em>${t.src==='override'?'이날만 · ':''}${away.length?`${PEOPLE.length-away.length}명`:'전원'}</em></button>`;
       const exH = ex.map(({p,l}) => `<button class="wb-ex" data-p="${p.id}" data-k="${k}" style="--c:${locColor(l)}">${av(p)}<span>${esc(p.name)}</span><b>${esc(locText(l,k))}</b>${l.note?`<small>${esc(l.note)}</small>`:''}</button>`).join('');
       h += `<div class="wb-row ${k===TK?'today':''} ${k<TK?'past':''}">${dcol}<div class="wb-main">${pill}${exH}</div></div>`; }
     h += `</div><div class="wb-foot">기본 ${esc(routineSummary(routineAt(state.bweek)))}<br>근무지를 누르면 그날만 바꿉니다.</div>`;
@@ -504,7 +513,7 @@ function mountCalendar(root, ctx) {
       const lb = t ? `<span class="lb" style="background:color-mix(in srgb,${LOC[t.code].color} 22%,transparent);color:${LOC[t.code].color}">${esc(teamLocName(t))}</span>`
         : `<span class="lb" style="color:${hol?'var(--red)':'var(--text2)'}">${esc(hol||'휴무')}</span>`;
       // 팀과 다른 곳에 있는 사람: 이니셜 + 장소색 테두리
-      const who = PEOPLE.map(p => { const l=locOf(p.id,k); return (l && !l.same) ? `<span class="av" style="--c:${locColor(l)}" title="${esc(p.name)} ${esc(locText(l,k))}">${esc(p.name.slice(1,2))}</span>` : ''; }).join('');
+      const who = PEOPLE.map(p => { const l=locOf(p.id,k); return isEx(l) ? `<span class="av" style="--c:${locColor(l)}" title="${esc(p.name)} ${esc(locText(l,k))}">${esc(p.name.slice(1,2))}</span>` : ''; }).join('');
       return `<button data-k="${k}" aria-pressed="${k===state.sel}" class="${k===TK?'today':''} ${t?'':'off'} ${k<TK?'past':''}" aria-label="${d.getMonth()+1}월 ${d.getDate()}일 ${WD[dw]}요일${hol?' '+hol:''}"><span class="wd ${dw===6?'sat':(dw===0||hol)?'sun':''}">${k===TK?'오늘':WD[dw]}</span><span class="dn tnum">${d.getDate()===1?(d.getMonth()+1)+'/':''}${d.getDate()}</span>${lb}<span class="who">${who}</span><span class="cnt">${n?n+'건':''}</span></button>`; }).join('');
     vp.querySelectorAll('.strip.leaving').forEach(x => x.remove());
     const cur = vp.querySelector('.strip');
@@ -526,7 +535,7 @@ function mountCalendar(root, ctx) {
     const s = monday(parse(state.sel));
     $('week').innerHTML = [0,1,2,3,4,5,6].map(i => { const d=addDays(s,i), k=key(d), hol=HOLIDAYS[k], off=isOffDay(k), t=teamLoc(k);
       const tl = off ? '' : `<button class="tl" data-tl="${k}" style="color:${LOC[t.code].color}" title="${esc(teamLocFull(t))}${t.note?' · '+esc(t.note):''} · 눌러서 변경"><i></i><span>${LOC[t.code].ic} ${esc(teamLocName(t))}</span>${t.src==='override'?'<em>이날만</em>':''}</button>`;
-      const exc = PEOPLE.map(p=>({p,l:locOf(p.id,k)})).filter(x=>x.l && !x.l.same);
+      const exc = PEOPLE.map(p=>({p,l:locOf(p.id,k)})).filter(x=>isEx(x.l));
       const excH = (off||!exc.length) ? '' : `<div class="exc">${exc.map(({p,l}) => `<button class="locrow" data-p="${p.id}" data-k="${k}" title="${esc(locText(l,k))}${l.note?' · '+esc(l.note):''}">${av(p)}<span class="lb" style="color:${locColor(l)}">${esc(p.name)} ${esc(locText(l,k))}</span></button>`).join('')}</div>`;
       const evs = eventsOf(k).filter(e=>e.type!=='holiday');
       return `<div class="col ${k===TK?'today':''} ${off?'wknd':''} ${k<TK?'past':''}" data-k="${k}"><button class="ch" data-day="${k}" title="이 날 자세히"><span class="dn tnum">${d.getDate()}</span><span class="wd">${WD[d.getDay()]}</span>${hol?`<span class="hol">${esc(hol)}</span>`:''}</button>${tl}${excH}
@@ -554,7 +563,7 @@ function mountCalendar(root, ctx) {
         : t.code===base ? ''
         : `<span class="tloc dim" style="color:${LOC[t.code].color}" title="주간 패턴">${esc(teamLocName(t))}</span>`;
       const label = `${d.getMonth()+1}월 ${d.getDate()}일 ${WD[dw]}요일${hol?' '+hol:''}${off?'':' · 팀 '+teamLocName(t)}${evs.length?` · 일정 ${evs.length}건`:''}`;
-      const ex = off ? '' : PEOPLE.map(p=>{ const l=locOf(p.id,k); return (l&&!l.same)?`<span class="av" style="--c:${locColor(l)}" title="${esc(p.name)} ${esc(locText(l,k))}">${esc(p.name.slice(1,2))}</span>`:''; }).join('');
+      const ex = off ? '' : PEOPLE.map(p=>{ const l=locOf(p.id,k); return isEx(l)?`<span class="av" style="--c:${locColor(l)}" title="${esc(p.name)} ${esc(locText(l,k))}">${esc(p.name.slice(1,2))}</span>`:''; }).join('');
       const colorOf = e => e.type==='leave'?EVTYPE.leave.color:EVTYPE[e.type].color;
       const items = evs.slice(0,3).map(e=>`<span class="li" style="--c:${colorOf(e)}">${e.allday?'':`<b>${e.start}</b> `}${e.type==='wishket'?'<span class="k">수주</span>':e.type==='meeting'?`<span class="k">${KIND[e.kind]?.label||'미팅'}</span>`:''}${esc(e.title)}${(e.type==='wishket'||e.type==='meeting')?` <span style="opacity:.75">· ${names(e.people)}</span>`:''}</span>`).join('') + (evs.length>3?`<span class="more">+${evs.length-3}</span>`:'');
       const bars = `<span class="bars">${evs.slice(0,3).map(e=>`<i style="--c:${colorOf(e)}"></i>`).join('')}</span>`;
@@ -571,7 +580,7 @@ function mountCalendar(root, ctx) {
     for (let i=0;i<n;i++){ const d=addDays(s,i), k=key(d), hol=HOLIDAYS[k], off=isOffDay(k), t=teamLoc(k), evs=eventsOf(k).filter(e=>e.type!=='holiday');
       if (off && !evs.length && !hol) continue;
       const tl = t ? `<span class="tl" style="color:${LOC[t.code].color};border-color:color-mix(in srgb,${LOC[t.code].color} 45%,transparent)"><i></i>${LOC[t.code].ic} ${esc(teamLocName(t))}${t.src==='override'?' ·이날만':''}</span>` : '';
-      const ex = off ? '' : PEOPLE.map(p=>{ const l=locOf(p.id,k); return (l&&!l.same)?`<span><b>${esc(p.name)}</b> <span style="color:${locColor(l)}">${esc(locText(l,k))}</span></span>`:''; }).filter(Boolean).join('');
+      const ex = off ? '' : PEOPLE.map(p=>{ const l=locOf(p.id,k); return isEx(l)?`<span><b>${esc(p.name)}</b> <span style="color:${locColor(l)}">${esc(locText(l,k))}</span></span>`:''; }).filter(Boolean).join('');
       h += `<div class="ag-day ${k===TK?'today':''} ${off?'off':''}" data-k="${k}"><div class="ag-h"><span class="d tnum ${k===TK?'today':''}">${d.getMonth()+1}/${d.getDate()} ${WD[d.getDay()]}${k===TK?' · 오늘':''}</span>${hol?`<span class="hol">${esc(hol)}</span>`:''}${tl}${ex?`<span class="ex">${ex}</span>`:''}<button class="add" data-add="${k}">＋</button></div>
         ${evs.length?`<div class="evlist">${evs.map(e=>evCard(e)).join('')}</div>`:'<div class="empty" style="padding:.1rem 0">일정 없음</div>'}</div>`; }
     return h;
@@ -659,7 +668,7 @@ function mountCalendar(root, ctx) {
         <div class="fld"><label>${type==='meeting'?'참석':'대상'}</label><div class="chips grid3" id="f-people">${pcheck(pre.people||[ME])}</div></div>
         ${type==='meeting' ? `<div class="fld"><label>방식</label><div class="seg full" id="f-mt">${Object.entries(MT).map(([k,v],i)=>`<button type="button" data-mt="${k}" aria-pressed="${i===1}">${v}</button>`).join('')}</div></div>`:''}
         <div class="fld"><label for="f-place">장소 / 링크</label><input id="f-place" placeholder="예: 고객사 (강남), 시청역2호점 미팅룸, Google Meet"></div>
-        ${type==='meeting' ? `<div class="fld" id="autoout-row"><label class="ck"><input type="checkbox" id="f-autoout" checked><span>참석자를 그날 <b>외근</b>으로 표시 (대면 · 사무실 밖)</span></label></div>`:''}
+        ${type==='meeting' ? `<div class="fld" id="autoout-row"><label class="ck"><input type="checkbox" id="f-autoout" checked><span>참석자를 시작 시각부터 <b>외근</b>으로 표시 (대면 · 사무실 밖 · 종일이면 하루 전체)</span></label></div>`:''}
         ${type==='meeting' ? `<div class="fld"><label>미팅 성격</label><div class="kinds" id="f-kinds">${Object.entries(KIND).map(([k,v],i)=>`<button type="button" data-kind="${k}" style="--c:var(--blue)" aria-pressed="${i===0}">${v.label}${v.desc?`<small>${v.desc}</small>`:''}</button>`).join('')}</div></div>
           <div class="fld"><label for="f-proj">프로젝트 연결 (선택 · 수주 후 건만)</label><select id="f-proj"><option value="">연결 안 함</option>${PROJECTS.map(w=>`<option value="${w.slug}">${esc(w.title)}</option>`).join('')}</select><div class="hint">지원~미팅 단계(위시켓) 건의 수주 미팅은 워크룸에서 등록합니다. 여기서는 그 외 미팅(진행 중 프로젝트·직거래·입찰·협력사)을 등록합니다.</div></div>`:''}
         <div class="fld"><label for="f-note">메모</label><textarea id="f-note" rows="2" placeholder="준비물, 안건, 주의사항"></textarea></div>
@@ -681,7 +690,7 @@ function mountCalendar(root, ctx) {
           <div class="fld"><label>이 날 근무지</label><div class="chips grid2" id="f-loc"><button type="button" class="chip span2" data-loc="" style="--c:var(--text2)" aria-pressed="${!ov}">팀 근무지대로 · ${team?esc(teamLocName(team)):'휴무'}</button>${['out','cityhall','forest','other','home'].map(c=>`<button type="button" class="chip" data-loc="${c}" style="--c:${LOC[c].color}" aria-pressed="${ov?.loc===c}"><i class="sw"></i>${LOC[c].full}</button>`).join('')}</div></div>
           <div class="fld" id="branch-row" ${ov?.loc==='other'?'':'hidden'}><label for="f-branch">지점명</label><input id="f-branch" placeholder="예: 패스트파이브 강남 3호점" value="${esc(ov?.branch||'')}"></div>
           <div class="fld"><label for="f-note">사유 (선택 · 팀에 공개)</label><input id="f-note" placeholder="예: 고객사 방문 후 시청역 복귀" value="${esc(ov?.note||'')}"></div>
-          <div class="hint">팀 근무지: ${team?teamLocFull(team):'휴무'}. 연차·반차는 '휴가'에서 등록합니다.${om?`<br>이 날 대면 미팅(${esc(om.title)})이 있어 '팀 근무지대로'면 자동으로 외근입니다. 사무실에 있다면 그 지점을 직접 고르세요.`:''}</div>`;
+          <div class="hint">팀 근무지: ${team?teamLocFull(team):'휴무'}. 연차·반차는 '휴가'에서 등록합니다.${om ? om.at ? `<br>이 날 ${om.at} 대면 미팅(${esc(om.title)})이 있어 '팀 근무지대로'면 그 시각부터 외근으로 표시됩니다. 하루 종일 밖이면 '외근'을 고르세요.` : `<br>이 날 종일 대면 미팅(${esc(om.title)})이 있어 '팀 근무지대로'면 자동으로 외근입니다. 사무실에 있다면 그 지점을 직접 고르세요.` : ''}</div>`;
       }
     } else {
       body = `<div class="fld"><label for="f-person">누구</label><select id="f-person">${PEOPLE.map(p=>`<option value="${p.id}" ${p.id===person?'selected':''}>${esc(p.name)}</option>`).join('')}</select></div>
