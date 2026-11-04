@@ -1,7 +1,7 @@
-import { CalendarPage } from './calendar.jsx';
+import { CalendarPage, CalendarToday } from './calendar.jsx';
 // 날짜 규칙(한국 달력일) — 'YYYY-MM-DD' 를 만들거나 비교하는 코드는 전부 이 모듈을 쓴다 (src/dates.mjs 머리말 참조)
 import { kstParts, kstToIso, kstDateStr, kstStartOfDay, isYmd, addDaysYmd, daysBetweenYmd, daysBetweenKst, scheduleFrom } from './dates.mjs';
-const { useState, useEffect, useMemo, useCallback, useRef } = React;
+const { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } = React;
 
 // ─── Supabase ───
 const SUPABASE_URL = 'https://ucwtmheysdrgrmeaubuy.supabase.co';
@@ -665,7 +665,11 @@ function buildTableHash({ filter, search, memberFilter, sortKey, sortOrder }) {
 
 function parseHash() {
   const h = (window.location.hash || '').replace(/^#/, '');
-  if (CAL_ENABLED && /^calendar(?:[/?]|$)/.test(h)) return { name: 'calendar' };
+  if (CAL_ENABLED && /^calendar(?:[/?]|$)/.test(h)) {
+    // #calendar?d=YYYY-MM-DD — 워크룸에서 미팅 날짜를 눌러 그 날로 바로 가기 (2026-11-04)
+    const d = new URLSearchParams(h.split('?')[1] || '').get('d');
+    return isYmd(d || '') ? { name: 'calendar', date: d } : { name: 'calendar' };
+  }
   const m = h.match(/^project\/([^/]+)\/tasks$/);
   if (m) {
     let slug;
@@ -677,7 +681,7 @@ function parseHash() {
 }
 function navigate(route) {
   if (route.name === 'project') window.location.hash = `project/${encodeURIComponent(route.slug)}/tasks`;
-  else if (route.name === 'calendar') window.location.hash = 'calendar';
+  else if (route.name === 'calendar') window.location.hash = route.date ? `calendar?d=${route.date}` : 'calendar';
   else window.location.hash = '';
 }
 
@@ -4037,7 +4041,11 @@ function EmptyState({ icon, title, hint, primary, secondary }) {
 
 // ─── ProjectTable ───
 const PAGE_SIZE = 30;
-function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, onSort, onBatchDelete, onMemoSave, memberFilter, teamMembers, milestones, milestonesSetupNeeded, onQuickApplyTemplate, onOpenProject, onAddNew, onResetFilters }) {
+function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, onSort, onBatchDelete, onMemoSave, memberFilter, teamMembers, milestones, milestonesSetupNeeded, onQuickApplyTemplate, onOpenProject, onOpenCalendar, onAddNew, onResetFilters }) {
+  // 미팅 일시를 누르면 캘린더 그 날로 (행 클릭 = 상세 창과 구분되게 점선 밑줄) (2026-11-04)
+  const calLink = (iso, children) => onOpenCalendar ? (
+    <button type="button" className="cal-link" title="캘린더에서 이 날 보기"
+      onClick={e => { e.stopPropagation(); onOpenCalendar(iso); }} onKeyDown={e => e.stopPropagation()}>{children}</button>) : children;
   const [selected, setSelected] = useState(new Set());
   const [page, setPage] = useState(1);
   const toggleSelect = (slug, e) => { e.stopPropagation(); setSelected(prev => { const s=new Set(prev); s.has(slug)?s.delete(slug):s.add(slug); return s; }); };
@@ -4210,7 +4218,7 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                 {(() => {
                   const parts = [];
                   if (isPostDev) { if (r.deadline) parts.push(<span key="dl" style={{ color:'var(--green)' }}>✅ 개발완료 {r.deadline}</span>); }
-                  else if (!hideMeeting && meetingStr) parts.push(<span key="mt" style={{ color:ms==='done'?'var(--text2)':'var(--yellow)', fontWeight:ms==='done'?400:600 }}>{mt?mt.emoji:'📅'} {meetingStr}{ms==='done'?' · 완료':''}</span>);
+                  else if (!hideMeeting && meetingStr) parts.push(<span key="mt" style={{ color:ms==='done'?'var(--text2)':'var(--yellow)', fontWeight:ms==='done'?400:600 }}>{mt?mt.emoji:'📅'} {calLink(r.meeting_at, meetingStr)}{ms==='done'?' · 완료':''}</span>);
                   if (!isPostDev && HAS_MILESTONES.includes(r.current_status) && r.deadline) parts.push(<span key="dd" style={{ color:'var(--text2)' }}>마감 {r.deadline}</span>);
                   entries.forEach((e, i) => parts.push(
                     <span key={'a'+i} style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
@@ -4329,7 +4337,7 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                             <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.8rem', fontWeight:600, background:isDone?'var(--surface-success-mid)':'var(--surface-warning-mid)', color:isDone?'var(--green)':'var(--yellow)' }}>{isDone?'완료':'예정'}</span>
                           )}
                           {mt && <span>{mt.emoji}</span>}
-                          <span style={{ color:isDone?'var(--text2)':'var(--yellow)' }}>{meetingStr}</span>
+                          <span style={{ color:isDone?'var(--text2)':'var(--yellow)' }}>{calLink(r.meeting_at, meetingStr)}</span>
                         </span>
                       );
                     })() : <span style={{ color:'var(--text2)' }}>—</span>}
@@ -4450,8 +4458,15 @@ function App({ session }) {
     return () => { alive = false; };
   }, [data?.length, statusSig]);
   const [route, setRoute]                 = useState(() => parseHash());
+  // 화면을 오갈 때 목록 스크롤 위치 기억 (2026-11-04) — 해시가 바뀌는 순간(아직 다시 그리기 전) 떠나는 화면의 위치를 적어 둔다.
+  //   브라우저 자동 복원은 새 화면이 그려지기 전에 일어나 어긋나므로 끄고 직접 한다.
+  const routeRef = useRef(route); routeRef.current = route;
+  const scrollMem = useRef({});
+  const routeKey = r => r.name === 'project' ? `project:${r.slug}` : r.name;
   useEffect(() => {
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
     const h = () => {
+      scrollMem.current[routeKey(routeRef.current)] = window.scrollY;
       setRoute(parseHash());
       const q = parseTableQuery();
       if (q && parseHash().name === 'table') {
@@ -5309,6 +5324,19 @@ function App({ session }) {
     if (!stillRelevant) setMemberFilter('');
   }, [filter, memberFilter, data]);
 
+  // 돌아온 화면의 스크롤 복원: 목록은 떠날 때 위치로, 처음 여는 화면·캘린더는 맨 위로 (데이터가 그려진 뒤에)
+  const rk = routeKey(route);
+  useLayoutEffect(() => {
+    if (!data) return;
+    window.scrollTo(0, rk === 'calendar' ? 0 : (scrollMem.current[rk] || 0));
+  }, [rk, !!data]);
+  // 창 제목 = 지금 화면 (설치한 앱 창 제목·브라우저 탭·방문 기록에서 구분되게)
+  const projTitle = route.name === 'project' ? (data?.find(d => d.slug === route.slug)?.title || route.slug) : '';
+  useEffect(() => {
+    document.title = route.name === 'calendar' ? '캘린더 · 퍼스트핍 워크룸' : route.name === 'project' ? `${projTitle} · 퍼스트핍 워크룸` : '퍼스트핍 워크룸';
+  }, [route.name, projTitle]);
+  const openCalendarAt = (iso) => { const d = iso ? (isYmd(iso) ? iso : kstDateStr(new Date(iso))) : null; navigate(d ? { name:'calendar', date:d } : { name:'calendar' }); };
+
   if (!data) return <Loading />;
 
   // 사내 캘린더 route (#calendar) — 화면·저장은 calendar.jsx 가 담당, 여기서는 워크룸 데이터만 넘긴다
@@ -5327,6 +5355,7 @@ function App({ session }) {
         currentMember={currentMember}
         securedStatuses={SECURED_STATUSES}
         isDirect={isDirectContract}
+        initialDate={route.date}
         onBack={() => navigate({ name:'table' })}
         appNav={<AppBrand connected={connected} current="calendar" onGo={(name) => navigate({ name })} />}
         appRight={<>
@@ -5494,6 +5523,10 @@ function App({ session }) {
       {/* DB 설정 배너 */}
       {teamSetupNeeded && <DBSetupBanner sql={SETUP_SQL} />}
 
+      {/* 오늘 요약 — 팀·내 근무지, 팀과 다른 팀원, 오늘 일정. 누르면 캘린더 그 날 (2026-11-04) */}
+      {CAL_ENABLED && <CalendarToday supabase={supabase} teamMembers={teamMembers} projects={data} currentMember={currentMember}
+        securedStatuses={SECURED_STATUSES} isDirect={isDirectContract} onOpen={openCalendarAt} />}
+
       {/* 내 담당 프로젝트 — 수주 후 작업 페이지 바로가기 */}
       {currentMember && (() => {
         const myProjects = data.filter(d =>
@@ -5572,7 +5605,8 @@ function App({ session }) {
           {thisWeekMeetings.length>0 && (
             <div style={{ flex:'1 1 0', minWidth:0, padding:'0.5rem 0.8rem', borderRadius:8, background:'var(--surface-warning-soft)', border:'1px solid var(--surface-warning-mid)', fontSize:'0.8rem', color:'var(--yellow)', display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
               <span style={{ fontWeight:600, flexShrink:0 }}>📅 이번 주 남은 미팅 {thisWeekMeetings.length}건</span>
-              <span style={{ fontSize:'0.8rem', color:'var(--text2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0, flex:1 }}>{thisWeekMeetings.map(m=>(m.title||m.slug).substring(0,15)).join(', ')}</span>
+              <span style={{ fontSize:'0.8rem', color:'var(--text2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0, flex:1 }}>{thisWeekMeetings.map((m, i) => (
+                <React.Fragment key={m.slug}>{i > 0 && ', '}<button type="button" className="cal-link" onClick={() => openCalendarAt(m.meeting_at)} title={`캘린더에서 ${formatMeetingAt(m.meeting_at)} 보기`}>{(m.title||m.slug).substring(0,15)}</button></React.Fragment>))}</span>
             </div>
           )}
           {staleCount>0 && (
@@ -5648,6 +5682,7 @@ function App({ session }) {
           milestonesSetupNeeded={milestonesSetupNeeded}
           onQuickApplyTemplate={handleCreateMilestonesFromTemplate}
           onOpenProject={(slug) => navigate({ name:'project', slug })}
+          onOpenCalendar={CAL_ENABLED ? openCalendarAt : null}
           onAddNew={() => setShowQuickAdd(true)}
           onResetFilters={() => { setFilter('all'); setSearch(''); setMemberFilter(''); }}
         />
