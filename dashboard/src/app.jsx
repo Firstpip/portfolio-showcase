@@ -627,25 +627,9 @@ function normalizeUrlInput(u) {
   return safeHttpUrl('https://' + s) || '';
 }
 
-// ─── 미팅 알림 — 브라우저 알림 권한은 사용자 제스처에서만 요청 가능하므로 메뉴 항목으로 노출 (2026-09-20) ───
-// 지금까지 requestPermission 호출이 없어 알림이 한 번도 발송되지 않았다.
-const NOTIFY_KEY = 'meeting_notify';          // { enabled, leads:[분] }
-const NOTIFY_SENT_KEY = 'meeting_notified';   // { "<slug>@<meetingISO>@<lead>": <발송시각> }
-const NOTIFY_LEADS = [1440, 60];              // 하루 전 · 1시간 전
-const notifySupported = () => typeof window !== 'undefined' && 'Notification' in window;
-function readNotifyPref() {
-  try { const v = JSON.parse(localStorage.getItem(NOTIFY_KEY) || '{}'); return { enabled: !!v.enabled, leads: Array.isArray(v.leads) && v.leads.length ? v.leads : NOTIFY_LEADS }; }
-  catch { return { enabled: false, leads: NOTIFY_LEADS }; }
-}
-function writeNotifyPref(v) { try { localStorage.setItem(NOTIFY_KEY, JSON.stringify(v)); } catch {} }
-function readNotifySent() { try { return JSON.parse(localStorage.getItem(NOTIFY_SENT_KEY) || '{}'); } catch { return {}; } }
-function writeNotifySent(v) {
-  // 30일 지난 기록은 정리 (localStorage 무한 증가 방지)
-  const cutoff = Date.now() - 30*86400000;
-  const pruned = Object.fromEntries(Object.entries(v).filter(([,t]) => t > cutoff));
-  try { localStorage.setItem(NOTIFY_SENT_KEY, JSON.stringify(pruned)); } catch {}
-}
-const leadLabel = (m) => m >= 1440 ? `${m/1440}일 전` : m >= 60 ? `${m/60}시간 전` : `${m}분 전`;
+// (구) 미팅 알림 — 워크룸 화면이 열려 있을 때 수주 미팅 하루 전·1시간 전 브라우저 알림 (2026-09-20 추가, 2026-11-04 삭제)
+//   사용자 결정: 미팅 전 알림은 두지 않는다(캘린더 🔔 서버 푸시로 일원화). 남은 브라우저 저장값만 한 번 지운다.
+try { localStorage.removeItem('meeting_notify'); localStorage.removeItem('meeting_notified'); } catch {}
 
 // ─── 사내 캘린더 (2026-10-30 추가, 2026-10-31 전원 공개) ───
 // 공개 전엔 ?cal=1 플래그 뒤에 있었다. 알림·홈 화면 앱 주소의 ?cal=1 은 이제 아무 일도 하지 않는다.
@@ -997,7 +981,7 @@ function AppBrand({ connected, current, onGo }) {
   );
 }
 
-function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onDeleted, onShortcuts, onSignOut, notifyState, notifyLeads, onToggleNotify }) {
+function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onDeleted, onShortcuts, onSignOut }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -1045,16 +1029,6 @@ function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onD
               </button>
             </>
           )}
-          <div style={{ height:1, background:'var(--border)', margin:'2px 6px' }} />
-          <button onClick={select(onToggleNotify)} style={itemStyle} disabled={notifyState === 'unsupported'}
-            title={notifyState === 'blocked' ? '브라우저에서 차단됨 — 사이트 설정에서 허용 후 다시 눌러주세요'
-              : notifyState === 'on' ? `알림 켜짐 (${(notifyLeads||[]).map(leadLabel).join(' · ')})` : '미팅 전에 브라우저 알림을 받습니다'}
-            onMouseEnter={e=>onItemHover(e,true)} onMouseLeave={e=>onItemHover(e,false)}>
-            <span style={{ width:18 }}>{notifyState === 'on' ? '🔔' : '🔕'}</span> 미팅 알림
-            <span style={{ marginLeft:'auto', fontSize:'0.7rem', color: notifyState === 'on' ? 'var(--green)' : notifyState === 'blocked' ? 'var(--red)' : 'var(--text2)' }}>
-              {notifyState === 'on' ? (notifyLeads||[]).map(leadLabel).join(' · ') : notifyState === 'blocked' ? '차단됨' : notifyState === 'unsupported' ? '미지원' : '꺼짐'}
-            </span>
-          </button>
           <div style={{ height:1, background:'var(--border)', margin:'2px 6px' }} />
           {/* 프로젝트 row 를 못 찾는 직원용 전역 진입점 — 프로젝트 맥락 없는 원본 그대로 복사 */}
           <div style={{ ...itemStyle, cursor:'default', flexDirection:'column', alignItems:'flex-start', gap:4 }}>
@@ -4542,56 +4516,6 @@ function App({ session }) {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  // 리드타임별로 한 번씩만 발송. 키에 미팅 시각을 넣어 일정이 바뀌면 다시 알린다.
-  const checkMeetingNotifications = useCallback((rows) => {
-    if (!notifySupported() || Notification.permission !== 'granted') return;
-    const pref = readNotifyPref();
-    if (!pref.enabled) return;
-    const sent = readNotifySent();
-    const now = Date.now();
-    let changed = false;
-    (rows || []).forEach(p => {
-      if (!p.meeting_at || p.current_status !== 'interview') return;
-      const m = new Date(p.meeting_at).getTime();
-      if (isNaN(m) || m < now) return;
-      for (const lead of pref.leads) {
-        const fireAt = m - lead * 60000;
-        // 예정 시각이 지나기 전이고, 리드타임 시점을 막 지난 경우에만 (최대 2시간 늦게 열어도 1회는 발송)
-        if (now < fireAt || now - fireAt > 2 * 3600000) continue;
-        const key = `${p.slug}@${p.meeting_at}@${lead}`;
-        if (sent[key]) continue;
-        try {
-          new Notification('📅 미팅 알림', {
-            body: `${p.title || p.slug}\n${formatMeetingAt(p.meeting_at)} (${leadLabel(lead)})`,
-            icon: 'https://firstpip.github.io/portfolio-showcase/dashboard/icon.png',
-            tag: key,
-          });
-          sent[key] = now; changed = true;
-        } catch (e) { console.warn('알림 발송 실패:', e.message); }
-      }
-    });
-    if (changed) writeNotifySent(sent);
-  }, []);
-
-  // 알림 켜기/끄기 — 권한 요청은 반드시 클릭 핸들러(사용자 제스처) 안에서
-  const [notifyPref, setNotifyPref] = useState(() => readNotifyPref());
-  const notifyState = !notifySupported() ? 'unsupported'
-    : Notification.permission === 'denied' ? 'blocked'
-    : notifyPref.enabled && Notification.permission === 'granted' ? 'on' : 'off';
-  const handleToggleNotify = useCallback(async () => {
-    if (!notifySupported()) { toast('이 브라우저는 알림을 지원하지 않습니다', 'error'); return; }
-    const pref = readNotifyPref();
-    if (pref.enabled && Notification.permission === 'granted') {
-      const next = { ...pref, enabled: false }; writeNotifyPref(next); setNotifyPref(next);
-      toast('미팅 알림을 껐습니다', 'info'); return;
-    }
-    let perm = Notification.permission;
-    if (perm === 'default') { try { perm = await Notification.requestPermission(); } catch { perm = 'denied'; } }
-    if (perm !== 'granted') { toast('브라우저에서 알림이 차단돼 있습니다. 주소창 옆 사이트 설정에서 허용해 주세요.', 'error'); setNotifyPref(readNotifyPref()); return; }
-    const next = { ...pref, enabled: true, leads: pref.leads }; writeNotifyPref(next); setNotifyPref(next);
-    toast(`미팅 알림을 켰습니다 (${next.leads.map(leadLabel).join(' · ')})`, 'success');
-    checkMeetingNotifications(dataRef.current);
-  }, [toast, checkMeetingNotifications]);
 
   const loadMilestones = useCallback(async () => {
     const { data:rows, error } = await supabase.from(MILESTONES_TABLE).select('*').order('order_idx', { ascending:true });
@@ -4693,8 +4617,7 @@ function App({ session }) {
     // (구) P2/P3 orphan 정리 cron(cleanup-p2p3.yml)은 제거됨 — 미선정은 이제 즉시 삭제
     // (handleDelete/handleBatchDelete)로 DB+파일을 함께 정리하므로 별도 정리 작업 불필요.
     setData(finalRows); setConnected(true);
-    checkMeetingNotifications(finalRows);
-  }, [toast, checkMeetingNotifications]);
+  }, [toast]);
 
   // 필터 상태 → 해시 동기화. replaceState 라 히스토리가 쌓이지 않고 hashchange 도 발생하지 않는다.
   useEffect(() => {
@@ -4720,7 +4643,6 @@ function App({ session }) {
   }, [data, meetingTick, toast]);
 
   // 알림도 1분 주기로 점검 — 탭을 열어둔 채로 리드타임이 지나면 그 시점에 발송
-  useEffect(() => { checkMeetingNotifications(dataRef.current); }, [meetingTick, checkMeetingNotifications]);
 
   useEffect(() => {
     loadData();
@@ -5411,7 +5333,6 @@ function App({ session }) {
           <button onClick={toggleTheme} title={theme === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}
             style={btn.secondary({ padding:'0.4rem 0.55rem', lineHeight:1, margin:0 })}>{theme === 'dark' ? '☀️' : '🌙'}</button>
           <UserMenu session={session} currentMember={currentMember} displayName={displayName} isAdmin={isAdmin}
-            notifyState={notifyState} notifyLeads={notifyPref.leads} onToggleNotify={handleToggleNotify}
             onTeamMgr={() => setShowTeamMgr(true)} onDeleted={() => setShowDeleted(true)}
             onShortcuts={() => setShowShortcuts(true)} onSignOut={signOutClean} />
         </>}
@@ -5562,7 +5483,6 @@ function App({ session }) {
             currentMember={currentMember}
             displayName={displayName}
             isAdmin={isAdmin}
-            notifyState={notifyState} notifyLeads={notifyPref.leads} onToggleNotify={handleToggleNotify}
             onTeamMgr={() => setShowTeamMgr(true)}
             onDeleted={() => setShowDeleted(true)}
             onShortcuts={() => setShowShortcuts(true)}
