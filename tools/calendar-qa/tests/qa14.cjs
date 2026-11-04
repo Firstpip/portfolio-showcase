@@ -16,10 +16,13 @@ const { chromium } = require(process.env.PW_CORE || 'playwright-core');
   // 사람 바꾸기 → 김가람으로 내일 개인 근무지 재택
   await p.click('#qa-p a:has-text("김가람")'); await p.waitForSelector('#todaycard .today-head'); await p.waitForTimeout(300);
   ok('김가람으로 바뀜', await p.evaluate(() => document.querySelector('#todaycard .av.me')?.title)==='김가람');
-  const k = await p.evaluate(() => __mock.wday(2));
+  // 변경 알림 범위(오늘~다음 근무일) 안의 날: 첫 평일(평일이면 오늘, 주말이면 월요일). wday(2)는 목·금요일에 범위를 벗어난다
+  const k = await p.evaluate(() => __mock.wday(0));
   await p.evaluate(k => { document.querySelector(`#mgrid .mc[data-k="${k}"]`).click(); }, k); await p.waitForTimeout(200);
   await p.click('#sheet [data-q="out"]'); await p.waitForTimeout(400); await p.keyboard.press('Escape');
   await p.click('#qa-btn'); await p.waitForTimeout(150);
+  // 기준 시각을 오늘 10:00으로 — 밤 22:00~07:30에 돌리면 알림이 아침으로 미뤄져 비어 보인다
+  await p.evaluate(() => { const d = new Date(); const z = (n) => String(n).padStart(2, '0'); document.getElementById('qa-t').value = `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}T10:00`; });
   await p.click('#qa-chg'); await p.waitForTimeout(150);
   const ch = await p.textContent('#qa-out');
   ok('변경 알림 미리보기: 다른 팀원이 김가람 외근 알림 받음', /이나래 님이 받는 알림/.test(ch) && /김가람/.test(ch) && /외근/.test(ch), ch);
