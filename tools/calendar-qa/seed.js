@@ -21,6 +21,9 @@
   // 다른 장소(직접 입력): 평일 +2 김가람 혼자 판교로 바로 출근, 평일 +4 팀 전체가 미팅 장소로 바로 출근
   DB.member_work_overrides.push({ id:id(), ...base, member_id:m.M1, work_date:wday(2), loc:'other', branch:'판교 가나다타워 12층', note:'협력사 미팅 후 퇴근' });
   DB.team_work_overrides.push({ id:id(), ...base, work_date:wday(4), loc:'other', branch:'성수동 라마바빌딩', note:'고객사 워크숍 — 바로 출근' });
+  // 팀 근무지에 오는 사람이 없는 날: 평일 +6 전원 개인 재택('전원 재택'), 평일 +7 제각각('각자 근무')
+  DB.team_members.forEach(x => DB.member_work_overrides.push({ id:id(), ...base, member_id:x.id, work_date:wday(6), loc:'home', branch:null, note:null }));
+  ['home','forest','out','home','forest','out','home'].slice(0, DB.team_members.length).forEach((loc,i) => DB.member_work_overrides.push({ id:id(), ...base, member_id:DB.team_members[i].id, work_date:wday(7), loc, branch:null, note:null }));
   // 다음 주: 최라온 연차 3일
   if (N>3) DB.team_leaves.push({ id:id(), ...base, member_id:M4, from_date:day(7), to_date:day(9), kind:'off', note:'' });
   const ev = (o) => DB.calendar_events.push({ id:id(), ...base, kind:null, all_day:false, start_time:null, end_time:null, meeting_type:null, place:null, people:[], note:null, repeat:null, repeat_until:null, skip_holiday:true, exdates:[], parent_id:null, project_slug:null, auto_out:false, ...o });

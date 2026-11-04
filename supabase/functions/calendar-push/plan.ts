@@ -128,6 +128,12 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
     if (lv) { text = `${LOC[lv.kind].label} · ${text}`; mate = mate ? `${LOC[lv.kind].label} · ${mate}` : null; away = true; }
     return { text, mate: mate ?? text, away, code, half: !!lv, partial };
   }
+  // 그 날 그 사람이 팀 근무지로 출근하는지 (개인 근무지가 없고, 종일 휴가·종일 외근이 아님)
+  const followsTeam = (pid: string, k: string) => {
+    const lv = leaveOf(pid, k); if (lv && !HALF[lv.kind]) return false;
+    if (s.memberOverrides.some((o) => o.member_id === pid && o.work_date === k)) return false;
+    const om = outMeeting(pid, k); return !(om && !om.at);
+  };
   // 그 날 그 사람이 참석하는 시간 있는 일정(수동 일정 + 아직 안 끝난 수주 미팅)
   function timedItems(pid: string, k: string) {
     const out: { id: string; start: string; title: string; label: string; place: string }[] = [];
@@ -152,12 +158,31 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
     if (lv && !HALF[lv.kind]) return { text: `${o.name} ${LOC[lv.kind].label}`, key: `lv:${lv.id ?? lv.from_date}` };
     const p = placeOf(o.id, k); return p?.away ? { text: `${o.name} ${short(p.mate)}`, key: `${lv ? "lv:" + (lv.id ?? lv.from_date) + ":" : ""}${p.text}` } : null;
   };
+  // 다음 근무일 안내의 팀원 줄: 장소별로 묶어 전원 (2026-11-04 사용자 결정 — 평소와 같은 사람도, 휴가자도 포함)
+  //   '시청역2호점: 이나래, 박다온(오후반차) · 재택: 최라온 · 연차: 한별'. 근무하는 곳은 사람 많은 순(같으면 팀 근무지 먼저), 휴가는 뒤에.
+  //   묶는 곳은 아침에 가는 곳 — 시간 있는 미팅은 팀 근무지에 두고 '(14:00 외근)', 종일 외근은 '외근'.
+  const groupedMates = (ms: Member[], k: string): string => {
+    const t = teamLoc(k)!, work = new Map<string, string[]>(), off = new Map<string, string[]>();
+    for (const o of ms) {
+      const lv = leaveOf(o.id, k);
+      if (lv && !HALF[lv.kind]) { const g = LOC[lv.kind]?.label || "휴가"; off.set(g, [...(off.get(g) || []), o.name]); continue; }
+      const ov = s.memberOverrides.find((x) => x.member_id === o.id && x.work_date === k);
+      let g = short(teamFull(t)); const tag: string[] = lv ? [LOC[lv.kind].label] : [];
+      if (ov && !(ov.loc === t.code && (ov.loc !== "other" || (ov.branch || "") === (t.branch || "")))) g = short(ov.loc === "other" && ov.branch ? ov.branch : LOC[ov.loc]?.full || ov.loc);
+      else if (!ov) { const om = outMeeting(o.id, k); if (om?.at) tag.push(`${om.at} 외근`); else if (om) g = "외근"; }
+      work.set(g, [...(work.get(g) || []), tag.length ? `${o.name}(${tag.join(", ")})` : o.name]);
+    }
+    const fmt = (m: Map<string, string[]>) => [...m.entries()].map(([g, ns]) => `${g}: ${ns.join(", ")}`);
+    const home = short(teamFull(t));   // 같은 인원이면 팀 근무지를 앞에
+    return [...fmt(new Map([...work.entries()].sort((a, b) => b[1].length - a[1].length || (b[0] === home ? 1 : 0) - (a[0] === home ? 1 : 0)))), ...fmt(off)].join(" · ");
+  };
   const notes: Note[] = [];
   const join2 = (...xs: (string | null)[]) => xs.filter(Boolean).join(" · ");
   const subsOf = (pid: string) => s.subs.filter((x) => x.member_id === pid);
 
   // ① 다음 근무일 안내 — 근무일 18:00, 다음 근무일 기준 (금요일 → 월요일, 공휴일 전날 → 그다음 평일). 매 근무일 보낸다 (2026-11-04 사용자 결정)
-  //   문구: 제목에 내가 갈 곳, 본문은 제목에 없는 것만 — 팀 근무지 사유·내 일정·평소와 다른 팀원. '(평소와 다름)'·건수 같은 설명은 쓰지 않는다.
+  //   문구: 제목에 내가 갈 곳, 본문은 제목에 없는 것만 — 팀원 전원(장소별 묶음) · 팀 근무지 사유 · 내 일정. '(평소와 다름)'·건수 같은 설명은 쓰지 않는다.
+  //   다음 근무일 종일 휴가인 사람에게는 보내지 않는다(받는 사람들의 팀원 줄에는 '연차: 이름'으로 나옴).
   const briefed = new Set<string>(); let briefK = "";
   if (!isOff(today) && nowMin >= BRIEF_FROM && nowMin < BRIEF_TO) {
     const k = nextWorkday(today); briefK = k;
@@ -169,14 +194,16 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       if (!place) continue; // 다음 근무일 종일 휴가
       const items = timedItems(m.id, k), allday = alldayItems(m.id, k);
       const list = [...allday.map((t) => `종일 ${t}`), ...items.map((it) => `${it.start} ${it.title}`)];
-      const mates = s.members.filter((o) => o.id !== m.id).map((o) => statusOf(o, k)?.text).filter(Boolean) as string[];
+      const mates = groupedMates(s.members.filter((o) => o.id !== m.id), k);
       const title = briefTitle(k === tomorrow ? "내일" : "다음 근무일", k, place);
-      const lines: string[] = [];
+      // 본문 순서 (2026-11-04 사용자 결정): 팀원 근무지 → 팀 근무지 사유 → 내 일정. 내 근무지는 제목.
+      const lines: string[] = mates ? [mates] : [];
       // 팀 근무지를 그날만 바꿨으면: 내가 따로 가면 팀 전체가 어디인지, 팀과 같이 가면(제목에 있음) 사유만
       if (teamChanged) { const tf = short(teamFull(teamLoc(k))), why = teamOv?.note || null;
-        if (place.away) lines.push(join2(`팀 전체 ${tf}`, why)); else if (why) lines.push(why); }
+        // 아침에 팀과 같은 곳으로 가면(오후 미팅·반차) 제목에 이미 있으므로 사유만 (2026-11-04)
+        const apart = place.away && !place.partial && !(place.half && place.code === teamLoc(k)!.code);
+        if (apart) lines.push(join2(`팀 전체 ${tf}`, why)); else if (why) lines.push(why); }
       if (list.length) lines.push(`일정: ${list.slice(0, 3).join(", ")}${list.length > 3 ? ` 외 ${list.length - 3}건` : ""}`);
-      if (mates.length) lines.push(`팀원: ${mates.join(", ")}`);
       notes.push({ key: `e:${k}:${m.id}`, member: m.id, kind: "brief", title, body: lines.join("\n"), url: URL_CAL, tag: `e:${k}`, ttl: 14 * 3600, urgency: "normal" });
       briefed.add(m.id);
     }
@@ -278,7 +305,9 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       if (hadB && hasF && b.loc === f.loc && (b.branch || "") === (f.branch || "") && (b.note || "") === (f.note || "")) continue;
       if (!hadB && !hasF) continue;
       const t = teamLoc(k);
-      for (const w of watchers(actor)) note(`c:${a.id}:${w}`, w, `🏢 ${dayWord(k)} 팀 근무지 ${short(teamFull(t))}`,
+      // 팀 근무지를 따르는 사람에게만 (2026-11-04 사용자 결정): 종일 휴가·개인 근무지·종일 외근이 있으면 그 사람이 갈 곳은 안 바뀐다.
+      //   반차·시간 있는 미팅은 팀 근무지로 출근하므로 받는다. 아무도 안 따르면 보내지 않음.
+      for (const w of watchers(actor).filter((pid) => followsTeam(pid, k))) note(`c:${a.id}:${w}`, w, `🏢 ${dayWord(k)} 팀 근무지 ${short(teamFull(t))}`,
         join(dateLine(k), hasF ? f.note : "원래 근무지로", byWho(actor)), `team:${k}`);
     } else if (a.table_name === "member_work_overrides") {
       // 팀원 개인 근무지 → 바꾼 사람 뺀 전원 (남이 바꾸면 당사자도)

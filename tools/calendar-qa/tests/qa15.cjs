@@ -21,7 +21,7 @@ const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
   const row = await p.evaluate(() => { const r = [...document.querySelectorAll('.prow')].find(x => /김가람/.test(x.querySelector('.nm')?.textContent || '')); return { chip: r?.querySelector('.loc')?.textContent, map: r?.querySelector('a.maplink')?.href }; });
   ok('날짜 창: 개인 다른 장소 칩 + 지도', /판교 가나다타워 12층/.test(row.chip || '') && /map\.naver\.com/.test(row.map || ''), JSON.stringify(row));
   await p.keyboard.press('Escape'); await p.waitForTimeout(150);
-  // 팀 근무지 입력: 다른 장소 고르면 '장소' 칸, 비우면 막힘, 주간 패턴과 같이 못 씀
+  // 팀 근무지 입력: 다른 장소 고르면 '장소' 칸, 비우면 막힘, 주간 패턴 체크는 없음(설정으로 옮김)
   await p.evaluate(k => { document.querySelector(`#mgrid .mc[data-k="${k}"]`).click(); }, await p.evaluate(() => __mock.wday(5)));
   await p.waitForTimeout(200);
   await p.click('#sheet [data-tl]'); await p.waitForTimeout(250);
@@ -30,9 +30,8 @@ const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
   ok('입력: 칩 문구', /다른 장소 \(직접 입력\)/.test(await p.textContent('#f-loc [data-loc="other"]')));
   const toastOf = async () => { await p.waitForTimeout(150); return p.evaluate(() => document.querySelector('#toast')?.textContent || ''); };
   await p.click('#sheet button[type=submit]'); ok('입력: 장소 비우면 막힘', /장소를 입력해 주세요/.test(await toastOf()));
-  await p.fill('#f-branch', '판교 라마바타워'); await p.check('#f-routine');
-  await p.click('#sheet button[type=submit]'); ok('입력: 주간 패턴과 함께는 막힘', /그날만 정할 수 있어요/.test(await toastOf()));
-  await p.uncheck('#f-routine'); await p.click('#sheet button[type=submit]'); await p.waitForTimeout(400);
+  ok('입력: 주간 패턴 체크 없음', !(await p.$('#f-routine')) && !/주간 패턴 변경/.test(await p.textContent('#sheet')));
+  await p.fill('#f-branch', '판교 라마바타워'); await p.click('#sheet button[type=submit]'); await p.waitForTimeout(400);
   const saved = await p.evaluate(() => __mock.DB.team_work_overrides.find(o => o.branch === '판교 라마바타워'));
   ok('입력: 저장됨 (loc other + branch)', saved && saved.loc === 'other', JSON.stringify(saved || null));
 
