@@ -25,6 +25,6 @@ const { chromium } = require(process.env.PW_CORE || 'playwright-core');
     a = await qn(); await p.evaluate(() => window.dispatchEvent(new Event('online'))); await p.waitForTimeout(400); qs = await since(a);
     ok(`${where}: 네트워크 복구 → 바로 전체`, has(qs, [...WR, ...VS]), qs.join(','));
   }
-  ok('워크룸 목록 렌더 정상', await p.goto((process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html?n=4').then(() => p.waitForSelector('text=📅 캘린더', { timeout:8000 })).then(() => true).catch(() => false));
+  ok('워크룸 목록 렌더 정상', await p.goto((process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html?n=4').then(() => p.waitForSelector('.app-top .app-brand nav', { timeout:8000 })).then(() => true).catch(() => false));
   console.log(out.join('\n')); console.log('ERR', errs); await b.close();
 })();

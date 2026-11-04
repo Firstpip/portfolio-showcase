@@ -74,7 +74,8 @@
     update(v){ this.op='update'; this.v=v; return this; }
     upsert(v,o){ this.op='upsert'; this.v=Array.isArray(v)?v:[v]; this.oc=(o?.onConflict||'id').split(','); return this; }
     delete(){ this.op='delete'; return this; }
-    then(res, rej){ return Promise.resolve().then(() => this.exec()).then(res, rej); }
+    // ?lat=800 → 읽기마다 800ms 지연 (느린 네트워크에서 '불러오는 중'·다시 들어올 때 즉시 표시 확인용)
+    then(res, rej){ const lat = this.op==='select' ? Number(QS.get('lat')||0) : 0; return (lat ? new Promise(r => setTimeout(r, lat)) : Promise.resolve()).then(() => this.exec()).then(res, rej); }
     exec(){
       const t = this.t; if (!DB[t]) DB[t] = [];
       const rows = DB[t]; const match = r => this.f.every(f => f(r));

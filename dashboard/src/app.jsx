@@ -971,6 +971,32 @@ function CapturePromptButton({ project, onAppendHistory, style, label = '📋 �
   );
 }
 
+// ─── 상단 공통: 제목 + 화면 탭 (2026-11-04) ───
+// 워크룸 목록과 캘린더가 같은 자리·같은 모양으로 쓴다. 전에는 캘린더가 아이콘 버튼 사이의 '📅 캘린더'와 '← 워크룸'으로만
+// 이어져 다른 사이트처럼 보였다. 캘린더에서는 calendar.jsx 헤더 칸에 포털로 들어간다(.fpcal 초기화 CSS 를 이기도록 모두 인라인 스타일).
+function AppBrand({ connected, current, onGo }) {
+  const tab = (name, label) => {
+    const on = current === name;
+    return (
+      <button key={name} type="button" aria-current={on ? 'page' : undefined} onClick={() => { if (!on) onGo(name); }}
+        style={{ margin:0, padding:'0.34rem 0.85rem', borderRadius:7, border:'none', lineHeight:1.35, whiteSpace:'nowrap',
+          background: on ? 'var(--surface)' : 'transparent', color: on ? 'var(--text)' : 'var(--text2)',
+          fontSize:'0.86rem', fontWeight: on ? 600 : 500, cursor: on ? 'default' : 'pointer',
+          boxShadow: on ? '0 1px 3px var(--shadow)' : 'none', fontFamily:'inherit' }}>{label}</button>
+    );
+  };
+  return (
+    <div className="app-brand" style={{ display:'flex', alignItems:'center', gap:12, margin:0, padding:0, minWidth:0 }}>
+      <h1 className="app-brand-title" style={{ margin:0, padding:0, fontSize:'1.3rem', fontWeight:700, letterSpacing:'-0.02em', lineHeight:1.3,
+        display:'flex', alignItems:'center', gap:8, whiteSpace:'nowrap' }}>퍼스트핍 워크룸 <LiveDot connected={connected} /></h1>
+      <nav aria-label="화면" style={{ display:'inline-flex', gap:2, padding:2, margin:0, borderRadius:9,
+        background:'var(--surface2)', border:'1px solid var(--border)' }}>
+        {tab('table', '프로젝트')}{tab('calendar', '캘린더')}
+      </nav>
+    </div>
+  );
+}
+
 function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onDeleted, onShortcuts, onSignOut, notifyState, notifyLeads, onToggleNotify }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -992,11 +1018,11 @@ function UserMenu({ session, currentMember, displayName, isAdmin, onTeamMgr, onD
   return (
     <div ref={ref} style={{ position:'relative' }}>
       <button onClick={() => setOpen(o => !o)}
-        style={{ display:'flex', alignItems:'center', gap:6, padding:'0.3rem 0.5rem 0.3rem 0.35rem',
+        style={{ display:'flex', alignItems:'center', gap:6, padding:'0.3rem 0.5rem 0.3rem 0.35rem', margin:0,
           borderRadius:8, border:'1px solid var(--border)', background: open?'var(--surface2)':'transparent',
-          color:'var(--text)', cursor:'pointer', fontSize:'0.85rem' }}>
+          color:'var(--text)', cursor:'pointer', fontSize:'0.85rem', lineHeight:1.2, fontFamily:'inherit' }}>
         {currentMember && <MemberAvatar member={currentMember} size={22} />}
-        <span style={{ fontWeight:500 }}>{displayName}</span>
+        <span className="um-name" style={{ fontWeight:500 }}>{displayName}</span>
         <span style={{ color:'var(--text2)', fontSize:'0.7rem', marginLeft:2, transform: open?'rotate(180deg)':'none', transition:'transform 0.15s' }}>▾</span>
       </button>
       {open && (
@@ -5365,7 +5391,13 @@ function App({ session }) {
 
   // 사내 캘린더 route (#calendar) — 화면·저장은 calendar.jsx 가 담당, 여기서는 워크룸 데이터만 넘긴다
   if (route.name === 'calendar') {
+    // 캘린더 헤더의 사용자 메뉴에서 여는 창(팀 관리·최근 삭제·단축키)도 여기서 그린다
     return (
+      <>
+      {showShortcuts && <ShortcutHelp onClose={() => setShowShortcuts(false)} />}
+      {showTeamMgr && <TeamMgrModal members={teamMembers} projects={data} onClose={() => setShowTeamMgr(false)}
+        onAdd={handleAddMember} onUpdate={handleUpdateMember} onDeactivate={handleDeactivateMember} />}
+      {showDeleted && <DeletedProjectsModal onClose={() => setShowDeleted(false)} onRestored={loadData} toast={toast} />}
       <CalendarPage
         supabase={supabase}
         teamMembers={teamMembers}
@@ -5374,8 +5406,18 @@ function App({ session }) {
         securedStatuses={SECURED_STATUSES}
         isDirect={isDirectContract}
         onBack={() => navigate({ name:'table' })}
+        appNav={<AppBrand connected={connected} current="calendar" onGo={(name) => navigate({ name })} />}
+        appRight={<>
+          <button onClick={toggleTheme} title={theme === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}
+            style={btn.secondary({ padding:'0.4rem 0.55rem', lineHeight:1, margin:0 })}>{theme === 'dark' ? '☀️' : '🌙'}</button>
+          <UserMenu session={session} currentMember={currentMember} displayName={displayName} isAdmin={isAdmin}
+            notifyState={notifyState} notifyLeads={notifyPref.leads} onToggleNotify={handleToggleNotify}
+            onTeamMgr={() => setShowTeamMgr(true)} onDeleted={() => setShowDeleted(true)}
+            onShortcuts={() => setShowShortcuts(true)} onSignOut={signOutClean} />
+        </>}
         onOpenProject={(slug) => { const p = data.find(d => d.slug === slug); navigate({ name:'table' }); if (p) setSelectedProject(p); }}
       />
+      </>
     );
   }
 
@@ -5500,18 +5542,15 @@ function App({ session }) {
       )}
 
       {/* Header */}
-      <div className="fade-in" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1.25rem', flexWrap:'wrap', gap:'0.75rem', position:'relative', zIndex:50 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          <h1 style={{ fontSize:'1.45rem', fontWeight:700, letterSpacing:'-0.02em' }}>퍼스트핍 워크룸</h1>
-          <LiveDot connected={connected} />
-        </div>
+      <div className="fade-in app-top" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1.25rem', flexWrap:'wrap', gap:'0.75rem', position:'relative', zIndex:50 }}>
+        {CAL_ENABLED ? <AppBrand connected={connected} current="table" onGo={(name) => navigate({ name })} /> : (
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <h1 style={{ fontSize:'1.45rem', fontWeight:700, letterSpacing:'-0.02em' }}>퍼스트핍 워크룸</h1>
+            <LiveDot connected={connected} />
+          </div>)}
         <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
           <button onClick={() => setShowQuickAdd(true)}
             style={btn.primary({ padding:'0.4rem 0.85rem', display:'flex', alignItems:'center', gap:4 })}>＋ 등록</button>
-          {CAL_ENABLED && (
-            <button onClick={() => navigate({ name:'calendar' })} title="사내 캘린더 — 팀 근무지·휴가·미팅"
-              style={btn.secondary({ padding:'0.4rem 0.7rem' })}>📅 캘린더</button>
-          )}
           <button onClick={() => setShowDeleted(true)} title="최근 삭제 (복원)"
             style={btn.secondary({ padding:'0.4rem 0.55rem', lineHeight:1 })}>🗑</button>
           <button onClick={toggleTheme} title={theme === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}

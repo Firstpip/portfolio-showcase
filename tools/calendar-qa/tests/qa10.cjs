@@ -39,7 +39,7 @@ const S = __dirname + '/shots/';
   // 좁은 PC 폭에서 헤더 한 줄
   for (const w of [960, 1024, 1280]) { p = await open(w, 760);
     for (const v of ['month','week','list']) { await p.click('#v-'+v); await p.waitForTimeout(60);
-      const one = await p.evaluate(() => { const ids = ['btn-back','btn-today','prev','next','v-month','btn-push','btn-add-top']; const tops = ids.map(i => Math.round(document.getElementById(i).getBoundingClientRect().top)); return { tops, h: Math.round(document.querySelector('.fpcal .top').getBoundingClientRect().height) }; });
+      const one = await p.evaluate(() => { const ids = ['cal-appnav','btn-today','prev','next','v-month','btn-push','btn-add-top','cal-appright']; const tops = ids.map(i => { const r = document.getElementById(i).getBoundingClientRect(); return Math.round(r.top + r.height/2); }); return { tops, h: Math.round(document.querySelector('.fpcal .top').getBoundingClientRect().height) }; });
       ok(`${w}px ${v}: 헤더 한 줄`, new Set(one.tops).size === 1 || Math.max(...one.tops) - Math.min(...one.tops) < 8, JSON.stringify(one)); }
     if (w===960) { await p.click('#v-week'); await p.screenshot({ path:S+'h-960-week.png', clip:{ x:0, y:0, width:960, height:160 } }); }
     await p.context().close(); }

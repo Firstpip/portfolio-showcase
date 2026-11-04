@@ -59,7 +59,7 @@ const { chromium } = require(process.env.PW_CORE || 'playwright-core');
     PushManager.prototype.getSubscription = async () => sub;
   });
   await p.evaluate(() => { __mock.DB.push_subscriptions = [{ id:'ps9', user_id:'11111111-1111-1111-1111-111111111111', endpoint:'https://push.test/lo' }]; });
-  await p.click('#btn-back'); await p.waitForTimeout(400);
+  await p.click('.fpcal .app-brand nav button:nth-child(1)'); await p.waitForTimeout(400);   // 상단 '프로젝트' 탭 (2026-11-04 '← 워크룸' 대체)
   await p.locator('button', { hasText: '이나래' }).first().click().catch(()=>{}); await p.waitForTimeout(200);
   const signOut = await p.$('text=로그아웃');
   if (signOut) { await signOut.click(); await p.waitForTimeout(800);

@@ -1,4 +1,4 @@
-// 2026-11-04 맥 앱 QA: 데스크톱 화면을 창 크기에 맞춤 — 좌우 폭 1760·바깥 여백 유지, 월/주 달력·사이드바가 창 높이를 채움, 월 칸 일정 줄 수는 칸 높이만큼 + '+N건'
+// 2026-11-04 맥 앱 QA: 데스크톱 화면을 창 크기에 맞춤 — 좌우 폭 1600(워크룸과 같음)·바깥 여백 유지, 월/주 달력·사이드바가 창 높이를 채움, 월 칸 일정 줄 수는 칸 높이만큼 + '+N건'
 const { chromium } = require(process.env.PW_CORE || 'playwright-core');
 const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
 (async () => {
@@ -8,11 +8,11 @@ const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
     const p = await ctx.newPage(); p.on('pageerror', e => errs.push(e.message));
     await p.goto(U + '?reset=1#calendar'); await p.waitForSelector('#todaycard .today-head'); await p.waitForTimeout(400);
     const m = await p.evaluate(() => { const r = s => document.querySelector(s).getBoundingClientRect();
-      return { docH: document.documentElement.scrollHeight, gridB: r('#mgrid').bottom, sideB: r('.fpcal .side').bottom, rootL: r('#root').left, topT: r('.fpcal .top h1').top, demo: getComputedStyle(document.querySelector('.fpcal .demo')).display }; });
+      return { docH: document.documentElement.scrollHeight, gridB: r('#mgrid').bottom, sideB: r('.fpcal .side').bottom, rootL: r('#root').left, topT: r('.fpcal .top .app-brand-title').top, demo: getComputedStyle(document.querySelector('.fpcal .demo')).display }; });
     ok(`${w}x${h} 월: 세로 스크롤 없음`, m.docH <= h, m.docH);
     ok(`${w}x${h} 월: 달력이 창 아래까지 (여백 ≤ 32px)`, h - m.gridB <= 32 && h - m.gridB >= 0, Math.round(h - m.gridB));
     ok(`${w}x${h} 사이드바 아래 끝 = 달력 아래 끝`, Math.abs(m.sideB - m.gridB) <= 2, `${Math.round(m.sideB)} / ${Math.round(m.gridB)}`);
-    ok(`${w}x${h} 폭: 1760 넘는 창만 가운데 정렬`, w > 1760 ? m.rootL > 0 : m.rootL === 0, m.rootL);
+    ok(`${w}x${h} 폭: 1600 넘는 창만 가운데 정렬 (워크룸과 같음)`, w > 1600 ? m.rootL > 0 : m.rootL === 0, m.rootL);
     ok(`${w}x${h} 위 여백 (제목 ≤ 40px)`, m.topT <= 40, Math.round(m.topT));
     ok(`${w}x${h} 하단 '변경 기록 보기' 숨김`, m.demo === 'none');
     await p.click('#v-week'); await p.waitForTimeout(250);
