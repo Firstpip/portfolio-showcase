@@ -1079,6 +1079,18 @@ function mountCalendar(root, ctx) {
     if (error) toast('테스트 알림을 보내지 못했어요');
     else toast(data?.sent ? '테스트 알림을 보냈어요. 잠시 후 도착합니다' : '이 기기를 찾지 못했어요. 알림을 껐다 다시 켜 주세요');
   }
+  // 알림이 차단된 기기에서 푸는 방법 — 기기·브라우저·앱 창 여부마다 다르다 (2026-11-04: 맥 크롬 앱 창엔 주소창이 없어 '자물쇠' 안내로는 못 풀었음)
+  function blockedHelp(env){
+    const ua = navigator.userAgent, edge = /Edg\//.test(ua), chromium = edge || /Chrome\/|Chromium/.test(ua), mac = /Macintosh/.test(ua);
+    const os = mac ? `맥 시스템 설정 → 알림 → ${edge ? 'Microsoft Edge' : 'Google Chrome'}` : `윈도우 설정 → 시스템 → 알림 → ${edge ? 'Microsoft Edge' : 'Google Chrome'}`;
+    if (env.ios) return '아이폰 설정 → 알림 → 워크룸 → 알림 허용을 켠 뒤 앱을 다시 열어 주세요.';
+    if (/Android/i.test(ua)) return '크롬 주소창 왼쪽 아이콘(또는 홈 화면 앱이면 휴대폰 설정 → 애플리케이션 → 워크룸 → 알림)에서 알림을 허용한 뒤 새로고침해 주세요.';
+    if (chromium && env.standalone) return `앱 창 오른쪽 위 ⋮ → '앱 정보' → 알림을 '허용'으로 바꾼 뒤 새로고침해 주세요. 메뉴가 안 보이면 ${edge ? '엣지' : '크롬'} 주소창에 <b>${edge ? 'edge' : 'chrome'}://settings/content/notifications</b> 를 열고 차단 목록의 firstpip.github.io 를 허용으로 바꿉니다. ${os} 도 켜져 있어야 합니다.`;
+    if (chromium) return `주소창 왼쪽 아이콘(사이트 정보) → 알림 → 허용으로 바꾼 뒤 새로고침해 주세요. ${os} 도 켜져 있어야 합니다.`;
+    if (/Safari\//.test(ua) && env.standalone) return '맥 시스템 설정 → 알림 → 워크룸 → 알림 허용을 켠 뒤 앱을 다시 열어 주세요.';
+    if (/Safari\//.test(ua)) return 'Safari 메뉴 → 설정 → 웹사이트 → 알림 → firstpip.github.io 를 허용으로 바꾼 뒤 새로고침해 주세요.';
+    return '주소창 왼쪽 사이트 정보(자물쇠)에서 알림을 허용한 뒤 새로고침해 주세요.';
+  }
   async function openPush(){
     const env = pushEnv();
     const head = `<h2>알림 설정<button class="x" aria-label="닫기">✕</button></h2>`;
@@ -1095,7 +1107,8 @@ function mountCalendar(root, ctx) {
     } else if (!env.supported) {
       body = stat('var(--text2)', '이 브라우저는 푸시 알림을 지원하지 않아요') + `<div class="hint">아이폰은 홈 화면 앱, PC 는 크롬·엣지·사파리에서 켤 수 있어요.</div>`;
     } else if (env.perm === 'denied') {
-      body = stat('var(--red)', '이 기기에서 알림이 차단돼 있어요') + `<div class="hint">${env.ios ? '아이폰 설정 → 알림 → 워크룸 → 알림 허용을 켠 뒤 다시 열어 주세요.' : '주소창 왼쪽 사이트 설정(자물쇠)에서 알림을 허용한 뒤 새로고침해 주세요.'}</div>`;
+      body = stat('var(--red)', '이 기기에서 알림이 차단돼 있어요') + `<div class="hint">${blockedHelp(env)}</div>
+        <div class="hint" style="margin-top:.4rem">한 번 차단하면 화면에서 다시 물어볼 수 없어 설정에서 직접 풀어야 해요. 푼 뒤 🔔 → '이 기기에서 알림 켜기'를 누르세요.</div>`;
     } else {
       // 열 때마다 구독 행을 새로 읽는다 — 마지막으로 받은 알림 시각이 페이지를 연 시점에 멈춰 있지 않게
       let sub = null; try { sub = await currentSub(); if (sub && env.perm === 'granted') await saveSub(sub); } catch (e) { console.warn(e); }

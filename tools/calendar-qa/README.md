@@ -57,3 +57,10 @@ for t in tools/calendar-qa/tests/*.cjs; do echo "== $t"; node "$t" | grep -E "PA
 | qa19 | 워크룸 ↔ 캘린더: 같은 상단(제목 + 프로젝트/캘린더 탭)·폭, 탭 위치 고정, 다시 들어가면 바로 표시(?lat=800)·보던 달 유지, 캘린더의 사용자 메뉴·테마, 폰은 탭만 |
 
 발송 판단 단위 테스트는 `supabase/functions/calendar-push/plan.test.ts` (Deno: `deno test supabase/functions/calendar-push/plan.test.ts`).
+
+### 알림 권한 흉내 (주소 옵션)
+- `?perm=denied` 차단 · `?perm=granted` 허용 · `?perm=default` 아직 안 물어봄
+- `?app=1` 설치한 앱 창(맥·윈도우 앱, 아이폰 홈 화면 앱)처럼
+- `?ua=mac-chrome|mac-safari|win-chrome|iphone|android` 기기·브라우저 흉내
+- 예: `index.html?perm=denied&app=1&ua=mac-chrome#calendar` → 🔔 → 맥 크롬 앱 창의 차단 해제 안내
+- `?lat=800` 읽기마다 800ms 지연(느린 네트워크)

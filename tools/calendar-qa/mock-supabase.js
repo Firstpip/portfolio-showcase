@@ -1,6 +1,17 @@
 // 로그인 없이 워크룸을 띄우기 위한 메모리 Supabase (테스트 전용)
 // - from().select/insert/update/upsert/delete + eq/is/in/order/limit, rpc, channel, auth, functions
 // - 캘린더 테이블에 DB 트리거 흉내: created/updated, 감사 로그, 휴가 겹침(23P01), 고유키(23505), 실시간 이벤트
+// QA: 알림 권한·앱 창 흉내 — ?perm=denied|granted|default, ?app=1(홈 화면·설치 앱 창), ?ua=mac-chrome|mac-safari|win-chrome|iphone|android
+(function () { const q = new URLSearchParams(location.search);
+  const perm = q.get('perm'); if (perm && 'Notification' in window) try { Object.defineProperty(Notification, 'permission', { get: () => perm }); } catch (_) {}
+  if (q.get('app')) { const mm = window.matchMedia.bind(window); window.matchMedia = m => /display-mode: *standalone/.test(m) ? { matches:true, media:m, addListener(){}, removeListener(){}, addEventListener(){}, removeEventListener(){} } : mm(m); try { Object.defineProperty(navigator, 'standalone', { get: () => true }); } catch (_) {} }
+  const UA = { 'mac-chrome':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'mac-safari':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+    'win-chrome':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'iphone':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
+    'android':'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36' }[q.get('ua')];
+  if (UA) try { Object.defineProperty(navigator, 'userAgent', { get: () => UA }); } catch (_) {}
+})();
 (function () {
   const ME_UID = '11111111-1111-1111-1111-111111111111';
   const iso = () => new Date().toISOString();
