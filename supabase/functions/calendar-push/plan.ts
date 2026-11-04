@@ -26,6 +26,7 @@ export type Snapshot = {
 };
 export type Note = {
   key: string; member: string; kind: "brief" | "change";
+  day?: string; at?: number;   // 변경 알림만: 무슨 날에 대한 알림인지 · 변경 시각 (같은 실행의 안내와 겹침 판단용, 발송엔 안 씀)
   title: string; body: string; url: string; tag: string; ttl: number; urgency: "high" | "normal";
 };
 
@@ -60,13 +61,13 @@ export const BRIEF_FROM = 16 * 60, BRIEF_TO = 17 * 60 + 30;
 const ICON: Record<string, string> = { home: "🏠", out: "🚕", cityhall: "🏢", forest: "🏢", other: "🏢" };
 // 제목 우선순위: 내 근무지가 달라짐 '🏠 내일 재택근무 · 11/4 (수)' > 내 일정 있음 '📅 내일 11/4 (수)'
 //               > 팀원만 평소와 다름 '👥 내일 김동욱 재택근무 · 11/4 (수)' (여러 명이면 '외 N명')
-export const briefTitle = (when: string, k: string, place: { text: string; code: string; half?: boolean } | null, hasItems = true, away: string[] = []) =>
+export const briefTitle = (when: string, k: string, place: { text: string; code: string; half?: boolean; partial?: boolean } | null, hasItems = true, away: string[] = []) =>
   place ? `${placeIcon(place)} ${when} ${short(place.text)} · ${fmtD(k)}`
   : !hasItems && away.length ? `👥 ${when} ${short(away[0])}${away.length > 1 ? ` 외 ${away.length - 1}명` : ""} · ${fmtD(k)}`
   : `📅 ${when} ${fmtD(k)}`;
 // 짧은 표기: 다 아는 '패스트파이브'·'근무' 는 뺀다 (2026-11-03 문구 정리)
 const short = (t: string) => t.replace(/패스트파이브 /g, "").replace("재택근무", "재택");
-const placeIcon = (p: { code: string; half?: boolean }) => p.half ? "🌓" : ICON[p.code] || "📍";
+const placeIcon = (p: { code: string; half?: boolean; partial?: boolean }) => p.half ? "🌓" : p.partial ? "🏢" : ICON[p.code] || "📍";
 const atOffice = (p: unknown) => typeof p === "string" && ["패스트파이브", "시청역", "서울숲", "사무실"].some((w) => p.includes(w));
 
 export function occursOn(e: Row, k: string, holidays: Record<string, string>): boolean {
@@ -114,19 +115,21 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
     return hits.find((h) => h.at === null) || hits.sort((a, b) => a.at!.localeCompare(b.at!))[0];
   }
   // 그 날 그 사람이 있는 곳(사람이 읽을 문장). 종일 휴가면 null.
-  function placeOf(pid: string, k: string): { text: string; away: boolean; code: string; half: boolean } | null {
+  // text: 본인에게 보일 문장(시간 있는 미팅이면 '시청역2호점 · 14:00 외근 (…)' — 아침에 갈 곳이 먼저), mate: 팀원 줄·남에게 보일 짧은 문장
+  function placeOf(pid: string, k: string): { text: string; mate: string; away: boolean; code: string; half: boolean; partial: boolean } | null {
     if (isOff(k)) return null;
     const lv = leaveOf(pid, k);
     if (lv && !HALF[lv.kind]) return null;
     const t = teamLoc(k)!;
     const ov = s.memberOverrides.find((o) => o.member_id === pid && o.work_date === k);
-    let text: string, away = false, code = t.code;
+    let text: string, mate: string | null = null, away = false, code = t.code, partial = false;
     if (ov && !(ov.loc === t.code && (ov.loc !== "other" || (ov.branch || "") === (t.branch || "")))) {
       text = ov.loc === "other" && ov.branch ? ov.branch : LOC[ov.loc]?.full || ov.loc; away = true; code = ov.loc;
-    } else if (!ov && outMeeting(pid, k)) { const om = outMeeting(pid, k)!; text = `${om.at ? om.at + " " : ""}외근 (${om.title})`; away = true; code = "out"; }
+    } else if (!ov && outMeeting(pid, k)) { const om = outMeeting(pid, k)!; mate = `${om.at ? om.at + " " : ""}외근 (${om.title})`;
+      partial = !!om.at; text = partial ? `${teamFull(t)} · ${mate}` : mate; away = true; code = "out"; }
     else text = teamFull(t);
-    if (lv) { text = `${LOC[lv.kind].label} · ${text}`; away = true; }
-    return { text, away, code, half: !!lv };
+    if (lv) { text = `${LOC[lv.kind].label} · ${text}`; mate = mate ? `${LOC[lv.kind].label} · ${mate}` : null; away = true; }
+    return { text, mate: mate ?? text, away, code, half: !!lv, partial };
   }
   // 그 날 그 사람이 참석하는 시간 있는 일정(수동 일정 + 아직 안 끝난 수주 미팅)
   function timedItems(pid: string, k: string) {
@@ -150,7 +153,7 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
   const statusOf = (o: Member, k: string): { text: string; key: string } | null => {
     const lv = leaveOf(o.id, k);
     if (lv && !HALF[lv.kind]) return { text: `${o.name} ${LOC[lv.kind].label}`, key: `lv:${lv.id ?? lv.from_date}` };
-    const p = placeOf(o.id, k); return p?.away ? { text: `${o.name} ${short(p.text)}`, key: `${lv ? "lv:" + (lv.id ?? lv.from_date) + ":" : ""}${p.text}` } : null;
+    const p = placeOf(o.id, k); return p?.away ? { text: `${o.name} ${short(p.mate)}`, key: `${lv ? "lv:" + (lv.id ?? lv.from_date) + ":" : ""}${p.text}` } : null;
   };
   const notes: Note[] = [];
   const subsOf = (pid: string) => s.subs.filter((x) => x.member_id === pid);
@@ -159,8 +162,9 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
   //   보내는 조건: 팀 근무지가 평소(주간 패턴)와 다름 · 내 근무지가 팀과 다름(반차 포함) · 내 일정이 있음
   //                · 팀원 중 평소와 다르고 오늘과도 다른 사람(재택·외근·다른 지점·반차·휴가) — 넷 중 하나 (2026-11-03 사용자 결정)
   //   문구 (2026-11-03): 제목에 가장 중요한 변화, 본문은 제목에 없는 것만 — '근무지:'·'(평소와 다름)'·'(계속)'·건수 같은 설명은 쓰지 않는다.
+  const briefed = new Set<string>(); let briefK = "";
   if (!isOff(today) && nowMin >= BRIEF_FROM && nowMin < BRIEF_TO) {
-    const k = nextWorkday(today);
+    const k = nextWorkday(today); briefK = k;
     const teamOv = s.teamOverrides.find((o) => o.work_date === k);
     const teamChanged = !!teamOv || s.routines.some((r) => r.valid_from === k && !sameAsPrev(r));
     for (const m of s.members) {
@@ -181,6 +185,7 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       // 팀원 줄: 제목이 팀원 한 명만 말하고 그게 전부면 본문에 다시 쓰지 않는다
       if (mates.length && !(title.startsWith("👥") && mates.length === 1 && !lines.length)) lines.push(`팀원: ${mates.join(", ")}`);
       notes.push({ key: `e:${k}:${m.id}`, member: m.id, kind: "brief", title, body: lines.join("\n"), url: URL_CAL, tag: `e:${k}`, ttl: 14 * 3600, urgency: "normal" });
+      briefed.add(m.id);
     }
   }
 
@@ -195,13 +200,16 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
   const dayWord = (k: string) => (k === today ? "오늘" : k === tomorrow ? "내일" : fmtD(k));
   // 근무지 변경을 알리는 범위: 오늘 ~ 다음 근무일(최소 모레). 금요일 오후 안내 뒤 월요일을 바꿔도 알린다
   const until = [addDay(today, 2), nextWorkday(today)].sort()[1];
+  // 제목에 날짜가 이미 있으면(오늘·내일이 아닌 날) 본문에서는 날짜를 빼서 같은 말을 두 번 하지 않는다
+  const dateLine = (k: string) => dayWord(k) === fmtD(k) ? null : fmtD(k);
   const inLoc = (k: string | undefined) => !!k && k >= today && k <= until && !isOff(k);
   const rangeDays = () => { const out: string[] = []; for (let k = today; k <= until; k = addDay(k, 1)) if (!isOff(k)) out.push(k); return out; };
   const alive = (x: Row | null | undefined) => !!x && !x.deleted_at;
   const join = (...xs: (string | null | undefined | false)[]) => xs.filter(Boolean).join(" · ");
   const byWho = (actor: string | undefined, subject?: string, verb = "변경") => actor && actor !== subject ? `${memberName(actor)} ${verb}` : null;
-  const note = (key: string, member: string, title: string, body: string, tag: string) =>
-    notes.push({ key, member, kind: "change", title, body, url: URL_CAL, tag, ttl: 86400, urgency: "normal" });
+  let curAt = 0, curDay = "";   // 지금 처리 중인 변경 기록의 시각·대상 날짜 (note 가 함께 적는다)
+  const note = (key: string, member: string, title: string, body: string, tag: string, day = curDay) =>
+    notes.push({ key, member, kind: "change", title, body, url: URL_CAL, tag, ttl: 86400, urgency: "normal", day, at: curAt });
   const secs = (x: unknown, y: unknown) => Math.abs(Date.parse(String(x)) - Date.parse(String(y))) / 1000;
 
   // 묶기: 표마다 '같은 대상' 기준
@@ -239,8 +247,8 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       const p = placeOf(pid, k); if (!p) continue;
       if (!is && p.code === "out") continue;   // 다른 미팅으로 여전히 외근이면 바뀐 게 없음
       const nm = memberName(pid);
-      for (const t of to) note(`c:${a.id}:${t}:${pid}:${k}`, t, `${placeIcon(p)} ${nm} ${dayWord(k)} ${short(p.text)}`,
-        join(fmtD(k), is ? why(k) : "미팅이 취소·변경돼 외근 해제", byWho(actor, pid)), `who:${pid}:${k}`);
+      for (const t of to) note(`c:${a.id}:${t}:${pid}:${k}`, t, `${is ? "🚕" : placeIcon(p)} ${nm} ${dayWord(k)} ${short(p.mate)}`,
+        join(dateLine(k), is ? why(k) : "미팅이 취소·변경돼 외근 해제", byWho(actor, pid)), `who:${pid}:${k}`, k);
     }
   }
   // 일정 한 건의 사람이 읽을 시간 문구
@@ -264,28 +272,29 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
     const g = groups[gkey(a)];
     if (g[g.length - 1] !== a) continue;               // 같은 대상의 마지막 기록에서 한 번에 처리
     const first = g[0];
+    curAt = Date.parse(a.at) || 0; curDay = "";
     const actor = a.actor_id ? byUser[a.actor_id] : undefined;
     const b: Row = (first.op === "INSERT" ? null : first.before) || {}, f: Row = (a.op === "DELETE" ? null : a.after) || {};
     const hadB = first.op !== "INSERT", hasF = a.op !== "DELETE";
 
     if (a.table_name === "team_work_overrides") {
-      const k = (f.work_date || b.work_date) as string;
+      const k = (f.work_date || b.work_date) as string; curDay = k;
       if (!inLoc(k)) continue;
       if (hadB && hasF && b.loc === f.loc && (b.branch || "") === (f.branch || "") && (b.note || "") === (f.note || "")) continue;
       if (!hadB && !hasF) continue;
       const t = teamLoc(k);
       for (const w of watchers(actor)) note(`c:${a.id}:${w}`, w, `🏢 ${dayWord(k)} 팀 근무지 ${short(teamFull(t))}`,
-        join(fmtD(k), hasF ? f.note : "원래 근무지로", byWho(actor)), `team:${k}`);
+        join(dateLine(k), hasF ? f.note : "원래 근무지로", byWho(actor)), `team:${k}`);
     } else if (a.table_name === "member_work_overrides") {
       // 팀원 개인 근무지 → 바꾼 사람 뺀 전원 (남이 바꾸면 당사자도)
       const sig = (x: Row, has: boolean) => has ? `${x.loc}|${x.branch || ""}` : "";
       if (sig(b, hadB) === sig(f, hasF)) continue;   // 바꿨다 되돌림
-      const pid = (f.member_id || b.member_id) as string, k = (f.work_date || b.work_date) as string;
+      const pid = (f.member_id || b.member_id) as string, k = (f.work_date || b.work_date) as string; curDay = k;
       if (!pid || !inLoc(k)) continue;
       const p = placeOf(pid, k); if (!p) continue;   // 그날 종일 휴가면 근무지는 의미 없음
       const nm = memberName(pid);
-      for (const w of watchers(actor)) note(`c:${a.id}:${w}`, w, `${placeIcon(p)} ${nm} ${dayWord(k)} ${short(p.text)}`,
-        join(fmtD(k), hasF ? f.note : "원래 근무지로", byWho(actor, pid)), `who:${pid}:${k}`);
+      for (const w of watchers(actor)) note(`c:${a.id}:${w}`, w, `${p.partial ? "🚕" : placeIcon(p)} ${nm} ${dayWord(k)} ${short(p.mate)}`,
+        join(dateLine(k), hasF ? f.note : "원래 근무지로", byWho(actor, pid)), `who:${pid}:${k}`);
     } else if (a.table_name === "team_leaves") {
       // 휴가 등록·수정·취소가 오늘~다음 근무일에 걸치면 → 바꾼 사람 뺀 전원. 사유만 고친 건 보내지 않음. 지웠다 되돌림은 없음.
       const was = hadB && alive(b), is = hasF && alive(f);
@@ -293,6 +302,7 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       const range = (x: Row) => `${fmtD(x.from_date)}${x.to_date !== x.from_date ? "–" + fmtD(x.to_date) : ""}`;
       const lb = (x: Row) => LOC[x.kind]?.label || "휴가";
       const send = (x: Row, verb: string, extra: string | null) => { if (!hits(x)) return;
+        curDay = briefK && x.from_date <= briefK && x.to_date >= briefK ? briefK : x.from_date;
         for (const w of watchers(actor)) note(`c:${a.id}:${w}:${x.member_id}`, w, `🌴 ${memberName(x.member_id)} ${lb(x)} ${verb}`,
           join(range(x), extra, x.note && verb !== "취소" ? x.note : null, byWho(actor, x.member_id, verb)), `leave:${x.id ?? x.member_id + x.from_date}`); };
       if (!was && !is) continue;
@@ -360,6 +370,7 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       const fk = is ? firstWithin(f, today, 7, s.holidays) || (bk && f.event_date) || null : null;
       const anchorK = inEv(bk) ? bk : inEv(fk) ? fk : null;
       if (!anchorK) continue;
+      curDay = anchorK;
       const anchor = anchorK === bk ? base! : f;
       const everyone = new Set<string>([...(base?.people || []), ...(f.people || [])]);
       const repeatAll = was && !is && !!base?.repeat && !split;
@@ -378,6 +389,13 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
           join(when, showDiff ? diff.join(", ") : null, splitWord, byWho(actor, undefined, actVerb)), `ev:${f.id || base?.id}`);
       }
     }
+  }
+  // 같은 실행에서 다음 근무일 안내를 받는 사람에게, 그 날에 대한 변경 중 16:00 전에 한 것은 안내에 이미 담겼으니 따로 보내지 않는다 (2026-11-03)
+  //   16:00 이후 변경은 안내(첫 실행에 이미 나감)에 없을 수 있어 그대로 보낸다 — 알림이 빠지는 쪽으로는 줄이지 않는다
+  if (briefed.size) {
+    const cut = Date.parse(`${today}T${String(Math.floor(BRIEF_FROM / 60)).padStart(2, "0")}:${String(BRIEF_FROM % 60).padStart(2, "0")}:00+09:00`);
+    const kept = notes.filter((n) => !(n.kind === "change" && n.day === briefK && briefed.has(n.member) && (n.at || 0) < cut && n.at));
+    return { notes: kept, cursor };
   }
   return { notes, cursor };
 }
