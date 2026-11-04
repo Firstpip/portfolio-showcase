@@ -109,15 +109,16 @@ async function runScheduled() {
     cursor = last[0]?.id ?? 0;
     await setState("audit_cursor", { id: cursor });
   }
-  // 다음 근무일은 연휴면 며칠 뒤일 수 있어 2주치를 읽는다. 일정은 어제 이후 + 아직 끝나지 않은 반복만(전부 읽으면 쌓일수록 조회 한도에 잘림)
-  const yday = addDay(today, -1);
+  // 근무지·휴가·일정은 1년 남짓 앞까지 읽는다 — 남이 바꾼 먼 날의 근무지·휴가도 당사자에게 알리므로 그날 상태를 정확히 계산해야 한다 (2026-11-04, 전엔 2주).
+  // 팀 규모가 작아 행 수는 적다. 일정은 어제 이후 + 아직 끝나지 않은 반복만(전부 읽으면 쌓일수록 조회 한도에 잘림)
+  const yday = addDay(today, -1), ahead = addDay(today, 400);
   const [members, routines, teamOverrides, memberOverrides, leaves, events, holidays, wishket, audit] = await Promise.all([
     must<any[]>(sb.from("team_members").select("id,name,user_id,is_active")),
     must<any[]>(sb.from("team_work_routines").select("valid_from,days")),
-    must<any[]>(sb.from("team_work_overrides").select("work_date,loc,branch,note").gte("work_date", yday).lte("work_date", addDay(today, 14))),
-    must<any[]>(sb.from("member_work_overrides").select("member_id,work_date,loc,branch").gte("work_date", today).lte("work_date", addDay(today, 14))),
-    must<any[]>(sb.from("team_leaves").select("id,member_id,from_date,to_date,kind").is("deleted_at", null).lte("from_date", addDay(today, 14)).gte("to_date", today)),
-    must<any[]>(sb.from("calendar_events").select("*").is("deleted_at", null).lte("event_date", addDay(today, 14))
+    must<any[]>(sb.from("team_work_overrides").select("work_date,loc,branch,note").gte("work_date", yday).lte("work_date", ahead)),
+    must<any[]>(sb.from("member_work_overrides").select("member_id,work_date,loc,branch").gte("work_date", today).lte("work_date", ahead)),
+    must<any[]>(sb.from("team_leaves").select("id,member_id,from_date,to_date,kind").is("deleted_at", null).lte("from_date", ahead).gte("to_date", today)),
+    must<any[]>(sb.from("calendar_events").select("*").is("deleted_at", null).lte("event_date", ahead)
       .or(`event_date.gte.${yday},and(repeat.not.is.null,or(repeat_until.is.null,repeat_until.gte.${yday}))`)),
     must<any[]>(sb.from("calendar_holidays").select("holiday_date,name")),
     must<any[]>(sb.from("wishket_projects").select("slug,title,meeting_at,meeting_type,assigned_main,assigned_sub,current_status")

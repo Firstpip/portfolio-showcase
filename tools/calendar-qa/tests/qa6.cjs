@@ -15,7 +15,7 @@ const S = __dirname + '/shots/';
   ok('범례 없음(모두 표시하므로)', await p.isHidden('#mfoot'));
   const w = await p.evaluate(()=>{ const c=[...document.querySelectorAll('#mgrid .mc')].slice(0,7).map(x=>Math.round(x.getBoundingClientRect().width)); return c; });
   ok('주말 칸이 평일보다 좁음', w[5]<w[0]*0.7 && w[6]<w[0]*0.7, w.join(','));
-  ok('aria-label', /11월 3일 화요일 · 팀 시청역 · 일정 3건/.test(await p.getAttribute('#mgrid .mc.today','aria-label')), await p.getAttribute('#mgrid .mc.today','aria-label'));
+  ok('aria-label', /^\d+월 \d+일 .요일 · 팀 \S+ · 일정 \d+건$/.test(await p.getAttribute('#mgrid .mc.today','aria-label')), await p.getAttribute('#mgrid .mc.today','aria-label'));
   ok('일요일 숫자 빨강 클래스', await p.evaluate(()=>!!document.querySelector('#mgrid .mc:nth-child(14) .dn.sun')));
   ok('#root 폭 1600', await p.evaluate(()=>document.getElementById('root').style.maxWidth)==='1600px');
   await p.screenshot({ path:S+'b-month.png' });

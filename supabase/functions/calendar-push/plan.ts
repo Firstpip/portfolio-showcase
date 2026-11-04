@@ -1,8 +1,7 @@
 // 알림 계획 — DB 스냅샷과 지금 시각으로 '지금 보낼 알림' 목록을 만든다.
 // 보내는 알림은 두 가지 (2026-10-30 사용자 결정: 미팅 시작 전 알림은 두지 않는다)
-//   ① 다음 근무일 안내: 근무일 16:00~17:30 첫 실행에 '다음 근무일' 근무지·일정·팀 부재. 내 근무지가 평소와 같고 내 일정도 없으면 보내지 않는다.
-//      (2026-11-03 조정: 유연출퇴근이라 퇴근 시각이 사람·날마다 다름 — 가장 이른 퇴근 전에 받아야 재택 전날 노트북 등을 챙길 수 있어
-//       저녁 18:30 → 오후 16:00. 이후 바뀌는 내일 근무지·내 일정은 ② 변경 알림이 메운다. 팀원 부재만으로는 보내지 않음 — 매일 오는 알림은 무시하게 된다)
+//   ① 다음 근무일 안내: 근무일 18:00~19:30 첫 실행에 '다음 근무일' 내 근무지·일정·팀원 부재. 매 근무일 보낸다(다음 근무일 종일 휴가인 사람만 제외).
+//      (2026-11-04 사용자 결정: 평소와 다를 때만 오후 4시 → 매일 18:00. 안내를 보고 고친 내용은 ② 변경 알림으로 바로 나간다)
 //   ② 변경 알림: 감사 로그 기준. 밤 22:00~07:30 사이에는 보내지 않고 쌓아 두었다가 07:30 이후 첫 실행에 보낸다.
 // DB·네트워크에 의존하지 않는 순수 함수라 따로 테스트한다 (plan.test.ts).
 // 근무지 규칙은 화면(dashboard/src/calendar.jsx)과 같다:
@@ -43,7 +42,7 @@ const hm = (t: unknown) => (t ? String(t).slice(0, 5) : "");
 const LOC: Record<string, { label: string; full: string }> = {
   cityhall: { label: "시청역", full: "패스트파이브 시청역2호점" },
   forest: { label: "서울숲", full: "패스트파이브 서울숲" },
-  other: { label: "기타지점", full: "패스트파이브 기타 지점" },
+  other: { label: "다른 장소", full: "다른 장소" },   // 직접 입력한 장소(branch) — 다른 지점·미팅 장소로 바로 출근 (2026-11-04)
   home: { label: "재택", full: "재택근무" },
   out: { label: "외근", full: "외근" },
   off: { label: "연차", full: "연차" }, am: { label: "오전반차", full: "오전 반차" },
@@ -57,14 +56,11 @@ const KIND: Record<string, string> = {
 const MT: Record<string, string> = { video: "화상", inperson: "대면", phone: "전화" };
 const URL_CAL = "./?cal=1#calendar";
 // 다음 근무일 안내 시각(한국 시간, 분). 5분마다 도는 실행 중 이 구간의 첫 실행에서 한 번만 나간다(push_sent 키).
-export const BRIEF_FROM = 16 * 60, BRIEF_TO = 17 * 60 + 30;
-const ICON: Record<string, string> = { home: "🏠", out: "🚕", cityhall: "🏢", forest: "🏢", other: "🏢" };
-// 제목 우선순위: 내 근무지가 달라짐 '🏠 내일 재택근무 · 11/4 (수)' > 내 일정 있음 '📅 내일 11/4 (수)'
-//               > 팀원만 평소와 다름 '👥 내일 김동욱 재택근무 · 11/4 (수)' (여러 명이면 '외 N명')
-export const briefTitle = (when: string, k: string, place: { text: string; code: string; half?: boolean; partial?: boolean } | null, hasItems = true, away: string[] = []) =>
-  place ? `${placeIcon(place)} ${when} ${short(place.text)} · ${fmtD(k)}`
-  : !hasItems && away.length ? `👥 ${when} ${short(away[0])}${away.length > 1 ? ` 외 ${away.length - 1}명` : ""} · ${fmtD(k)}`
-  : `📅 ${when} ${fmtD(k)}`;
+export const BRIEF_FROM = 18 * 60, BRIEF_TO = 19 * 60 + 30;
+const ICON: Record<string, string> = { home: "🏠", out: "🚕", cityhall: "🏢", forest: "🏢", other: "📍" };
+// 제목 = 내가 갈 곳 '🏢 내일 시청역2호점 · 11/5 (목)' — 매일 오는 안내라 맨 먼저 볼 것은 내일 어디로 가는지 (2026-11-04)
+export const briefTitle = (when: string, k: string, place: { text: string; code: string; half?: boolean; partial?: boolean }) =>
+  `${placeIcon(place)} ${when} ${short(place.text)} · ${fmtD(k)}`;
 // 짧은 표기: 다 아는 '패스트파이브'·'근무' 는 뺀다 (2026-11-03 문구 정리)
 const short = (t: string) => t.replace(/패스트파이브 /g, "").replace("재택근무", "재택");
 const placeIcon = (p: { code: string; half?: boolean; partial?: boolean }) => p.half ? "🌓" : p.partial ? "🏢" : ICON[p.code] || "📍";
@@ -76,6 +72,7 @@ export function occursOn(e: Row, k: string, holidays: Record<string, string>): b
   return e.repeat === "weekly" && e.event_date < k && (!e.repeat_until || k <= e.repeat_until)
     && dow(e.event_date) === dow(k) && !(e.skip_holiday !== false && holidays[k]);
 }
+const EV_DAYS = 365;   // 일정 변경 알림을 볼 회차 범위(일) — 받는 사람이 참석자·만든 사람뿐이라 넓게
 function firstWithin(e: Row, from: string, days: number, holidays: Record<string, string>): string | null {
   for (let i = 0; i <= days; i++) { const k = addDay(from, i); if (occursOn(e, k, holidays)) return k; }
   return null;
@@ -156,12 +153,11 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
     const p = placeOf(o.id, k); return p?.away ? { text: `${o.name} ${short(p.mate)}`, key: `${lv ? "lv:" + (lv.id ?? lv.from_date) + ":" : ""}${p.text}` } : null;
   };
   const notes: Note[] = [];
+  const join2 = (...xs: (string | null)[]) => xs.filter(Boolean).join(" · ");
   const subsOf = (pid: string) => s.subs.filter((x) => x.member_id === pid);
 
-  // ① 다음 근무일 안내 — 근무일 오후, 다음 근무일 기준 (금요일 → 월요일, 공휴일 전날 → 그다음 평일)
-  //   보내는 조건: 팀 근무지가 평소(주간 패턴)와 다름 · 내 근무지가 팀과 다름(반차 포함) · 내 일정이 있음
-  //                · 팀원 중 평소와 다르고 오늘과도 다른 사람(재택·외근·다른 지점·반차·휴가) — 넷 중 하나 (2026-11-03 사용자 결정)
-  //   문구 (2026-11-03): 제목에 가장 중요한 변화, 본문은 제목에 없는 것만 — '근무지:'·'(평소와 다름)'·'(계속)'·건수 같은 설명은 쓰지 않는다.
+  // ① 다음 근무일 안내 — 근무일 18:00, 다음 근무일 기준 (금요일 → 월요일, 공휴일 전날 → 그다음 평일). 매 근무일 보낸다 (2026-11-04 사용자 결정)
+  //   문구: 제목에 내가 갈 곳, 본문은 제목에 없는 것만 — 팀 근무지 사유·내 일정·평소와 다른 팀원. '(평소와 다름)'·건수 같은 설명은 쓰지 않는다.
   const briefed = new Set<string>(); let briefK = "";
   if (!isOff(today) && nowMin >= BRIEF_FROM && nowMin < BRIEF_TO) {
     const k = nextWorkday(today); briefK = k;
@@ -173,17 +169,14 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       if (!place) continue; // 다음 근무일 종일 휴가
       const items = timedItems(m.id, k), allday = alldayItems(m.id, k);
       const list = [...allday.map((t) => `종일 ${t}`), ...items.map((it) => `${it.start} ${it.title}`)];
-      const others = s.members.filter((o) => o.id !== m.id).map((o) => ({ cur: statusOf(o, k), prev: statusOf(o, today) })).filter((x) => x.cur);
-      const fresh = others.filter((x) => x.cur!.key !== x.prev?.key).map((x) => x.cur!.text);
-      const mates = others.map((x) => x.cur!.text);
-      const moved = teamChanged || place.away;
-      if (!moved && !list.length && !fresh.length) continue;
-      const title = briefTitle(k === tomorrow ? "내일" : "다음 근무일", k, moved ? place : null, list.length > 0, fresh);
+      const mates = s.members.filter((o) => o.id !== m.id).map((o) => statusOf(o, k)?.text).filter(Boolean) as string[];
+      const title = briefTitle(k === tomorrow ? "내일" : "다음 근무일", k, place);
       const lines: string[] = [];
-      if (teamChanged) lines.push(`팀 전체 ${short(teamFull(teamLoc(k)))}${teamOv?.note ? " · " + teamOv.note : ""}`);
+      // 팀 근무지를 그날만 바꿨으면: 내가 따로 가면 팀 전체가 어디인지, 팀과 같이 가면(제목에 있음) 사유만
+      if (teamChanged) { const tf = short(teamFull(teamLoc(k))), why = teamOv?.note || null;
+        if (place.away) lines.push(join2(`팀 전체 ${tf}`, why)); else if (why) lines.push(why); }
       if (list.length) lines.push(`일정: ${list.slice(0, 3).join(", ")}${list.length > 3 ? ` 외 ${list.length - 3}건` : ""}`);
-      // 팀원 줄: 제목이 팀원 한 명만 말하고 그게 전부면 본문에 다시 쓰지 않는다
-      if (mates.length && !(title.startsWith("👥") && mates.length === 1 && !lines.length)) lines.push(`팀원: ${mates.join(", ")}`);
+      if (mates.length) lines.push(`팀원: ${mates.join(", ")}`);
       notes.push({ key: `e:${k}:${m.id}`, member: m.id, kind: "brief", title, body: lines.join("\n"), url: URL_CAL, tag: `e:${k}`, ttl: 14 * 3600, urgency: "normal" });
       briefed.add(m.id);
     }
@@ -197,6 +190,8 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
   let cursor: number | null = null;
   if (quiet) return { notes, cursor };
   const watchers = (exclude: string | undefined) => s.members.filter((m) => m.id !== exclude && subsOf(m.id).some((x) => x.change_alerts)).map((m) => m.id);
+  // 당사자: 남이 내 근무지·휴가·일정을 바꾸면 날짜와 상관없이(오늘 이후) 나에게는 보낸다 (2026-11-04 사용자 결정 — 다른 팀원 범위는 그대로)
+  const ownerOnly = (pid: string | null | undefined, actor: string | undefined) => pid && pid !== actor && subsOf(pid).some((x) => x.change_alerts) ? [pid] : [];
   const dayWord = (k: string) => (k === today ? "오늘" : k === tomorrow ? "내일" : fmtD(k));
   // 근무지 변경을 알리는 범위: 오늘 ~ 다음 근무일(최소 모레). 금요일 오후 안내 뒤 월요일을 바꿔도 알린다
   const until = [addDay(today, 2), nextWorkday(today)].sort()[1];
@@ -290,10 +285,11 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       const sig = (x: Row, has: boolean) => has ? `${x.loc}|${x.branch || ""}` : "";
       if (sig(b, hadB) === sig(f, hasF)) continue;   // 바꿨다 되돌림
       const pid = (f.member_id || b.member_id) as string, k = (f.work_date || b.work_date) as string; curDay = k;
-      if (!pid || !inLoc(k)) continue;
+      if (!pid || !k || k < today || isOff(k)) continue;
+      const to = inLoc(k) ? watchers(actor) : ownerOnly(pid, actor);   // 다음 근무일 너머는 당사자에게만
       const p = placeOf(pid, k); if (!p) continue;   // 그날 종일 휴가면 근무지는 의미 없음
       const nm = memberName(pid);
-      for (const w of watchers(actor)) note(`c:${a.id}:${w}`, w, `${p.partial ? "🚕" : placeIcon(p)} ${nm} ${dayWord(k)} ${short(p.mate)}`,
+      for (const w of to) note(`c:${a.id}:${w}`, w, `${p.partial ? "🚕" : placeIcon(p)} ${nm} ${dayWord(k)} ${short(p.mate)}`,
         join(dateLine(k), hasF ? f.note : "원래 근무지로", byWho(actor, pid)), `who:${pid}:${k}`);
     } else if (a.table_name === "team_leaves") {
       // 휴가 등록·수정·취소가 오늘~다음 근무일에 걸치면 → 바꾼 사람 뺀 전원. 사유만 고친 건 보내지 않음. 지웠다 되돌림은 없음.
@@ -301,19 +297,22 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       const hits = (x: Row) => !!x.from_date && x.from_date <= until && x.to_date >= today;
       const range = (x: Row) => `${fmtD(x.from_date)}${x.to_date !== x.from_date ? "–" + fmtD(x.to_date) : ""}`;
       const lb = (x: Row) => LOC[x.kind]?.label || "휴가";
-      const send = (x: Row, verb: string, extra: string | null) => { if (!hits(x)) return;
+      const future = (x: Row) => !!x.to_date && x.to_date >= today;
+      // 오늘~다음 근무일에 걸치면 전원, 그 뒤면 당사자에게만
+      const toOf = (x: Row) => hits(x) ? watchers(actor) : future(x) ? ownerOnly(x.member_id, actor) : [];
+      const send = (x: Row, verb: string, extra: string | null) => { const to = toOf(x); if (!to.length) return;
         curDay = briefK && x.from_date <= briefK && x.to_date >= briefK ? briefK : x.from_date;
-        for (const w of watchers(actor)) note(`c:${a.id}:${w}:${x.member_id}`, w, `🌴 ${memberName(x.member_id)} ${lb(x)} ${verb}`,
+        for (const w of to) note(`c:${a.id}:${w}:${x.member_id}`, w, `🌴 ${memberName(x.member_id)} ${lb(x)} ${verb}`,
           join(range(x), extra, x.note && verb !== "취소" ? x.note : null, byWho(actor, x.member_id, verb)), `leave:${x.id ?? x.member_id + x.from_date}`); };
       if (!was && !is) continue;
       if (!was) send(f, "등록", null);
       else if (!is) send(b, "취소", null);
       else if (b.member_id !== f.member_id) { send(b, "취소", null); send(f, "등록", null); }
       else if (b.from_date !== f.from_date || b.to_date !== f.to_date || b.kind !== f.kind) {
-        if (!hits(b) && !hits(f)) continue;
-        const x = hits(f) ? f : b;
+        const x = hits(f) ? f : b, to = hits(f) || hits(b) ? watchers(actor) : future(f) || future(b) ? ownerOnly(f.member_id, actor) : [];
+        if (!to.length) continue;
         const changes = join(b.kind !== f.kind ? `${lb(b)} → ${lb(f)}` : null, (b.from_date !== f.from_date || b.to_date !== f.to_date) ? `${range(b)} → ${range(f)}` : null);
-        for (const w of watchers(actor)) note(`c:${a.id}:${w}:${x.member_id}`, w, `🌴 ${memberName(x.member_id)} ${lb(f)} 변경`, join(changes, byWho(actor, x.member_id)), `leave:${f.id}`);
+        for (const w of to) note(`c:${a.id}:${w}:${x.member_id}`, w, `🌴 ${memberName(x.member_id)} ${lb(f)} 변경`, join(changes, byWho(actor, x.member_id)), `leave:${f.id}`);
       }
     } else if (a.table_name === "wishket_projects") {
       // 위시켓 대면 미팅 일시·방식·담당이 바뀌어 누군가의 근무지(외근)가 바뀌면 → 바꾼 사람 뺀 전원 (일정 알림 대상이 아니라 담당자도 받음)
@@ -354,7 +353,8 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
           () => f.all_day ? "종일 대면 미팅" : f.end_time ? `대면 미팅 ~${hm(f.end_time)}` : "대면 미팅");
       }
       // 일정 알림 — 참석자(전·후)에게. 기준 회차: 바꾸기 전 회차가 7일 안이면 그 날(옮긴 경우 '날짜 a → b'), 아니면 바꾼 뒤 회차
-      const inEv = (k: string | null) => !!k && k >= today && k <= addDay(today, 7);
+      // 참석자·만든 사람은 당사자라 날짜와 상관없이(오늘 이후, 1년 안 회차) 받는다 (2026-11-04, 전엔 7일 안만)
+      const inEv = (k: string | null) => !!k && k >= today && k <= addDay(today, EV_DAYS);
       const exOnly = was && is && !split && JSON.stringify(b.exdates || []) !== JSON.stringify(f.exdates || []) && evDiff(b, "", f, "").length === 0
         && ["repeat", "repeat_until", "all_day", "auto_out"].every((c) => JSON.stringify(b[c] ?? null) === JSON.stringify(f[c] ?? null));
       if (exOnly) {
@@ -362,23 +362,29 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
         const addedX = (f.exdates || []).filter((x: string) => !(b.exdates || []).includes(x)).filter(inEv).sort()[0];
         const removedX = (b.exdates || []).filter((x: string) => !(f.exdates || []).includes(x)).filter(inEv).sort()[0];
         const k = addedX || removedX; if (!k) continue;
-        for (const pid of (f.people || []).filter((x: string) => x !== actor && subsOf(x).some((y) => y.change_alerts)))
+        const maker = byUser[f.created_by as string], ppl = [...new Set([...(f.people || []), ...(maker ? [maker] : [])])];
+        for (const pid of ppl.filter((x: string) => x !== actor && subsOf(x).some((y) => y.change_alerts)))
           note(`c:${a.id}:${pid}`, pid, `${addedX ? "✖️" : "➕"} ${f.title} ${addedX ? "취소" : "추가"}`, join(`${fmtD(k)} ${timeOf(f)}`, "이 회차만", byWho(actor, undefined, addedX ? "취소" : "추가")), `ev:${f.id}`);
         continue;
       }
-      const bk = was ? (baseK && occursOn({ ...base, exdates: [] }, baseK, s.holidays) ? baseK : firstWithin(base!, today, 7, s.holidays)) : null;
-      const fk = is ? firstWithin(f, today, 7, s.holidays) || (bk && f.event_date) || null : null;
+      const bk = was ? (baseK && occursOn({ ...base, exdates: [] }, baseK, s.holidays) ? baseK : firstWithin(base!, today, EV_DAYS, s.holidays)) : null;
+      const fk = is ? firstWithin(f, today, EV_DAYS, s.holidays) || (bk && f.event_date) || null : null;
       const anchorK = inEv(bk) ? bk : inEv(fk) ? fk : null;
       if (!anchorK) continue;
       curDay = anchorK;
       const anchor = anchorK === bk ? base! : f;
       const everyone = new Set<string>([...(base?.people || []), ...(f.people || [])]);
+      // 만든 사람이 참석자가 아니어도, 남이 그 일정을 바꾸면 알린다
+      const maker = byUser[(base?.created_by || f.created_by) as string];
+      const makerOnly = !!maker && !everyone.has(maker);
+      if (makerOnly) everyone.add(maker);
       const repeatAll = was && !is && !!base?.repeat && !split;
       const diff = was && is ? evDiff(base!, bk || anchorK, f, fk || (f.repeat ? anchorK : f.event_date)) : [];
       if (was && is && !diff.length && !split) continue;   // 메모·성격 등 알릴 필요 없는 수정
       for (const pid of everyone) {
         if (pid === actor || !subsOf(pid).some((y) => y.change_alerts)) continue;
-        const inB = was && (base!.people || []).includes(pid), inF = is && (f.people || []).includes(pid);
+        const asMaker = makerOnly && pid === maker;
+        const inB = was && (asMaker || (base!.people || []).includes(pid)), inF = is && (asMaker || (f.people || []).includes(pid));
         const verb = split ? ["✏️", "변경"] : !inB && inF ? ["➕", "추가"] : inB && !inF ? ["✖️", was && is ? "참석 빠짐" : "취소"] : ["✏️", "변경"];
         const showDiff = verb[1] === "변경" && diff.length > 0;
         const dateMoved = showDiff && diff.some((x) => x.startsWith("날짜")), timeMoved = showDiff && diff.some((x) => x.startsWith("시간"));
@@ -390,8 +396,8 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       }
     }
   }
-  // 같은 실행에서 다음 근무일 안내를 받는 사람에게, 그 날에 대한 변경 중 16:00 전에 한 것은 안내에 이미 담겼으니 따로 보내지 않는다 (2026-11-03)
-  //   16:00 이후 변경은 안내(첫 실행에 이미 나감)에 없을 수 있어 그대로 보낸다 — 알림이 빠지는 쪽으로는 줄이지 않는다
+  // 같은 실행에서 다음 근무일 안내를 받는 사람에게, 그 날에 대한 변경 중 18:00(BRIEF_FROM) 전에 한 것은 안내에 이미 담겼으니 따로 보내지 않는다 (2026-11-03)
+  //   18:00 이후 변경은 안내(첫 실행에 이미 나감)에 없을 수 있어 그대로 보낸다 — 알림이 빠지는 쪽으로는 줄이지 않는다
   if (briefed.size) {
     const cut = Date.parse(`${today}T${String(Math.floor(BRIEF_FROM / 60)).padStart(2, "0")}:${String(BRIEF_FROM % 60).padStart(2, "0")}:00+09:00`);
     const kept = notes.filter((n) => !(n.kind === "change" && n.day === briefK && briefed.has(n.member) && (n.at || 0) < cut && n.at));

@@ -1,5 +1,6 @@
 // 알림 계획 테스트 — deno test supabase/functions/calendar-push/plan.test.ts
 // 2026-11-03 재작성: 오후 4시 안내·팀원 변동·묶기(지웠다 되돌림 생략)·나누기 짝(시각 기준)·문구 정리 반영
+// 2026-11-04: 안내 매일 18:00, 당사자 알림은 날짜 제한 없음, 다른 장소(직접 입력)
 import { planNotifications, type Snapshot } from "./plan.ts";
 
 const eq = (a: unknown, b: unknown, msg: string) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${msg}\n  실제: ${JSON.stringify(a)}\n  기대: ${JSON.stringify(b)}`); };
@@ -26,7 +27,7 @@ const base = (): Snapshot => ({
   wishket: [{ slug: "w1", title: "호텔 QR 앱", meeting_at: "2026-11-03T02:00:00Z", meeting_type: "video", assigned_main: M2, assigned_sub: null, current_status: "interview" }],
   audit: [],
 });
-const brief = (s: Snapshot, d: string, t = "16:00") => planNotifications(s, at(d, t)).notes.filter((n) => n.kind === "brief");
+const brief = (s: Snapshot, d: string, t = "18:00") => planNotifications(s, at(d, t)).notes.filter((n) => n.kind === "brief");
 const change = (s: Snapshot, d: string, t = "10:00") => planNotifications(s, at(d, t)).notes.filter((n) => n.kind === "change");
 const tb = (n: { title: string; body: string }) => [n.title, n.body];
 const empty = (s: Snapshot) => { s.events = []; s.wishket = []; return s; };
@@ -37,12 +38,12 @@ Deno.test("안내: 미팅 시작 전 알림은 없음 (사용자 결정)", () =>
   for (const t of ["13:30", "13:50", "10:30"]) eq(planNotifications(s, at("2026-11-03", t)).notes.length, 0, `미팅 알림 없음 ${t}`);
 });
 
-Deno.test("안내: 근무일 16:00~17:30 첫 실행, 다음 근무일 기준, 켠 사람만", () => {
+Deno.test("안내: 근무일 18:00~19:30 첫 실행, 다음 근무일 기준, 켠 사람만", () => {
   const s = base();
   s.leaves = [{ id: "l3", member_id: M3, from_date: "2026-11-03", to_date: "2026-11-03", kind: "off" }];
-  eq(brief(s, "2026-11-02", "15:59").length, 0, "15:59 전");
-  eq(brief(s, "2026-11-02", "17:30").length, 0, "17:30 이후");
-  eq(brief(s, "2026-11-02", "17:25").length, 2, "17:25 도 구간 안");
+  eq(brief(s, "2026-11-02", "17:59").length, 0, "17:59 전");
+  eq(brief(s, "2026-11-02", "19:30").length, 0, "19:30 이후");
+  eq(brief(s, "2026-11-02", "19:25").length, 2, "19:25 도 구간 안");
   const r = brief(s, "2026-11-02");
   eq(r.map((n) => n.member).sort(), [M1, M2], "켠 사람만(박다온 꺼짐)");
   const me = r.find((n) => n.member === M2)!;
@@ -53,48 +54,47 @@ Deno.test("안내: 근무일 16:00~17:30 첫 실행, 다음 근무일 기준, �
 Deno.test("안내: 금요일 → 월요일, 공휴일 전날 → 그다음 평일, 쉬는 날엔 없음", () => {
   const s = base();
   s.events.push({ id: "e5", type: "internal", title: "월요 점검", event_date: "2026-11-09", start_time: "09:30:00", all_day: false, people: [M1], exdates: [] });
-  eq(brief(s, "2026-11-06").filter((n) => n.member === M1).map((n) => [n.key, n.title]), [["e:2026-11-09:m1", "📅 다음 근무일 11/9 (월)"]], "금요일 → 월요일");
+  eq(brief(s, "2026-11-06").filter((n) => n.member === M1).map((n) => [n.key, ...tb(n)]), [["e:2026-11-09:m1", "🏢 다음 근무일 시청역2호점 · 11/9 (월)", "일정: 09:30 월요 점검, 10:00 주간 회의"]], "금요일 → 월요일");
   eq(brief(s, "2026-11-07").length, 0, "토요일엔 없음");
   s.holidays["2026-11-10"] = "임시공휴일";
-  s.events.push({ id: "e6", type: "internal", title: "수요 점검", event_date: "2026-11-11", start_time: "09:30:00", all_day: false, people: [M1], exdates: [] });
   eq(brief(s, "2026-11-09").filter((n) => n.member === M1).map((n) => n.key), ["e:2026-11-11:m1"], "공휴일 전날 → 그다음 평일");
 });
 
-Deno.test("안내: 평소와 같은 날은 없음, 팀 근무지·내 근무지·반차 변화는 제목에", () => {
+Deno.test("안내: 평소와 같은 날도 매일 — 제목에 내가 갈 곳, 팀 근무지 사유·다른 장소·반차", () => {
   const s = empty(base());
-  eq(brief(s, "2026-11-03").length, 0, "패턴대로·일정 없음·팀 정상");
-  s.teamOverrides = [{ work_date: "2026-11-04", loc: "other", branch: "패스트파이브 강남 3호점", note: "시청역 공사" }];
-  eq(tb(brief(s, "2026-11-03").find((n) => n.member === M1)!), ["🏢 내일 강남 3호점 · 11/4 (수)", "팀 전체 강남 3호점 · 시청역 공사"], "팀 근무지 하루 예외 — 팀 전체임을 본문에");
+  const r = brief(s, "2026-11-03");
+  eq(r.map((n) => [n.member, ...tb(n)]), [[M1, "🏠 내일 재택 · 11/4 (수)", ""], [M2, "🏠 내일 재택 · 11/4 (수)", ""]], "패턴대로·일정 없음이어도 보냄");
+  eq(tb(brief(s, "2026-11-04").find((n) => n.member === M1)!), ["🏢 내일 시청역2호점 · 11/5 (목)", ""], "다음 날도");
+  s.teamOverrides = [{ work_date: "2026-11-04", loc: "other", branch: "성수동 가나다빌딩", note: "고객사 워크숍" }];
+  eq(tb(brief(s, "2026-11-03").find((n) => n.member === M1)!), ["📍 내일 성수동 가나다빌딩 · 11/4 (수)", "고객사 워크숍"], "팀 전체가 미팅 장소로 바로 출근 — 제목에 장소, 본문엔 사유만");
+  s.teamOverrides = [{ work_date: "2026-11-04", loc: "forest", branch: null, note: null }];
+  s.memberOverrides = [{ member_id: M1, work_date: "2026-11-04", loc: "other", branch: "성수동 가나다빌딩" }];
+  eq(tb(brief(s, "2026-11-03").find((n) => n.member === M1)!), ["📍 내일 성수동 가나다빌딩 · 11/4 (수)", "팀 전체 서울숲"], "나만 미팅 장소로 — 팀 전체가 어디인지");
+  eq(tb(brief(s, "2026-11-03").find((n) => n.member === M2)!), ["🏢 내일 서울숲 · 11/4 (수)", "팀원: 김가람 성수동 가나다빌딩"], "팀원에게는 팀원 줄로");
   s.teamOverrides = []; s.memberOverrides = [{ member_id: M1, work_date: "2026-11-05", loc: "home", branch: null }];
-  eq(tb(brief(s, "2026-11-04").find((n) => n.member === M1)!), ["🏠 내일 재택 · 11/5 (목)", ""], "개인 재택 — 제목으로 충분, 본문 없음");
+  eq(tb(brief(s, "2026-11-04").find((n) => n.member === M1)!), ["🏠 내일 재택 · 11/5 (목)", ""], "개인 재택 — 제목으로 충분");
   s.memberOverrides = []; s.leaves = [{ id: "l2", member_id: M2, from_date: "2026-11-05", to_date: "2026-11-05", kind: "pm" }];
   eq(brief(s, "2026-11-04").find((n) => n.member === M2)!.title, "🌓 내일 오후반차 · 시청역2호점 · 11/5 (목)", "반차");
   s.leaves = []; s.routines.push({ valid_from: "2026-11-05", days: { 1: "cityhall", 2: "cityhall", 3: "home", 4: "forest", 5: "cityhall" } });
-  eq(tb(brief(s, "2026-11-04").find((n) => n.member === M1)!), ["🏢 내일 서울숲 · 11/5 (목)", "팀 전체 서울숲"], "새 패턴이 시작되는 날");
-  eq(brief(s, "2026-10-27").length, 0, "과거(예전 패턴, 평소와 같음) → 없음");
+  eq(tb(brief(s, "2026-11-04").find((n) => n.member === M1)!), ["🏢 내일 서울숲 · 11/5 (목)", ""], "새 패턴이 시작되는 날");
 });
 
-Deno.test("안내: 팀원만 평소와 다르면 모두에게 — 제목에 그 팀원, 한 명뿐이면 본문 생략", () => {
+Deno.test("안내: 평소와 다른 팀원은 본문 '팀원:' 줄에, 내 일정은 '일정:' 줄에", () => {
   const s = empty(base());
   s.memberOverrides = [{ member_id: M1, work_date: "2026-11-04", loc: "out", branch: null }];
-  eq(tb(brief(s, "2026-11-03").find((n) => n.member === M2)!), ["👥 내일 김가람 외근 · 11/4 (수)", ""], "한 명");
+  eq(tb(brief(s, "2026-11-03").find((n) => n.member === M2)!), ["🏠 내일 재택 · 11/4 (수)", "팀원: 김가람 외근"], "한 명");
   s.memberOverrides.push({ member_id: M3, work_date: "2026-11-04", loc: "forest", branch: null });
-  eq(tb(brief(s, "2026-11-03").find((n) => n.member === M2)!), ["👥 내일 김가람 외근 외 1명 · 11/4 (수)", "팀원: 김가람 외근, 박다온 서울숲"], "여러 명");
+  eq(brief(s, "2026-11-03").find((n) => n.member === M2)!.body, "팀원: 김가람 외근, 박다온 서울숲", "여러 명");
   s.events = [{ id: "e9", type: "internal", title: "회고", event_date: "2026-11-04", start_time: "16:00:00", all_day: false, people: [M2], exdates: [] }];
-  eq(tb(brief(s, "2026-11-03").find((n) => n.member === M2)!), ["📅 내일 11/4 (수)", "일정: 16:00 회고\n팀원: 김가람 외근, 박다온 서울숲"], "내 일정이 있으면 📅");
+  eq(brief(s, "2026-11-03").find((n) => n.member === M2)!.body, "일정: 16:00 회고\n팀원: 김가람 외근, 박다온 서울숲", "일정 먼저");
 });
 
-Deno.test("안내: 이어지는 상태(같은 휴가·연속 재택)는 그것만으로 안 보냄, 따로 등록한 휴가는 새 소식", () => {
+Deno.test("안내: 다음 근무일 종일 휴가인 사람은 받지 않음, 이어지는 휴가는 매일 팀원 줄에", () => {
   const s = empty(base());
   s.subs.push({ id: "s3b", member_id: M3, morning_brief: true, change_alerts: true });
   s.leaves = [{ id: "L", member_id: M2, from_date: "2026-11-04", to_date: "2026-11-10", kind: "off" }];
-  eq(brief(s, "2026-11-03").map((n) => n.title), ["👥 내일 이나래 연차 · 11/4 (수)", "👥 내일 이나래 연차 · 11/4 (수)"], "시작 전날엔 알림");
-  for (const d of ["2026-11-04", "2026-11-05", "2026-11-06", "2026-11-09"]) eq(brief(s, d).length, 0, `${d} 이어지는 휴가 → 없음`);
-  s.events = [{ id: "e9", type: "internal", title: "회고", event_date: "2026-11-05", start_time: "16:00:00", all_day: false, people: [M1], exdates: [] }];
-  eq(brief(s, "2026-11-04").find((n) => n.member === M1)!.body, "일정: 16:00 회고\n팀원: 이나래 연차", "다른 이유로 보낼 땐 본문에 그대로");
-  s.events = [];
-  s.leaves = [{ id: "F", member_id: M2, from_date: "2026-11-06", to_date: "2026-11-06", kind: "off" }, { id: "M", member_id: M2, from_date: "2026-11-09", to_date: "2026-11-09", kind: "off" }];
-  eq(brief(s, "2026-11-06").map((n) => n.title), ["👥 다음 근무일 이나래 연차 · 11/9 (월)", "👥 다음 근무일 이나래 연차 · 11/9 (월)"], "금·월 따로 등록한 휴가 → 월요일도 알림");
+  eq(brief(s, "2026-11-03").map((n) => [n.member, n.body]), [[M1, "팀원: 이나래 연차"], [M3, "팀원: 이나래 연차"]], "휴가 중인 이나래는 제외");
+  eq(brief(s, "2026-11-05").map((n) => n.title), ["🏢 내일 시청역2호점 · 11/6 (금)", "🏢 내일 시청역2호점 · 11/6 (금)"], "휴가 중에도 매일");
 });
 
 // ───────── 변경 알림: 시간 규칙·묶기 ─────────
@@ -188,7 +188,11 @@ Deno.test("변경: 팀원 개인 근무지 — 전원(바꾼 사람 제외), 남
   eq(tb(change(s, "2026-11-03", "17:40")[0]), ["🚕 김가람 내일 14:00 외근 (고객사 킥오프)", "11/4 (수) · 원래 근무지로"], "해제했는데 대면 미팅이 있으면 그 외근이 '원래'");
   s.events = [];
   s.audit = [{ id: 36, at: "", table_name: "member_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { member_id: M1, work_date: "2026-11-10", loc: "home", branch: null } }];
-  eq(change(s, "2026-11-03", "17:40").length, 0, "범위 밖");
+  eq(change(s, "2026-11-03", "17:40").length, 0, "범위 밖 — 본인이 바꾸면 아무에게도");
+  s.memberOverrides = [{ member_id: M1, work_date: "2026-11-20", loc: "other", branch: "성수동 가나다빌딩" }];
+  s.audit = [{ id: 38, at: "", table_name: "member_work_overrides", op: "INSERT", actor_id: "u2", before: null, after: { member_id: M1, work_date: "2026-11-20", loc: "other", branch: "성수동 가나다빌딩" } }];
+  eq(change(s, "2026-11-03", "17:40").map((n) => [n.member, ...tb(n)]), [[M1, "📍 김가람 11/20 (금) 성수동 가나다빌딩", "이나래 변경"]], "범위 밖 — 남이 바꾸면 당사자에게만");
+  s.memberOverrides = [];
   s.audit = [{ id: 37, at: "", table_name: "member_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { member_id: M1, work_date: "2026-11-04", loc: "home", branch: null } }];
   eq(change(s, "2026-11-03", "23:00").length, 0, "밤에는 보류");
 });
@@ -202,7 +206,12 @@ Deno.test("변경: 휴가 — 등록·취소·날짜/종류 변경·대상자 �
   eq(tb(r[0]), ["🌴 박다온 연차 등록", "11/4 (수)–11/5 (목)"], "등록 — 본인이 등록했으면 '누가' 생략");
   eq(one({ op: "UPDATE", before: lv, after: { ...lv, note: "가족 행사" } }).length, 0, "사유만 수정");
   eq(tb(one({ op: "UPDATE", before: lv, after: { ...lv, deleted_at: "x" } })[0]), ["🌴 박다온 연차 취소", "11/4 (수)–11/5 (목)"], "취소");
-  eq(one({ op: "INSERT", before: null, after: { ...lv, from_date: "2026-11-20", to_date: "2026-11-21" } }).length, 0, "먼 휴가는 전날 안내에서");
+  eq(one({ op: "INSERT", before: null, after: { ...lv, from_date: "2026-11-20", to_date: "2026-11-21" } }).length, 0, "먼 휴가를 본인이 등록 → 전날 안내에서");
+  eq(one({ op: "INSERT", actor_id: "u1", before: null, after: { ...lv, from_date: "2026-11-20", to_date: "2026-11-21" } }).map((n) => [n.member, ...tb(n)]),
+    [[M3, "🌴 박다온 연차 등록", "11/20 (금)–11/21 (토) · 김가람 등록"]], "먼 휴가를 남이 등록 → 당사자에게만");
+  const far = { ...lv, from_date: "2026-11-20", to_date: "2026-11-21" };
+  eq(one({ op: "UPDATE", actor_id: "u1", before: far, after: { ...far, deleted_at: "x" } }).map((n) => [n.member, n.title]), [[M3, "🌴 박다온 연차 취소"]], "먼 휴가를 남이 취소 → 당사자에게");
+  eq(one({ op: "UPDATE", actor_id: "u1", before: far, after: { ...far, to_date: "2026-11-23" } }).map((n) => [n.member, n.body]), [[M3, "11/20 (금)–11/21 (토) → 11/20 (금)–11/23 (월) · 김가람 변경"]], "먼 휴가를 남이 변경 → 당사자에게");
   eq(tb(one({ op: "UPDATE", before: lv, after: { ...lv, from_date: "2026-11-20", to_date: "2026-11-21" } })[0]), ["🌴 박다온 연차 변경", "11/4 (수)–11/5 (목) → 11/20 (금)–11/21 (토)"], "가까운 휴가를 먼 날로");
   eq(tb(one({ op: "UPDATE", before: lv, after: { ...lv, kind: "pm" } })[0]), ["🌴 박다온 오후반차 변경", "연차 → 오후반차"], "종류 변경");
   r = one({ op: "UPDATE", before: lv, after: { ...lv, member_id: M2 } });
@@ -250,7 +259,7 @@ Deno.test("변경: 주간 패턴 — 같은 내용·지난 패턴 생략, 바뀐
   const s = empty(base());
   const same = { valid_from: "2026-11-05", days: { 1: "cityhall", 2: "cityhall", 3: "home", 4: "cityhall", 5: "cityhall" } };
   s.routines.push(same);
-  eq(brief(s, "2026-11-04").length, 0, "같은 내용 → 안내 없음");
+  eq(tb(brief(s, "2026-11-04").find((n) => n.member === M1)!), ["🏢 내일 시청역2호점 · 11/5 (목)", ""], "같은 내용 → 평소 안내 그대로");
   s.audit = [{ id: 81, at: "", table_name: "team_work_routines", op: "INSERT", actor_id: "u1", before: null, after: same }];
   eq(change(s, "2026-11-04").length, 0, "같은 내용 → 변경 알림 없음");
   s.routines = [base().routines[0], { valid_from: "2026-09-01", days: { 1: "home", 2: "cityhall", 3: "home", 4: "cityhall", 5: "cityhall" } }, { valid_from: "2026-10-01", days: base().routines[0].days }];
@@ -274,7 +283,12 @@ Deno.test("변경: 일정 추가·수정·취소·참석 변경 — 참석자에
   eq(one({ op: "UPDATE", actor_id: "u2", before: ev, after: { ...ev, deleted_at: "x" } }).map((n) => [n.member, n.title]), [["m3", "✖️ 디자인 협의 취소"]], "취소");
   const p = one({ op: "UPDATE", actor_id: "u1", before: ev, after: { ...ev, people: [M2, M1] } });
   eq(p.map((n) => `${n.member}|${n.title}`).sort(), ["m2|✏️ 디자인 협의 변경", "m3|✖️ 디자인 협의 참석 빠짐"], "참석 변경 — 빠진 사람은 '참석 빠짐'");
-  eq(one({ op: "INSERT", actor_id: "u2", before: null, after: { ...ev, id: "e10", event_date: "2026-12-01" } }).length, 0, "먼 일정");
+  eq(one({ op: "INSERT", actor_id: "u2", before: null, after: { ...ev, id: "e10", event_date: "2026-12-01" } }).map((n) => [n.member, ...tb(n)]),
+    [["m3", "➕ 디자인 협의 추가", "12/1 (화) 11:00 · 이나래 추가"]], "먼 일정도 참석자에게 (당사자)");
+  const mine = { ...ev, people: [M2], created_by: "u1" };
+  eq(one({ op: "UPDATE", actor_id: "u2", before: mine, after: { ...mine, start_time: "13:00:00" } }).map((n) => [n.member, n.title]), [["m1", "✏️ 디자인 협의 변경"]], "만든 사람(참석자 아님)도 남이 바꾸면");
+  eq(one({ op: "UPDATE", actor_id: "u2", before: mine, after: { ...mine, deleted_at: "x" } }).map((n) => [n.member, n.title]), [["m1", "✖️ 디자인 협의 취소"]], "만든 사람에게 취소");
+  eq(one({ op: "UPDATE", actor_id: "u1", before: mine, after: { ...mine, start_time: "13:00:00" } }).map((n) => n.member), ["m2"], "만든 사람이 직접 바꾸면 본인 제외");
   eq(one({ op: "INSERT", actor_id: "u2", before: null, after: { ...ev, people: [] } }).length, 0, "참석자 없는 일정은 받을 사람 없음");
 });
 
@@ -309,7 +323,7 @@ Deno.test("변경: 반복 일정 — 나누기(시각 기준 짝)·한 회차 �
   s2.audit = [{ id: 52, at: "", table_name: "calendar_events", op: "UPDATE", actor_id: "u1", before: { ...rep2, exdates: [...rep2.exdates, "2026-11-09"] }, after: rep2 }];
   eq(change(s2, "2026-11-04", "15:00").find((n) => n.member === M2)!.title, "➕ 주간 회의 추가", "되돌림");
   s2.audit = [{ id: 53, at: "", table_name: "calendar_events", op: "UPDATE", actor_id: "u1", before: rep2, after: { ...rep2, exdates: [...rep2.exdates, "2026-11-30"] } }];
-  eq(change(s2, "2026-11-04", "15:00").length, 0, "8일 뒤 회차 삭제");
+  eq(tb(change(s2, "2026-11-04", "15:00").find((n) => n.member === M2)!), ["✖️ 주간 회의 취소", "11/30 (월) 10:00 · 이 회차만 · 김가람 취소"], "먼 회차 삭제도 참석자에게");
   // 반복 전체 삭제 → 지난 회차 날짜가 아니라 '매주 … 반복 전체'
   s2.audit = [{ id: 54, at: "", table_name: "calendar_events", op: "UPDATE", actor_id: "u1", before: rep2, after: { ...rep2, deleted_at: "x" } }];
   eq(tb(change(s2, "2026-11-02", "17:00").find((n) => n.member === M2)!), ["✖️ 주간 회의 취소", "매주 월 10:00 · 반복 전체 · 김가람 취소"], "반복 전체 삭제");
@@ -317,16 +331,16 @@ Deno.test("변경: 반복 일정 — 나누기(시각 기준 짝)·한 회차 �
 
 Deno.test("구독이 없는 사람에게는 계획하지 않음", () => {
   const s = base(); s.subs = [];
-  eq(planNotifications(s, at("2026-11-03", "16:00")).notes.length, 0, "구독 없음");
+  eq(planNotifications(s, at("2026-11-03", "18:00")).notes.length, 0, "구독 없음");
 });
 
 Deno.test("대면 미팅 외근: 시간 있는 미팅은 그 시각부터(가장 이른 것), 종일 미팅은 하루 전체", () => {
   const s = empty(base());
   const mk = (id: string, start: string | null, title: string) => ({ id, type: "meeting", title, event_date: "2026-11-04", start_time: start, all_day: !start, meeting_type: "inperson", people: [M1], auto_out: true, exdates: [] });
   s.events = [mk("a", "16:00:00", "B사 미팅"), mk("b", "14:00:00", "A사 미팅")];
-  eq(brief(s, "2026-11-03").find((n) => n.member === M2)!.title, "👥 내일 김가람 14:00 외근 (A사 미팅) · 11/4 (수)", "가장 이른 시각");
+  eq(brief(s, "2026-11-03").find((n) => n.member === M2)!.body, "팀원: 김가람 14:00 외근 (A사 미팅)", "가장 이른 시각");
   s.events.push(mk("c", null, "종일 워크숍"));
-  eq(brief(s, "2026-11-03").find((n) => n.member === M2)!.title, "👥 내일 김가람 외근 (종일 워크숍) · 11/4 (수)", "종일이 있으면 하루 전체");
+  eq(brief(s, "2026-11-03").find((n) => n.member === M2)!.body, "팀원: 김가람 외근 (종일 워크숍)", "종일이 있으면 하루 전체");
 });
 
 Deno.test("문구: 제목에 날짜가 있으면(모레 이후) 본문에 날짜를 다시 쓰지 않음", () => {
@@ -339,22 +353,22 @@ Deno.test("문구: 제목에 날짜가 있으면(모레 이후) 본문에 날짜
   eq(tb(change(s, "2026-11-03", "15:00")[0]), ["🚕 김가람 내일 외근", "11/4 (수)"], "내일 → 본문에 날짜");
 });
 
-Deno.test("겹침: 16:00 전 변경은 같은 실행의 안내에 담기니 변경 알림 생략, 16:00 이후 변경은 그대로", () => {
+Deno.test("겹침: 18:00 전 변경은 같은 실행의 안내에 담기니 변경 알림 생략, 18:00 이후 변경은 그대로", () => {
   const s = empty(base());
   s.subs.push({ id: "s3b", member_id: M3, morning_brief: true, change_alerts: true });
   s.memberOverrides = [{ member_id: M1, work_date: "2026-11-04", loc: "out", branch: null }];
-  s.audit = [{ id: 95, at: iso("2026-11-03", "15:58:00"), table_name: "member_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { member_id: M1, work_date: "2026-11-04", loc: "out", branch: null } }];
-  let r = planNotifications(s, at("2026-11-03", "16:00")).notes;
+  s.audit = [{ id: 95, at: iso("2026-11-03", "17:58:00"), table_name: "member_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { member_id: M1, work_date: "2026-11-04", loc: "out", branch: null } }];
+  let r = planNotifications(s, at("2026-11-03", "18:00")).notes;
   eq(r.filter((n) => n.kind === "brief").map((n) => n.member).sort(), [M1, M2, M3], "안내는 나감");
-  eq(r.filter((n) => n.kind === "change").length, 0, "15:58 변경 → 안내에 담겨 변경 알림 생략");
-  s.audit = [{ id: 96, at: iso("2026-11-03", "16:03:00"), table_name: "member_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { member_id: M1, work_date: "2026-11-04", loc: "out", branch: null } }];
-  r = planNotifications(s, at("2026-11-03", "16:05")).notes;
-  eq(r.filter((n) => n.kind === "change").map((n) => n.member).sort(), [M2, M3], "16:03 변경 → 안내 뒤일 수 있어 그대로 보냄(빠지지 않게)");
-  s.audit = [{ id: 97, at: iso("2026-11-03", "15:58:00"), table_name: "member_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { member_id: M1, work_date: "2026-11-05", loc: "home", branch: null } }];
+  eq(r.filter((n) => n.kind === "change").length, 0, "17:58 변경 → 안내에 담겨 변경 알림 생략");
+  s.audit = [{ id: 96, at: iso("2026-11-03", "18:03:00"), table_name: "member_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { member_id: M1, work_date: "2026-11-04", loc: "out", branch: null } }];
+  r = planNotifications(s, at("2026-11-03", "18:05")).notes;
+  eq(r.filter((n) => n.kind === "change").map((n) => n.member).sort(), [M2, M3], "18:03 변경 → 안내 뒤일 수 있어 그대로 보냄(빠지지 않게)");
+  s.audit = [{ id: 97, at: iso("2026-11-03", "17:58:00"), table_name: "member_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { member_id: M1, work_date: "2026-11-05", loc: "home", branch: null } }];
   s.memberOverrides = [{ member_id: M1, work_date: "2026-11-05", loc: "home", branch: null }];
-  eq(planNotifications(s, at("2026-11-03", "16:00")).notes.filter((n) => n.kind === "change").length, 2, "다음 근무일이 아닌 날 변경은 그대로");
+  eq(planNotifications(s, at("2026-11-03", "18:00")).notes.filter((n) => n.kind === "change").length, 2, "다음 근무일이 아닌 날 변경은 그대로");
   s.subs = s.subs.filter((x) => x.member_id !== M3 || x.id === "s3");   // 박다온는 안내 끔
-  s.audit = [{ id: 98, at: iso("2026-11-03", "15:58:00"), table_name: "member_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { member_id: M1, work_date: "2026-11-04", loc: "out", branch: null } }];
+  s.audit = [{ id: 98, at: iso("2026-11-03", "17:58:00"), table_name: "member_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { member_id: M1, work_date: "2026-11-04", loc: "out", branch: null } }];
   s.memberOverrides = [{ member_id: M1, work_date: "2026-11-04", loc: "out", branch: null }];
-  eq(planNotifications(s, at("2026-11-03", "16:00")).notes.filter((n) => n.kind === "change").map((n) => n.member), [M3], "안내를 끈 사람에겐 변경 알림 그대로");
+  eq(planNotifications(s, at("2026-11-03", "18:00")).notes.filter((n) => n.kind === "change").map((n) => n.member), [M3], "안내를 끈 사람에겐 변경 알림 그대로");
 });

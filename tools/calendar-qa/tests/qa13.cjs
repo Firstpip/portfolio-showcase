@@ -10,6 +10,8 @@ const S = __dirname + '/shots/';
       DB.team_work_overrides.push({ id:'to1', work_date:k, loc:'cityhall', branch:null, note:null, created_at:'2026-11-01T00:00:00Z', updated_at:'2026-11-01T00:00:00Z', created_by:'22222222-2222-2222-2222-222222222222' });
       DB.calendar_events.push({ id:'mt1', type:'meeting', kind:'sales', title:'고객사 미팅', event_date:k, all_day:false, start_time:'14:00', end_time:'16:00', meeting_type:'inperson', place:'고객사(강남)', people:[m.M1, m.M2], auto_out:true, exdates:[], repeat:null, deleted_at:null, created_at:'2026-11-01T00:00:00Z', updated_at:'2026-11-01T00:00:00Z' });
     })();` }));
+  // 사용자 QA 그날(11/3 화)로 시계를 고정 — 내일이 '평소 재택'인 수요일이 되게 (여는 요일과 상관없이 같은 결과)
+  await ctx.clock.install({ time: new Date('2026-11-03T10:00:00+09:00') });
   const p = await ctx.newPage(); p.on('pageerror', e => errs.push(e.message)); p.on('console', m => { if (m.type()==='error') errs.push(m.text()); });
   await p.goto((process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html?n=3#calendar'); await p.waitForSelector('#todaycard .today-head'); await p.waitForTimeout(400);
   const k = await p.evaluate(() => __mock.day(1));

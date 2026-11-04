@@ -6,6 +6,9 @@
   const iso = () => new Date().toISOString();
   const uuid = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random()*16|0; return (c==='x'?r:(r&3|8)).toString(16); });
   const day = n => { const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+n); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
+  // 여는 요일과 상관없이 같은 모습이 되게: wday(n) = 오늘부터 n번째 평일(0 = 오늘이 평일이면 오늘), nextDow(w) = 내일 이후 첫 w요일
+  const wday = n => { let i = 0, c = 0; for (;; i++) { const g = new Date(day(i)+'T00:00:00').getDay(); if (g>0 && g<6) { if (c===n) return day(i); c++; } } };
+  const nextDow = w => { for (let i = 1; ; i++) if (new Date(day(i)+'T00:00:00').getDay()===w) return day(i); };
   const at = (n, hm) => new Date(`${day(n)}T${hm}:00+09:00`).toISOString();
   const M1='aaaaaaaa-0000-0000-0000-000000000001', M2='aaaaaaaa-0000-0000-0000-000000000002', M3='aaaaaaaa-0000-0000-0000-000000000003';
   const DB = {
@@ -114,5 +117,5 @@
     auth: { getSession: async () => ({ data:{ session: sessionOf() } }), onAuthStateChange: () => ({ data:{ subscription:{ unsubscribe(){} } } }), signOut: async () => ({}) },
   }) };
   // 테스트에서 다른 사람이 바꾼 상황을 만들 때 쓰는 손잡이
-  window.__mock = { restored, save, DB, M1, M2, M3, day, asOther(fn){ const prev = actor; actor = '33333333-3333-3333-3333-333333333333'; try { return fn(); } finally { actor = prev; } }, emit };
+  window.__mock = { restored, save, DB, M1, M2, M3, day, wday, nextDow, asOther(fn){ const prev = actor; actor = '33333333-3333-3333-3333-333333333333'; try { return fn(); } finally { actor = prev; } }, emit };
 })();

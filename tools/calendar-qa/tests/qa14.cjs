@@ -16,7 +16,7 @@ const { chromium } = require(process.env.PW_CORE || 'playwright-core');
   // 사람 바꾸기 → 김가람으로 내일 개인 근무지 재택
   await p.click('#qa-p a:has-text("김가람")'); await p.waitForSelector('#todaycard .today-head'); await p.waitForTimeout(300);
   ok('김가람으로 바뀜', await p.evaluate(() => document.querySelector('#todaycard .av.me')?.title)==='김가람');
-  const k = await p.evaluate(() => __mock.day(2));
+  const k = await p.evaluate(() => __mock.wday(2));
   await p.evaluate(k => { document.querySelector(`#mgrid .mc[data-k="${k}"]`).click(); }, k); await p.waitForTimeout(200);
   await p.click('#sheet [data-q="out"]'); await p.waitForTimeout(400); await p.keyboard.press('Escape');
   await p.click('#qa-btn'); await p.waitForTimeout(150);

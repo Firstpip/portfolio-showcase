@@ -62,15 +62,15 @@
         <a href="${urlWith({ reset: 1, n: 7 })}">7명으로 초기화</a></div>
       <h4>알림 미리보기 <span class="hint">(운영과 같은 판단 코드)</span></h4>
       <div class="row">기준 시각 <input type="datetime-local" id="qa-t" value="${localIso(new Date())}"></div>
-      <div class="row" style="margin-top:6px"><button id="qa-brief">이 날 오후 4시 '다음 근무일 안내'</button></div>
+      <div class="row" style="margin-top:6px"><button id="qa-brief">이 날 저녁 6시 '다음 근무일 안내'</button></div>
       <div class="row" style="margin-top:6px"><button id="qa-chg">변경 알림 보기 (확인 안 한 변경 ${pending}건)</button><button id="qa-ack">여기까지 확인함</button></div>
       <div class="hint">변경 알림: 마지막 '확인함' 이후 이 탭에서 바꾼 것을, 기준 시각에 보낸다고 치고 계산합니다. 밤 22:00~07:30 이면 보류(아침에 발송)라 비어 보여요.</div>
       <div id="qa-out" style="margin-top:8px"></div>`;
     const t = () => new Date(document.getElementById('qa-t').value).getTime();
     document.getElementById('qa-brief').onclick = () => {
-      const d = new Date(t()); d.setHours(16, 0, 0, 0);
+      const d = new Date(t()); d.setHours(18, 0, 0, 0);
       const notes = CalPlan.planNotifications(snapshot(false), d.getTime()).notes.filter((n) => n.kind === 'brief');
-      document.getElementById('qa-out').innerHTML = `<div class="hint">${d.getMonth() + 1}/${d.getDate()} 16:00 기준</div>` + render(notes, '보낼 안내 없음 — 쉬는 날이거나, 다음 근무일이 모두 평소와 같아요.');
+      document.getElementById('qa-out').innerHTML = `<div class="hint">${d.getMonth() + 1}/${d.getDate()} 18:00 기준</div>` + render(notes, '보낼 안내 없음 — 오늘이 쉬는 날이거나, 다음 근무일에 모두 종일 휴가예요.');
     };
     document.getElementById('qa-chg').onclick = () => {
       const notes = CalPlan.planNotifications(snapshot(true), t()).notes.filter((n) => n.kind === 'change');
