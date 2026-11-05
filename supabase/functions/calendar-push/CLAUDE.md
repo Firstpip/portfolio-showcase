@@ -25,6 +25,11 @@
 
 ## 운영
 - 5분마다 pg_cron → 이 함수. 근무지·휴가·일정은 400일 앞까지 읽는다(먼 날 당사자 알림의 상태 계산용). 실행마다 `push_state.heartbeat` 기록 → `calendar_push_status()` RPC → 화면이 30분 넘게 끊기면 캘린더에 경고, 설정 창에 마지막 실행 표시.
-- 발송 실패(5xx 등)는 `push_state.retry_queue` 에서 최대 6번 재시도. 404/410 이면 구독 삭제.
+- 발송 결과(`pushOutcome`, 2026-11-05): 404/410 → 구독 삭제 · 429/5xx/네트워크 → `push_state.retry_queue` 에서 최대 6번 재시도 · 그 밖의 4xx(401·403 등) → 재시도·삭제 없이 기록만(heartbeat `rejected`).
+  일시 실패로는 구독을 지우지 않는다 — 실패 30번 이상 + 14일 넘게 못 받은 구독만 정리(`isStaleSub`).
+- 알림 키(push_sent)를 잡은 뒤 **보내기 전에 대기열에 먼저 적는다** → 도중에 죽어도 다음 실행이 보낸다(드물게 중복, 유실 없음).
+- 실행 잠금 `push_state.run_lock`: 한 번에 하나, 3분 안 재실행은 `{skipped:'busy'}`(공개 anon 키 연타로 재시도 소진·대기열 덮어쓰기 방지). 수동 시험은 run_lock 의 until 을 과거로 바꾼 뒤 호출.
+- 상태 저장(setState) 실패는 오류로 끝낸다. 500 응답 본문엔 원문 오류를 싣지 않는다(로그에만).
 - 클라이언트는 `push_subscriptions` 에서 알림 켜기/끄기 두 칸만 고칠 수 있다(등록·이전은 `register_push_subscription` RPC).
-- 배포: 함수는 `supabase functions deploy calendar-push`(verify_jwt 유지), 테스트는 `deno test plan.test.ts`.
+- 배포: 함수는 `supabase functions deploy calendar-push`(verify_jwt 유지), 테스트는 `deno test plan.test.ts`(Homebrew deno 는 소스 빌드라 느림 — 공식 바이너리 `~/.deno-bin/deno`).
+- 주간 패턴 변경 알림: 바꾸기 전·후 패턴으로 앞으로 8일 팀 근무지를 비교해 달라지는 날만(같은 내용 재저장 생략, 예정 취소 DELETE 도 알림).

@@ -1,7 +1,7 @@
 // 알림 계획 테스트 — deno test supabase/functions/calendar-push/plan.test.ts
 // 2026-11-03 재작성: 오후 4시 안내·팀원 변동·묶기(지웠다 되돌림 생략)·나누기 짝(시각 기준)·문구 정리 반영
 // 2026-11-04: 안내 매일 18:00, 당사자 알림은 날짜 제한 없음, 다른 장소(직접 입력), 팀 근무지 변경은 따르는 사람에게만
-import { planNotifications, type Snapshot } from "./plan.ts";
+import { isStaleSub, planNotifications, pushOutcome, type Snapshot } from "./plan.ts";
 
 const eq = (a: unknown, b: unknown, msg: string) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${msg}\n  실제: ${JSON.stringify(a)}\n  기대: ${JSON.stringify(b)}`); };
 const at = (k: string, hm: string) => Date.parse(`${k}T${hm}:00+09:00`);
@@ -297,6 +297,41 @@ Deno.test("변경: 주간 패턴 — 같은 내용·지난 패턴 생략, 바뀐
   eq(tb(change(s, "2026-11-04")[0]), ["🗓 11/5 (목)부터 주간 근무 패턴 변경", "목 재택 · 김가람 변경"], "바뀐 요일만");
   s.audit = [];
   eq(brief(s, "2026-11-04").find((n) => n.member === M2)!.title, "🏠 내일 재택 · 11/5 (목)", "안내");
+});
+
+// 2026-11-05: 바꾸기 전·후 패턴으로 앞으로 8일 팀 근무지를 비교 — 같은 날짜 재저장(UPDATE)·예정 취소(DELETE)
+Deno.test("변경: 주간 패턴 — 같은 날짜로 같은 내용 재저장은 생략, 내용이 바뀌면 바뀐 요일만", () => {
+  const s = empty(base());
+  const old = { valid_from: "2026-11-05", days: { 1: "cityhall", 2: "cityhall", 3: "home", 4: "home", 5: "cityhall" } };
+  s.routines.push(old);
+  s.audit = [{ id: 91, at: "", table_name: "team_work_routines", op: "UPDATE", actor_id: "u1", before: old, after: { ...old } }];
+  eq(change(s, "2026-11-04").length, 0, "같은 내용 재저장(직전 패턴과는 다르지만 이 행은 그대로)");
+  const neu = { valid_from: "2026-11-05", days: { 1: "cityhall", 2: "home", 3: "home", 4: "home", 5: "cityhall" } };
+  s.routines = [base().routines[0], neu];
+  s.audit = [{ id: 92, at: "", table_name: "team_work_routines", op: "UPDATE", actor_id: "u1", before: old, after: neu }];
+  eq(tb(change(s, "2026-11-04")[0]), ["🗓 11/5 (목)부터 주간 근무 패턴 변경", "화 재택 · 김가람 변경"], "이 행에서 바뀐 요일(화)만 — 목은 원래 재택");
+});
+
+Deno.test("변경: 예정된 주간 패턴 취소(DELETE)도 알림", () => {
+  const s = empty(base());
+  const sched = { valid_from: "2026-11-05", days: { 1: "cityhall", 2: "cityhall", 3: "home", 4: "forest", 5: "cityhall" } };
+  // 지금 상태(s.routines)엔 이미 없음
+  s.audit = [{ id: 93, at: "", table_name: "team_work_routines", op: "DELETE", actor_id: "u1", before: sched, after: null }];
+  const r = change(s, "2026-11-04");
+  eq(r.length, 2, "바꾼 사람 뺀 전원(이나래·박다온)");
+  eq(tb(r[0]), ["🗓 11/5 (목)부터 예정됐던 주간 패턴 취소", "목 시청역 · 김가람 변경"], "원래대로 돌아가는 요일");
+  s.audit = [{ id: 94, at: "", table_name: "team_work_routines", op: "DELETE", actor_id: "u1", before: { valid_from: "2027-03-02", days: sched.days }, after: null }];
+  eq(change(s, "2026-11-04").length, 0, "8일 밖 예정 취소는 생략");
+});
+
+Deno.test("발송 결과 분류·오래 죽은 구독", () => {
+  eq([201, 404, 410, 429, 500, 503, 400, 401, 403, 413, null].map(pushOutcome),
+    ["ok", "gone", "gone", "retry", "retry", "retry", "fatal", "fatal", "fatal", "fatal", "retry"], "상태 코드");
+  const now = Date.parse("2026-11-05T09:00:00+09:00");
+  eq(isStaleSub(10, null, now), false, "실패 10번은 지우지 않음 (전엔 지웠다)");
+  eq(isStaleSub(30, new Date(now - 3 * 864e5).toISOString(), now), false, "최근에 받은 적 있음");
+  eq(isStaleSub(30, new Date(now - 20 * 864e5).toISOString(), now), true, "30번 실패 + 20일 동안 못 받음");
+  eq(isStaleSub(45, null, now), true, "한 번도 못 받음");
 });
 
 // ───────── 변경 알림: 일정 ─────────

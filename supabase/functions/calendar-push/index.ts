@@ -1,7 +1,7 @@
 import "@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "@supabase/supabase-js";
 import webpush from "web-push";
-import { addDay, kstKey, planNotifications, type Snapshot } from "./plan.ts";
+import { addDay, isStaleSub, kstKey, planNotifications, pushOutcome, type PushOutcome, type Snapshot } from "./plan.ts";
 
 // 사내 캘린더 웹 푸시 (2026-10-30)
 //   - pg_cron 이 5분마다 {source:'cron'} 으로 부른다 → 지금 보낼 알림을 계산해 보낸다(근무일 오후 다음 근무일 안내·변경 알림).
@@ -14,7 +14,10 @@ const ALLOWED_ORIGINS = new Set(["https://firstpip.github.io", "http://127.0.0.1
 // 위시켓 프로젝트는 대면 미팅 외근(근무지) 변화를 알리려고 함께 읽는다 (2026-11-03)
 const CAL_TABLES = ["team_work_routines", "team_work_overrides", "member_work_overrides", "team_leaves", "calendar_events", "wishket_projects"];
 const SENT_KEEP_DAYS = 14;
-const MAX_FAILS = 10; // 404/410 이 아닌 실패가 이만큼 쌓이면 구독 정리
+// 실행 잠금: 한 번에 하나만, 그리고 3분 안에 다시 돌지 않는다 (2026-11-05).
+//   함수는 공개 anon 키로 부를 수 있어서, 연달아 부르면 재시도 6회가 몇 초 만에 소진되고 겹친 실행이 재시도 대기열을 서로 덮어썼다.
+//   cron 은 5분 간격이라 영향 없음. 잠금은 풀지 않고 만료로 끝낸다(= 최소 간격). 실행이 죽어도 3분 뒤 자동으로 풀린다.
+const RUN_LEASE_MS = 3 * 60_000;
 // 방금 쌓인 감사 기록은 다음 실행으로 미룬다 — 한 번의 저장이 기록 여러 건(반복 일정 나누기 등)으로 남을 때
 // 실행이 그 사이에 끼어 반쪽만 처리하지 않게. 그 기록부터 뒤는 이번에 보지 않는다(처리 위치도 그 앞까지만).
 const AUDIT_SETTLE_MS = 30_000;
@@ -35,11 +38,11 @@ const cors = (origin: string | null) => ({
 const json = (o: unknown, status: number, origin: string | null) =>
   new Response(JSON.stringify(o), { status, headers: { ...cors(origin), "Content-Type": "application/json" } });
 
-type SubRow = { id: string; endpoint: string; p256dh: string; auth: string; member_id: string | null; lead_minutes: number; morning_brief: boolean; change_alerts: boolean; fail_count: number };
+type SubRow = { id: string; endpoint: string; p256dh: string; auth: string; member_id: string | null; lead_minutes: number; morning_brief: boolean; change_alerts: boolean; fail_count: number; last_sent_at: string | null };
 type Payload = { title: string; body: string; url: string; tag: string };
 
-// 구독 1개에 1건 전송. 결과: ok | gone(구독 만료 → 삭제) | fail
-async function sendOne(sub: SubRow, p: Payload, ttl: number, urgency: "high" | "normal"): Promise<"ok" | "gone" | "fail"> {
+// 구독 1개에 1건 전송. 결과는 pushOutcome(plan.ts) 참고. status 는 기록용
+async function sendOne(sub: SubRow, p: Payload, ttl: number, urgency: "high" | "normal"): Promise<{ r: PushOutcome; status: number | null }> {
   try {
     const d = webpush.generateRequestDetails(
       { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
@@ -52,26 +55,30 @@ async function sendOne(sub: SubRow, p: Payload, ttl: number, urgency: "high" | "
     const body = new Uint8Array(d.body as unknown as ArrayLike<number>);
     const res = await fetch(d.endpoint, { method: d.method, headers, body });
     await res.body?.cancel();
-    if (res.status === 404 || res.status === 410) return "gone";
-    return res.ok ? "ok" : "fail";
+    const r = pushOutcome(res.status);
+    if (r === "fatal") console.warn("push rejected:", res.status, sub.id);
+    return { r, status: res.status };
   } catch (e) {
     console.warn("push send error:", (e as Error).message);
-    return "fail";
+    return { r: "retry", status: null };
   }
 }
 
-// 구독들에게 1건씩 보낸다. 실패 횟수는 이번 실행 안에서도 누적(failCount 맵)해서 MAX_FAILS 정리가 제대로 되게 (2026-11-03)
-const failCount = new Map<string, number>();
-async function deliver(subs: SubRow[], p: Payload, ttl: number, urgency: "high" | "normal") {
-  let sent = 0, failed = 0; const retry: string[] = [];
+// 구독들에게 1건씩 보낸다. 실패 횟수는 실행마다 새 맵으로 누적한다(전엔 모듈 전역 맵이라 함수 인스턴스가 재사용되면 지난 실행 값이 남았다).
+//   구독 삭제는 404/410(만료)이거나, 오래 죽어 있는 경우(isStaleSub)만. 일시 실패는 재시도, 영구 거절(fatal)은 기록만.
+type FailMap = Map<string, number>;
+async function deliver(subs: SubRow[], p: Payload, ttl: number, urgency: "high" | "normal", fails: FailMap = new Map()) {
+  let sent = 0, failed = 0, rejected = 0; const retry: string[] = [];
   for (const s of subs) {
-    const r = await sendOne(s, p, ttl, urgency);
-    const fc = failCount.get(s.id) ?? s.fail_count;
-    if (r === "ok") { sent++; failCount.set(s.id, 0); await sb.from("push_subscriptions").update({ last_sent_at: new Date().toISOString(), fail_count: 0 }).eq("id", s.id); }
-    else if (r === "gone" || fc + 1 >= MAX_FAILS) { failed++; await sb.from("push_subscriptions").delete().eq("id", s.id); }
-    else { failed++; retry.push(s.id); failCount.set(s.id, fc + 1); await sb.from("push_subscriptions").update({ fail_count: fc + 1 }).eq("id", s.id); }
+    const { r } = await sendOne(s, p, ttl, urgency);
+    const fc = (fails.get(s.id) ?? s.fail_count) + (r === "ok" ? 0 : 1);
+    if (r === "ok") { sent++; fails.set(s.id, 0); await sb.from("push_subscriptions").update({ last_sent_at: new Date().toISOString(), fail_count: 0 }).eq("id", s.id); continue; }
+    failed++; fails.set(s.id, fc);
+    if (r === "gone" || isStaleSub(fc, s.last_sent_at, Date.now())) { await sb.from("push_subscriptions").delete().eq("id", s.id); continue; }
+    if (r === "retry") retry.push(s.id); else rejected++;
+    await sb.from("push_subscriptions").update({ fail_count: fc }).eq("id", s.id);
   }
-  return { sent, failed, retry };
+  return { sent, failed, rejected, retry };
 }
 
 async function must<T>(q: PromiseLike<{ data: T | null; error: unknown }>): Promise<T> {
@@ -80,7 +87,17 @@ async function must<T>(q: PromiseLike<{ data: T | null; error: unknown }>): Prom
   return (data ?? []) as T;
 }
 const getState = async <T>(name: string): Promise<T | null> => (await must<{ value: T }[]>(sb.from("push_state").select("value").eq("name", name)))[0]?.value ?? null;
-const setState = (name: string, value: unknown) => sb.from("push_state").upsert({ name, value, updated_at: new Date().toISOString() });
+// 상태 저장 실패를 그냥 넘기면 처리 위치·재시도 대기열이 조용히 어긋난다 → 오류로 실행을 끝낸다
+const setState = async (name: string, value: unknown) => { await must(sb.from("push_state").upsert({ name, value, updated_at: new Date().toISOString() })); };
+
+// 실행 잠금(RUN_LEASE_MS). 한 번의 UPDATE … WHERE until < 지금 으로 잡아서 동시에 와도 하나만 성공한다
+async function acquireRun(now: number): Promise<boolean> {
+  await sb.from("push_state").upsert({ name: "run_lock", value: { until: new Date(0).toISOString() } }, { onConflict: "name", ignoreDuplicates: true });
+  const nowIso = new Date(now).toISOString();
+  const got = await must<{ name: string }[]>(sb.from("push_state").update({ value: { until: new Date(now + RUN_LEASE_MS).toISOString(), at: nowIso }, updated_at: nowIso })
+    .eq("name", "run_lock").lt("value->>until", nowIso).select("name"));
+  return got.length > 0;
+}
 
 // 재시도 대기열: 일시 실패(5xx·429·네트워크)한 알림을 다음 실행들에서 다시 보낸다. 받을 구독·만료 시각·남은 횟수를 함께 둔다.
 //   (알림 키는 먼저 잡고 보내는 구조라, 대기열이 없으면 한 번 실패한 알림은 영영 빠진다)
@@ -101,7 +118,9 @@ async function readAudit(cursor: number) {
 
 async function runScheduled() {
   const now = Date.now(), today = kstKey(now);
-  const subs = await must<SubRow[]>(sb.from("push_subscriptions").select("id,endpoint,p256dh,auth,member_id,lead_minutes,morning_brief,change_alerts,fail_count"));
+  if (!(await acquireRun(now))) return { skipped: "busy" };
+  const fails: FailMap = new Map();
+  const subs = await must<SubRow[]>(sb.from("push_subscriptions").select("id,endpoint,p256dh,auth,member_id,lead_minutes,morning_brief,change_alerts,fail_count,last_sent_at"));
   // 감사 로그 처리 위치. 처음 실행이면 지금 위치로 잡고(과거 변경을 한꺼번에 보내지 않게) 넘어간다.
   let cursor: number | null = (await getState<{ id: number }>("audit_cursor"))?.id ?? null;
   if (cursor === null) {
@@ -135,13 +154,13 @@ async function runScheduled() {
 
   // 지난 실행에서 일시 실패한 알림부터 다시
   const queue: Retry[] = [];
-  let sent = 0, failed = 0, retried = 0;
+  let sent = 0, failed = 0, rejected = 0, retried = 0;
   for (const q of (await getState<Retry[]>("retry_queue")) || []) {
     if (q.until < now) continue;
     const targets = subs.filter((x) => q.subs.includes(x.id));
     if (!targets.length) continue;
-    const r = await deliver(targets, q.p, Math.max(60, Math.round((q.until - now) / 1000)), q.urgency);
-    sent += r.sent; failed += r.failed; retried++;
+    const r = await deliver(targets, q.p, Math.max(60, Math.round((q.until - now) / 1000)), q.urgency, fails);
+    sent += r.sent; failed += r.failed; rejected += r.rejected; retried++;
     if (r.retry.length && q.tries + 1 < RETRY_MAX) queue.push({ ...q, subs: r.retry, tries: q.tries + 1 });
   }
 
@@ -151,18 +170,22 @@ async function runScheduled() {
     const rows = await must<{ key: string }[]>(sb.from("push_sent").upsert(notes.map((n) => ({ key: n.key })), { onConflict: "key", ignoreDuplicates: true }).select("key"));
     claimed = new Set(rows.map((r) => r.key));
   }
-  for (const n of notes) {
-    if (!claimed.has(n.key)) continue;
-    const targets = subs.filter((s) => s.member_id === n.member && (n.kind === "brief" ? s.morning_brief : s.change_alerts));
-    const payload = { title: n.title, body: n.body, url: n.url, tag: n.tag };
-    const r = await deliver(targets, payload, n.ttl, n.urgency);
-    sent += r.sent; failed += r.failed;
-    if (r.retry.length) queue.push({ subs: r.retry, p: payload, ttl: n.ttl, urgency: n.urgency, until: now + n.ttl * 1000, tries: 1 });
+  // 키를 잡은 알림은 보내기 전에 대기열에 먼저 적어 둔다 — 보내는 도중 함수가 죽어도 다음 실행이 다시 보낸다
+  //   (전엔 키만 잡고 죽으면 그 알림은 영영 빠졌다. 지금은 드물게 두 번 갈 수는 있어도 빠지지는 않는다)
+  const todo = notes.filter((n) => claimed.has(n.key)).map((n) => ({
+    n, payload: { title: n.title, body: n.body, url: n.url, tag: n.tag },
+    targets: subs.filter((s) => s.member_id === n.member && (n.kind === "brief" ? s.morning_brief : s.change_alerts)),
+  })).filter((t) => t.targets.length);
+  if (todo.length) await setState("retry_queue", [...queue, ...todo.map((t) => ({ subs: t.targets.map((x) => x.id), p: t.payload, ttl: t.n.ttl, urgency: t.n.urgency, until: now + t.n.ttl * 1000, tries: 0 }))]);
+  for (const t of todo) {
+    const r = await deliver(t.targets, t.payload, t.n.ttl, t.n.urgency, fails);
+    sent += r.sent; failed += r.failed; rejected += r.rejected;
+    if (r.retry.length) queue.push({ subs: r.retry, p: t.payload, ttl: t.n.ttl, urgency: t.n.urgency, until: now + t.n.ttl * 1000, tries: 1 });
   }
   await setState("retry_queue", queue);
   if (nextCursor !== null && nextCursor > cursor) await setState("audit_cursor", { id: nextCursor });
   await sb.from("push_sent").delete().lt("sent_at", new Date(now - SENT_KEEP_DAYS * 864e5).toISOString());
-  const result = { planned: notes.length, claimed: claimed.size, sent, failed, retried, queued: queue.length, cursor: Math.max(cursor, nextCursor ?? 0) };
+  const result = { planned: notes.length, claimed: claimed.size, sent, failed, rejected, retried, queued: queue.length, subs: subs.length, cursor: Math.max(cursor, nextCursor ?? 0) };
   // 마지막 실행 기록 — 알림 설정 창이 'n분 전 정상 실행'을 보여 주고, 오래 멈추면 경고한다 (calendar_push_status RPC)
   await setState("heartbeat", { at: new Date(now).toISOString(), ...result });
   return result;
@@ -180,7 +203,7 @@ Deno.serve(async (req) => {
       const token = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
       const { data: u } = await sb.auth.getUser(token);
       if (!u?.user) return json({ error: "로그인이 필요합니다" }, 401, origin);
-      let q = sb.from("push_subscriptions").select("id,endpoint,p256dh,auth,member_id,lead_minutes,morning_brief,change_alerts,fail_count").eq("user_id", u.user.id);
+      let q = sb.from("push_subscriptions").select("id,endpoint,p256dh,auth,member_id,lead_minutes,morning_brief,change_alerts,fail_count,last_sent_at").eq("user_id", u.user.id);
       if (typeof body.endpoint === "string") q = q.eq("endpoint", body.endpoint);
       const subs = await must<SubRow[]>(q);
       if (!subs.length) return json({ sent: 0, failed: 0, error: "등록된 기기가 없습니다" }, 404, origin);
@@ -189,7 +212,8 @@ Deno.serve(async (req) => {
     }
     return json(await runScheduled(), 200, origin);
   } catch (e) {
+    // 원문 오류는 로그에만 (공개 키로 부를 수 있는 함수라 내부 구조를 응답에 싣지 않는다)
     console.error("calendar-push error:", e);
-    return json({ error: (e as Error)?.message || String(e) }, 500, origin);
+    return json({ error: "internal" }, 500, origin);
   }
 });

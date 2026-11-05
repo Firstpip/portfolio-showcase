@@ -351,14 +351,25 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       meetingLocNotes(a, actor, pids, watchers(actor), (pid, k) => hadB && wkOut(b, pid, k), (pid, k) => hasF && wkOut(f, pid, k),
         () => "수주 미팅");
     } else if (a.table_name === "team_work_routines") {
-      if (!hasF || !f.valid_from || f.valid_from > addDay(today, 7)) continue;
-      const cur = s.routines.find((x) => x.valid_from === f.valid_from) || f;
-      if (sameAsPrev(cur)) continue;   // 같은 내용을 다시 저장
-      if (![0, 1, 2, 3, 4, 5, 6, 7].some((i) => routineAt(addDay(today, i))?.valid_from === f.valid_from)) continue;   // 앞으로 8일 중 쓰이는 날이 없음(지난 패턴)
-      const prev = [...s.routines].filter((x) => x.valid_from < cur.valid_from).sort((x, y) => (x.valid_from < y.valid_from ? 1 : -1))[0];
-      const diff = [1, 2, 3, 4, 5].filter((w) => (prev?.days?.[String(w)] || "cityhall") !== (cur.days?.[String(w)] || "cityhall"))
-        .map((w) => `${WD[w]} ${LOC[cur.days?.[String(w)] || "cityhall"]?.label}`).join(", ");
-      for (const w of watchers(actor)) note(`c:${a.id}:${w}`, w, `🗓 ${fmtD(cur.valid_from)}부터 주간 근무 패턴 변경`, join(diff || null, byWho(actor)), "routine");
+      // 바꾸기 전·후 패턴으로 앞으로 8일(근무일, 그날만 정한 팀 근무지가 없는 날)의 팀 근무지를 각각 계산해 달라지는 날만 알린다 (2026-11-05)
+      //   — 같은 내용 다시 저장(UPDATE)·지난 패턴은 달라지는 날이 없어 안 보내고, 예정된 패턴 취소(DELETE)는 보낸다.
+      //   전에는 직전 패턴하고만 비교해 같은 날짜 재저장에도 알림이 갔고, DELETE 는 아예 건너뛰었다.
+      const vf: string | undefined = hasF ? f.valid_from : b.valid_from;
+      if (!vf) continue;
+      const after = s.routines;
+      const before = [...s.routines.filter((x) => x.valid_from !== vf), ...(hadB && b.valid_from ? [b] : [])];
+      const locIn = (rs: Row[], k: string) => ([...rs].filter((r) => r.valid_from <= k).sort((x, y) => (x.valid_from < y.valid_from ? 1 : -1))[0]?.days?.[String(dow(k))] || "cityhall") as string;
+      const changed = new Map<number, string>();
+      for (let i = 0; i <= 7; i++) {
+        const k = addDay(today, i);
+        if (isOff(k) || s.teamOverrides.some((o) => o.work_date === k)) continue;
+        const x = locIn(before, k), y = locIn(after, k);
+        if (x !== y) changed.set(dow(k), y);
+      }
+      if (!changed.size) continue;
+      const diff = [...changed].sort((x, y) => x[0] - y[0]).map(([w, l]) => `${WD[w]} ${LOC[l]?.label}`).join(", ");
+      const title = hasF ? `🗓 ${fmtD(vf)}부터 주간 근무 패턴 변경` : `🗓 ${fmtD(vf)}부터 예정됐던 주간 패턴 취소`;
+      for (const w of watchers(actor)) note(`c:${a.id}:${w}`, w, title, join(diff, byWho(actor)), "routine");
     } else if (a.table_name === "calendar_events") {
       // 나누기(이 회차만·이후 전부): 원래 반복 쪽 갱신은 건너뛰고 새 일정 쪽에서 한 건으로
       if (hadB && hasF && first === a && isSplitParentUpdate(a, b, f)) continue;
@@ -433,4 +444,24 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
     return { notes: kept, cursor };
   }
   return { notes, cursor };
+}
+
+// 푸시 서비스 응답 → 처리 방법 (2026-11-05)
+//   gone: 404/410 구독 만료 → 구독 삭제 / retry: 429·5xx·네트워크 오류 → 재시도 대기열
+//   fatal: 그 밖의 4xx(400·401·403·413 등) — 다시 보내도 같은 결과(키·내용 문제). 재시도하지 않고 구독도 지우지 않는다.
+//   전에는 404/410 이 아닌 실패를 모두 세어 10번이면 구독을 지웠다 → 푸시 서비스 일시 장애나 VAPID 설정 실수로 구독이 사라졌다.
+export type PushOutcome = "ok" | "gone" | "retry" | "fatal";
+export function pushOutcome(status: number | null): PushOutcome {
+  if (status === null) return "retry";
+  if (status >= 200 && status < 300) return "ok";
+  if (status === 404 || status === 410) return "gone";
+  if (status === 429 || status >= 500) return "retry";
+  return "fatal";
+}
+// 오래 죽어 있는 구독 정리: 실패가 30번 넘게 쌓였고 14일 넘게 한 번도 받지 못했을 때만 (일시 장애로는 지워지지 않게)
+export const STALE_FAILS = 30, STALE_DAYS = 14;
+export function isStaleSub(failCount: number, lastSentAt: string | null, now: number): boolean {
+  if (failCount < STALE_FAILS) return false;
+  const last = lastSentAt ? Date.parse(lastSentAt) : 0;
+  return now - last > STALE_DAYS * 864e5;
 }
