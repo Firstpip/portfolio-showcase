@@ -12,6 +12,19 @@ if (!window.supabase) {
 }
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 // 로그아웃할 때 이 기기의 캘린더 알림 구독도 끊는다 — 공용 PC 등에서 로그아웃한 뒤에도 팀 일정·근무지 알림이 뜨지 않게 (2026-11-03)
+// 서버(PostgREST)는 요청한 limit 과 상관없이 한 번에 최대 1000행만 준다 — .limit(20000) 은 조용히 1000행에서 잘린다.
+//   받은 만큼 offset 을 옮겨 가며 빈 쪽이 올 때까지(또는 max 까지) 나눠 읽는다. 서버 한도가 바뀌어도 맞게 (2026-11-05)
+async function selectAll(build, max = 20000) {
+  const out = [];
+  while (out.length < max) {
+    const { data, error } = await build().range(out.length, Math.min(out.length + 999, max - 1));
+    if (error) return { data: null, error };
+    if (!data || !data.length) break;
+    out.push(...data);
+  }
+  return { data: out, error: null };
+}
+
 async function signOutClean() {
   try {
     const reg = await navigator.serviceWorker?.getRegistration?.();
@@ -1156,7 +1169,7 @@ function FunnelAnalysis({ data }) {
   const [events, setEvents] = useState(null);
   const [err, setErr] = useState(false);
   useEffect(() => {
-    supabase.from('wishket_funnel_events').select('kind,project_title,wishket_project_id,occurred_at').order('occurred_at').limit(20000)
+    selectAll(() => supabase.from('wishket_funnel_events').select('kind,project_title,wishket_project_id,occurred_at').order('occurred_at').order('event_key'))
       .then(({ data: ev, error }) => { if (error) setErr(true); else setEvents(ev || []); });
   }, []);
   const cohorts = useMemo(() => (events ? buildFunnelCohorts(events, data, visitCtx) : []), [events, data, visitCtx]);
@@ -4573,9 +4586,9 @@ function App({ session }) {
     const [s, v, x] = await Promise.all([
       supabase.from(VISIT_SUMMARY_VIEW).select('*'),
       supabase.from(PROPOSAL_VIEWS_TABLE).select('slug,viewed_on,viewed_at,checked_at'),
-      supabase.from(VISITS_TABLE).select('slug,portfolio,session_id,ip_hash,ua,referrer_origin,created_at,last_seen_at,dwell_ms,max_scroll_pct,interactions')
+      selectAll(() => supabase.from(VISITS_TABLE).select('slug,portfolio,session_id,ip_hash,ua,referrer_origin,created_at,last_seen_at,dwell_ms,max_scroll_pct,interactions')
         .eq('is_bot', false).eq('is_automation', false).eq('is_internal', false)
-        .order('created_at', { ascending:false }).limit(5000),
+        .order('created_at', { ascending:false }).order('id'), 5000),
     ]);
     const summary = {}, views = {}, visitsBySlug = {}, ipFirst = {};
     (s.error ? [] : s.data || []).forEach(r => { summary[r.slug] = r; });

@@ -26,7 +26,7 @@ const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
   await p.waitForTimeout(200);
   await p.click('#sheet [data-tl]'); await p.waitForTimeout(250);
   await p.click('#f-loc [data-loc="other"]'); await p.waitForTimeout(100);
-  ok('입력: 다른 장소 → 장소 칸 보임', await p.isVisible('#f-branch') && (await p.textContent('label[for="f-branch"]')) === '장소');
+  ok('입력: 다른 장소 → 장소 칸 보임', await p.isVisible('#f-branch') && (await p.textContent('label[for="f-branch"]')) === '장소' && (await p.getAttribute('#f-branch', 'placeholder')) === '이름이나 주소');
   ok('입력: 칩 문구', /다른 장소 \(직접 입력\)/.test(await p.textContent('#f-loc [data-loc="other"]')));
   const toastOf = async () => { await p.waitForTimeout(150); return p.evaluate(() => document.querySelector('#toast')?.textContent || ''); };
   await p.click('#sheet button[type=submit]'); ok('입력: 장소 비우면 막힘', /장소를 입력해 주세요/.test(await toastOf()));
@@ -59,6 +59,7 @@ const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
   await p.evaluate(far => { const btn = document.querySelector('#btn-add-top'); btn.click(); }, far); await p.waitForTimeout(250);
   await p.fill('#f-title', '먼 날 고객 미팅'); await p.fill('#f-date', far);
   const pplOk = await p.evaluate(() => { const bs = [...document.querySelectorAll('#sheet [data-pc]')]; bs.forEach(x => x.setAttribute('aria-pressed', 'false')); const g = bs.find(x => /김가람/.test(x.textContent)); if (g) g.setAttribute('aria-pressed', 'true'); return !!g; });
+  await p.click('#sheet [data-where="office"]');   // 대면 미팅은 어디서 하는지 꼭 골라야 저장된다
   await p.click('#sheet button[type=submit]'); await p.waitForTimeout(400);
   await p.click('#qa-btn'); await p.waitForTimeout(150);
   await p.fill('#qa-t', `${await p.evaluate(() => __mock.wday(1))}T10:00`); await p.click('#qa-chg'); await p.waitForTimeout(150);

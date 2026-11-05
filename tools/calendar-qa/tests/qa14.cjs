@@ -19,18 +19,18 @@ const { chromium } = require(process.env.PW_CORE || 'playwright-core');
   // 변경 알림 범위(오늘~다음 근무일) 안의 날: 첫 평일(평일이면 오늘, 주말이면 월요일). wday(2)는 목·금요일에 범위를 벗어난다
   const k = await p.evaluate(() => __mock.wday(0));
   await p.evaluate(k => { document.querySelector(`#mgrid .mc[data-k="${k}"]`).click(); }, k); await p.waitForTimeout(200);
-  await p.click('#sheet [data-q="out"]'); await p.waitForTimeout(400); await p.keyboard.press('Escape');
+  await p.click('#sheet [data-q="home"]');   // 외근 버튼은 없어짐(2026-11-05) — 재택으로 바꿔 본다 await p.waitForTimeout(400); await p.keyboard.press('Escape');
   await p.click('#qa-btn'); await p.waitForTimeout(150);
   // 기준 시각을 오늘 10:00으로 — 밤 22:00~07:30에 돌리면 알림이 아침으로 미뤄져 비어 보인다
   await p.evaluate(() => { const d = new Date(); const z = (n) => String(n).padStart(2, '0'); document.getElementById('qa-t').value = `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}T10:00`; });
   await p.click('#qa-chg'); await p.waitForTimeout(150);
   const ch = await p.textContent('#qa-out');
-  ok('변경 알림 미리보기: 다른 팀원이 김가람 외근 알림 받음', /이나래 님이 받는 알림/.test(ch) && /김가람/.test(ch) && /외근/.test(ch), ch);
+  ok('변경 알림 미리보기: 다른 팀원이 김가람 재택 알림 받음', /이나래 님이 받는 알림/.test(ch) && /김가람/.test(ch) && /재택/.test(ch), ch);
   await p.click('#qa-ack'); await p.waitForTimeout(100);
   await p.click('#qa-chg'); ok('확인함 뒤엔 비어 있음', /보낼 변경 알림 없음/.test(await p.textContent('#qa-out')));
   // 새로고침해도 유지
   await p.reload(); await p.waitForSelector('#todaycard .today-head'); await p.waitForTimeout(300);
-  ok('새로고침 뒤에도 김가람 외근 유지', await p.evaluate(k => __mock.DB.member_work_overrides.some(o => o.work_date===k && o.loc==='out'), k));
+  ok('새로고침 뒤에도 김가람 재택 유지', await p.evaluate(k => __mock.DB.member_work_overrides.some(o => o.work_date===k && o.loc==='home'), k));
   // 초기화
   await p.click('#qa-btn'); await p.click('#qa-p a:has-text("처음 데이터로 초기화")'); await p.waitForSelector('#todaycard .today-head'); await p.waitForTimeout(300);
   ok('초기화하면 처음 데이터', !(await p.evaluate(k => __mock.DB.member_work_overrides.some(o => o.work_date===k && o.loc==='out'), k)));

@@ -29,9 +29,8 @@ const S = __dirname + '/shots/';
   ok('내 근무(이나래): 시청역2호점 출근 선택 + 14:00부터 외근 안내', /14:00 대면 미팅\(고객사 미팅\)부터 외근으로 표시됩니다/.test(my) && await p.evaluate(() => document.querySelector('#sheet [data-q="team"]').getAttribute('aria-pressed'))==='true', my.replace(/\s+/g,' '));
   ok('날짜 창 팀 근무지 카드: 팀 근무지 · 평소 재택', /팀 근무지 · 평소 재택/.test(await p.textContent('#sheet .teamloc')), (await p.textContent('#sheet .teamloc')).replace(/\s+/g,' '));
   await p.screenshot({ path:S+'s-daysheet.png', clip:{ x:440, y:100, width:560, height:420 } });
-  // '외근' 누르면 하루 전체 외근으로 기록
-  await p.click('#sheet [data-q="out"]'); await p.waitForTimeout(400);
-  ok('외근 버튼 → 하루 전체 외근 기록', await p.evaluate(k => __mock.DB.member_work_overrides.some(o => o.work_date===k && o.loc==='out'), k));
+  // 외근은 고르는 버튼에서 뺐다(2026-11-05) — 하루 종일 밖이면 '다른 곳…'에서 장소를 적는다
+  ok('빠른 버튼에 외근 없음, 다른 곳… 있음', !(await p.$('#sheet [data-q="out"]')) && !!(await p.$('#sheet [data-q="more"]')));
   await p.keyboard.press('Escape');
   await p.click('#v-week'); await p.waitForTimeout(150);
   ok('주 보기 칸: 평소 재택', /평소 재택/.test(await p.textContent(`#week .col[data-k="${k}"] .tl`)), await p.textContent(`#week .col[data-k="${k}"] .tl`));

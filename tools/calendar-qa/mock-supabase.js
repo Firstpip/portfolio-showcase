@@ -79,7 +79,8 @@
     is(c,v){ this.f.push(r => (r[c]??null)===v); return this; } in(c,vs){ this.f.push(r => vs.includes(r[c])); return this; }
     gte(c,v){ this.f.push(r => r[c]>=v); return this; } lte(c,v){ this.f.push(r => r[c]<=v); return this; }
     or(expr){ this.f.push(logic('or', expr)); this._or=expr; return this; }
-    order(c,o){ this._order=[c, o?.ascending!==false]; return this; } limit(n){ this._limit=n; return this; }
+    order(c,o){ (this._orders ||= []).push([c, o?.ascending!==false]); return this; } limit(n){ this._limit=n; return this; }
+    range(a,b){ this._range=[a,b]; return this; }
     single(){ this._single=true; return this; } maybeSingle(){ this._single=true; return this; }
     insert(v){ this.op='insert'; this.v=Array.isArray(v)?v:[v]; return this; }
     update(v){ this.op='update'; this.v=v; return this; }
@@ -90,7 +91,9 @@
     exec(){
       const t = this.t; if (!DB[t]) DB[t] = [];
       const rows = DB[t]; const match = r => this.f.every(f => f(r));
-      if (this.op==='select') { (window.__mock.q ||= []).push(t); let out = rows.filter(match); if (this._order) { const [c,a]=this._order; out = [...out].sort((x,y)=> (x[c]>y[c]?1:x[c]<y[c]?-1:0)*(a?1:-1)); } if (this._limit) out = out.slice(0,this._limit); (window.__mock.rows ||= {})[t] = out.map(r=>r.title||r.work_date||r.from_date||r.id); return { data: JSON.parse(JSON.stringify(this._single ? out[0]||null : out)), error:null }; }
+      if (this.op==='select') { (window.__mock.q ||= []).push(t); let out = rows.filter(match); if (this._orders) out = [...out].sort((x,y) => { for (const [c,a] of this._orders) { const d = (x[c]>y[c]?1:x[c]<y[c]?-1:0)*(a?1:-1); if (d) return d; } return 0; });
+        // 실제 서버처럼 한 번에 최대 1000행 (limit·range 와 상관없이)
+        if (this._range) out = out.slice(this._range[0], this._range[1]+1); if (this._limit) out = out.slice(0,this._limit); if (!this._single) out = out.slice(0, 1000); (window.__mock.rows ||= {})[t] = out.map(r=>r.title||r.work_date||r.from_date||r.id); return { data: JSON.parse(JSON.stringify(this._single ? out[0]||null : out)), error:null }; }
       if (this.op==='insert' || this.op==='upsert') {
         const out = [];
         for (const v of this.v) {

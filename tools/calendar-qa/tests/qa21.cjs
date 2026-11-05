@@ -31,7 +31,9 @@ const ok = (c, m) => console.log((c ? 'PASS ' : 'FAIL ') + m);
     const lk = await pg.$$('table .cal-link, .cal-link');
     const texts = await Promise.all(lk.map(l => l.textContent()));
     console.log(tag, 'link texts', texts.join(' | '));
-    const target = lk[1];
+    // 순서로 고르면 날짜에 따라 다른 미팅이 걸린다 — +5일 미팅의 날짜 글자로 고른다
+    const k5 = await pg.evaluate(() => window.__mock.day(5));
+    const target = lk[texts.findIndex(t => t.includes(k5))];
     await target.scrollIntoViewIfNeeded(); await target.click(); await pg.waitForTimeout(900);
     const modal = await pg.$('.fpcal .ovl:not([hidden]) .sheet');
     console.log(tag, 'after G url', pg.url().split('#')[1], 'sheet', !!modal, 'sel', await pg.evaluate(() => document.querySelector('.fpcal #m-day, .fpcal .sheet')?.textContent.slice(0, 80)));
