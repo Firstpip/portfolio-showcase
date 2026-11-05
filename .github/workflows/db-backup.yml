@@ -1,76 +1,70 @@
 name: DB 일일 백업
 
+# 이 레포는 공개라 Actions artifact 를 GitHub 로그인 사용자 누구나 받을 수 있다.
+# 그래서 덤프는 age 공개키로 암호화한 파일 하나만 올린다 (평문 금지 — 2026-11-05 평문 백업 88개 삭제).
+# 복호화 키(개인키)는 레포·시크릿 어디에도 두지 않는다. 담당자 보관: 최기용 (분실 시 이 백업은 풀 수 없음).
+# 복구: artifact 를 받아 `age -d -i <개인키> backup.tar.gz.age | tar xz` → 테이블별 JSON → INSERT 로 재삽입.
+
 on:
   schedule:
-    - cron: '0 3 * * *'   # 매일 새벽 3시 (UTC) = 오후 12시 KST
-  workflow_dispatch:        # 수동 실행 가능
+    - cron: '0 3 * * *'   # 매일 03:00 UTC = 12:00 KST
+  workflow_dispatch:
 
 jobs:
   backup:
     runs-on: ubuntu-latest
-
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      AGE_RECIPIENT: age14t4ngsy0skkv0l5xd8wqswjrltelwzyqny0hy5dd2rsqz5n345eshldy9g
     steps:
-      - name: 테이블 덤프
+      - name: age 설치
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age
+
+      - name: 테이블 덤프 (1000행씩 끝까지)
         id: dump
+        shell: bash
         run: |
+          set -euo pipefail
           DATE=$(date -u '+%Y-%m-%d')
           mkdir -p backup
+          # 테이블 이름:정렬 기준(기본키). push_* 는 기기 구독·발송 기록이라 복구 의미가 없어 뺀다
+          TABLES="wishket_projects:id project_milestones:id team_members:id
+            wishket_funnel_events:event_key wishket_apply_attrs:wishket_project_id wishket_competition:wishket_project_id,observed_on
+            lost_reasons:slug showcase_visits:id proposal_views:slug team_networks:ip_hash
+            deleted_projects:id portfolio_delete_jobs:id meeting_prep_jobs:id project_audit_log:id
+            team_work_routines:id team_work_overrides:id member_work_overrides:id team_leaves:id calendar_events:id calendar_holidays:holiday_date
+            contact_messages:id profiles:id subscriptions:id daily_usage:id generations:id"
+          SUMMARY=""
+          for spec in $TABLES; do
+            t=${spec%%:*}; ord=${spec#*:}
+            echo '[]' > "backup/$t.json"; off=0
+            while :; do
+              # -f: HTTP 오류면 실패로 끝낸다 (예전엔 오류 JSON 을 백업으로 저장하고 성공 처리했다)
+              page=$(curl -sSf "$SUPABASE_URL/rest/v1/$t?select=*&order=$ord&limit=1000&offset=$off" \
+                -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY")
+              echo "$page" | jq -e 'type=="array"' >/dev/null || { echo "::error::$t 응답이 배열이 아님"; exit 1; }
+              n=$(echo "$page" | jq length)
+              jq -s '.[0] + .[1]' "backup/$t.json" <(echo "$page") > "backup/$t.tmp" && mv "backup/$t.tmp" "backup/$t.json"
+              [ "$n" -lt 1000 ] && break
+              off=$((off+1000))
+            done
+            c=$(jq length "backup/$t.json"); echo "  $t: $c행"; SUMMARY="$SUMMARY $t=$c"
+          done
+          [ "$(jq length backup/wishket_projects.json)" -gt 0 ] || { echo "::error::wishket_projects 0행 — 인증 오류 가능성"; exit 1; }
+          tar czf - -C backup . | age -r "$AGE_RECIPIENT" > "db-backup-$DATE.tar.gz.age"
+          rm -rf backup
+          ls -l "db-backup-$DATE.tar.gz.age"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "summary=$SUMMARY" >> "$GITHUB_OUTPUT"
 
-          echo "▶ wishket_projects 백업 중..."
-          curl -s \
-            "$SUPABASE_URL/rest/v1/wishket_projects?select=*&order=created_at.asc" \
-            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-            > backup/wishket_projects.json
-
-          echo "▶ project_milestones 백업 중..."
-          curl -s \
-            "$SUPABASE_URL/rest/v1/project_milestones?select=*&order=created_at.asc" \
-            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-            > backup/project_milestones.json
-
-          echo "▶ team_members 백업 중..."
-          curl -s \
-            "$SUPABASE_URL/rest/v1/team_members?select=*&order=created_at.asc" \
-            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
-            > backup/team_members.json
-
-          # 각 테이블 행 수 확인
-          P_COUNT=$(jq length backup/wishket_projects.json)
-          M_COUNT=$(jq length backup/project_milestones.json)
-          T_COUNT=$(jq length backup/team_members.json)
-          echo "  wishket_projects: $P_COUNT 행"
-          echo "  project_milestones: $M_COUNT 행"
-          echo "  team_members: $T_COUNT 행"
-
-          # 빈 배열이면 인증 오류 가능성 — 경고 출력
-          if [ "$P_COUNT" = "0" ]; then
-            echo "⚠️  wishket_projects가 0행입니다. 인증 오류 여부를 확인하세요."
-          fi
-
-          echo "date=$DATE" >> $GITHUB_OUTPUT
-          echo "projects=$P_COUNT" >> $GITHUB_OUTPUT
-          echo "milestones=$M_COUNT" >> $GITHUB_OUTPUT
-          echo "members=$T_COUNT" >> $GITHUB_OUTPUT
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-
-      - name: Artifact 업로드 (90일 보관)
+      - name: 암호화한 백업 업로드 (90일 보관)
         uses: actions/upload-artifact@v4
         with:
           name: db-backup-${{ steps.dump.outputs.date }}
-          path: backup/
+          path: db-backup-${{ steps.dump.outputs.date }}.tar.gz.age
           retention-days: 90
+          if-no-files-found: error
 
-      - name: 백업 완료 요약
-        run: |
-          echo "✅ 백업 완료: ${{ steps.dump.outputs.date }}"
-          echo "   wishket_projects : ${{ steps.dump.outputs.projects }}행"
-          echo "   project_milestones: ${{ steps.dump.outputs.milestones }}행"
-          echo "   team_members      : ${{ steps.dump.outputs.members }}행"
-          echo ""
-          echo "복구 시: GitHub Actions → db-backup-YYYY-MM-DD artifact 다운로드"
-          echo "→ Supabase SQL Editor에서 JSON 내용을 INSERT로 재삽입"
+      - name: 백업 요약
+        run: echo "✅ ${{ steps.dump.outputs.date }}:${{ steps.dump.outputs.summary }}"
