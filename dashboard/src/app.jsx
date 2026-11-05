@@ -172,127 +172,6 @@ const MILESTONE_TEMPLATES = {
   },
 };
 
-const SETUP_SQL = `-- Supabase SQL 에디터에서 실행 후 새로고침하세요
-
--- 1. 팀원 테이블 생성
-CREATE TABLE team_members (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  name TEXT NOT NULL,
-  color TEXT NOT NULL DEFAULT 'var(--accent)',
-  is_active BOOLEAN DEFAULT true,
-  user_id UUID REFERENCES auth.users(id),
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- 2. RLS 설정 (로그인한 사용자만 접근)
-ALTER TABLE team_members ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "anon_all" ON team_members;
-DROP POLICY IF EXISTS "auth_only_team" ON team_members;
-CREATE POLICY "auth_only_team" ON team_members
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);
-
--- 3. 프로젝트에 담당자 컬럼 추가
-ALTER TABLE wishket_projects
-  ADD COLUMN IF NOT EXISTS assigned_manager UUID,
-  ADD COLUMN IF NOT EXISTS assigned_main    UUID,
-  ADD COLUMN IF NOT EXISTS assigned_sub     UUID;`;
-
-const MILESTONE_SETUP_SQL = `-- Supabase SQL 에디터에서 실행 후 새로고침하세요
-
--- 계약 이후 프로젝트의 작업 진행 추적용 테이블
-CREATE TABLE IF NOT EXISTS project_milestones (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  project_slug TEXT NOT NULL REFERENCES wishket_projects(slug) ON DELETE CASCADE,
-  phase_key TEXT NOT NULL,
-  phase_label TEXT NOT NULL,
-  order_idx INT NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'planned',
-  blocked BOOLEAN NOT NULL DEFAULT false,
-  blocked_reason TEXT,
-  planned_start DATE,
-  planned_end DATE,
-  actual_start TIMESTAMPTZ,
-  actual_end TIMESTAMPTZ,
-  assignee UUID,
-  note TEXT,
-  week_number INT,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_project_milestones_slug ON project_milestones(project_slug);
-
-ALTER TABLE project_milestones ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "anon_all_milestones" ON project_milestones;
-DROP POLICY IF EXISTS "all_milestones" ON project_milestones;
-DROP POLICY IF EXISTS "auth_only_milestones" ON project_milestones;
-CREATE POLICY "auth_only_milestones" ON project_milestones
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);
-
--- 주차별 마일스톤 컬럼 추가 (이미 테이블이 있는 경우)
-ALTER TABLE project_milestones ADD COLUMN IF NOT EXISTS week_number INT;
-
--- 프로젝트에 주차별 에픽(마일스톤 플랜) 저장 컬럼 추가
-ALTER TABLE wishket_projects ADD COLUMN IF NOT EXISTS weekly_plan JSONB;
-
--- 프로젝트 착수일 컬럼 추가 (계약 후 실제 작업 시작일 — 주차 자동 계산 기준)
-ALTER TABLE wishket_projects ADD COLUMN IF NOT EXISTS start_date DATE;
-
--- 프로젝트 마감일 컬럼 추가
-ALTER TABLE wishket_projects ADD COLUMN IF NOT EXISTS deadline DATE;
-
--- created_at을 TIMESTAMPTZ로 마이그레이션 (DATE 타입이면 시·분·초가 손실되어 같은 날짜 동률 발생)
--- 기존 DATE 값은 자정(00:00:00 UTC)으로 보존되며, 이후 신규 등록부터 시각까지 정확히 기록됨
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name='wishket_projects' AND column_name='created_at' AND data_type='date'
-  ) THEN
-    ALTER TABLE wishket_projects
-      ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at::timestamptz,
-      ALTER COLUMN created_at SET DEFAULT now();
-  END IF;
-END $$;
-
--- wishket_projects RLS (로그인한 사용자만 접근)
-ALTER TABLE wishket_projects ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "auth_only_projects" ON wishket_projects;
-CREATE POLICY "auth_only_projects" ON wishket_projects
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);
-
--- 미팅 시각 경과 시 interview → meeting_done 자동 전환 (Atomic, race-safe)
--- 클라이언트가 loadData에서 RPC로 호출. 서버에서 단일 SQL UPDATE로 처리되어
--- history append race / 시계 불일치 / 중복 PATCH 문제 모두 해결.
-CREATE OR REPLACE FUNCTION transition_passed_meetings()
-RETURNS int LANGUAGE plpgsql SECURITY DEFINER AS $$
-DECLARE n int;
-BEGIN
-  UPDATE wishket_projects
-  SET current_status = 'meeting_done',
-      history = COALESCE(history, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
-        'status', 'meeting_done',
-        'date', to_char(now() AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD'),
-        'note', '미팅 시각 경과 자동 전환',
-        'meeting_at', meeting_at,
-        'meeting_type', meeting_type
-      )),
-      updated_at = (now() AT TIME ZONE 'Asia/Seoul')::date
-  WHERE current_status = 'interview'
-    AND meeting_at IS NOT NULL
-    AND meeting_at < now();
-  GET DIAGNOSTICS n = ROW_COUNT;
-  RETURN n;
-END $$;
-REVOKE EXECUTE ON FUNCTION transition_passed_meetings() FROM anon;
-GRANT EXECUTE ON FUNCTION transition_passed_meetings() TO authenticated;
-
--- current_status CHECK 제약: STATUS_ORDER 전체 enum 반영
-ALTER TABLE wishket_projects DROP CONSTRAINT IF EXISTS wishket_projects_current_status_check;
-ALTER TABLE wishket_projects ADD CONSTRAINT wishket_projects_current_status_check
-  CHECK (current_status IN (
-    'generated','applied','interview','meeting_done',
-    'won','in_progress','maintenance_free','maintenance_paid','delivered','settled','lost'
-  ));`;
 
 
 // 착수일~마감일에서 전체 주차 산출 — getCurrentWeek와 동일한 산식(마감일이 속한 주차 = 전체 주차).
@@ -1602,29 +1481,6 @@ function AssignPicker({ label, members, value, onChange, exclude }) {
 }
 
 // ─── DeletedProjectsModal (최근 삭제 복원) ───
-const DELETED_RESTORE_SQL = `-- Supabase SQL 에디터에서 1회 실행 후 새로고침
-create or replace function public.list_deleted_projects()
-returns table(slug text, title text, current_status text, deleted_at timestamptz, deleted_by text)
-language sql security definer set search_path = public as $$
-  select slug, title, current_status, deleted_at, deleted_by
-  from public.deleted_projects order by deleted_at desc limit 100;
-$$;
-grant execute on function public.list_deleted_projects() to authenticated;
-
-create or replace function public.restore_deleted_project(p_slug text)
-returns text language plpgsql security definer set search_path = public as $$
-declare snap jsonb;
-begin
-  select row_data into snap from public.deleted_projects
-    where slug = p_slug order by deleted_at desc limit 1;
-  if snap is null then raise exception '삭제 스냅샷 없음: %', p_slug; end if;
-  if exists(select 1 from public.wishket_projects where slug = p_slug) then
-    raise exception '이미 존재하는 프로젝트: %', p_slug; end if;
-  insert into public.wishket_projects overriding system value
-    select * from jsonb_populate_record(null::public.wishket_projects, snap);
-  return p_slug;
-end $$;
-grant execute on function public.restore_deleted_project(text) to authenticated;`;
 
 function DeletedProjectsModal({ onClose, onRestored, toast }) {
   const trapRef = useFocusTrap();
@@ -1675,9 +1531,9 @@ function DeletedProjectsModal({ onClose, onRestored, toast }) {
           {list === null && !err && <div style={{ color:'var(--text2)', fontSize:'0.85rem' }}>불러오는 중…</div>}
           {err && (
             <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>
-              <div style={{ color:'var(--red)', marginBottom:8, fontWeight:600 }}>복원 기능 SQL이 아직 설치되지 않았습니다.</div>
-              <div style={{ marginBottom:6 }}>Supabase → SQL 에디터에서 아래를 실행 후 새로고침하세요:</div>
-              <pre style={{ background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:8, padding:'0.7rem', overflowX:'auto', fontSize:'0.7rem', lineHeight:1.5, whiteSpace:'pre' }}>{DELETED_RESTORE_SQL}</pre>
+              <div style={{ color:'var(--red)', marginBottom:8, fontWeight:600 }}>삭제 기록을 불러오지 못했습니다.</div>
+              <div>{err}</div>
+              <div style={{ marginTop:6 }}>DB 구성이 레포 기준(supabase/migrations)과 다를 수 있습니다. 관리자에게 알려 주세요.</div>
             </div>
           )}
           {list && list.length === 0 && !err && <div style={{ color:'var(--text2)', fontSize:'0.85rem' }}>삭제된 프로젝트가 없습니다.</div>}
@@ -1922,23 +1778,13 @@ function TeamNetworksSection() {
 }
 
 // ─── DBSetupBanner ───
-function DBSetupBanner({ sql }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard.writeText(sql).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
-  };
+// 팀원 테이블을 읽지 못할 때. 예전엔 SQL 을 복사해 SQL 편집기에 붙이게 했지만, 그렇게 만든 객체가 권한 회수 없이 남아
+//   로그인 없이 실행되는 구멍이 됐다(2026-11-05). DB 변경은 supabase/migrations 로만 한다.
+function DBSetupBanner() {
   return (
     <div style={{ padding:'1rem 1.25rem', borderRadius:10, background:'var(--surface-warning-soft)', border:'1px solid var(--surface-warning-mid)', marginBottom:'1rem' }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-        <div style={{ fontSize:'0.85rem', fontWeight:600, color:'var(--yellow)' }}>⚙️ 팀원/담당자 기능 — DB 설정 필요</div>
-        <button onClick={copy} style={{ padding:'0.25rem 0.6rem', borderRadius:6, border:'1px solid var(--surface-warning-mid)', background:copied?'var(--surface-warning-mid)':'transparent', color:'var(--yellow)', cursor:'pointer', fontSize:'0.8rem', fontWeight:600 }}>
-          {copied ? '✓ 복사됨' : 'SQL 복사'}
-        </button>
-      </div>
-      <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:8 }}>
-        Supabase 대시보드 → SQL 에디터에서 아래 SQL을 실행 후 새로고침하세요
-      </div>
-      <pre style={{ fontSize:'0.8rem', color:'var(--text2)', background:'var(--surface2)', padding:'0.75rem', borderRadius:6, overflow:'auto', lineHeight:1.7, border:'1px solid var(--border)' }}>{sql}</pre>
+      <div style={{ fontSize:'0.85rem', fontWeight:600, color:'var(--yellow)', marginBottom:6 }}>⚙️ 팀원 정보를 불러오지 못했습니다</div>
+      <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>DB 구성이 레포 기준(supabase/migrations)과 다를 수 있습니다. 관리자에게 알려 주세요.</div>
     </div>
   );
 }
@@ -2581,13 +2427,9 @@ function ProjectView({ project, milestones, setupNeeded, teamMembers, saving, on
         </div>
         <div style={{ padding:'0.9rem 1.1rem', borderRadius:10, background:'var(--surface-warning-soft)', border:'1px solid var(--surface-warning-mid)', marginBottom:'0.75rem' }}>
           <div style={{ fontSize:'0.9rem', fontWeight:600, color:'var(--yellow)', marginBottom:4 }}>⚠️ DB 설정 필요</div>
-          <div style={{ fontSize:'0.8rem', color:'var(--text2)', lineHeight:1.5 }}>작업 트래커를 사용하려면 project_milestones 테이블을 먼저 생성하세요.</div>
+          <div style={{ fontSize:'0.8rem', color:'var(--text2)', lineHeight:1.5 }}>작업 트래커 테이블(project_milestones)을 읽지 못했습니다.</div>
         </div>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
-          <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>Supabase SQL 에디터에서 실행</div>
-          <button onClick={() => { navigator.clipboard.writeText(MILESTONE_SETUP_SQL); }} style={btn.secondary({ padding:'0.35rem 0.7rem', borderRadius:'var(--radius-md)', background:'var(--surface2)', color:'var(--text)', fontSize:'var(--text-sm)' })}>📋 SQL 복사</button>
-        </div>
-        <pre style={{ background:'var(--bg)', padding:'0.9rem', borderRadius:8, fontSize:'0.8rem', color:'var(--text2)', overflow:'auto', maxHeight:360, border:'1px solid var(--border)', lineHeight:1.5 }}>{MILESTONE_SETUP_SQL}</pre>
+        <div style={{ fontSize:'0.8rem', color:'var(--text2)' }}>DB 구성이 레포 기준(supabase/migrations)과 다를 수 있습니다. 관리자에게 알려 주세요.</div>
       </div>
     );
   }
@@ -5534,7 +5376,7 @@ function App({ session }) {
       </div>
 
       {/* DB 설정 배너 */}
-      {teamSetupNeeded && <DBSetupBanner sql={SETUP_SQL} />}
+      {teamSetupNeeded && <DBSetupBanner />}
 
       {/* 오늘 요약 — 팀·내 근무지, 팀과 다른 팀원, 오늘 일정. 누르면 캘린더 그 날 (2026-11-04) */}
       {CAL_ENABLED && <CalendarToday supabase={supabase} teamMembers={teamMembers} projects={data} currentMember={currentMember}
