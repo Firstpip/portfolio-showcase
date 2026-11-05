@@ -2573,9 +2573,15 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 
 -- ============================================================================
 -- pg_cron: 캘린더 알림 함수 5분마다 호출 (anon 키 — 공개값, 함수는 verify_jwt)
+-- 운영 주소를 부르므로 로컬·검증용 DB(db diff 섀도, supabase start)에서는 등록하지 않는다 — 운영에는 이미 있음.
+-- 새 운영 DB를 이 파일로 만들 때만: SET app.enable_cron = 'on'; 후 적용 (또는 이 블록을 수동 실행)
 -- ============================================================================
 DO $$
 BEGIN
+  IF coalesce(current_setting('app.enable_cron', true), '') <> 'on' THEN
+    RAISE NOTICE 'pg_cron calendar-push 등록 건너뜀 (app.enable_cron 꺼짐)';
+    RETURN;
+  END IF;
   IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'calendar-push') THEN
     PERFORM cron.unschedule('calendar-push');
   END IF;

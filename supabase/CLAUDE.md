@@ -11,3 +11,8 @@
 - 적용 전 점검: anon 이 실행 가능한 SECURITY DEFINER 함수가 없어야 한다(트리거·event_trigger 제외, `rls_auto_enable` 은 Supabase 기본).
   `20261105120000_revoke_anon_rpc.sql` 의 마지막 DO 블록과 같은 질의.
 - 운영 적용은 건마다 승인 → 적용 전 권한·정책 상태를 저장 → `supabase db push` → 다시 조회해 확인.
+- 권한(2026-11-05~): 데이터 정책은 '로그인한 계정 전부'(`USING (true)`)가 아니라 `(SELECT public.is_staff())` — 팀원(team_members.user_id, is_active 아님 false) 또는 관리자(is_admin).
+  새 테이블도 같은 조건으로 만든다. 팀원 추가·연결(team_members 쓰기)은 관리자만. 퇴사자는 `is_active = false` 로 바꾸면 바로 막힌다.
+  SECURITY DEFINER 함수는 RLS 를 거치지 않으므로 본문 첫 줄에서 `IF NOT public.is_staff() THEN RAISE … '42501'`.
+- 로컬 검증: 임시 폴더에 config.toml·migrations 를 복사해 `supabase start --workdir <임시> -x studio,…` → 시험 계정(팀원·퇴사·외부·관리자)으로 REST 호출.
+  기준선의 pg_cron 등록은 `app.enable_cron=on` 일 때만 하므로 로컬·섀도 DB가 운영 알림 서버를 부르지 않는다.
