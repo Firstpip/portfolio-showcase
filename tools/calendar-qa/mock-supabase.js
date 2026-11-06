@@ -47,6 +47,24 @@
   else { try { const j = JSON.parse(sessionStorage.getItem('__mockDB')||'null'); if (j) { Object.keys(DB).forEach(k => delete DB[k]); Object.assign(DB, j); restored = true; } } catch (_) {} }
   const save = () => { try { sessionStorage.setItem('__mockDB', JSON.stringify(DB)); } catch (_) {} };
   window.addEventListener('pagehide', save); window.addEventListener('beforeunload', save);
+  // ?demo=projects — 프로젝트 목록 날짜 칸(개발완료 예정일·무상 만료일) 눈으로 확인용 표본 (2026-11-06). 자동 시험(qa*)은 쓰지 않는다.
+  //   무상 기준: 검수 후 6개월, 계약금액 1,000만원 미만 3개월(dashboard/src/maintenance.mjs). 날짜는 여는 날 기준.
+  if (QS.get('demo') === 'projects' && !DB.wishket_projects.some(r => String(r.slug).startsWith('demo_'))) {
+    const W = n => 'https://www.wishket.com/project/7' + n, base = { history:[], memo:null };
+    DB.wishket_projects.push(...[
+      { slug:'demo_dev_ok',      title:'[개발 중] 사내 예약 시스템 — 마감 20일 남음',          current_status:'in_progress',      budget:'1,500만원', start_date:day(-40), deadline:day(20) },
+      { slug:'demo_dev_late',    title:'[개발 중] 재고 관리 앱 — 마감 3일 지남',               current_status:'in_progress',      budget:'900만원',   start_date:day(-60), deadline:day(-3) },
+      { slug:'demo_dev_none',    title:'[개발 중] 설문 플랫폼 — 마감일 없음',                  current_status:'in_progress',      budget:'1,200만원' },
+      { slug:'demo_mf_soon',     title:'[무상] 시설 점검 앱 — 700만원, 곧 만료(3개월)',         current_status:'maintenance_free', budget:'700만원',   start_date:day(-150), deadline:day(-80) },
+      { slug:'demo_mf_ok',       title:'[무상] 교육 LMS — 1,800만원(6개월)',                   current_status:'maintenance_free', budget:'1,800만원', start_date:day(-100), deadline:day(-10) },
+      { slug:'demo_mf_trans',    title:'[무상] 뉴스레터 대시보드 — 마감일 없음 → 무상 전환일 기준', current_status:'maintenance_free', budget:'500만원', history:[{ date:day(-200), status:'in_progress', note:'' }, { date:day(-30), status:'maintenance_free', note:'' }] },
+      { slug:'demo_mf_manual',   title:'[무상] 쇼핑몰 리뉴얼 — 계약서 기간 직접 입력(1년)',      current_status:'maintenance_free', budget:'1,800만원', start_date:day(-90), deadline:day(-10), free_maint_until:day(355) },
+      { slug:'demo_mf_over',     title:'[무상] 워크북 웹 — 무상 기간 끝남',                    current_status:'maintenance_free', budget:'800만원',   start_date:day(-200), deadline:day(-120) },
+      { slug:'demo_mf_nobudget', title:'[무상] 랜딩 페이지 — 금액 없음(기준 없음)',             current_status:'maintenance_free', budget:'',          start_date:day(-30), deadline:day(-15) },
+      { slug:'demo_paid',        title:'[유상] 병원 홈페이지 — 개발완료일 그대로',               current_status:'maintenance_paid', budget:'1,000만원', deadline:day(-200) },
+      { slug:'demo_deliv',       title:'[납품 완료] 포트폴리오 사이트 — 개발완료일 그대로',       current_status:'delivered',        budget:'60만원',    deadline:day(-50) },
+    ].map((r, i) => ({ id:800 + i, created_at:`${day(-i)}T01:00:00Z`, wishket_url:W(i), ...base, ...r })));
+  }
   // QA: ?as=1,2,3… 로 로그인한 사람 바꾸기(팀원 목록 순서). 기본은 2번(이나래)
   const AS = Number(QS.get('as') || 0);
   const curUid = () => (AS && DB.team_members[AS-1]?.user_id) || ME_UID;
