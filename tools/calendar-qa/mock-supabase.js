@@ -122,6 +122,19 @@
         Object.assign(r, { member_id: me?.id || null, p256dh:args.p_p256dh, auth:args.p_auth, platform:args.p_platform, user_agent:args.p_user_agent, updated_at:iso() });
         return { data: JSON.parse(JSON.stringify(r)), error:null };
       }
+      // 반복 나누기(2026-11-06): 새 일정 INSERT + 원래 반복 UPDATE 를 한 번에. __mock.failSplit 이면 아무것도 쓰지 않고 실패(트랜잭션 롤백 흉내)
+      if (fn === 'calendar_split_event') {
+        if (window.__mock.failSplit) return err('08006', 'connection failure');
+        if (!DB.calendar_events.some(r => r.id === args.p_parent && !r.deleted_at)) return err('P0002', '나눌 반복 일정을 찾지 못했습니다');
+        const ins = await new Q('calendar_events').insert(args.p_row);
+        if (ins.error) return ins;
+        const patch = { exdates: args.p_parent_exdates || [], change_note: args.p_parent_note };
+        if (args.p_parent_until) patch.repeat_until = args.p_parent_until;
+        const up = await new Q('calendar_events').update(patch).eq('id', args.p_parent);
+        if (up.error) return up;
+        (window.__mock.splits ||= []).push(args);
+        return { data: DB.calendar_events[DB.calendar_events.length - 1].id, error:null };
+      }
       // 알림 서버 상태: 테스트가 페이지를 열기 전에 window.__qaHeartbeat 로 정할 수 있다(QA 패널·점검용)
       if (fn === 'calendar_push_status') return { data: window.__mock.heartbeat || window.__qaHeartbeat || null, error:null };
       return { data:0, error:null };

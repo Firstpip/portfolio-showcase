@@ -1075,12 +1075,14 @@ function mountCalendar(root, ctx) {
       run(async () => {
         if (ed) {
           const m = ed.ref, k = ed.k, rs = m.repeat ? (pressed('[data-rs]')[0]?.dataset.rs || 'one') : 'all', diff = diffText(m, k, fields);
+          // 반복 나누기는 새 일정 추가 + 원래 반복 수정을 한 번에(calendar_split_event, 2026-11-06) — 따로 저장하다 두 번째가 실패하면 일정이 겹쳤다
+          const split = (row, exdates, until, note) => db(() => sb.rpc('calendar_split_event', { p_parent:m.id, p_row:row, p_parent_exdates:exdates, p_parent_until:until, p_parent_note:note }));
           if (rs==='one') {
-            await db(() => sb.from(T.events).insert({ ...eventRow({ ...fields, repeat:undefined, until:undefined, parent:m.id }), change_note:`${fmtD(k)} ${m.title} · 이 회차만 · ${diff}` }));
-            await db(() => sb.from(T.events).update({ exdates:[...(m.exdates||[]), k], change_note:`${fmtD(k)} 회차를 따로 고침` }).eq('id', m.id));
+            await split({ ...eventRow({ ...fields, repeat:undefined, until:undefined, parent:m.id }), change_note:`${fmtD(k)} ${m.title} · 이 회차만 · ${diff}` },
+              [...(m.exdates||[]), k], null, `${fmtD(k)} 회차를 따로 고침`);
           } else if (rs==='future' && k!==m.date) {
-            await db(() => sb.from(T.events).insert({ ...eventRow({ ...fields, parent:m.id, exdates:(m.exdates||[]).filter(x=>x>=k) }), change_note:`${fmtD(k)}부터 ${m.title} · 이후 전부 · ${diff}` }));
-            await db(() => sb.from(T.events).update({ repeat_until:key(addDays(parse(k),-1)), exdates:(m.exdates||[]).filter(x=>x<k), change_note:`${fmtD(k)}부터 새 반복으로 나눔` }).eq('id', m.id));
+            await split({ ...eventRow({ ...fields, parent:m.id, exdates:(m.exdates||[]).filter(x=>x>=k) }), change_note:`${fmtD(k)}부터 ${m.title} · 이후 전부 · ${diff}` },
+              (m.exdates||[]).filter(x=>x<k), key(addDays(parse(k),-1)), `${fmtD(k)}부터 새 반복으로 나눔`);
           } else {
             await db(() => sb.from(T.events).update({ ...eventRow({ ...fields, exdates:m.exdates, parent:m.parent }), change_note:`${fmtD(date)} ${title} · ${diff}` }).eq('id', m.id));
           }
