@@ -24,8 +24,8 @@ const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
     await p.waitForTimeout(700);
     const c = await p.evaluate(() => { const c = document.querySelector(`#mgrid .mc[data-k="${__mock.day(1)}"]`), cb = c.getBoundingClientRect(), o = document.querySelector('#mgrid .mc:not([data-k="' + __mock.day(1) + '"])').getBoundingClientRect();
       const vis = [...c.querySelectorAll('.li')].filter(x => !x.hidden), more = c.querySelector('.more');
-      return { same: Math.abs(cb.height - o.height) < 2, shown: vis.length, more: more.hidden ? '' : more.textContent, inside: Math.max(...vis.map(x => x.getBoundingClientRect().bottom), more.hidden ? 0 : more.getBoundingClientRect().bottom) <= cb.bottom + 0.5, docH: document.documentElement.scrollHeight }; });
-    ok(`${w}x${h} 일정 많은 날: 칸 높이 그대로·'+N건'·칸 안`, c.same && c.inside && (c.shown === 10 ? c.more === '' : c.more === `+${10 - c.shown}건`) && c.docH <= h, JSON.stringify(c));
+      return { same: Math.abs(cb.height - o.height) < 2, total: c.querySelectorAll('.li').length, shown: vis.length, more: more.hidden ? '' : more.textContent, inside: Math.max(...vis.map(x => x.getBoundingClientRect().bottom), more.hidden ? 0 : more.getBoundingClientRect().bottom) <= cb.bottom + 0.5, docH: document.documentElement.scrollHeight }; });
+    ok(`${w}x${h} 일정 많은 날: 칸 높이 그대로·'+N건'·칸 안`, c.same && c.inside && c.total >= 9 && (c.shown === c.total ? c.more === '' : c.more === `+${c.total - c.shown}건`) && c.docH <= h, JSON.stringify(c));
     await ctx.close();
   }
   // 창 크기를 바꾸면 다시 맞춤

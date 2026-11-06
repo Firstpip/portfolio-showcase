@@ -9,6 +9,11 @@ const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
   const p = await ctx.newPage(); p.on('pageerror', e => errs.push(e.message));
   await p.goto(U + '?reset=1#calendar'); await p.waitForSelector('#todaycard .today-head'); await p.waitForTimeout(400);
   const [k6, k7, k5] = await p.evaluate(() => [__mock.wday(6), __mock.wday(7), __mock.wday(5)]);
+  // 시드의 연차는 달력 날짜(day 7~9)라 요일에 따라 wday(6)과 안 겹친다 → 이 시험이 쓰는 날에 직접 1명 휴가를 넣는다 (2026-11-06)
+  await p.evaluate(k => { const m = __mock, x = m.DB.team_members[m.DB.team_members.length - 1];
+    m.DB.team_leaves.push({ id:'qa18-leave', created_at:'2026-11-01T00:00:00Z', updated_at:'2026-11-01T00:00:00Z', deleted_at:null, created_by:null, updated_by:null, member_id:x.id, from_date:k, to_date:k, kind:'off', note:'' });
+    m.emit('team_leaves', 'INSERT'); }, k6);
+  await p.waitForTimeout(600);
   const cell = k => p.evaluate(k => { const t = document.querySelector(`#mgrid .mc[data-k="${k}"] .tloc`); return { tx: t?.textContent, tip: t?.title }; }, k);
   const c6 = await cell(k6), c7 = await cell(k7);
   ok('월 칸: 휴가 1명 + 나머지 전원 재택 → 재택', c6.tx === '재택' && /오는 사람 없음/.test(c6.tip) && /재택 3 · 휴가 1/.test(c6.tip), JSON.stringify(c6));
