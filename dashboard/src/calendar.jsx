@@ -65,7 +65,7 @@ export function CalendarToday(props) {
         <span style={{ fontSize:'0.78rem', color:'var(--text2)' }} className="tnum">{d.date}</span>
       </span>
       <span style={{ display:'flex', flexWrap:'wrap', gap:6, alignItems:'center', minWidth:0 }}>
-        {chip(`${d.team.ic} 팀 ${d.team.name}${d.team.usual ? ` (${d.team.usual})` : ''}`, d.team.color, 'team', true)}
+        {chip(`${d.team.ic} 팀 ${d.team.name}`, d.team.color, 'team', true)}
         {d.me && chip(`나 · ${d.me.text}`, d.me.color, 'me', true)}
         {d.others.map((o, i) => chip(`${o.name} ${o.text}`, o.color, 'o'+i))}
         {!d.others.length && d.people > 1 && <span style={{ fontSize:'0.78rem', color:'var(--text2)' }}>다른 팀원은 모두 팀 근무지</span>}
@@ -276,10 +276,7 @@ function mountCalendar(root, ctx) {
   const teamLocFull = t => t.code==='other' && t.branch ? t.branch : LOC[t.code].full;
   // 직접 입력한 장소는 눌러서 지도에서 찾게 (네이버 지도 검색)
   const mapLink = place => place ? `<a class="maplink" href="https://map.naver.com/p/search/${encodeURIComponent(place)}" target="_blank" rel="noopener" title="지도에서 보기">지도</a>` : '';
-  // 그날만 정한 팀 근무지면 '평소 ○○'(주간 패턴의 그 요일 근무지)를 돌려준다. 평소와 같은 곳이면(사유만 적은 경우) 빈 문자열.
-  //   '이날만'은 무엇과 다른지 말하지 않아 뜻이 바로 안 읽혀서 평소 근무지를 직접 보여 준다 (2026-11-03 사용자 QA)
-  const usualTag = (t, k) => { if (!t || t.src!=='override') return ''; const c = routineAt(k).days[parse(k).getDay()] || 'cityhall';
-    return c===t.code && t.code!=='other' ? '' : `평소 ${LOC[c].label}`; };
+  // 그날만 정한 팀 근무지에 '평소 ○○'를 붙이던 표시는 뺐다 (2026-11-06 사용자 QA — 평소 근무지는 안 보여 줘도 됨). 그날 근무지만 보인다.
   // 반복 일정이 k 날짜에 열리는지 (건너뛴 회차·종료일·공휴일 건너뜀 반영)
   function occursOn(m, k){
     if ((m.exdates||[]).includes(k)) return false;
@@ -369,7 +366,7 @@ function mountCalendar(root, ctx) {
     const lt = l => l.src==='leave' ? LOC[l.code].label : locText(l, k), lc = l => l.src==='leave' ? 'var(--red)' : locColor(l);
     const mine = ME ? locOf(ME, k) : null;
     return { k, today: k===TK, tomorrow: k===key(addDays(TODAY, 1)), date: `${d.getMonth()+1}월 ${d.getDate()}일 ${WD[d.getDay()]}요일`, people: PEOPLE.length,
-      team: v.empty ? { name:v.name, ic:v.ic, color:v.color, usual:'' } : { name:teamLocName(t), ic:LOC[t.code].ic, color:LOC[t.code].color, usual:usualTag(t, k) },
+      team: v.empty ? { name:v.name, ic:v.ic, color:v.color } : { name:teamLocName(t), ic:LOC[t.code].ic, color:LOC[t.code].color },
       me: mine ? { text: lt(mine), color: mine.same && !mine.outAt ? 'var(--text2)' : lc(mine) } : null,
       others: PEOPLE.filter(p => p.id!==ME).map(p => ({ p, l:locOf(p.id, k) })).filter(x => isEx(x.l)).map(x => ({ name:x.p.name, text:lt(x.l), color:lc(x.l) })),
       evs: rawEventsOf(k).filter(e => e.type!=='holiday' && e.type!=='leave').map(e => ({ t: e.allday || !e.start ? '종일' : e.start, title:e.title, type:e.type,
@@ -478,7 +475,7 @@ function mountCalendar(root, ctx) {
     const L = LOC[t.code];
     const l3 = t.note ? esc(t.note) : t.src==='override' ? `${esc(P(t.ref.by).name)} 변경 · ${fmtAt(t.ref.at)}` : '';   // 주간 패턴대로인 날은 셋째 줄 없음 (2026-11-04)
     return `<div class="teamloc" style="color:${L.color};border-color:color-mix(in srgb,${L.color} 45%,transparent);background:color-mix(in srgb,${L.color} 9%,transparent)">
-      <span class="ic">${L.ic}</span><span class="tx"><span class="l1">${usualTag(t,k)?`팀 근무지 · ${usualTag(t,k)}`:'팀 근무지'}</span><span class="l2">${esc(teamLocFull(t))}${t.code==='other' ? ' '+mapLink(t.branch) : ''}</span>${l3?`<span class="l3">${l3}</span>`:''}</span>
+      <span class="ic">${L.ic}</span><span class="tx"><span class="l1">팀 근무지</span><span class="l2">${esc(teamLocFull(t))}${t.code==='other' ? ' '+mapLink(t.branch) : ''}</span>${l3?`<span class="l3">${l3}</span>`:''}</span>
       <button class="edit" data-tl="${k}">변경</button></div>`;
   }
   // 사람별 위치 칩: 팀과 같으면 실제 장소명을 흐린 칩으로, 다르면(반차 포함) 색 칩으로
@@ -613,7 +610,7 @@ function mountCalendar(root, ctx) {
       if (!t) { h += `<div class="wb-row ${k===TK?'today':''} ${k<TK?'past':''}">${dcol}<div class="wb-main"><span class="wb-hol">${esc(hol||'휴무')}</span></div></div>`; continue; }
       const L = LOC[t.code], ex = PEOPLE.map(p=>({p,l:locOf(p.id,k)})).filter(x=>isEx(x.l)), away = ex.filter(x => !x.l.same);
       const tv = teamView(k);
-      const pill = tv.empty ? `<button class="wb-team" data-tl="${k}" style="--c:${tv.color}" title="${esc(emptyTip(tv))} · 눌러서 이날 팀 근무지 변경"><span class="ic">${tv.ic}</span><span class="nm">${esc(tv.name)}</span><em>팀 ${esc(teamLocName(t))} 0명</em></button>` : `<button class="wb-team" data-tl="${k}" style="--c:${L.color}" title="${esc(teamLocFull(t))}${t.note?' · '+esc(t.note):''} · 눌러서 이날 팀 근무지 변경"><span class="ic">${L.ic}</span><span class="nm">${esc(teamLocFull(t).replace('패스트파이브 ',''))}</span><em>${usualTag(t,k)?usualTag(t,k)+' · ':''}${away.length?`${PEOPLE.length-away.length}명`:'전원'}</em></button>`;
+      const pill = tv.empty ? `<button class="wb-team" data-tl="${k}" style="--c:${tv.color}" title="${esc(emptyTip(tv))} · 눌러서 이날 팀 근무지 변경"><span class="ic">${tv.ic}</span><span class="nm">${esc(tv.name)}</span><em>팀 ${esc(teamLocName(t))} 0명</em></button>` : `<button class="wb-team" data-tl="${k}" style="--c:${L.color}" title="${esc(teamLocFull(t))}${t.note?' · '+esc(t.note):''} · 눌러서 이날 팀 근무지 변경"><span class="ic">${L.ic}</span><span class="nm">${esc(teamLocFull(t).replace('패스트파이브 ',''))}</span><em>${away.length?`${PEOPLE.length-away.length}명`:'전원'}</em></button>`;
       const exH = ex.map(({p,l}) => `<button class="wb-ex" data-p="${p.id}" data-k="${k}" style="--c:${locColor(l)}">${av(p)}<span>${esc(p.name)}</span><b>${esc(locText(l,k))}</b>${l.note?`<small>${esc(l.note)}</small>`:''}</button>`).join('');
       h += `<div class="wb-row ${k===TK?'today':''} ${k<TK?'past':''}">${dcol}<div class="wb-main">${pill}${exH}</div></div>`; }
     h += `</div><div class="wb-foot">기본 ${esc(routineSummary(routineAt(state.bweek)))} · <button type="button" class="lnk" data-set>패턴 바꾸기</button><br>근무지를 누르면 그날만 바꿉니다.</div>`;
@@ -728,7 +725,7 @@ function mountCalendar(root, ctx) {
     const s = monday(parse(state.sel));
     $('week').innerHTML = [0,1,2,3,4,5,6].map(i => { const d=addDays(s,i), k=key(d), hol=HOLIDAYS[k], off=isOffDay(k), t=teamLoc(k);
       const tv = off ? null : teamView(k);
-      const tl = off ? '' : tv.empty ? `<button class="tl" data-tl="${k}" style="color:${tv.color}" title="${esc(emptyTip(tv))} · 눌러서 팀 근무지 변경"><i></i><span>${tv.ic} ${esc(tv.name)}</span><em>팀 ${esc(teamLocName(t))} 0명</em></button>` : `<button class="tl" data-tl="${k}" style="color:${LOC[t.code].color}" title="${esc(teamLocFull(t))}${t.note?' · '+esc(t.note):''} · 눌러서 변경"><i></i><span>${LOC[t.code].ic} ${esc(teamLocName(t))}</span>${usualTag(t,k)?`<em>${usualTag(t,k)}</em>`:''}</button>`;
+      const tl = off ? '' : tv.empty ? `<button class="tl" data-tl="${k}" style="color:${tv.color}" title="${esc(emptyTip(tv))} · 눌러서 팀 근무지 변경"><i></i><span>${tv.ic} ${esc(tv.name)}</span><em>팀 ${esc(teamLocName(t))} 0명</em></button>` : `<button class="tl" data-tl="${k}" style="color:${LOC[t.code].color}" title="${esc(teamLocFull(t))}${t.note?' · '+esc(t.note):''} · 눌러서 변경"><i></i><span>${LOC[t.code].ic} ${esc(teamLocName(t))}</span></button>`;
       const exc = PEOPLE.map(p=>({p,l:locOf(p.id,k)})).filter(x=>isEx(x.l));
       const excH = (off||!exc.length) ? '' : `<div class="exc">${exc.map(({p,l}) => `<button class="locrow" data-p="${p.id}" data-k="${k}" title="${esc(locText(l,k))}${l.note?' · '+esc(l.note):''}">${av(p)}<span class="lb" style="color:${locColor(l)}">${esc(p.name)} ${esc(locText(l,k))}</span></button>`).join('')}</div>`;
       const evs = eventsOf(k).filter(e=>e.type!=='holiday');
@@ -753,7 +750,7 @@ function mountCalendar(root, ctx) {
       const tloc = off ? '' : tv.empty
         ? `<span class="tloc" style="background:color-mix(in srgb,${tv.color} 18%,transparent);color:${tv.color}" title="${esc(emptyTip(tv))}">${esc(tv.name)}</span>`
         : t.src==='override'
-        ? `<span class="tloc" style="background:color-mix(in srgb,${LOC[t.code].color} 24%,transparent);color:${LOC[t.code].color}" title="${usualTag(t,k)||'그날만 정한 팀 근무지'} → 이날 ${esc(teamLocName(t))}">${esc(teamLocName(t))}</span>`
+        ? `<span class="tloc" style="background:color-mix(in srgb,${LOC[t.code].color} 24%,transparent);color:${LOC[t.code].color}" title="그날만 정한 팀 근무지 → 이날 ${esc(teamLocName(t))}">${esc(teamLocName(t))}</span>`
         : `<span class="tloc dim" style="color:${LOC[t.code].color}" title="주간 패턴">${esc(teamLocName(t))}</span>`;
       const label = `${d.getMonth()+1}월 ${d.getDate()}일 ${WD[dw]}요일${hol?' '+hol:''}${off?'':tv.empty?' · '+tv.name:' · 팀 '+teamLocName(t)}${evs.length?` · 일정 ${evs.length}건`:''}`;
       const ex = off ? '' : PEOPLE.map(p=>{ const l=locOf(p.id,k); return isEx(l)?`<span class="av" style="--c:${locColor(l)}" title="${esc(p.name)} ${esc(locText(l,k))}">${esc(p.name.slice(1,2))}</span>`:''; }).join('');
@@ -772,7 +769,7 @@ function mountCalendar(root, ctx) {
     for (let i=0;i<n;i++){ const d=addDays(s,i), k=key(d), hol=HOLIDAYS[k], off=isOffDay(k), t=teamLoc(k), evs=eventsOf(k).filter(e=>e.type!=='holiday');
       if (off && !evs.length && !hol) continue;
       const tv = t && teamView(k);
-      const tl = tv?.empty ? `<span class="tl" style="color:${tv.color};border-color:color-mix(in srgb,${tv.color} 45%,transparent)" title="${esc(emptyTip(tv))}"><i></i>${tv.ic} ${esc(tv.name)} · 팀 ${esc(teamLocName(t))} 0명</span>` : t ? `<span class="tl" style="color:${LOC[t.code].color};border-color:color-mix(in srgb,${LOC[t.code].color} 45%,transparent)"><i></i>${LOC[t.code].ic} ${esc(teamLocName(t))}${usualTag(t,k)?` · ${usualTag(t,k)}`:''}</span>` : '';
+      const tl = tv?.empty ? `<span class="tl" style="color:${tv.color};border-color:color-mix(in srgb,${tv.color} 45%,transparent)" title="${esc(emptyTip(tv))}"><i></i>${tv.ic} ${esc(tv.name)} · 팀 ${esc(teamLocName(t))} 0명</span>` : t ? `<span class="tl" style="color:${LOC[t.code].color};border-color:color-mix(in srgb,${LOC[t.code].color} 45%,transparent)"><i></i>${LOC[t.code].ic} ${esc(teamLocName(t))}</span>` : '';
       const ex = off ? '' : PEOPLE.map(p=>{ const l=locOf(p.id,k); return isEx(l)?`<span><b>${esc(p.name)}</b> <span style="color:${locColor(l)}">${esc(locText(l,k))}</span></span>`:''; }).filter(Boolean).join('');
       h += `<div class="ag-day ${k===TK?'today':''} ${off?'off':''}" data-k="${k}"><div class="ag-h"><span class="d tnum ${k===TK?'today':''}">${d.getMonth()+1}/${d.getDate()} ${WD[d.getDay()]}${k===TK?' · 오늘':''}</span>${hol?`<span class="hol">${esc(hol)}</span>`:''}${tl}${ex?`<span class="ex">${ex}</span>`:''}<button class="add" data-add="${k}">＋</button></div>
         ${evs.length?`<div class="evlist">${evs.map(e=>evCard(e)).join('')}</div>`:'<div class="empty" style="padding:.1rem 0">일정 없음</div>'}</div>`; }

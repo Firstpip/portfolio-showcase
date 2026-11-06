@@ -1,6 +1,7 @@
 import { CalendarPage, CalendarToday } from './calendar.jsx';
 // 날짜 규칙(한국 달력일) — 'YYYY-MM-DD' 를 만들거나 비교하는 코드는 전부 이 모듈을 쓴다 (src/dates.mjs 머리말 참조)
 import { runMove } from './move.mjs';
+import { freeMaintInfo } from './maintenance.mjs';
 import { kstParts, kstToIso, kstDateStr, kstStartOfDay, isYmd, addDaysYmd, daysBetweenYmd, daysBetweenKst, scheduleFrom } from './dates.mjs';
 const { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } = React;
 
@@ -67,6 +68,24 @@ const MEETING_REACHED_STATUSES = ['meeting_done', ...SECURED_STATUSES];
 const HAS_MILESTONES = ['won','in_progress','maintenance_free','maintenance_paid','delivered','settled']; // 마일스톤 트래커 노출 대상
 const ACTIVE_WORK = ['won','in_progress']; // 상단 '내 담당 프로젝트' 카드 노출 대상 — 납품·정산 완료 제외
 const POST_DEV = ['maintenance_free','maintenance_paid','delivered','settled']; // 개발 종료 후 상태 — 주차 진행/마감 초과 등 실시간 일정 표시 숨김
+// 목록의 날짜 칸은 상태마다 다른 날짜를 보인다 (2026-11-06 사용자 요청):
+//   개발 중 → 개발완료(예정)일(마감일) · 유지보수(무상) → 무상 만료일(src/maintenance.mjs) · 그 밖의 개발 종료 → 개발완료일 · 나머지 → 미팅일
+const dateColKind = (status) => status === 'in_progress' ? 'dev_due' : status === 'maintenance_free' ? 'free_until' : POST_DEV.includes(status) ? 'dev_done' : 'meeting';
+const dateColLabel = (filter) => filter === 'all' ? '일정' : ({ dev_due:'개발완료일', free_until:'무상 만료일', dev_done:'개발완료일', meeting:'미팅일' })[dateColKind(filter)];
+const freeMaintOf = (r) => freeMaintInfo(r, parseBudgetNum(r.budget), kstDateStr());
+const dateSortValue = (r) => { const k = dateColKind(r.current_status); return (k === 'free_until' ? freeMaintOf(r).until : k === 'meeting' ? r.meeting_at : r.deadline) || ''; };
+// 남은 날: D-n · 오늘 · n일 지남(초과)
+const dLeftLabel = (n, past = '지남') => n == null ? '' : n < 0 ? `${-n}일 ${past}` : n === 0 ? '오늘' : `D-${n}`;
+// 무상 만료일이 어떻게 정해졌는지 (목록 칸 툴팁·정보 탭 안내)
+const freeMaintWhy = (fm, manwon) => {
+  const calc = fm.auto ? `${fm.baseKind === 'deadline' ? '개발완료일' : '무상 전환일'} ${fm.base} + ${fm.months}개월 (계약금액 ${manwon.toLocaleString()}만원 · 1,000만원 ${fm.months === 3 ? '미만' : '이상'})` : null;
+  if (fm.manual) return `직접 입력한 날짜${calc ? ` — 회사 기준으로는 ${fm.auto} (${calc})` : ''}`;
+  if (calc) return `회사 기준: ${calc}`;
+  return !fm.months ? '계약금액(예산)이 없어 무상 기간을 정할 수 없습니다 — 정보 탭에서 금액이나 만료일을 입력하세요'
+    : '개발완료일(마감일)이 없어 계산할 수 없습니다 — 정보 탭에서 마감일이나 만료일을 입력하세요';
+};
+// 무상 만료일 직접 고치는 칸을 보일 상태 — 개발 중(계약서에 기간이 따로 있으면 미리 입력)·유지보수(무상)
+const FREE_MAINT_EDIT = ['in_progress', 'maintenance_free'];
 // 능동(계약~정산) 상태 — 일괄삭제에서 제외 + DB 트리거/엣지함수 보호 대상과 동일하게 유지.
 // (단일 '프로젝트 삭제'는 슬러그 입력 확인 후 force로 이 보호를 의도적으로 우회한다.)
 const PROTECTED_DELETE_STATUSES = ['won','contracted','in_progress','maintenance_free','maintenance_paid','delivered','settled'];
@@ -2960,6 +2979,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const [startDateChanged, setStartDateChanged] = useState(false);
   const [editDeadline, setEditDeadline] = useState(project?.deadline||'');
   const [deadlineChanged, setDeadlineChanged] = useState(false);
+  // 무상 유지보수 만료일 — 비워 두면 회사 기준 자동 계산(src/maintenance.mjs), 입력하면 그 날짜가 우선 (2026-11-06)
+  const [editFreeUntil, setEditFreeUntil] = useState(project?.free_maint_until||'');
+  const [freeUntilChanged, setFreeUntilChanged] = useState(false);
   // 미팅 폼 모드: '미팅 완료' + 기존 미팅 있음 → "추가 미팅 등록"(새 미팅, 빈 폼). 그 외 → 현재 미팅 수정(프리필)
   const isAddMode = project?.current_status === 'meeting_done' && !!project?.meeting_at;
   const [editMeeting, setEditMeeting] = useState(isAddMode ? '' : (project?.meeting_at || ''));   // ISO(UTC) 또는 ''
@@ -2999,7 +3021,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const [assignChanged, setAssignChanged] = useState(false);
 
   // ── 미저장 변경 통합 플래그 — 닫기 가드 + 외부 변경 경고에 사용 (2026-06-07) ──
-  const anyDirty = infoChanged||dateChanged||startDateChanged||deadlineChanged||urlChanged||memoChanged||linksChanged||assignChanged||meetingChanged||resultMemoChanged||directChanged||!!newLinkUrl.trim()||!!note.trim()||!!newStatus;
+  const anyDirty = infoChanged||dateChanged||startDateChanged||deadlineChanged||freeUntilChanged||urlChanged||memoChanged||linksChanged||assignChanged||meetingChanged||resultMemoChanged||directChanged||!!newLinkUrl.trim()||!!note.trim()||!!newStatus;
 
   // 편집 중(미저장 변경 존재)에 project prop이 Realtime 외부 갱신으로 교체되면 경고 배너.
   // 자기 저장은 dirty 플래그를 같은 배치에서 해제하므로 echo에는 발화하지 않음.
@@ -3247,6 +3269,29 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                     </div>
                   </div>
                 )}
+                {FREE_MAINT_EDIT.includes(project.current_status) && (() => {
+                  const manwon = parseBudgetNum(editBudget);
+                  const fm = freeMaintInfo({ ...project, deadline: editDeadline || null, free_maint_until: editFreeUntil || null }, manwon, kstDateStr());
+                  return (
+                    <div>
+                      <div style={{ ...labelS, display:'flex', alignItems:'center', gap:5 }}>
+                        무상 유지보수 만료일
+                        <span style={{ fontSize:'0.8rem', color:'var(--text2)', fontWeight:400, opacity:0.8 }}>비워 두면 회사 기준으로 자동 계산</span>
+                      </div>
+                      <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                        <input type="date" aria-label="무상 유지보수 만료일" value={editFreeUntil} onChange={e => { setEditFreeUntil(e.target.value); setFreeUntilChanged(e.target.value!==(project.free_maint_until||'')); }} style={{ ...inputS, flex:1 }} />
+                        {editFreeUntil && (
+                          <button type="button" onClick={() => { setEditFreeUntil(''); setFreeUntilChanged(!!project.free_maint_until); }}
+                            style={{ flexShrink:0, padding:'0.45rem 0.7rem', borderRadius:6, border:'1px solid var(--border)', background:'transparent', color:'var(--text2)', fontSize:'0.8rem', cursor:'pointer', whiteSpace:'nowrap' }}>자동 계산으로</button>
+                        )}
+                      </div>
+                      <div style={{ marginTop:4, fontSize:'0.8rem', color: fm.until ? 'var(--text2)' : 'var(--yellow)', lineHeight:1.5 }}>
+                        {fm.until && <>→ {fm.until}{fm.left != null ? ` (${dLeftLabel(fm.left)})` : ''} · </>}{freeMaintWhy(fm, manwon)}
+                      </div>
+                      <div style={{ marginTop:2, fontSize:'0.75rem', color:'var(--text2)', opacity:0.75 }}>회사 기준: 검수 완료 후 6개월, 계약금액(공급가) 1,000만 원 미만은 3개월 — 계약서 기간이 다르면 직접 입력</div>
+                    </div>
+                  );
+                })()}
                 <div>
                   <div style={labelS}>위시켓 공고 URL</div>
                   <input type="url" value={editUrl} placeholder="https://www.wishket.com/project/..." onChange={e => { setEditUrl(e.target.value); setUrlChanged(e.target.value!==(project.wishket_url||'')); }} style={inputS} />
@@ -3365,19 +3410,20 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                   {linkErr && <div style={{ fontSize:'0.75rem', color:'var(--red)', marginTop:6 }}>⚠ {linkErr}</div>}
                 </div>
               </div>
-              {(infoChanged||dateChanged||startDateChanged||deadlineChanged||urlChanged||memoChanged||linksChanged||directChanged) && (
+              {(infoChanged||dateChanged||startDateChanged||deadlineChanged||freeUntilChanged||urlChanged||memoChanged||linksChanged||directChanged) && (
                 <button onClick={() => {
                   const fields = {};
                   if (infoChanged) { fields.title=editTitle; fields.budget=editBudget; fields.timeline=editTimeline; }
                   if (dateChanged) fields.created_at = editDate ? kstToIso(editDate, kstParts(project.created_at)?.time || '12:00') : project.created_at;
                   if (startDateChanged) fields.start_date = editStartDate || null;
                   if (deadlineChanged) fields.deadline = editDeadline || null;
+                  if (freeUntilChanged) fields.free_maint_until = editFreeUntil || null;
                   if (urlChanged)  fields.wishket_url = editUrl;
                   if (memoChanged) fields.memo = editMemo;
                   if (directChanged) fields.direct_contract = editDirect;
                   if (linksChanged) fields.portfolio_links = editLinks;
                   onFieldSave(project, fields);
-                  setInfoChanged(false); setDateChanged(false); setStartDateChanged(false); setDeadlineChanged(false); setUrlChanged(false); setMemoChanged(false); setLinksChanged(false); setDirectChanged(false);
+                  setInfoChanged(false); setDateChanged(false); setStartDateChanged(false); setDeadlineChanged(false); setFreeUntilChanged(false); setUrlChanged(false); setMemoChanged(false); setLinksChanged(false); setDirectChanged(false);
                 }} disabled={saving || (!editDirect && !editUrl.trim())} style={{ ...saveBtnS(true), width:'100%', marginTop:10, ...((!editDirect && !editUrl.trim()) ? { opacity:0.5, cursor:'not-allowed' } : {}) }}>
                   {saving ? '저장 중...' : '저장'}
                 </button>
@@ -3948,8 +3994,8 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
     const sortFn = (a,b) => {
       let va, vb;
       if (sortKey==='budget')     { va=parseBudgetNum(a.budget);  vb=parseBudgetNum(b.budget); }
-      // 개발 종료 후 상태 행은 미팅일 대신 개발완료일(마감일) 기준으로 정렬
-      else if (sortKey==='meeting_at') { va=(POST_DEV.includes(a.current_status)?a.deadline:a.meeting_at)||''; vb=(POST_DEV.includes(b.current_status)?b.deadline:b.meeting_at)||''; }
+      // 날짜 칸 정렬은 행마다 보이는 날짜 그대로 (dateColKind — 미팅일·개발완료일·무상 만료일)
+      else if (sortKey==='meeting_at') { va=dateSortValue(a); vb=dateSortValue(b); }
       else { va=a.created_at||''; vb=b.created_at||''; }
       let cmp;
       if (typeof va === 'number') cmp = sortOrder==='desc' ? vb-va : va-vb;
@@ -3980,8 +4026,8 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
     { key:'title',      label:'프로젝트', sortable:false, width:'' },
     { key:'budget',     label:CONTRACT_NET_STATUSES.includes(filter)?'계약대금':'예산',  sortable:true,  width:'110px' },
     { key:'created_at', label:'생성일', sortable:true,  width:'100px' },
-    // 개발 종료 후 상태 필터에서는 미팅일 대신 개발완료일(마감일)을 표시
-    ...(hideMeeting  ? [] : [{ key:'meeting_at', label:POST_DEV.includes(filter)?'개발완료일':'미팅일', sortable:true,  width:'175px' }]),
+    // 날짜 칸 제목은 필터 상태에 맞게 (dateColLabel) — '전체'는 행마다 다른 날짜라 '일정'
+    ...(hideMeeting  ? [] : [{ key:'meeting_at', label:dateColLabel(filter), sortable:true,  width:'215px' }]),   // 215px: '무상 끝남 2026-09-19 48일 지남'이 한 줄에 들어가게
     ...(hideAssigned ? [] : [{ key:'assigned',   label:assignColLabel(filter), sortable:false, width:'130px' }]),
     { key:'note',       label:'메모',  sortable:false, width:'160px' },
   ];
@@ -4073,9 +4119,18 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                 </div>
                 {(() => {
                   const parts = [];
-                  if (isPostDev) { if (r.deadline) parts.push(<span key="dl" style={{ color:'var(--green)' }}>✅ 개발완료 {r.deadline}</span>); }
+                  const kind = dateColKind(r.current_status);
+                  if (kind === 'free_until') {
+                    const fm = freeMaintOf(r);
+                    if (fm.until) parts.push(<span key="fm" style={{ color:fm.left<0?'var(--red)':fm.left<=30?'var(--yellow)':'var(--text2)', fontWeight:fm.left<=30?600:400 }}>🔧 무상 {fm.left<0?'끝남':'만료'} {fm.until}{fm.manual?' ✎':''} · {dLeftLabel(fm.left)}</span>);
+                  }
+                  else if (isPostDev) { if (r.deadline) parts.push(<span key="dl" style={{ color:'var(--green)' }}>✅ 개발완료 {r.deadline}</span>); }
+                  else if (kind === 'dev_due') {
+                    const left = r.deadline ? daysBetweenYmd(kstDateStr(), r.deadline) : null;
+                    if (r.deadline) parts.push(<span key="dd" style={{ color:left<0?'var(--red)':'var(--text2)' }}>⚙️ 완료 예정 {r.deadline} · {dLeftLabel(left, '초과')}</span>);
+                  }
                   else if (!hideMeeting && meetingStr) parts.push(<span key="mt" style={{ color:ms==='done'?'var(--text2)':'var(--yellow)', fontWeight:ms==='done'?400:600 }}>{mt?mt.emoji:'📅'} {calLink(r.meeting_at, meetingStr)}{ms==='done'?' · 완료':''}</span>);
-                  if (!isPostDev && HAS_MILESTONES.includes(r.current_status) && r.deadline) parts.push(<span key="dd" style={{ color:'var(--text2)' }}>마감 {r.deadline}</span>);
+                  if (!isPostDev && kind !== 'dev_due' && HAS_MILESTONES.includes(r.current_status) && r.deadline) parts.push(<span key="dd" style={{ color:'var(--text2)' }}>마감 {r.deadline}</span>);
                   entries.forEach((e, i) => parts.push(
                     <span key={'a'+i} style={{ display:'inline-flex', alignItems:'center', gap:3 }}>
                       <MemberAvatar member={e.m} size={14} />
@@ -4173,7 +4228,29 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                   <td title={r.created_at ? formatMeetingAt(r.created_at) || r.created_at : ''} style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:'var(--text2)' }}>{r.created_at ? (r.created_at.length >= 10 ? r.created_at.slice(0,10) : r.created_at) : '—'}</td>
                   {!hideMeeting && (
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem' }}>
-                    {POST_DEV.includes(r.current_status) ? (
+                    {dateColKind(r.current_status) === 'free_until' ? (() => {
+                      const fm = freeMaintOf(r), why = freeMaintWhy(fm, parseBudgetNum(r.budget));
+                      if (!fm.until) return <span title={why} style={{ color:'var(--text2)' }}>— <span style={{ fontSize:'0.75rem' }}>기준 없음</span></span>;
+                      const over = fm.left < 0, soon = !over && fm.left <= 30;
+                      return (
+                        <span title={why} style={{ display:'flex', alignItems:'center', gap:4 }}>
+                          <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.8rem', fontWeight:600, background:over?'var(--surface-danger-mid)':soon?'var(--surface-warning-mid)':'var(--surface-info-mid)', color:over?'var(--red)':soon?'var(--yellow)':'var(--blue)' }}>{over?'무상 끝남':'무상 만료'}</span>
+                          <span style={{ color:'var(--text2)' }}>{fm.until}{fm.manual && <span aria-label="직접 입력" style={{ marginLeft:2 }}>✎</span>}</span>
+                          <span style={{ fontSize:'0.75rem', fontWeight:600, color:over?'var(--red)':soon?'var(--yellow)':'var(--text2)' }}>{dLeftLabel(fm.left)}</span>
+                        </span>
+                      );
+                    })() : dateColKind(r.current_status) === 'dev_due' ? (
+                      r.deadline ? (() => {
+                        const left = daysBetweenYmd(kstDateStr(), r.deadline), over = left != null && left < 0;
+                        return (
+                          <span title="개발 완료 예정일(정보 탭의 마감일)" style={{ display:'flex', alignItems:'center', gap:4 }}>
+                            <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.8rem', fontWeight:600, background:over?'var(--surface-danger-mid)':'var(--surface-info-mid)', color:over?'var(--red)':'var(--blue)' }}>완료 예정</span>
+                            <span style={{ color:'var(--text2)' }}>{r.deadline}</span>
+                            <span style={{ fontSize:'0.75rem', fontWeight:600, color:over?'var(--red)':'var(--text2)' }}>{dLeftLabel(left, '초과')}</span>
+                          </span>
+                        );
+                      })() : <span title="정보 탭에서 마감일을 입력하세요" style={{ color:'var(--text2)' }}>— <span style={{ fontSize:'0.75rem' }}>마감일 없음</span></span>
+                    ) : POST_DEV.includes(r.current_status) ? (
                       r.deadline ? (
                         <span style={{ display:'flex', alignItems:'center', gap:4 }}>
                           <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.8rem', fontWeight:600, background:'var(--surface-success-mid)', color:'var(--green)' }}>개발완료</span>

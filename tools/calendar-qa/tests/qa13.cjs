@@ -18,7 +18,7 @@ const S = __dirname + '/shots/';
   // 주간 근무 보드
   await p.click('#s-week'); await p.waitForTimeout(150);
   const row = await p.evaluate(k => { const r = [...document.querySelectorAll('#weekboard .wb-row')].find(x => x.querySelector(`[data-tl="${k}"]`)); return { pill: r.querySelector('.wb-team').textContent.trim(), ex: [...r.querySelectorAll('.wb-ex')].map(x => x.textContent.trim()) }; }, k);
-  ok('주간 근무: 평소 재택 · 전원', /평소 재택 · 전원/.test(row.pill), row.pill);
+  ok('주간 근무: 평소 근무지 안 보임 · 전원', !/평소/.test(row.pill) && /전원/.test(row.pill), row.pill);   // 2026-11-06 '평소 ○○' 표시 뺌
   ok('주간 근무: 두 사람 14:00 외근 줄', row.ex.length===2 && row.ex.every(t => /14:00 외근/.test(t)), row.ex.join(' / '));
   await p.screenshot({ path:S+'s-weekboard.png', clip:{ x:0, y:80, width:420, height:560 } });
   // 날짜 창(사람별 칩)
@@ -27,15 +27,15 @@ const S = __dirname + '/shots/';
   ok('날짜 창: 김가람·이나래 시청역2호점 · 14:00 외근, 박다온 시청역2호점', chips.some(t => /김가람.*시청역 · 14:00 외근/.test(t)) && chips.some(t => /이나래.*시청역 · 14:00 외근/.test(t)) && chips.some(t => /박다온.*시청역/.test(t) && !/외근/.test(t)), chips.join(' | '));
   const my = await p.textContent('#sheet .mystat');
   ok('내 근무(이나래): 시청역2호점 출근 선택 + 14:00부터 외근 안내', /14:00 대면 미팅\(고객사 미팅\)부터 외근으로 표시됩니다/.test(my) && await p.evaluate(() => document.querySelector('#sheet [data-q="team"]').getAttribute('aria-pressed'))==='true', my.replace(/\s+/g,' '));
-  ok('날짜 창 팀 근무지 카드: 팀 근무지 · 평소 재택', /팀 근무지 · 평소 재택/.test(await p.textContent('#sheet .teamloc')), (await p.textContent('#sheet .teamloc')).replace(/\s+/g,' '));
+  ok('날짜 창 팀 근무지 카드: 팀 근무지(평소 근무지 없음)', (t => /팀 근무지/.test(t) && !/평소/.test(t))(await p.textContent('#sheet .teamloc')), (await p.textContent('#sheet .teamloc')).replace(/\s+/g,' '));
   await p.screenshot({ path:S+'s-daysheet.png', clip:{ x:440, y:100, width:560, height:420 } });
   // 외근은 고르는 버튼에서 뺐다(2026-11-05) — 하루 종일 밖이면 '다른 곳…'에서 장소를 적는다
   ok('빠른 버튼에 외근 없음, 다른 곳… 있음', !(await p.$('#sheet [data-q="out"]')) && !!(await p.$('#sheet [data-q="more"]')));
   await p.keyboard.press('Escape');
   await p.click('#v-week'); await p.waitForTimeout(150);
-  ok('주 보기 칸: 평소 재택', /평소 재택/.test(await p.textContent(`#week .col[data-k="${k}"] .tl`)), await p.textContent(`#week .col[data-k="${k}"] .tl`));
+  ok('주 보기 칸: 평소 근무지 안 보임', !/평소/.test(await p.textContent(`#week .col[data-k="${k}"] .tl`)), await p.textContent(`#week .col[data-k="${k}"] .tl`));
   await p.click('#v-list'); await p.waitForTimeout(150);
-  ok('목록 보기: 평소 재택', /평소 재택/.test(await p.textContent(`#listview [data-k="${k}"] .ag-h`)));
+  ok('목록 보기: 평소 근무지 안 보임', !/평소/.test(await p.textContent(`#listview [data-k="${k}"] .ag-h`)));
   await p.click('#v-month'); await p.waitForTimeout(150);
   // 월 달력 칸 아바타(따로 보여 줄 사람)
   await p.click('#s-today');
@@ -45,6 +45,6 @@ const S = __dirname + '/shots/';
   await p.evaluate(k => { __mock.DB.member_work_overrides = []; const e = __mock.DB.calendar_events.find(x => x.id==='mt1'); e.all_day = true; e.start_time = null; e.end_time = null; __mock.emit('calendar_events','UPDATE'); __mock.emit('member_work_overrides','DELETE'); }, k);
   await p.waitForTimeout(500); await p.click('#s-week'); await p.waitForTimeout(150);
   const row2 = await p.evaluate(k => { const r = [...document.querySelectorAll('#weekboard .wb-row')].find(x => x.querySelector(`[data-tl="${k}"]`)); return r.querySelector('.wb-team').textContent.trim(); }, k);
-  ok('종일 대면 미팅 → 1명(두 사람 하루 외근)', /평소 재택 · 1명/.test(row2), row2);
+  ok('종일 대면 미팅 → 1명(두 사람 하루 외근)', /1명/.test(row2) && !/평소/.test(row2), row2);
   console.log(out.join('\n')); console.log('ERR', errs); await b.close();
 })();

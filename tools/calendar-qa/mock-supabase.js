@@ -54,7 +54,8 @@
   const UNIQUE = { team_work_routines:['valid_from'], team_work_overrides:['work_date'], member_work_overrides:['member_id','work_date'] };
   const listeners = [];
   let actor = ME_UID;
-  const emit = (table, eventType) => setTimeout(() => listeners.filter(l => !l.table || l.table===table).forEach(l => l.fn({ eventType, table })), 10);
+  // 실제 Supabase 처럼 바뀐 행(new·old)을 같이 보낸다 — 워크룸 본체는 payload.new 로 목록을 고친다 (2026-11-06)
+  const emit = (table, eventType, row, old) => { const n = row ? JSON.parse(JSON.stringify(row)) : {}, o = old ? JSON.parse(JSON.stringify(old)) : {}; setTimeout(() => listeners.filter(l => !l.table || l.table===table).forEach(l => l.fn({ eventType, table, new:n, old:o })), 10); };
   const audit = (table, op, before, after) => { if (!CAL.includes(table) && table!=='wishket_projects') return; DB.project_audit_log.push({ id:DB.project_audit_log.length+1, at:iso(), table_name:table, op, row_pk:(after||before).id, actor_id:actor, actor_email: actor===ME_UID?'qa@example.test':'other@example.test', before: before?JSON.parse(JSON.stringify(before)):null, after: after?JSON.parse(JSON.stringify(after)):null }); };
   const err = (code, message) => ({ data:null, error:{ code, message } });
   function check(table, row, selfId){
@@ -98,15 +99,15 @@
         const out = [];
         for (const v of this.v) {
           const ex = this.op==='upsert' ? rows.find(r => this.oc.every(c => r[c]===v[c])) : null;
-          if (ex) { const before = { ...ex }; const next = { ...ex, ...v, updated_at:iso(), updated_by:actor }; const c = check(t, next, ex.id); if (c && c!=='dup') return c; Object.assign(ex, next); audit(t,'UPDATE',before,ex); out.push(ex); emit(t,'UPDATE'); continue; }
+          if (ex) { const before = { ...ex }; const next = { ...ex, ...v, updated_at:iso(), updated_by:actor }; const c = check(t, next, ex.id); if (c && c!=='dup') return c; Object.assign(ex, next); audit(t,'UPDATE',before,ex); out.push(ex); emit(t,'UPDATE',ex,before); continue; }
           const row = { id:uuid(), created_at:iso(), updated_at:iso(), created_by:actor, updated_by:actor, exdates:t==='calendar_events'?[]:undefined, ...v };
           const c = check(t, row, row.id); if (c==='dup') return err('23505','duplicate key'); if (c) return c;
-          rows.push(row); audit(t,'INSERT',null,row); out.push(row); emit(t,'INSERT');
+          rows.push(row); audit(t,'INSERT',null,row); out.push(row); emit(t,'INSERT',row);
         }
         return { data: JSON.parse(JSON.stringify(out)), error:null };
       }
-      if (this.op==='update') { const hit = rows.filter(match); for (const r of hit) { const before={...r}; const next = { ...r, ...this.v, updated_at:iso(), updated_by:actor }; const c = check(t, next, r.id); if (c==='dup') return err('23505','duplicate key'); if (c) return c; Object.assign(r, next); audit(t,'UPDATE',before,r); emit(t,'UPDATE'); } return { data:hit, error:null }; }
-      if (this.op==='delete') { const hit = rows.filter(match); DB[t] = rows.filter(r => !match(r)); hit.forEach(r => { audit(t,'DELETE',r,null); emit(t,'DELETE'); }); return { data:hit, error:null }; }
+      if (this.op==='update') { const hit = rows.filter(match); for (const r of hit) { const before={...r}; const next = { ...r, ...this.v, updated_at:iso(), updated_by:actor }; const c = check(t, next, r.id); if (c==='dup') return err('23505','duplicate key'); if (c) return c; Object.assign(r, next); audit(t,'UPDATE',before,r); emit(t,'UPDATE',r,before); } return { data:hit, error:null }; }
+      if (this.op==='delete') { const hit = rows.filter(match); DB[t] = rows.filter(r => !match(r)); hit.forEach(r => { audit(t,'DELETE',r,null); emit(t,'DELETE',null,r); }); return { data:hit, error:null }; }
     }
   }
   const sessionOf = () => { const uid = curUid(); actor = uid; return { user:{ id:uid, email:(DB.team_members.find(m=>m.user_id===uid)?.name||'qa')+'@example.test', app_metadata:{ role:'admin' }, user_metadata:{} } }; };

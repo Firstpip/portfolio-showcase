@@ -2,7 +2,7 @@
 //   npm test  (= TZ=Asia/Seoul · America/Los_Angeles · UTC 로 세 번 실행)
 // 브라우저 번들 안의 코드는 node 로 못 돌리므로, 순수 함수만 dates.mjs 에 두고 여기서 단언한다.
 import {
-  isYmd, kstParts, kstToIso, kstDateStr, kstStartOfDay, toYmd, addDaysYmd, daysBetweenYmd, daysBetweenKst, scheduleFrom,
+  isYmd, kstParts, kstToIso, kstDateStr, kstStartOfDay, toYmd, addDaysYmd, addMonthsYmd, daysBetweenYmd, daysBetweenKst, scheduleFrom,
 } from './dates.mjs';
 
 const TZ = process.env.TZ || '(기본)';
@@ -36,6 +36,13 @@ eq('addDaysYmd 월 경계', addDaysYmd('2026-11-30', 1), '2026-12-01');
 eq('addDaysYmd 연 경계', addDaysYmd('2026-12-31', 1), '2027-01-01');
 eq('addDaysYmd 윤년', addDaysYmd('2028-02-28', 1), '2028-02-29');
 eq('addDaysYmd 음수', addDaysYmd('2026-11-01', -1), '2026-10-31');
+eq('addMonthsYmd 6개월', addMonthsYmd('2026-05-23', 6), '2026-11-23');
+eq('addMonthsYmd 연 넘김', addMonthsYmd('2026-10-28', 6), '2027-04-28');
+eq('addMonthsYmd 없는 날 → 말일', addMonthsYmd('2026-08-31', 6), '2027-02-28');
+eq('addMonthsYmd 윤년 말일', addMonthsYmd('2027-08-31', 6), '2028-02-29');
+eq('addMonthsYmd 3개월', addMonthsYmd('2026-11-30', 3), '2027-02-28');
+eq('addMonthsYmd 음수', addMonthsYmd('2026-01-31', -2), '2025-11-30');
+eq('addMonthsYmd 무효', addMonthsYmd('2026-13-01', 1), null);
 eq('addDaysYmd 0·무효', [addDaysYmd('2026-11-02', 0), addDaysYmd('bad', 3)], ['2026-11-02', null]);
 eq('addDaysYmd 7N-1 (마감 자동 계산 관례)', addDaysYmd('2026-11-02', 7 * 7 - 1), '2026-12-20');
 

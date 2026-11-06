@@ -72,6 +72,20 @@ export function addDaysYmd(ymd, n) {
   return t.toISOString().slice(0, 10);
 }
 
+/**
+ * 달력일 + n개월. 같은 날짜가 없는 달이면 그달 말일로 (8/31 + 6개월 → 2/28·윤년 2/29).
+ * 민법의 월 단위 기간 계산(초일 불산입, 마지막 달의 같은 날 전날 만료 → 같은 날짜 +n개월로 끝, 없는 날짜면 말일)과 같은 결과다.
+ */
+export function addMonthsYmd(ymd, n) {
+  if (!isYmd(ymd)) return null;
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (m < 1 || m > 12 || d < 1 || d > new Date(Date.UTC(y, m, 0)).getUTCDate()) return null;   // 2026-13-01·02-30 같은 없는 날짜
+  const total = (m - 1) + (n || 0);
+  const ty = y + Math.floor(total / 12), tm = ((total % 12) + 12) % 12;
+  const last = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(ty, tm, Math.min(d, last))).toISOString().slice(0, 10);
+}
+
 /** 두 달력일 사이의 일수 (b - a). 같은 날 0, b 가 앞이면 음수. 무효값은 null. */
 export function daysBetweenYmd(a, b) {
   if (!isYmd(a) || !isYmd(b)) return null;
