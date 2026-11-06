@@ -1,5 +1,6 @@
 import { CalendarPage, CalendarToday } from './calendar.jsx';
 // 날짜 규칙(한국 달력일) — 'YYYY-MM-DD' 를 만들거나 비교하는 코드는 전부 이 모듈을 쓴다 (src/dates.mjs 머리말 참조)
+import { runMove } from './move.mjs';
 import { kstParts, kstToIso, kstDateStr, kstStartOfDay, isYmd, addDaysYmd, daysBetweenYmd, daysBetweenKst, scheduleFrom } from './dates.mjs';
 const { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } = React;
 
@@ -4444,6 +4445,7 @@ function App({ session }) {
     setVisitData({ summary, views, visitsBySlug, ipFirst });
   }, []);
   // 팀 브라우저 표식 — 같은 출처(firstpip.github.io)의 쇼케이스 페이지(assets/sv.js)가 읽어 내부 방문으로 분류한다
+  //   새 주소(workroom.firstpip.co.kr)에서는 출처가 달라 효과가 없다 — 옛 주소의 마지막 정리(src/move.mjs)와 팀 IP 등록이 대신한다
   useEffect(() => { try { localStorage.setItem('fp_internal', '1'); } catch {} }, []);
   // 팀 네트워크 등록 — 지금 공인 IP 를 team_networks 에 등록/갱신 → 같은 와이파이의 모든 기기·브라우저가 팀 방문으로 빠진다.
   //   브라우저 표식은 브라우저마다·시크릿 창·Safari 정리로 새기 쉬워 IP 단위로 보강 (2026-10-22). 실패는 무시.
@@ -5981,4 +5983,5 @@ function Root() {
   return <App session={session} />;
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
+// 옛 주소(firstpip.github.io)면 새 주소로 옮기는 단계에 따라 띠를 띄우거나 정리 후 이동 — src/move.mjs
+if (!runMove(supabase)) ReactDOM.createRoot(document.getElementById('root')).render(<Root />);

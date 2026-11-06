@@ -10,7 +10,7 @@ import { addDay, isStaleSub, kstKey, planNotifications, pushOutcome, type PushOu
 // 발송: web-push 로 암호화·VAPID 서명만 만들고(generateRequestDetails) 전송은 fetch 로 한다(Deno 네이티브).
 // 비밀값: VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT (supabase secrets). SUPABASE_* 는 런타임이 넣어 준다.
 
-const ALLOWED_ORIGINS = new Set(["https://firstpip.github.io", "http://127.0.0.1:8765", "http://localhost:8765"]);
+const ALLOWED_ORIGINS = new Set(["https://firstpip.github.io", "https://workroom.firstpip.co.kr", "http://127.0.0.1:8765", "http://localhost:8765"]);
 // 위시켓 프로젝트는 대면 미팅 외근(근무지) 변화를 알리려고 함께 읽는다 (2026-11-03)
 const CAL_TABLES = ["team_work_routines", "team_work_overrides", "member_work_overrides", "team_leaves", "calendar_events", "wishket_projects"];
 const SENT_KEEP_DAYS = 14;

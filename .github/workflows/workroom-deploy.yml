@@ -1,0 +1,53 @@
+name: 워크룸 새 주소 배포
+
+# dashboard/ 를 Firstpip/workroom 레포(GitHub Pages, workroom.firstpip.co.kr)로 그대로 복사한다 (2026-11-06).
+# 왜: 워크룸을 결과물 페이지와 다른 출처로 옮겨 로그인 정보를 분리한다 — dashboard/src/move.mjs 머리말.
+# 소스는 계속 이 레포 dashboard/ 하나. 옛 주소(firstpip.github.io/portfolio-showcase/dashboard/)도 이 레포 Pages 로 계속 배포된다.
+# 비밀값 WORKROOM_DEPLOY_KEY(Firstpip/workroom 의 쓰기 배포 키 개인키)가 없으면 건너뛴다.
+
+on:
+  push:
+    branches: [main]
+    paths: ['dashboard/**', '.github/workflows/workroom-deploy.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workroom-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 복사
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      KEY: ${{ secrets.WORKROOM_DEPLOY_KEY }}
+    steps:
+      - name: 배포 키 확인
+        id: k
+        run: |
+          if [ -z "$KEY" ]; then echo "::notice::WORKROOM_DEPLOY_KEY 없음 — 새 주소 배포를 건너뜁니다"; echo "go=0" >> "$GITHUB_OUTPUT"; else echo "go=1" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/checkout@v4
+        if: steps.k.outputs.go == '1'
+      - name: 새 레포로 복사
+        if: steps.k.outputs.go == '1'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && printf '%s\n' "$KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          git clone --depth 1 git@github.com:Firstpip/workroom.git out
+          # 화면에 필요한 것만 — 소스·빌드 도구·미리보기는 빼고
+          rsync -a --delete --exclude .git --exclude CNAME --exclude .nojekyll \
+            --exclude src --exclude node_modules --exclude 'package*.json' --exclude _preview.html --exclude data.json \
+            dashboard/ out/
+          echo "workroom.firstpip.co.kr" > out/CNAME
+          touch out/.nojekyll
+          cd out
+          git add -A
+          if git diff --cached --quiet; then echo "바뀐 것 없음"; exit 0; fi
+          git -c user.name="workroom-deploy" -c user.email="workroom-deploy@users.noreply.github.com" \
+            commit -q -m "워크룸 배포: portfolio-showcase ${GITHUB_SHA::7}"
+          git push -q origin HEAD:main

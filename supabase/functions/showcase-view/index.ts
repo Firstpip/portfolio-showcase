@@ -7,7 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 //   team:  대시보드(로그인 세션 JWT)가 로드마다 1회 → 지금 공인 IP 를 team_networks 에 등록/갱신 (2026-10-22)
 // 응답은 항상 204 — 실패해도 페이지 동작엔 영향이 없어야 하고, 거절 사유를 외부에 알릴 필요도 없다.
 
-const ALLOWED_ORIGINS = new Set(["https://firstpip.github.io"]);
+const ALLOWED_ORIGINS = new Set(["https://firstpip.github.io", "https://workroom.firstpip.co.kr"]);   // 워크룸 새 주소(2026-11-06) — 팀 IP 등록 호출
 const SLUG_RE = /^\d{6}_[a-z0-9][a-z0-9_-]{1,100}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const BOT_RE = /bot|crawl|spider|slurp|preview|facebookexternalhit|kakaotalk-scrap|yeti|daum|bingpreview|headless|lighthouse|pingdom|uptime|curl|wget|python|node-fetch|axios|go-http/i;

@@ -1288,10 +1288,10 @@ function mountCalendar(root, ctx) {
     const os = mac ? `맥 시스템 설정 → 알림 → ${edge ? 'Microsoft Edge' : 'Google Chrome'}` : `윈도우 설정 → 시스템 → 알림 → ${edge ? 'Microsoft Edge' : 'Google Chrome'}`;
     if (env.ios) return '아이폰 설정 → 알림 → 워크룸 → 알림 허용을 켠 뒤 앱을 다시 열어 주세요.';
     if (/Android/i.test(ua)) return '크롬 주소창 왼쪽 아이콘(또는 홈 화면 앱이면 휴대폰 설정 → 애플리케이션 → 워크룸 → 알림)에서 알림을 허용한 뒤 새로고침해 주세요.';
-    if (chromium && env.standalone) return `앱 창 오른쪽 위 ⋮ → '앱 정보' → 알림을 '허용'으로 바꾼 뒤 새로고침해 주세요. 메뉴가 안 보이면 ${edge ? '엣지' : '크롬'} 주소창에 <b>${edge ? 'edge' : 'chrome'}://settings/content/notifications</b> 를 열고 차단 목록의 firstpip.github.io 를 허용으로 바꿉니다. ${os} 도 켜져 있어야 합니다.`;
+    if (chromium && env.standalone) return `앱 창 오른쪽 위 ⋮ → '앱 정보' → 알림을 '허용'으로 바꾼 뒤 새로고침해 주세요. 메뉴가 안 보이면 ${edge ? '엣지' : '크롬'} 주소창에 <b>${edge ? 'edge' : 'chrome'}://settings/content/notifications</b> 를 열고 차단 목록의 ${location.hostname} 를 허용으로 바꿉니다. ${os} 도 켜져 있어야 합니다.`;
     if (chromium) return `주소창 왼쪽 아이콘(사이트 정보) → 알림 → 허용으로 바꾼 뒤 새로고침해 주세요. ${os} 도 켜져 있어야 합니다.`;
     if (/Safari\//.test(ua) && env.standalone) return '맥 시스템 설정 → 알림 → 워크룸 → 알림 허용을 켠 뒤 앱을 다시 열어 주세요.';
-    if (/Safari\//.test(ua)) return 'Safari 메뉴 → 설정 → 웹사이트 → 알림 → firstpip.github.io 를 허용으로 바꾼 뒤 새로고침해 주세요.';
+    if (/Safari\//.test(ua)) return `Safari 메뉴 → 설정 → 웹사이트 → 알림 → ${location.hostname} 를 허용으로 바꾼 뒤 새로고침해 주세요.`;
     return '주소창 왼쪽 사이트 정보(자물쇠)에서 알림을 허용한 뒤 새로고침해 주세요.';
   }
   async function openPush(){
