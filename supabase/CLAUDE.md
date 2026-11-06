@@ -8,6 +8,7 @@
 - 함수를 만들면 같은 마이그레이션에서 `REVOKE EXECUTE ON FUNCTION … FROM PUBLIC, anon;` 후 필요한 역할에만 `GRANT`.
   Postgres 는 새 함수에 PUBLIC 실행 권한을 주고, 이는 스키마 단위 기본 권한으로 막을 수 없다(전역 변경은 확장 함수까지 막아 쓰지 않음).
 - SECURITY DEFINER 함수는 `SET search_path = public, pg_temp` 를 붙인다.
+- CI(`.github/workflows/ci.yml`)가 `node tools/ci/check-migrations.mjs` 로 SECURITY DEFINER 함수의 REVOKE … FROM PUBLIC·anon GRANT 금지·search_path 를 검사한다. 로컬에서도 먼저 돌린다.
 - 적용 전 점검: anon 이 실행 가능한 SECURITY DEFINER 함수가 없어야 한다(트리거·event_trigger 제외, `rls_auto_enable` 은 Supabase 기본).
   `20261105120000_revoke_anon_rpc.sql` 의 마지막 DO 블록과 같은 질의.
 - 운영 적용은 건마다 승인 → 적용 전 권한·정책 상태를 저장 → `supabase db push` → 다시 조회해 확인.

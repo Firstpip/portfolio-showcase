@@ -1,0 +1,79 @@
+name: 검사
+
+# main 에 올라온 변경을 자동으로 확인한다 (2026-11-06). 배포(GitHub Pages)를 막지는 않고, 실패하면 알린다.
+#  - 대시보드: 날짜 단위 테스트(시간대 3개), 올린 app.js 가 src 로 다시 빌드한 것과 같은지
+#  - 서버 함수: 알림 계산 테스트, 함수 3개 타입 검사
+#  - DB: 마이그레이션 규칙(SECURITY DEFINER 함수 권한 회수·search_path — supabase/CLAUDE.md)
+# 캘린더 화면 QA(tools/calendar-qa, Playwright)는 오래 걸려 여기서 돌리지 않는다 — 화면을 바꾸면 로컬에서 돌린다.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dashboard:
+    name: 대시보드
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: 의존성
+        working-directory: dashboard
+        run: npm ci --no-audit --no-fund
+      - name: 날짜 단위 테스트
+        working-directory: dashboard
+        run: npm test
+      - name: 올린 app.js 가 src 빌드와 같은가
+        working-directory: dashboard
+        run: |
+          npm run build
+          if ! git diff --quiet -- app.js app.js.map; then
+            echo "::error::dashboard/app.js 가 src 와 다릅니다 — dashboard 에서 npm run build 후 app.js·app.js.map 을 함께 커밋하세요"
+            git diff --stat -- app.js app.js.map
+            exit 1
+          fi
+
+  functions:
+    name: 서버 함수
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.8
+      - name: 알림 계산 테스트
+        working-directory: supabase/functions/calendar-push
+        run: deno test --config deno.json plan.test.ts
+      - name: 타입 검사
+        working-directory: supabase/functions
+        run: |
+          for f in calendar-push delete-portfolios showcase-view; do
+            echo "== $f"
+            (cd "$f" && deno check --config deno.json index.ts)
+          done
+
+  migrations:
+    name: DB 마이그레이션 규칙
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node tools/ci/check-migrations.mjs
