@@ -1,5 +1,5 @@
 // 프로젝트 목록 날짜 칸 (2026-11-06): 개발 중 → 개발완료(예정)일, 유지보수(무상) → 무상 만료일(회사 기준 자동 + 직접 입력)
-//  무상 기준: 검수 후 6개월, 계약금액 1,000만 원 미만 3개월(2026-10-15 이후 계약), 그 전 계약은 일괄 6개월 — dashboard/src/maintenance.mjs
+//  무상 기준: 검수 후 6개월, 계약금액 1,000만 원 미만 3개월(2026-10-15 이후 계약), 그 전 계약은 일괄 180일 — dashboard/src/maintenance.mjs
 //  배지(2026-11-10): 기간 중 '무상 중', 30일 이내 '만료 임박', 지나면 '무상 만료'
 const { chromium } = require(process.env.PW_CORE || 'playwright-core');
 (async () => {
@@ -48,7 +48,7 @@ const { chromium } = require(process.env.PW_CORE || 'playwright-core');
       t = await rowText('maintenance_free', 'qa_mf5');
       ok(`${nm} 지난 무상: '무상 만료'·'지남'`, /무상 만료/.test(t) && /지남/.test(t), t.slice(0, 160));
       t = await rowText('maintenance_free', 'qa_mf6');
-      ok(`${nm} 10-15 이전 계약 500만: 금액 무관 6개월 = 2027-03-02`, /2027-03-02/.test(t) && /무상 중/.test(t), t.slice(0, 160));
+      ok(`${nm} 10-15 이전 계약 500만: 금액 무관 180일 = 2027-03-01`, /2027-03-01/.test(t) && /무상 중/.test(t), t.slice(0, 160));
       // 그 밖의 개발 종료 상태는 그대로 개발완료일
       t = await rowText('delivered', 'qa_del');
       ok(`${nm} 납품 완료: 개발완료일 그대로`, /개발완료/.test(t) && /2026-05-28/.test(t), t.slice(0, 160));

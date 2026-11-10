@@ -1,6 +1,6 @@
 // '개발 중' → 다음 상태로 넘길 때 개발 완료일 확인 창 (2026-11-10)
 //  - 유지보수(무상)·유지보수(유상)·납품 완료로 넘기면 창이 뜨고, 고른 날짜가 deadline(개발완료일)이 된다
-//  - 유지보수(무상)이면 무상 기간 3개월·6개월·기타 — 기본값은 사내 기준(2026-10-15 이전 계약 6개월, 이후 1,000만원 미만 3개월)
+//  - 유지보수(무상)이면 무상 기간 3개월·6개월·기타(옛 계약은 180일 추가) — 기본값은 사내 기준(2026-10-15 이전 계약 180일, 이후 1,000만원 미만 3개월)
 //  - 사내 기준과 같은 기간이면 free_maint_until 은 비워 두고(자동 계산), 다르면 날짜를 저장
 const { chromium } = require(process.env.PW_CORE || 'playwright-core');
 const kst = (d = new Date()) => d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
@@ -38,40 +38,42 @@ const addMonths = (ymd, n) => { const [y, m, d] = ymd.split('-').map(Number); co
     const radio = (v) => dlg().locator(`input[name="free-months"][value="${v}"]`);
     const confirmBtn = () => dlg().getByRole('button', { name:/으\)로 변경/ });
     try {
-      // 1) 옛 계약(04-16) 500만 → 무상: 기본 6개월, 완료일을 9일 전으로
+      // 1) 옛 계약(04-16) 500만 → 무상: 기본 180일, 완료일을 9일 전으로
       await open('qa_dd_old', '유지보수 (무상)');
       ok(`${nm} 창이 뜸 (개발 중 → 무상)`, await dlg().count() === 1);
       ok(`${nm} 완료일 기본값 = 오늘`, await dlg().locator('input[aria-label="개발 완료일"]').inputValue() === TODAY);
-      ok(`${nm} 옛 계약 → 6개월 기본 선택`, await radio('6').isChecked() && !(await radio('3').isChecked()));
+      ok(`${nm} 옛 계약 → 180일 기본 선택`, await radio('d180').isChecked() && !(await radio('m6').isChecked()) && !(await radio('m3').isChecked()));
+      const vals = await dlg().locator('input[name="free-months"]').evaluateAll(es => es.map(e => e.value).join(','));
+      ok(`${nm} 옛 계약 선택지: 180일·3개월·6개월·기타`, vals === 'd180,m3,m6,other', vals);
       let txt = (await dlg().textContent()).replace(/\s+/g, ' ');
-      ok(`${nm} 사내 기준 이유 표시`, /2026-10-15 이전 계약은 금액과 상관없이 6개월/.test(txt), txt.slice(0, 260));
+      ok(`${nm} 사내 기준 이유 표시`, /2026-10-15 이전 계약은 금액과 상관없이 180일/.test(txt), txt.slice(0, 260));
       // 미래 날짜는 막힘
       await dlg().locator('input[aria-label="개발 완료일"]').fill(addDays(TODAY, 1)); await p.waitForTimeout(100);
       ok(`${nm} 미래 완료일 → 버튼 꺼짐 + 안내`, await confirmBtn().isDisabled() && /오늘 이후 날짜/.test(await dlg().textContent()));
       await dlg().locator('input[aria-label="개발 완료일"]').fill(DONE); await p.waitForTimeout(100);
       txt = (await dlg().textContent()).replace(/\s+/g, ' ');
-      ok(`${nm} 기간 미리보기 ${DONE} ~ ${addMonths(DONE, 6)}`, txt.includes(`${DONE} ~ ${addMonths(DONE, 6)}`), txt.slice(-200));
+      ok(`${nm} 기간 미리보기 ${DONE} ~ ${addDays(DONE, 180)}`, txt.includes(`${DONE} ~ ${addDays(DONE, 180)}`), txt.slice(-200));
       if (nm === 'PC') await p.screenshot({ path: __dirname + '/../out/qa29-pc.png' }).catch(() => {});
       else await p.screenshot({ path: __dirname + '/../out/qa29-phone.png' }).catch(() => {});
       await confirmBtn().click(); await p.waitForTimeout(700);
       let r = await row('qa_dd_old'), last = r.history[r.history.length - 1];
       ok(`${nm} 저장: 상태 무상·deadline=${DONE}·free_maint_until 비움(기준과 같음)`, r.current_status === 'maintenance_free' && r.deadline === DONE && !r.free_maint_until, JSON.stringify({ s:r.current_status, d:r.deadline, f:r.free_maint_until }));
-      ok(`${nm} 이력: dev_done + 메모`, last.dev_done === DONE && last.note.includes(`개발완료일 ${DONE}`) && last.note.includes('무상 6개월'), JSON.stringify(last));
+      ok(`${nm} 이력: dev_done + 메모`, last.dev_done === DONE && last.note.includes(`개발완료일 ${DONE}`) && last.note.includes('무상 180일'), JSON.stringify(last));
       await p.goto(BASE + '#?f=maintenance_free'); await p.reload(); await p.waitForTimeout(900);
       const lt = await p.evaluate(() => { const e = [...document.querySelectorAll('tr, [role="button"]')].filter(x => x.textContent.includes('qa_dd_old')).pop(); return e ? e.textContent.replace(/\s+/g, ' ') : ''; });
-      ok(`${nm} 목록 무상 만료일 = ${addMonths(DONE, 6)} · 무상 중`, lt.includes(addMonths(DONE, 6)) && /무상 중/.test(lt), lt.slice(0, 200));
+      ok(`${nm} 목록 무상 만료일 = ${addDays(DONE, 180)} · 무상 중`, lt.includes(addDays(DONE, 180)) && /무상 중/.test(lt), lt.slice(0, 200));
 
       // 2) 새 계약 500만 → 기본 3개월, 6개월로 바꾸면 날짜 저장
       await open('qa_dd_new', '유지보수 (무상)');
-      ok(`${nm} 새 계약 500만 → 3개월 기본`, await radio('3').isChecked());
-      await dlg().locator('input[aria-label="개발 완료일"]').fill(DONE); await radio('6').check(); await p.waitForTimeout(100);
+      ok(`${nm} 새 계약 500만 → 3개월 기본, 180일 선택지 없음`, await radio('m3').isChecked() && await radio('d180').count() === 0);
+      await dlg().locator('input[aria-label="개발 완료일"]').fill(DONE); await radio('m6').check(); await p.waitForTimeout(100);
       await confirmBtn().click(); await p.waitForTimeout(700);
       r = await row('qa_dd_new');
       ok(`${nm} 기준과 다른 6개월 → free_maint_until=${addMonths(DONE, 6)}`, r.current_status === 'maintenance_free' && r.free_maint_until === addMonths(DONE, 6), JSON.stringify({ s:r.current_status, f:r.free_maint_until }));
 
       // 3) 금액 없음 → 기본 선택 없음, 고르기 전엔 버튼 꺼짐, 기타 날짜
       await open('qa_dd_none', '유지보수 (무상)');
-      ok(`${nm} 금액 없음 → 기본 선택 없음 + 버튼 꺼짐`, !(await radio('3').isChecked()) && !(await radio('6').isChecked()) && await confirmBtn().isDisabled());
+      ok(`${nm} 금액 없음 → 기본 선택 없음 + 버튼 꺼짐`, !(await radio('m3').isChecked()) && !(await radio('m6').isChecked()) && await confirmBtn().isDisabled());
       await radio('other').check(); await p.waitForTimeout(100);
       ok(`${nm} 기타: 날짜 넣기 전엔 꺼짐`, await confirmBtn().isDisabled());
       await dlg().locator('input[aria-label="무상 만료일 직접 입력"]').fill('2027-12-31'); await p.waitForTimeout(100);

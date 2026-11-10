@@ -1,8 +1,8 @@
 import { CalendarPage, CalendarToday } from './calendar.jsx';
 // 날짜 규칙(한국 달력일) — 'YYYY-MM-DD' 를 만들거나 비교하는 코드는 전부 이 모듈을 쓴다 (src/dates.mjs 머리말 참조)
 import { runMove } from './move.mjs';
-import { freeMaintInfo, freeMaintDefault, freeMaintUntilToStore } from './maintenance.mjs';
-import { kstParts, kstToIso, kstDateStr, kstStartOfDay, isYmd, addDaysYmd, addMonthsYmd, daysBetweenYmd, daysBetweenKst, scheduleFrom } from './dates.mjs';
+import { freeMaintInfo, freeMaintDefault, freeMaintUntilToStore, addTerm, TERM_LABEL } from './maintenance.mjs';
+import { kstParts, kstToIso, kstDateStr, kstStartOfDay, isYmd, addDaysYmd, daysBetweenYmd, daysBetweenKst, scheduleFrom } from './dates.mjs';
 const { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } = React;
 
 // ─── Supabase ───
@@ -80,12 +80,12 @@ const freeMaintBadge = (left) => left < 0 ? '무상 만료' : left <= 30 ? '만�
 const dLeftLabel = (n, past = '지남') => n == null ? '' : n < 0 ? `${-n}일 ${past}` : n === 0 ? '오늘' : `D-${n}`;
 // 무상 만료일이 어떻게 정해졌는지 (목록 칸 툴팁·정보 탭 안내)
 const freeMaintWhy = (fm, manwon) => {
-  const rule = fm.legacy ? `${fm.contractDate} 계약 — 2026-10-15 이전 계약은 금액과 상관없이 6개월`
-    : `계약금액 ${manwon.toLocaleString()}만원 · 1,000만원 ${fm.months === 3 ? '미만' : '이상'}`;
-  const calc = fm.auto ? `${fm.baseKind === 'deadline' ? '개발완료일(마감일)' : '유지보수(무상)로 바꾼 날'} ${fm.base} + ${fm.months}개월 (${rule})` : null;
+  const rule = fm.legacy ? `${fm.contractDate} 계약 — 2026-10-15 이전 계약은 금액과 상관없이 180일`
+    : `계약금액 ${manwon.toLocaleString()}만원 · 1,000만원 ${fm.term === 'm3' ? '미만' : '이상'}`;
+  const calc = fm.auto ? `${fm.baseKind === 'deadline' ? '개발완료일(마감일)' : '유지보수(무상)로 바꾼 날'} ${fm.base} + ${TERM_LABEL[fm.term]} (${rule})` : null;
   if (fm.manual) return `직접 입력한 날짜${calc ? ` — 회사 기준으로는 ${fm.auto} (${calc})` : ''}`;
   if (calc) return `회사 기준: ${calc}`;
-  return !fm.months ? '계약금액(예산)이 없어 무상 기간을 정할 수 없습니다 — 정보 탭에서 금액이나 만료일을 입력하세요'
+  return !fm.term ? '계약금액(예산)이 없어 무상 기간을 정할 수 없습니다 — 정보 탭에서 금액이나 만료일을 입력하세요'
     : '개발완료일(마감일)이 없어 계산할 수 없습니다 — 정보 탭에서 마감일이나 만료일을 입력하세요';
 };
 // 무상 만료일 직접 고치는 칸을 보일 상태 — 개발 중(계약서에 기간이 따로 있으면 미리 입력)·유지보수(무상)
@@ -700,7 +700,7 @@ function ConfirmModal({ state, onCancel }) {
 // ─── DevDoneModal ───
 // '개발 중' → 유지보수(무상)·유지보수(유상)·납품 완료로 넘길 때 실제 개발 완료일을 한 번 더 확인받는다 (2026-11-10).
 // 확인하면 그 날짜가 마감일(deadline) 칸에 들어가 '개발완료일'이 된다(예정일 → 실제 완료일).
-// 유지보수(무상)로 갈 때는 무상 기간(3개월·6개월·기타)도 고른다. 기본값은 사내 기준(src/maintenance.mjs freeMaintDefault).
+// 유지보수(무상)로 갈 때는 무상 기간(3개월·6개월·기타, 2026-10-15 이전 계약은 180일 포함)도 고른다. 기본값은 사내 기준(src/maintenance.mjs freeMaintDefault).
 const DEV_DONE_TARGETS = ['maintenance_free', 'maintenance_paid', 'delivered'];
 function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
   const trapRef = useFocusTrap(true);
@@ -708,7 +708,7 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
   const manwon = parseBudgetNum(project.budget);
   const def = useMemo(() => freeMaintDefault(project, manwon), [project, manwon]);
   const [done, setDone] = useState(today);
-  const [choice, setChoice] = useState(def.months ? String(def.months) : '');
+  const [choice, setChoice] = useState(def.term || '');
   const [other, setOther] = useState('');
   useEffect(() => {
     const h = e => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); onCancel(); } };
@@ -718,7 +718,7 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
   const sm = STATUS_META[newStatus];
   const isFree = newStatus === 'maintenance_free';
   const doneOk = isYmd(done) && done <= today && (!project.start_date || done >= project.start_date);
-  const until = !isFree || !doneOk ? null : choice === 'other' ? (isYmd(other) && other > done ? other : null) : choice ? addMonthsYmd(done, Number(choice)) : null;
+  const until = !isFree || !doneOk ? null : choice === 'other' ? (isYmd(other) && other > done ? other : null) : choice ? addTerm(done, choice) : null;
   const ok = doneOk && (!isFree || !!until);
   const doneErr = !isYmd(done) ? '날짜를 입력하세요' : done > today ? '오늘 이후 날짜는 완료일이 될 수 없습니다'
     : project.start_date && done < project.start_date ? `착수일(${project.start_date})보다 앞설 수 없습니다` : '';
@@ -727,9 +727,9 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
     const extra = { fields: { deadline: done }, entry: { dev_done: done } };
     let noteAdd = `개발완료일 ${done}`;
     if (isFree) {
-      const store = freeMaintUntilToStore(done, choice, other, def.months);
+      const store = freeMaintUntilToStore(done, choice, other, def.term);
       if (store !== (project.free_maint_until || null)) extra.preFields = { free_maint_until: store };
-      noteAdd += ` · 무상 ${choice === 'other' ? '기타' : choice + '개월'} ~${until}`;
+      noteAdd += ` · 무상 ${choice === 'other' ? '기타' : TERM_LABEL[choice]} ~${until}`;
     }
     extra.noteAdd = noteAdd;
     onConfirm(extra);
@@ -772,8 +772,7 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
             <div>
               <div style={lbl}>무상 유지보수 기간</div>
               <div role="radiogroup" aria-label="무상 유지보수 기간" style={{ display:'flex', gap:8 }}>
-                {opt('3', '3개월', def.months === 3 ? '사내 기준' : null)}
-                {opt('6', '6개월', def.months === 6 ? '사내 기준' : null)}
+                {def.options.map(t => opt(t, TERM_LABEL[t], def.term === t ? '사내 기준' : null))}
                 {opt('other', '기타', null)}
               </div>
               {choice === 'other' && (
@@ -3395,7 +3394,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                       <div style={{ marginTop:4, fontSize:'0.8rem', color: fm.until ? 'var(--text2)' : 'var(--yellow)', lineHeight:1.5 }}>
                         {fm.until && <>→ {fm.until}{fm.left != null ? ` (${dLeftLabel(fm.left)})` : ''} · </>}{freeMaintWhy(fm, manwon)}
                       </div>
-                      <div style={{ marginTop:2, fontSize:'0.75rem', color:'var(--text2)', opacity:0.75 }}>회사 기준: 검수 완료 후 6개월, 계약금액(공급가) 1,000만 원 미만은 3개월(2026-10-15 이후 계약). 그 전 계약은 금액과 상관없이 6개월 — 계약서 기간이 다르면 직접 입력</div>
+                      <div style={{ marginTop:2, fontSize:'0.75rem', color:'var(--text2)', opacity:0.75 }}>회사 기준: 검수 완료 후 6개월, 계약금액(공급가) 1,000만 원 미만은 3개월(2026-10-15 이후 계약). 그 전 계약은 금액과 상관없이 180일 — 계약서 기간이 다르면 직접 입력</div>
                     </div>
                   );
                 })()}
