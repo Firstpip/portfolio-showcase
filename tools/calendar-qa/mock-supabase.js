@@ -48,17 +48,20 @@
   const save = () => { try { sessionStorage.setItem('__mockDB', JSON.stringify(DB)); } catch (_) {} };
   window.addEventListener('pagehide', save); window.addEventListener('beforeunload', save);
   // ?demo=projects — 프로젝트 목록 날짜 칸(개발완료 예정일·무상 만료일) 눈으로 확인용 표본 (2026-11-06). 자동 시험(qa*)은 쓰지 않는다.
-  //   무상 기준: 검수 후 6개월, 계약금액 1,000만원 미만 3개월(dashboard/src/maintenance.mjs). 날짜는 여는 날 기준.
+  //   무상 기준: 검수 후 6개월, 계약금액 1,000만원 미만 3개월, 2026-10-15 이전 계약은 일괄 6개월(dashboard/src/maintenance.mjs). 날짜는 여는 날 기준.
   if (QS.get('demo') === 'projects' && !DB.wishket_projects.some(r => String(r.slug).startsWith('demo_'))) {
     const W = n => 'https://www.wishket.com/project/7' + n, base = { history:[], memo:null };
     DB.wishket_projects.push(...[
       { slug:'demo_dev_ok',      title:'[개발 중] 사내 예약 시스템 — 마감 20일 남음',          current_status:'in_progress',      budget:'1,500만원', start_date:day(-40), deadline:day(20) },
+      { slug:'demo_dev_old',     title:'[개발 중] 예약 웹 — 500만원, 2026-04 계약(무상 기본 6개월)', current_status:'in_progress', budget:'500만원', start_date:'2026-04-27', deadline:day(10), history:[{ date:'2026-04-16', status:'contracted', note:'' }, { date:'2026-04-27', status:'in_progress', note:'' }] },
+      { slug:'demo_dev_small',   title:'[개발 중] 소개 사이트 — 700만원, 2026-10-20 계약(무상 기본 3개월)', current_status:'in_progress', budget:'700만원', start_date:'2026-10-21', deadline:day(10), history:[{ date:'2026-10-20', status:'contracted', note:'' }, { date:'2026-10-21', status:'in_progress', note:'' }] },
       { slug:'demo_dev_late',    title:'[개발 중] 재고 관리 앱 — 마감 3일 지남',               current_status:'in_progress',      budget:'900만원',   start_date:day(-60), deadline:day(-3) },
       { slug:'demo_dev_none',    title:'[개발 중] 설문 플랫폼 — 마감일 없음',                  current_status:'in_progress',      budget:'1,200만원' },
       { slug:'demo_mf_soon',     title:'[무상] 시설 점검 앱 — 700만원, 곧 만료(3개월)',         current_status:'maintenance_free', budget:'700만원',   start_date:day(-150), deadline:day(-80) },
       { slug:'demo_mf_ok',       title:'[무상] 교육 LMS — 1,800만원(6개월)',                   current_status:'maintenance_free', budget:'1,800만원', start_date:day(-100), deadline:day(-10) },
       { slug:'demo_mf_trans',    title:'[무상] 뉴스레터 대시보드 — 마감일 없음 → 무상 전환일 기준', current_status:'maintenance_free', budget:'500만원', history:[{ date:day(-200), status:'in_progress', note:'' }, { date:day(-30), status:'maintenance_free', note:'' }] },
       { slug:'demo_mf_manual',   title:'[무상] 쇼핑몰 리뉴얼 — 계약서 기간 직접 입력(1년)',      current_status:'maintenance_free', budget:'1,800만원', start_date:day(-90), deadline:day(-10), free_maint_until:day(355) },
+      { slug:'demo_mf_legacy',   title:'[무상] 예약 관리 웹 — 500만원이지만 2026-10-15 이전 계약(6개월)', current_status:'maintenance_free', budget:'500만원', deadline:day(-30), history:[{ date:'2026-04-16', status:'contracted', note:'' }, { date:day(-30), status:'maintenance_free', note:'' }] },
       { slug:'demo_mf_over',     title:'[무상] 워크북 웹 — 무상 기간 끝남',                    current_status:'maintenance_free', budget:'800만원',   start_date:day(-200), deadline:day(-120) },
       { slug:'demo_mf_nobudget', title:'[무상] 랜딩 페이지 — 금액 없음(기준 없음)',             current_status:'maintenance_free', budget:'',          start_date:day(-30), deadline:day(-15) },
       { slug:'demo_paid',        title:'[유상] 병원 홈페이지 — 개발완료일 그대로',               current_status:'maintenance_paid', budget:'1,000만원', deadline:day(-200) },
@@ -153,6 +156,18 @@
         if (up.error) return up;
         (window.__mock.splits ||= []).push(args);
         return { data: DB.calendar_events[DB.calendar_events.length - 1].id, error:null };
+      }
+      // 상태 변경(2026-11-10): 운영 append_project_history 와 같게 — 이력 항목 날짜는 오늘(KST), 허용된 칸만 바꾸고 바뀐 행을 돌려준다
+      if (fn === 'append_project_history') {
+        const r = DB.wishket_projects.find(x => x.slug === args.p_slug);
+        if (!r) return { data:null, error:null };
+        const ALLOWED = ['assigned_manager','assigned_main','assigned_sub','meeting_at','meeting_type','current_status','start_date','deadline'];
+        const patch = { history: [...(r.history || []), ...(args.p_entries || []).map(e => ({ ...e, date: day(0) }))] };
+        for (const k of ALLOWED) if (args.p_fields && k in args.p_fields) patch[k] = args.p_fields[k];
+        const up = await new Q('wishket_projects').update(patch).eq('slug', args.p_slug);
+        if (up.error) return up;
+        (window.__mock.appends ||= []).push(args);
+        return { data: JSON.parse(JSON.stringify(r)), error:null };
       }
       // 알림 서버 상태: 테스트가 페이지를 열기 전에 window.__qaHeartbeat 로 정할 수 있다(QA 패널·점검용)
       if (fn === 'calendar_push_status') return { data: window.__mock.heartbeat || window.__qaHeartbeat || null, error:null };
