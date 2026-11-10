@@ -3189,9 +3189,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const revertBlocked = !prevStatus ? null
     : prevStatus === 'interview' && !(project.meeting_at && new Date(project.meeting_at) > new Date())
       ? '미팅 일시가 없거나 이미 지났습니다. 미팅 탭에서 새 일정을 등록하면 자동으로 미팅 예정이 됩니다.'
-    : prevStatus === 'in_progress' && project.deadline && project.deadline < kstDateStr()
-      ? `마감일(${project.deadline})이 지나 되돌려도 자동으로 유지보수(무상)로 다시 전환됩니다. 정보 탭에서 마감일을 연장한 뒤 되돌리세요.`
-    : null;
+    : null;   // (2026-11-10) 마감일 경과 자동 무상 전환을 없애 '개발 중'으로 되돌리기는 막지 않는다
   const canRevert = !!prevStatus;
   // 전진 후보에서 직전 상태는 제외 — 되돌리기 버튼이 담당하므로 같은 상태가 중복 노출되지 않게 한다.
   const forwardTargets = targets.filter(s => s !== prevStatus);
@@ -4668,13 +4666,14 @@ function App({ session }) {
     let finalRows = rows;
     // 시각/날짜 경과 시 status 자동 전환 (모두 단일 atomic SQL).
     // 전환된 row는 Realtime UPDATE 이벤트로 자동 동기화됨 (별도 setData 불필요).
-    // 세 RPC 는 순차 실행 — 동시에 쏘면 같은 행이 착수일 전이 직후 마감일 전이까지 한 번에 넘어가
-    // (계약 논의 중 → 개발 중 → 유지보수) 사용자가 '개발 중' 단계를 보지 못한다 (2026-09-18)
+    // 순차 실행 — 미팅 전이 직후 착수일 전이가 같은 행을 건드릴 수 있어 차례로 (2026-09-18)
+    // 마감일 경과 → 유지보수(무상) 자동 전환은 없앴다(2026-11-10): 개발이 늦어져도 예정 마감일이 개발완료일로 굳어
+    //   무상 기간이 틀어졌다. 개발 완료는 사람이 '상태 변경'에서 실제 완료일을 넣어 확정한다(DevDoneModal).
+    //   서버 함수 transition_passed_deadlines 는 예전 화면이 불러도 아무것도 안 하도록 0 만 돌려준다.
     (async () => {
       const steps = [
         ['transition_passed_meetings',    n => `🤝 미팅 경과 자동 전환 ${n}건 → 미팅 완료`,        '미팅'],
         ['transition_passed_start_dates', n => `⚙️ 착수일 경과 자동 전환 ${n}건 → 개발 중`,        '착수일'],
-        ['transition_passed_deadlines',   n => `🔧 마감일 경과 자동 전환 ${n}건 → 유지보수 (무상)`, '마감일'],
       ];
       for (const [fn, msg, label] of steps) {
         const { data:n, error:e } = await supabase.rpc(fn);
@@ -5271,9 +5270,6 @@ function App({ session }) {
     if (newStatus === 'interview') {
       if (!project.meeting_at) { toast('미팅 일시를 먼저 등록하세요. 미팅 탭에서 미래 일정을 저장하면 자동으로 전환됩니다.', 'error'); return; }
       if (new Date(project.meeting_at) <= new Date()) { toast('등록된 미팅 시각이 이미 지났습니다. 미팅 탭에서 새 일시를 등록하세요.', 'error'); return; }
-    }
-    if (newStatus === 'in_progress' && project.deadline && project.deadline < kstDateStr()) {
-      toast(`마감일(${project.deadline})이 이미 지나 '개발 중'으로 바꿔도 자동으로 유지보수(무상)로 재전환됩니다. 정보 탭에서 마감일을 먼저 연장하세요.`, 'error'); return;
     }
     setSaving(true);
     try {
