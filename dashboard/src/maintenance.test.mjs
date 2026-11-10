@@ -1,5 +1,5 @@
 // 무상 만료일 계산 시험 — npm test 에서 dates 시험 다음에 돈다
-import { freeMaintTerm, freeMaintStartFromHistory, freeMaintInfo, contractDateFromHistory, freeMaintDefault, freeMaintUntilToStore, addTerm } from './maintenance.mjs';
+import { freeMaintTerm, freeMaintInfo, contractDateFromHistory, freeMaintDefault, freeMaintUntilToStore, addTerm } from './maintenance.mjs';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -30,36 +30,21 @@ eq('계약일: contracted 없으면 in_progress', contractDateFromHistory([{ dat
 eq('계약일: won 만', contractDateFromHistory([{ date: '2026-04-13', status: 'won' }]), '2026-04-13');
 eq('계약일: 없음', contractDateFromHistory([{ date: '2026-04-13', status: 'applied' }]), null);
 
-// 무상 시작일(history): 마지막 개발 중 이후 첫 무상
-const H = [
-  { date: '2026-05-20', status: 'in_progress' },
-  { date: '2026-08-31', status: 'maintenance_free' },
-  { date: '2026-09-01', status: 'in_progress' },     // 되돌림
-  { date: '2026-09-02', status: 'delivered' },
-  { date: '2026-09-02', status: 'maintenance_free' },
-  { date: '2026-10-01', status: 'maintenance_paid' },
-  { date: '2026-10-05', status: 'maintenance_free' }, // 유상↔무상 왕복은 시작일을 바꾸지 않음
-];
-eq('history: 되돌림 뒤 다시 무상이 된 날', freeMaintStartFromHistory(H), '2026-09-02');
-eq('history: 없으면 null', freeMaintStartFromHistory([{ date: '2026-01-01', status: 'won' }]), null);
-eq('history: 이상한 값 무시', freeMaintStartFromHistory([null, 3, { status: 'maintenance_free', date: 'x' }]), null);
-eq('history: 배열 아님', freeMaintStartFromHistory(undefined), null);
-
 const T = '2026-11-06';
 // 개발완료일 기준
 eq('개발완료일 + 3개월(700만)', freeMaintInfo({ deadline: '2026-09-02' }, 700, T),
-  { until: '2026-12-02', manual: false, auto: '2026-12-02', base: '2026-09-02', baseKind: 'deadline', term: 'm3', contractDate: null, legacy: false, left: 26 });
+  { until: '2026-12-02', manual: false, auto: '2026-12-02', base: '2026-09-02', term: 'm3', contractDate: null, legacy: false, left: 26 });
 eq('옛 계약(04-16) 700만 → 180일', freeMaintInfo({ deadline: '2026-09-02', history: [{ date: '2026-04-16', status: 'contracted' }] }, 700, T),
-  { until: '2027-03-01', manual: false, auto: '2027-03-01', base: '2026-09-02', baseKind: 'deadline', term: 'd180', contractDate: '2026-04-16', legacy: true, left: 115 });
+  { until: '2027-03-01', manual: false, auto: '2027-03-01', base: '2026-09-02', term: 'd180', contractDate: '2026-04-16', legacy: true, left: 115 });
 eq('개발완료일 + 6개월(1,800만)', freeMaintInfo({ deadline: '2026-10-28' }, 1800, T).until, '2027-04-28');
 eq('이미 지남 → left 음수', freeMaintInfo({ deadline: '2026-05-23' }, 450, T).left, -75);
 eq('오늘 만료 → left 0', freeMaintInfo({ deadline: '2026-08-06' }, 500, T).left, 0);
-// 개발완료일 없으면 무상 전환일
-eq('전환일 기준', freeMaintInfo({ deadline: null, history: [{ date: '2026-10-01', status: 'maintenance_free' }] }, 500, T),
-  { until: '2027-01-01', manual: false, auto: '2027-01-01', base: '2026-10-01', baseKind: 'transition', term: 'm3', contractDate: null, legacy: false, left: 56 });
+// 개발완료일 없으면 계산하지 않음 — 무상 전환일로 짐작하지 않는다 (2026-11-10)
+eq('개발완료일 없음 → until·base null (전환 이력이 있어도)', freeMaintInfo({ deadline: null, history: [{ date: '2026-10-01', status: 'maintenance_free' }] }, 500, T),
+  { until: null, manual: false, auto: null, base: null, term: 'm3', contractDate: null, legacy: false, left: null });
 // 직접 입력 우선
 eq('직접 입력 우선', freeMaintInfo({ deadline: '2026-10-28', free_maint_until: '2027-10-28' }, 1800, T),
-  { until: '2027-10-28', manual: true, auto: '2027-04-28', base: '2026-10-28', baseKind: 'deadline', term: 'm6', contractDate: null, legacy: false, left: 356 });
+  { until: '2027-10-28', manual: true, auto: '2027-04-28', base: '2026-10-28', term: 'm6', contractDate: null, legacy: false, left: 356 });
 eq('직접 입력은 기준일 없어도 보임', freeMaintInfo({ free_maint_until: '2027-01-31' }, 0, T).until, '2027-01-31');
 eq('직접 입력 형식 이상 → 무시하고 자동', freeMaintInfo({ deadline: '2026-10-28', free_maint_until: '2027/01/31' }, 1800, T).manual, false);
 // 계산할 수 없음

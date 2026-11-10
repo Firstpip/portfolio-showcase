@@ -7,7 +7,8 @@
 // 만료일 = 기준일 + 기간. 개월은 같은 날짜(09-02 + 3개월 = 12-02), 일은 그 일수 뒤(05-23 + 180일 = 11-19).
 // 워크룸에는 '검수 완료일'이 따로 없어서 개발완료일(deadline — 목록의 '개발완료일'과 같은 값)을 기준으로 삼는다.
 //   '개발 중'에서 넘길 때 확인 창(DevDoneModal)이 실제 완료일을 받아 deadline 에 넣는다(2026-11-10~).
-//   개발완료일이 비어 있으면 마지막으로 '개발 중'을 벗어나 '유지보수 (무상)'이 된 날(history)을 쓴다.
+//   개발완료일이 비어 있으면 계산하지 않는다(2026-11-10 사용자 결정 — 상태 바꾼 날로 짐작하지 않음).
+//   목록·정보 탭이 '개발완료일 미지정 — 입력하세요'로 안내한다.
 // 계약마다 다를 수 있어(별도 합의) 사람이 고친 날짜(free_maint_until)가 있으면 그것이 우선이다.
 // 계약금액은 budget 원본(위시켓은 지원가) — 위시켓 수수료를 뺀 실수령액이 아니다(고객과의 계약금액 기준).
 import { isYmd, addDaysYmd, addMonthsYmd, daysBetweenYmd } from './dates.mjs';
@@ -42,24 +43,13 @@ export function freeMaintTerm(manwon, contractDate = null) {
   return manwon < FREE_MAINT_SMALL_LIMIT ? 'm3' : 'm6';
 }
 
-/** 마지막 '개발 중' 이후 처음 '유지보수 (무상)'이 된 날. 개발 중으로 되돌렸다 다시 오면 새 날짜. 없으면 null. */
-export function freeMaintStartFromHistory(history) {
-  const h = Array.isArray(history) ? history : [];
-  let start = null;
-  for (const e of h) {
-    if (!e || typeof e !== 'object') continue;
-    if (e.status === 'in_progress' || e.status === 'won') start = null;   // 개발로 돌아가면 다시 센다
-    else if (e.status === 'maintenance_free' && !start && isYmd(e.date)) start = e.date;
-  }
-  return start;
-}
-
 /**
  * 프로젝트 → 무상 만료 정보.
  * @param p        wishket_projects 행 (deadline, history, free_maint_until)
  * @param manwon   계약금액(만원) — 화면의 parseBudgetNum(budget)
  * @param today    오늘 'YYYY-MM-DD' (한국 달력일)
- * @returns { until, manual, auto, base, baseKind:'deadline'|'transition'|null, term, contractDate, legacy, left }
+ * @returns { until, manual, auto, base, term, contractDate, legacy, left }
+ *   base: 개발완료일(deadline) — 없으면 null 이고 auto 도 null
  *   term: 사내 기준 기간 키('m3'|'m6'|'d180'|null) · legacy: 2026-10-15 이전 계약이라 일괄 180일을 적용했는지
  *   until: 화면에 보일 만료일(직접 입력 우선) · auto: 회사 기준 계산값 · left: 만료까지 남은 일수(지나면 음수)
  */
@@ -68,12 +58,10 @@ export function freeMaintInfo(p, manwon, today) {
   const contractDate = contractDateFromHistory(p?.history);
   const legacy = isYmd(contractDate) && contractDate < FREE_MAINT_RULE_FROM;
   const term = freeMaintTerm(manwon, contractDate);
-  let base = null, baseKind = null;
-  if (isYmd(p?.deadline)) { base = p.deadline; baseKind = 'deadline'; }
-  else { const t = freeMaintStartFromHistory(p?.history); if (t) { base = t; baseKind = 'transition'; } }
+  const base = isYmd(p?.deadline) ? p.deadline : null;
   const auto = base && term ? addTerm(base, term) : null;
   const until = manual || auto;
-  return { until, manual: !!manual, auto, base, baseKind, term, contractDate, legacy, left: until && isYmd(today) ? daysBetweenYmd(today, until) : null };
+  return { until, manual: !!manual, auto, base, term, contractDate, legacy, left: until && isYmd(today) ? daysBetweenYmd(today, until) : null };
 }
 
 /**

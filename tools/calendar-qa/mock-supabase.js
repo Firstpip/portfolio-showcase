@@ -59,7 +59,7 @@
       { slug:'demo_dev_none',    title:'[개발 중] 설문 플랫폼 — 마감일 없음',                  current_status:'in_progress',      budget:'1,200만원' },
       { slug:'demo_mf_soon',     title:'[무상] 시설 점검 앱 — 700만원, 곧 만료(3개월)',         current_status:'maintenance_free', budget:'700만원',   start_date:day(-150), deadline:day(-80) },
       { slug:'demo_mf_ok',       title:'[무상] 교육 LMS — 1,800만원(6개월)',                   current_status:'maintenance_free', budget:'1,800만원', start_date:day(-100), deadline:day(-10) },
-      { slug:'demo_mf_trans',    title:'[무상] 뉴스레터 대시보드 — 마감일 없음 → 무상 전환일 기준', current_status:'maintenance_free', budget:'500만원', history:[{ date:day(-200), status:'in_progress', note:'' }, { date:day(-30), status:'maintenance_free', note:'' }] },
+      { slug:'demo_mf_trans',    title:'[무상] 뉴스레터 대시보드 — 개발완료일 미지정(계산 안 함)', current_status:'maintenance_free', budget:'500만원', history:[{ date:day(-200), status:'in_progress', note:'' }, { date:day(-30), status:'maintenance_free', note:'' }] },
       { slug:'demo_mf_manual',   title:'[무상] 쇼핑몰 리뉴얼 — 계약서 기간 직접 입력(1년)',      current_status:'maintenance_free', budget:'1,800만원', start_date:day(-90), deadline:day(-10), free_maint_until:day(355) },
       { slug:'demo_mf_legacy',   title:'[무상] 예약 관리 웹 — 500만원이지만 2026-10-15 이전 계약(180일)', current_status:'maintenance_free', budget:'500만원', deadline:day(-30), history:[{ date:'2026-04-16', status:'contracted', note:'' }, { date:day(-30), status:'maintenance_free', note:'' }] },
       { slug:'demo_mf_over',     title:'[무상] 워크북 웹 — 무상 기간 끝남',                    current_status:'maintenance_free', budget:'800만원',   start_date:day(-200), deadline:day(-120) },

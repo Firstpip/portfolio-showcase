@@ -82,12 +82,16 @@ const dLeftLabel = (n, past = '지남') => n == null ? '' : n < 0 ? `${-n}일 ${
 const freeMaintWhy = (fm, manwon) => {
   const rule = fm.legacy ? `${fm.contractDate} 계약 — 2026-10-15 이전 계약은 금액과 상관없이 180일`
     : `계약금액 ${manwon.toLocaleString()}만원 · 1,000만원 ${fm.term === 'm3' ? '미만' : '이상'}`;
-  const calc = fm.auto ? `${fm.baseKind === 'deadline' ? '개발완료일(마감일)' : '유지보수(무상)로 바꾼 날'} ${fm.base} + ${TERM_LABEL[fm.term]} (${rule})` : null;
+  const calc = fm.auto ? `개발완료일 ${fm.base} + ${TERM_LABEL[fm.term]} (${rule})` : null;
   if (fm.manual) return `직접 입력한 날짜${calc ? ` — 회사 기준으로는 ${fm.auto} (${calc})` : ''}`;
   if (calc) return `회사 기준: ${calc}`;
-  return !fm.term ? '계약금액(예산)이 없어 무상 기간을 정할 수 없습니다 — 정보 탭에서 금액이나 만료일을 입력하세요'
-    : '개발완료일(마감일)이 없어 계산할 수 없습니다 — 정보 탭에서 마감일이나 만료일을 입력하세요';
+  return !fm.base ? FREE_MAINT_NO_DONE_MSG
+    : '계약금액(예산)이 없어 무상 기간을 정할 수 없습니다 — 정보 탭에서 금액이나 무상 만료일을 입력하세요';
 };
+// 개발완료일이 없으면 무상 만료일을 계산하지 않는다(상태 바꾼 날로 짐작하지 않음, 2026-11-10) — 목록·정보 탭 안내
+const FREE_MAINT_NO_DONE_MSG = '개발완료일이 지정되지 않아 무상 만료일을 계산할 수 없습니다 — 프로젝트를 열어 정보 탭 「개발완료일」에 실제로 개발이 끝난 날을 입력하세요';
+// 무상 만료일을 못 정할 때 목록 칸 표시: 개발완료일 없음 → '개발완료일 미지정', 금액 없음 → '금액 없음'
+const freeMaintMissing = (fm) => !fm.base ? '개발완료일 미지정' : '계약금액 없음';
 // 무상 만료일 직접 고치는 칸을 보일 상태 — 개발 중(계약서에 기간이 따로 있으면 미리 입력)·유지보수(무상)
 const FREE_MAINT_EDIT = ['in_progress', 'maintenance_free'];
 // 능동(계약~정산) 상태 — 일괄삭제에서 제외 + DB 트리거/엣지함수 보호 대상과 동일하게 유지.
@@ -3363,8 +3367,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                       ); })()}
                     </div>
                     <div style={{ flex:1 }}>
-                      <div style={{ ...labelS }}>마감일</div>
-                      <input type="date" value={editDeadline} onChange={e => { setEditDeadline(e.target.value); setDeadlineChanged(e.target.value!==(project.deadline||'')); }} style={inputS} />
+                      <div style={{ ...labelS }}>{POST_DEV.includes(project.current_status) ? '개발완료일' : '마감일'}</div>
+                      <input type="date" aria-label={POST_DEV.includes(project.current_status) ? '개발완료일' : '마감일'} value={editDeadline} onChange={e => { setEditDeadline(e.target.value); setDeadlineChanged(e.target.value!==(project.deadline||'')); }} style={inputS} />
                       {editDeadline && !POST_DEV.includes(project.current_status) && (() => {
                         const diff = daysBetweenYmd(kstDateStr(), editDeadline);   // 마감일 − 오늘(한국 달력일)
                         if (diff == null) return null;
@@ -4232,6 +4236,7 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                   if (kind === 'free_until') {
                     const fm = freeMaintOf(r);
                     if (fm.until) parts.push(<span key="fm" style={{ color:fm.left<0?'var(--red)':fm.left<=30?'var(--yellow)':'var(--text2)', fontWeight:fm.left<=30?600:400 }}>🔧 {freeMaintBadge(fm.left)} {fm.until}{fm.manual?' ✎':''} · {dLeftLabel(fm.left)}</span>);
+                    else parts.push(<span key="fm" style={{ color:'var(--yellow)', fontWeight:600 }}>⚠️ {freeMaintMissing(fm)} — 정보 탭에서 입력</span>);
                   }
                   else if (isPostDev) { if (r.deadline) parts.push(<span key="dl" style={{ color:'var(--green)' }}>✅ 개발완료 {r.deadline}</span>); }
                   else if (kind === 'dev_due') {
@@ -4339,7 +4344,12 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem' }}>
                     {dateColKind(r.current_status) === 'free_until' ? (() => {
                       const fm = freeMaintOf(r), why = freeMaintWhy(fm, parseBudgetNum(r.budget));
-                      if (!fm.until) return <span title={why} style={{ color:'var(--text2)' }}>— <span style={{ fontSize:'0.75rem' }}>기준 없음</span></span>;
+                      if (!fm.until) return (
+                        <span title={why} style={{ display:'flex', alignItems:'center', gap:4 }}>
+                          <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.8rem', fontWeight:600, background:'var(--surface-warning-mid)', color:'var(--yellow)' }}>{freeMaintMissing(fm)}</span>
+                          <span style={{ fontSize:'0.75rem', color:'var(--text2)' }}>정보 탭에서 입력</span>
+                        </span>
+                      );
                       const over = fm.left < 0, soon = !over && fm.left <= 30;
                       return (
                         <span title={why} style={{ display:'flex', alignItems:'center', gap:4 }}>

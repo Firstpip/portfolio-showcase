@@ -42,7 +42,7 @@ const { chromium } = require(process.env.PW_CORE || 'playwright-core');
       t = await rowText('maintenance_free', 'qa_mf2');
       ok(`${nm} 무상 1,800만: + 6개월 = 2027-04-28, 배지 '무상 중'`, /2027-04-28/.test(t) && /무상 중/.test(t) && !/무상 만료 /.test(t), t.slice(0, 160));
       t = await rowText('maintenance_free', 'qa_mf3');
-      ok(`${nm} 무상 마감일 없음(10-16 계약): 무상 전환일 11-01 + 3개월 = 2027-02-01`, /2027-02-01/.test(t), t.slice(0, 160));
+      ok(`${nm} 개발완료일 없음: 계산 안 함 + '개발완료일 미지정 · 정보 탭에서 입력'`, /개발완료일 미지정/.test(t) && /정보 탭에서 입력/.test(t) && !/2027-02-01/.test(t), t.slice(0, 160));
       t = await rowText('maintenance_free', 'qa_mf4');
       ok(`${nm} 직접 입력 우선 + ✎ 표시`, /2027-10-28/.test(t) && /✎/.test(t), t.slice(0, 160));
       t = await rowText('maintenance_free', 'qa_mf5');
@@ -58,12 +58,12 @@ const { chromium } = require(process.env.PW_CORE || 'playwright-core');
         // 정렬: 무상 필터에서 날짜 칸 오름차순이면 보이는 날짜 순
         await p.goto(BASE + '#?f=maintenance_free&s=meeting_at:asc'); await p.reload(); await p.waitForTimeout(900);
         const order = await p.evaluate(() => [...document.querySelectorAll('tbody tr')].map(r => (r.textContent.match(/qa_mf\d/) || [''])[0]).filter(Boolean));
-        ok('PC 무상 정렬(만료일 오름차순): mf5→mf1→mf3→mf6→mf2→mf4', order.join(',') === 'qa_mf5,qa_mf1,qa_mf3,qa_mf6,qa_mf2,qa_mf4', order.join(','));
+        ok('PC 무상 정렬(만료일 오름차순, 미지정 먼저): mf3→mf5→mf1→mf6→mf2→mf4', order.join(',') === 'qa_mf3,qa_mf5,qa_mf1,qa_mf6,qa_mf2,qa_mf4', order.join(','));
         // 정보 탭: 무상 만료일 직접 입력 → 저장 → 목록 반영, 자동 계산으로 되돌리기
         await p.locator('tbody tr', { hasText:'qa_mf1' }).first().click(); await p.waitForTimeout(500);
         await p.getByText('정보', { exact:true }).first().click().catch(() => {}); await p.waitForTimeout(300);
         const hint = await p.evaluate(() => { const i = document.querySelector('input[aria-label="무상 유지보수 만료일"]'); return i ? i.closest('div').parentElement.textContent.replace(/\s+/g, ' ') : ''; });
-        ok('정보 탭: 무상 만료일 칸 + 회사 기준 안내', /회사 기준: 개발완료일\(마감일\) 2026-09-02 \+ 3개월/.test(hint), hint.slice(0, 200));
+        ok('정보 탭: 무상 만료일 칸 + 회사 기준 안내', /회사 기준: 개발완료일 2026-09-02 \+ 3개월/.test(hint), hint.slice(0, 200));
         await p.fill('input[aria-label="무상 유지보수 만료일"]', '2027-03-01'); await p.waitForTimeout(150);
         await p.getByRole('button', { name:'저장', exact:true }).first().click(); await p.waitForTimeout(600);
         const saved = await p.evaluate(() => __mock.DB.wishket_projects.find(r => r.slug === 'qa_mf1').free_maint_until);
@@ -72,6 +72,14 @@ const { chromium } = require(process.env.PW_CORE || 'playwright-core');
         await p.getByRole('button', { name:'저장', exact:true }).first().click(); await p.waitForTimeout(600);
         const cleared = await p.evaluate(() => __mock.DB.wishket_projects.find(r => r.slug === 'qa_mf1').free_maint_until);
         ok('자동 계산으로 되돌리기: null 저장', cleared === null, String(cleared));
+        await p.keyboard.press('Escape'); await p.waitForTimeout(300);
+        // 개발완료일 없는 무상 건: 정보 탭 칸 이름 '개발완료일' + 입력 안내
+        await p.goto(BASE + '#?f=maintenance_free'); await p.reload(); await p.waitForTimeout(900);
+        await p.locator('tbody tr', { hasText:'qa_mf3' }).first().click(); await p.waitForTimeout(500);
+        await p.getByText('정보', { exact:true }).first().click().catch(() => {}); await p.waitForTimeout(300);
+        const hasDoneInput = await p.locator('input[aria-label="개발완료일"]').count();
+        const hint3 = await p.evaluate(() => { const i = document.querySelector('input[aria-label="무상 유지보수 만료일"]'); return i ? i.closest('div').parentElement.textContent.replace(/\s+/g, ' ') : ''; });
+        ok('정보 탭(개발완료일 없음): 칸 이름 개발완료일 + 입력 안내', hasDoneInput === 1 && /개발완료일이 지정되지 않아/.test(hint3), `${hasDoneInput} ${hint3.slice(0, 160)}`);
         await p.keyboard.press('Escape');
         await p.screenshot({ path: __dirname + '/../out/qa28-pc.png' }).catch(() => {});
       } else {
