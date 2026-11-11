@@ -48,17 +48,17 @@
   const save = () => { try { sessionStorage.setItem('__mockDB', JSON.stringify(DB)); } catch (_) {} };
   window.addEventListener('pagehide', save); window.addEventListener('beforeunload', save);
   // ?demo=projects — 프로젝트 목록 날짜 칸(개발완료 예정일·무상 만료일) 눈으로 확인용 표본 (2026-11-06). 자동 시험(qa*)은 쓰지 않는다.
-  //   무상 기준: 검수 후 6개월, 계약금액 1,000만원 미만 3개월, 2026-10-15 이전 계약은 일괄 180일(dashboard/src/maintenance.mjs). 날짜는 여는 날 기준.
+  //   무상 기준(일수): 개발완료일부터 180일, 계약금액 1,000만원 미만 90일, 2026-10-15 이전 계약은 일괄 180일(dashboard/src/maintenance.mjs). 날짜는 여는 날 기준.
   if (QS.get('demo') === 'projects' && !DB.wishket_projects.some(r => String(r.slug).startsWith('demo_'))) {
     const W = n => 'https://www.wishket.com/project/7' + n, base = { history:[], memo:null };
     DB.wishket_projects.push(...[
       { slug:'demo_dev_ok',      title:'[개발 중] 사내 예약 시스템 — 마감 20일 남음',          current_status:'in_progress',      budget:'1,500만원', start_date:day(-40), deadline:day(20) },
       { slug:'demo_dev_old',     title:'[개발 중] 예약 웹 — 500만원, 2026-04 계약(무상 기본 180일)', current_status:'in_progress', budget:'500만원', start_date:'2026-04-27', deadline:day(10), history:[{ date:'2026-04-16', status:'contracted', note:'' }, { date:'2026-04-27', status:'in_progress', note:'' }] },
-      { slug:'demo_dev_small',   title:'[개발 중] 소개 사이트 — 700만원, 2026-10-20 계약(무상 기본 3개월)', current_status:'in_progress', budget:'700만원', start_date:'2026-10-21', deadline:day(10), history:[{ date:'2026-10-20', status:'contracted', note:'' }, { date:'2026-10-21', status:'in_progress', note:'' }] },
+      { slug:'demo_dev_small',   title:'[개발 중] 소개 사이트 — 700만원, 2026-10-20 계약(무상 기본 90일)', current_status:'in_progress', budget:'700만원', start_date:'2026-10-21', deadline:day(10), history:[{ date:'2026-10-20', status:'contracted', note:'' }, { date:'2026-10-21', status:'in_progress', note:'' }] },
       { slug:'demo_dev_late',    title:'[개발 중] 재고 관리 앱 — 마감 3일 지남',               current_status:'in_progress',      budget:'900만원',   start_date:day(-60), deadline:day(-3) },
       { slug:'demo_dev_none',    title:'[개발 중] 설문 플랫폼 — 마감일 없음',                  current_status:'in_progress',      budget:'1,200만원' },
-      { slug:'demo_mf_soon',     title:'[무상] 시설 점검 앱 — 700만원, 곧 만료(3개월)',         current_status:'maintenance_free', budget:'700만원',   start_date:day(-150), deadline:day(-80) },
-      { slug:'demo_mf_ok',       title:'[무상] 교육 LMS — 1,800만원(6개월)',                   current_status:'maintenance_free', budget:'1,800만원', start_date:day(-100), deadline:day(-10) },
+      { slug:'demo_mf_soon',     title:'[무상] 시설 점검 앱 — 700만원, 곧 만료(90일)',         current_status:'maintenance_free', budget:'700만원',   start_date:day(-150), deadline:day(-80) },
+      { slug:'demo_mf_ok',       title:'[무상] 교육 LMS — 1,800만원(180일)',                   current_status:'maintenance_free', budget:'1,800만원', start_date:day(-100), deadline:day(-10) },
       { slug:'demo_mf_trans',    title:'[무상] 뉴스레터 대시보드 — 개발완료일 미지정(계산 안 함)', current_status:'maintenance_free', budget:'500만원', history:[{ date:day(-200), status:'in_progress', note:'' }, { date:day(-30), status:'maintenance_free', note:'' }] },
       { slug:'demo_mf_manual',   title:'[무상] 쇼핑몰 리뉴얼 — 계약서 기간 직접 입력(1년)',      current_status:'maintenance_free', budget:'1,800만원', start_date:day(-90), deadline:day(-10), free_maint_until:day(355) },
       { slug:'demo_mf_legacy',   title:'[무상] 예약 관리 웹 — 500만원이지만 2026-10-15 이전 계약(180일)', current_status:'maintenance_free', budget:'500만원', deadline:day(-30), history:[{ date:'2026-04-16', status:'contracted', note:'' }, { date:day(-30), status:'maintenance_free', note:'' }] },

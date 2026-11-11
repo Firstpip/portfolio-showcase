@@ -1,7 +1,7 @@
 import { CalendarPage, CalendarToday } from './calendar.jsx';
 // 날짜 규칙(한국 달력일) — 'YYYY-MM-DD' 를 만들거나 비교하는 코드는 전부 이 모듈을 쓴다 (src/dates.mjs 머리말 참조)
 import { runMove } from './move.mjs';
-import { freeMaintInfo, freeMaintDefault, freeMaintUntilToStore, addTerm, TERM_LABEL } from './maintenance.mjs';
+import { freeMaintInfo, freeMaintDefault, freeMaintInitialChoice, freeMaintUntilToStore, addFreeDays, parseFreeDays, FREE_MAINT_PRESETS, FREE_MAINT_SMALL_LIMIT, FREE_MAINT_MAX_DAYS } from './maintenance.mjs';
 import { kstParts, kstToIso, kstDateStr, kstStartOfDay, isYmd, addDaysYmd, daysBetweenYmd, daysBetweenKst, scheduleFrom } from './dates.mjs';
 const { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } = React;
 
@@ -81,8 +81,8 @@ const dLeftLabel = (n, past = '지남') => n == null ? '' : n < 0 ? `${-n}일 ${
 // 무상 만료일이 어떻게 정해졌는지 (목록 칸 툴팁·정보 탭 안내)
 const freeMaintWhy = (fm, manwon) => {
   const rule = fm.legacy ? `${fm.contractDate} 계약 — 2026-10-15 이전 계약은 금액과 상관없이 180일`
-    : `계약금액 ${manwon.toLocaleString()}만원 · 1,000만원 ${fm.term === 'm3' ? '미만' : '이상'}`;
-  const calc = fm.auto ? `개발완료일 ${fm.base} + ${TERM_LABEL[fm.term]} (${rule})` : null;
+    : `계약금액 ${manwon.toLocaleString()}만원 · 1,000만원 ${manwon < FREE_MAINT_SMALL_LIMIT ? '미만' : '이상'}`;
+  const calc = fm.auto ? `개발완료일 ${fm.base} + ${fm.term}일 (${rule})` : null;
   if (fm.manual) return `직접 입력한 날짜${calc ? ` — 회사 기준으로는 ${fm.auto} (${calc})` : ''}`;
   if (calc) return `회사 기준: ${calc}`;
   return !fm.base ? FREE_MAINT_NO_DONE_MSG
@@ -704,16 +704,20 @@ function ConfirmModal({ state, onCancel }) {
 // ─── DevDoneModal ───
 // '개발 중' → 유지보수(무상)·유지보수(유상)·납품 완료로 넘길 때 실제 개발 완료일을 한 번 더 확인받는다 (2026-11-10).
 // 확인하면 그 날짜가 마감일(deadline) 칸에 들어가 '개발완료일'이 된다(예정일 → 실제 완료일).
-// 유지보수(무상)로 갈 때는 무상 기간(3개월·6개월·기타, 2026-10-15 이전 계약은 180일 포함)도 고른다. 기본값은 사내 기준(src/maintenance.mjs freeMaintDefault).
+// 유지보수(무상)로 갈 때는 무상 기간도 일수로 고른다 — 60일·90일·180일·기타(일수 직접 입력) (2026-11-11, 그 전엔 3·6개월).
+//   기본값은 사내 기준(src/maintenance.mjs freeMaintDefault — 2026-10-15 이전 계약 180일, 이후 1,000만원 미만 90일·이상 180일).
+//   개발 중에 정보 탭에서 무상 만료일을 미리 넣어 둔 건은 그 날짜에 맞는 일수로 골라 둔다(freeMaintInitialChoice).
 const DEV_DONE_TARGETS = ['maintenance_free', 'maintenance_paid', 'delivered'];
 function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
   const trapRef = useFocusTrap(true);
   const today = kstDateStr();
   const manwon = parseBudgetNum(project.budget);
   const def = useMemo(() => freeMaintDefault(project, manwon), [project, manwon]);
+  const init = useMemo(() => freeMaintInitialChoice(project, manwon, today), []);   // 처음 연 순간 값만 — 고른 뒤 바뀌지 않게
   const [done, setDone] = useState(today);
-  const [choice, setChoice] = useState(def.term || '');
-  const [other, setOther] = useState('');
+  const [choice, setChoice] = useState(init.choice);   // '60'|'90'|'180'|'other'|''
+  const [other, setOther] = useState(init.other);      // '기타' 일수 입력(문자열 그대로 — 지우는 중에도 막지 않음)
+  const otherRef = useRef(null);
   useEffect(() => {
     const h = e => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); onCancel(); } };
     window.addEventListener('keydown', h, true);
@@ -722,7 +726,9 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
   const sm = STATUS_META[newStatus];
   const isFree = newStatus === 'maintenance_free';
   const doneOk = isYmd(done) && done <= today && (!project.start_date || done >= project.start_date);
-  const until = !isFree || !doneOk ? null : choice === 'other' ? (isYmd(other) && other > done ? other : null) : choice ? addTerm(done, choice) : null;
+  const days = choice === 'other' ? parseFreeDays(other) : choice ? Number(choice) : null;
+  const otherErr = choice === 'other' && other.trim() !== '' && days == null ? `1~${FREE_MAINT_MAX_DAYS.toLocaleString()} 사이의 정수(일)로 입력하세요` : '';
+  const until = !isFree || !doneOk || days == null ? null : addFreeDays(done, days);
   const ok = doneOk && (!isFree || !!until);
   const doneErr = !isYmd(done) ? '날짜를 입력하세요' : done > today ? '오늘 이후 날짜는 완료일이 될 수 없습니다'
     : project.start_date && done < project.start_date ? `착수일(${project.start_date})보다 앞설 수 없습니다` : '';
@@ -731,9 +737,10 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
     const extra = { fields: { deadline: done }, entry: { dev_done: done } };
     let noteAdd = `개발완료일 ${done}`;
     if (isFree) {
-      const store = freeMaintUntilToStore(done, choice, other, def.term);
+      const store = freeMaintUntilToStore(done, days, def.days);
+      if (store === undefined) return;   // ok 가 막지만 한 번 더 — 잘못된 값으로 저장하지 않는다
       if (store !== (project.free_maint_until || null)) extra.preFields = { free_maint_until: store };
-      noteAdd += ` · 무상 ${choice === 'other' ? '기타' : TERM_LABEL[choice]} ~${until}`;
+      noteAdd += ` · 무상 ${days}일 ~${until}`;
     }
     extra.noteAdd = noteAdd;
     onConfirm(extra);
@@ -743,10 +750,10 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
   const opt = (val, label, sub) => {
     const on = choice === val;
     return (
-      <label key={val} style={{ flex:'1 1 0', minWidth:0, display:'flex', flexDirection:'column', gap:2, padding:'0.55rem 0.6rem', borderRadius:10, cursor:'pointer',
+      <label key={val} style={{ flex:'1 1 0', minWidth:0, whiteSpace:'nowrap', display:'flex', flexDirection:'column', gap:2, padding:'0.55rem 0.6rem', borderRadius:10, cursor:'pointer',
         border:`2px solid ${on ? 'var(--accent)' : 'var(--border)'}`, background: on ? 'var(--surface-info-mid)' : 'var(--surface2)' }}>
         <span style={{ display:'flex', alignItems:'center', gap:6, fontSize:'0.88rem', fontWeight:on?600:500, color:'var(--text)' }}>
-          <input type="radio" name="free-months" value={val} checked={on} onChange={() => setChoice(val)} style={{ margin:0 }} />{label}
+          <input type="radio" name="free-days" value={val} checked={on} onChange={() => { setChoice(val); if (val === 'other') setTimeout(() => otherRef.current?.focus(), 0); }} style={{ margin:0 }} />{label}
         </span>
         {sub && <span style={{ fontSize:'0.72rem', color:'var(--accent)', fontWeight:600 }}>{sub}</span>}
       </label>
@@ -776,16 +783,26 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
             <div>
               <div style={lbl}>무상 유지보수 기간</div>
               <div role="radiogroup" aria-label="무상 유지보수 기간" style={{ display:'flex', gap:8 }}>
-                {def.options.map(t => opt(t, TERM_LABEL[t], def.term === t ? '사내 기준' : null))}
+                {FREE_MAINT_PRESETS.map(n => opt(String(n), `${n}일`, def.days === n ? '사내 기준' : null))}
                 {opt('other', '기타', null)}
               </div>
               {choice === 'other' && (
-                <input type="date" aria-label="무상 만료일 직접 입력" value={other} min={doneOk ? addDaysYmd(done, 1) : undefined} onChange={e => setOther(e.target.value)} style={{ ...inp, marginTop:8 }} />
+                <div style={{ marginTop:8 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                    <input ref={otherRef} type="text" inputMode="numeric" pattern="[0-9]*" maxLength={5} aria-label="무상 유지보수 일수 직접 입력" placeholder="예: 120" value={other}
+                      aria-invalid={!!otherErr} onChange={e => setOther(e.target.value.replace(/[^0-9]/g, ''))}
+                      onKeyDown={e => { if (e.key === 'Enter' && ok) { e.preventDefault(); submit(); } }}
+                      style={{ ...inp, flex:1, borderColor: otherErr ? 'var(--red)' : 'var(--border)' }} />
+                    <span style={{ fontSize:'0.9rem', color:'var(--text)', flexShrink:0 }}>일</span>
+                  </div>
+                  {otherErr && <div style={{ fontSize:'0.75rem', marginTop:5, color:'var(--red)' }}>{otherErr}</div>}
+                </div>
               )}
               <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginTop:6, lineHeight:1.5 }}>사내 기준: {def.reason}</div>
+              {init.note && <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginTop:2, lineHeight:1.5 }}>{init.note}</div>}
               <div style={{ marginTop:10, padding:'0.6rem 0.75rem', borderRadius:8, background:'var(--surface2)', fontSize:'0.85rem', color:'var(--text)' }}>
                 {until ? <>무상 유지보수 <b>{done} ~ {until}</b> <span style={{ color:'var(--text2)', fontSize:'0.78rem' }}>({dLeftLabel(daysBetweenYmd(today, until))})</span></>
-                  : <span style={{ color:'var(--text2)' }}>{choice === 'other' ? '만료일을 입력하세요 (완료일 이후)' : '기간을 고르세요'}</span>}
+                  : <span style={{ color:'var(--text2)' }}>{!doneOk ? '개발 완료일을 먼저 바르게 넣어 주세요' : choice === 'other' ? '무상 일수를 입력하세요' : '기간을 고르세요'}</span>}
               </div>
             </div>
           )}
@@ -3396,7 +3413,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                       <div style={{ marginTop:4, fontSize:'0.8rem', color: fm.until ? 'var(--text2)' : 'var(--yellow)', lineHeight:1.5 }}>
                         {fm.until && <>→ {fm.until}{fm.left != null ? ` (${dLeftLabel(fm.left)})` : ''} · </>}{freeMaintWhy(fm, manwon)}
                       </div>
-                      <div style={{ marginTop:2, fontSize:'0.75rem', color:'var(--text2)', opacity:0.75 }}>회사 기준: 검수 완료 후 6개월, 계약금액(공급가) 1,000만 원 미만은 3개월(2026-10-15 이후 계약). 그 전 계약은 금액과 상관없이 180일 — 계약서 기간이 다르면 직접 입력</div>
+                      <div style={{ marginTop:2, fontSize:'0.75rem', color:'var(--text2)', opacity:0.75 }}>회사 기준: 개발완료일부터 180일, 계약금액(공급가) 1,000만 원 미만은 90일(2026-10-15 이후 계약). 그 전 계약은 금액과 상관없이 180일 — 계약서 기간이 다르면 직접 입력</div>
                     </div>
                   );
                 })()}

@@ -1,5 +1,5 @@
 // 프로젝트 목록 날짜 칸 (2026-11-06): 개발 중 → 개발완료(예정)일, 유지보수(무상) → 무상 만료일(회사 기준 자동 + 직접 입력)
-//  무상 기준: 검수 후 6개월, 계약금액 1,000만 원 미만 3개월(2026-10-15 이후 계약), 그 전 계약은 일괄 180일 — dashboard/src/maintenance.mjs
+//  무상 기준(일수, 2026-11-11): 개발완료일부터 180일, 계약금액 1,000만 원 미만 90일(2026-10-15 이후 계약), 그 전 계약은 일괄 180일 — dashboard/src/maintenance.mjs
 //  배지(2026-11-10): 기간 중 '무상 중', 30일 이내 '만료 임박', 지나면 '무상 만료'
 const { chromium } = require(process.env.PW_CORE || 'playwright-core');
 (async () => {
@@ -37,10 +37,10 @@ const { chromium } = require(process.env.PW_CORE || 'playwright-core');
       ok(`${nm} 개발 중 마감 없음: 미팅일 대신 빈칸/안내`, nm === 'PC' ? /마감일 없음/.test(t) : !/미팅/.test(t), t.slice(0, 160));
       // 유지보수(무상)
       t = await rowText('maintenance_free', 'qa_mf1');
-      ok(`${nm} 무상 700만: 개발완료 09-02 + 3개월 = 2026-12-02`, /2026-12-02/.test(t) && /무상/.test(t), t.slice(0, 160));
+      ok(`${nm} 무상 700만: 개발완료 09-02 + 90일 = 2026-12-01`, /2026-12-01/.test(t) && /무상/.test(t), t.slice(0, 160));
       if (nm === 'PC') ok('PC 무상: 칸 제목 무상 만료일', /무상 만료일/.test(await header()), await header());
       t = await rowText('maintenance_free', 'qa_mf2');
-      ok(`${nm} 무상 1,800만: + 6개월 = 2027-04-28, 배지 '무상 중'`, /2027-04-28/.test(t) && /무상 중/.test(t) && !/무상 만료 /.test(t), t.slice(0, 160));
+      ok(`${nm} 무상 1,800만: + 180일 = 2027-04-26, 배지 '무상 중'`, /2027-04-26/.test(t) && /무상 중/.test(t) && !/무상 만료 /.test(t), t.slice(0, 160));
       t = await rowText('maintenance_free', 'qa_mf3');
       ok(`${nm} 개발완료일 없음: 계산 안 함 + '개발완료일 미지정 · 정보 탭에서 입력'`, /개발완료일 미지정/.test(t) && /정보 탭에서 입력/.test(t) && !/2027-02-01/.test(t), t.slice(0, 160));
       t = await rowText('maintenance_free', 'qa_mf4');
@@ -63,7 +63,7 @@ const { chromium } = require(process.env.PW_CORE || 'playwright-core');
         await p.locator('tbody tr', { hasText:'qa_mf1' }).first().click(); await p.waitForTimeout(500);
         await p.getByText('정보', { exact:true }).first().click().catch(() => {}); await p.waitForTimeout(300);
         const hint = await p.evaluate(() => { const i = document.querySelector('input[aria-label="무상 유지보수 만료일"]'); return i ? i.closest('div').parentElement.textContent.replace(/\s+/g, ' ') : ''; });
-        ok('정보 탭: 무상 만료일 칸 + 회사 기준 안내', /회사 기준: 개발완료일 2026-09-02 \+ 3개월/.test(hint), hint.slice(0, 200));
+        ok('정보 탭: 무상 만료일 칸 + 회사 기준 안내', /회사 기준: 개발완료일 2026-09-02 \+ 90일/.test(hint) && !/개월/.test(hint), hint.slice(0, 200));
         await p.fill('input[aria-label="무상 유지보수 만료일"]', '2027-03-01'); await p.waitForTimeout(150);
         await p.getByRole('button', { name:'저장', exact:true }).first().click(); await p.waitForTimeout(600);
         const saved = await p.evaluate(() => __mock.DB.wishket_projects.find(r => r.slug === 'qa_mf1').free_maint_until);
