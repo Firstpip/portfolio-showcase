@@ -1120,8 +1120,8 @@ function StatCard({ title, value, sub, color, delay }) {
 // 워크룸 row 는 지원종료 정리로 지워져 분모가 남지 않으므로 쓰지 않는다.
 // 정의 (지원 건 하나를 지원월 코호트에 넣고, 같은 공고 제목의 이후 이벤트를 잇는다 — 'apply' 알림엔 공고 id 가 없다):
 //   열람 = 지원 후 7일 안 · 미팅 = 30일 안(미팅 제안/일정 안내) · 계약 = 60일 안 체결
-//   기간이 아직 다 지나지 않은 지원이 20% 넘게 섞인 칸은 '진행 중' — 덜 익은 코호트가 하락처럼 보이는 착시 방지.
-//   결과물 '높음' = 지원 후 30일 안에 그 공고 결과물에 '높음' 방문(visitSessions)이 있었나 — 방문 수집이 10/21 부터라 그 이후 지원만.
+//   기간이 아직 다 지나지 않은 지원이 20% 넘게 섞인 칸은 회색 + '반영 N%' — 덜 익은 코호트가 하락처럼 보이는 착시 방지.
+//   데모 방문 = 지원 후 30일 안에 그 공고 데모(결과물)에 '높음' 등급 방문(visitSessions, 클라이언트로 추정)이 있었나 — 방문 수집이 10/21 부터라 그 이후 지원만.
 // 표본이 작다(월 40~80 지원, 계약 0~4) — 월별 계약률은 흔들림이 크니 90일 비교와 건수를 함께 볼 것.
 const FUNNEL_H = { view: 7, meeting: 30, contract: 60, high: 30 };   // 일
 const FUNNEL_MATURE = 0.8;
@@ -1198,7 +1198,7 @@ function funnelLatencyCdf(cohorts, now = Date.now()) {
   };
 }
 
-// rs 중 stage 기간이 다 지난 건만으로 비율. 덜 익은 건이 20% 넘으면 '진행 중' — 그래도 지금까지의 건수(k/n)는 사실이니 보여 주고,
+// rs 중 stage 기간이 다 지난 건만으로 비율. 덜 익은 건이 20% 넘으면 회색 칸 — 그래도 지금까지의 건수(k/n)는 사실이니 보여 주고,
 //   cdf 가 있으면 '반영'(과거 지원 기준으로 지금쯤 결과의 몇 %가 들어왔어야 하나 = 지원별 경과일의 누적 분포 평균)을 붙인다.
 //   반영이 낮은 칸의 비율은 아직 오를 수 있는 하한 — 다 지난 달과 나란히 비교하면 하락처럼 보이는 착시가 생긴다.
 function funnelRate(rs, stage, base = null, now = Date.now(), cdf = null) {
@@ -1225,7 +1225,7 @@ function FunnelCell({ r, strong }) {
       <span style={{ whiteSpace:'nowrap', color:'var(--text2)' }} title={tip}>
         <span style={{ fontWeight:500 }}>{r.pct.toFixed(0)}%</span>
         <span style={{ fontSize:'0.75rem' }}> {r.k}/{r.n}</span>
-        <div style={{ fontSize:'0.7rem' }}>진행 중{r.done != null ? ` · 반영 ${Math.round(r.done * 100)}%` : ''}</div>
+        {r.done != null && <div style={{ fontSize:'0.7rem' }}>반영 {Math.round(r.done * 100)}%</div>}
       </span>
     );
   }
@@ -1256,12 +1256,12 @@ function FunnelAnalysis({ data }) {
   const monthOf = (t) => kstDateStr(new Date(t)).slice(0, 7);
   const byMonth = Object.fromEntries(months.map(k => [k, cohorts.filter(c => monthOf(c.t0) === k)]));
   // 최근 90일 vs 직전 90일 — 단계마다 '기간이 다 지난' 가장 최근 90일 지원끼리 비교한다.
-  //   예: 미팅(30일)은 30~120일 전 지원 vs 120~210일 전 지원. 그냥 최근 90일을 쓰면 미팅·계약은 늘 '진행 중'이 된다.
+  //   예: 미팅(30일)은 30~120일 전 지원 vs 120~210일 전 지원. 그냥 최근 90일을 쓰면 미팅·계약은 늘 덜 찬 값이 된다.
   const win = (from, to) => cohorts.filter(c => c.t0 >= now - to * DAY && c.t0 < now - from * DAY);
   const fmtD = (daysAgo) => { const d = new Date(now - daysAgo * DAY + 9 * 3600000); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; };
   const stages = [
     { key: 'view', label: '열람', sub: '7일 안' },
-    { key: 'high', label: '결과물 높음', sub: '10/21~' },
+    { key: 'high', label: '데모 방문', sub: '10/21~' },
     { key: 'meeting', label: '미팅', sub: '30일 안' },
     { key: 'contract', label: '계약', sub: '60일 안' },
   ];
@@ -1326,10 +1326,10 @@ function FunnelAnalysis({ data }) {
           </div>
           <div style={{ marginTop:8, fontSize:'0.75rem', color:'var(--text2)', lineHeight:1.6 }}>
             위 카드는 단계마다 기간이 다 지난 가장 최근 90일 지원을 그 직전 90일과 비교합니다(그래서 단계별 날짜 범위가 다름).
-            같은 공고 제목으로 지원 이후 이벤트를 잇습니다. '진행 중' 칸은 지금까지의 건수와 '반영'(과거 지원 기준으로 지금쯤 결과의 몇 %가 들어왔어야 하는지)을 함께 보여 줍니다 — 반영이 낮을수록 앞으로 더 오를 수 있으니 다 지난 달과 바로 비교하지 마세요.
+            같은 공고 제목으로 지원 이후 이벤트를 잇습니다. 회색 칸은 기간이 아직 다 지나지 않은 달의 현재까지 값입니다. '반영'은 과거 지원 기준으로 지금쯤 결과의 몇 %가 들어왔어야 하는지 — 낮을수록 앞으로 더 오를 수 있으니 다 지난 달과 바로 비교하지 마세요.
             '열람'은 위시켓 첫 열람 알림 기준입니다 — 다시 열어 본 것은 알림이 없어 셀 수 없고, 7일 안에 전체 열람의 약 95%가 들어옵니다.
             알림이 오지 않는 열람도 있어(미팅까지 갔는데 열람 알림이 없는 건 존재) 실제보다 약간 낮게 나옵니다.
-            결과물 '높음'은 방문 수집이 시작된 10/21 이후 지원만. 월 지원 수십 건·계약 몇 건 규모라 월별 계약률은 흔들림이 큽니다 — 90일 비교와 건수를 함께 보세요.
+            '데모 방문'은 지원 후 30일 안에 그 공고 데모에 클라이언트로 추정되는 방문(방문 등급 '높음')이 있었던 비율로, 방문 수집이 시작된 10/21 이후 지원만 셉니다. 월 지원 수십 건·계약 몇 건 규모라 월별 계약률은 흔들림이 큽니다 — 90일 비교와 건수를 함께 보세요.
           </div>
         </>
       )}
