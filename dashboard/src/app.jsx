@@ -1128,7 +1128,13 @@ const FUNNEL_MATURE = 0.8;
 const SHOWCASE_TRACK_START = Date.parse('2026-10-21T00:00:00+09:00');
 const DAY = 86400000;
 
-function buildFunnelCohorts(events, projects, visitCtx) {
+// 공고 제목 비교 키 — 위시켓이 알림 종류마다 제목을 다르게 인코딩한다(실측 2026-11-12: 지원·미팅 알림 '비긴 -&gt; 데이터라이즈',
+//   열람 알림 '비긴 -> 데이터라이즈'). 'apply' 알림엔 공고 id 가 없어 제목이 유일한 연결 고리라, 엔티티·공백을 풀어서 비교한다.
+const FUNNEL_ENTITY = { '&gt;': '>', '&lt;': '<', '&amp;': '&', '&quot;': '"', '&#39;': "'", '&#x27;': "'", '&nbsp;': ' ' };
+const funnelTitleKey = (t) => String(t || '').replace(/&(?:gt|lt|amp|quot|nbsp|#39|#x27);/g, m => FUNNEL_ENTITY[m]).replace(/\s+/g, ' ').trim();
+
+function buildFunnelCohorts(rawEvents, projects, visitCtx) {
+  const events = rawEvents.map(e => ({ ...e, project_title: funnelTitleKey(e.project_title) }));
   const byTitle = new Map();
   for (const e of events) {
     let m = byTitle.get(e.project_title);
@@ -1141,7 +1147,7 @@ function buildFunnelCohorts(events, projects, visitCtx) {
     projBySlug.set(p.slug, p);
     const id = (String(p.wishket_url || '').match(/\/project\/(?:view\/)?(\d+)/) || [])[1];
     if (id) slugById.set(id, p.slug);
-    if (p.title) slugByTitle.set(p.title.trim(), p.slug);
+    if (p.title) slugByTitle.set(funnelTitleKey(p.title), p.slug);
   }
   const idByTitle = new Map();
   for (const e of events) if (e.wishket_project_id && !idByTitle.has(e.project_title)) idByTitle.set(e.project_title, e.wishket_project_id);
@@ -1278,6 +1284,8 @@ function FunnelAnalysis({ data }) {
           <div style={{ marginTop:8, fontSize:'0.75rem', color:'var(--text2)', lineHeight:1.6 }}>
             위 카드는 단계마다 기간이 다 지난 가장 최근 90일 지원을 그 직전 90일과 비교합니다(그래서 단계별 날짜 범위가 다름).
             같은 공고 제목으로 지원 이후 이벤트를 잇습니다. '진행 중' = 기간이 아직 다 지나지 않은 지원이 많아 비율을 내지 않음.
+            '열람'은 위시켓 첫 열람 알림 기준입니다 — 다시 열어 본 것은 알림이 없어 셀 수 없고, 7일 안에 전체 열람의 약 95%가 들어옵니다.
+            알림이 오지 않는 열람도 있어(미팅까지 갔는데 열람 알림이 없는 건 존재) 실제보다 약간 낮게 나옵니다.
             결과물 '높음'은 방문 수집이 시작된 10/21 이후 지원만. 월 지원 수십 건·계약 몇 건 규모라 월별 계약률은 흔들림이 큽니다 — 90일 비교와 건수를 함께 보세요.
           </div>
         </>
