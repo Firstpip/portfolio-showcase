@@ -1164,29 +1164,71 @@ function buildFunnelCohorts(rawEvents, projects, visitCtx) {
   return events.filter(e => e.kind === 'apply').map(e => {
     const t0 = Date.parse(e.occurred_at), m = byTitle.get(e.project_title) || {};
     const slug = slugById.get(idByTitle.get(e.project_title)) || slugByTitle.get(e.project_title);
+    const at = {
+      view: first(m.view, t0, FUNNEL_H.view),
+      meeting: first(m.meeting, t0, FUNNEL_H.meeting),
+      contract: first(m.contract, t0, FUNNEL_H.contract),
+      high: t0 >= SHOWCASE_TRACK_START && slug ? first(highAt(slug), t0, FUNNEL_H.high) : null,
+    };
+    const lat = Object.fromEntries(Object.entries(at).map(([k, v]) => [k, v == null ? null : Math.max(0, (v - t0) / DAY)]));
     return {
-      t0, title: e.project_title,
-      view: first(m.view, t0, FUNNEL_H.view) != null,
-      meeting: first(m.meeting, t0, FUNNEL_H.meeting) != null,
-      contract: first(m.contract, t0, FUNNEL_H.contract) != null,
-      high: t0 >= SHOWCASE_TRACK_START ? (slug ? first(highAt(slug), t0, FUNNEL_H.high) != null : null) : undefined,
+      t0, title: e.project_title, lat,
+      view: at.view != null,
+      meeting: at.meeting != null,
+      contract: at.contract != null,
+      high: t0 >= SHOWCASE_TRACK_START ? (slug ? at.high != null : null) : undefined,
     };
   });
 }
 
-// rs 중 stage 기간이 다 지난 건만으로 비율. 덜 익은 건이 20% 넘으면 null(진행 중)
-function funnelRate(rs, stage, base = null, now = Date.now()) {
+// 단계별 '지원 → 첫 이벤트' 걸린 일수의 누적 분포. 기간이 다 지난 지원만 쓴다(최근 지원을 넣으면 빨리 온 건만 섞여 앞으로 쏠린다).
+//   반환 (stage, ageDays) → 기간 안에 결국 일어난 이벤트 중 지원 후 ageDays 안에 일어난 비율. 표본이 5건 미만이면 null.
+function funnelLatencyCdf(cohorts, now = Date.now()) {
+  const sorted = {};
+  for (const stage of Object.keys(FUNNEL_H)) {
+    sorted[stage] = cohorts.filter(c => c.t0 + FUNNEL_H[stage] * DAY <= now && c.lat?.[stage] != null).map(c => c.lat[stage]).sort((a, b) => a - b);
+  }
+  return (stage, ageDays) => {
+    const xs = sorted[stage];
+    if (!xs || xs.length < 5) return null;
+    if (ageDays >= FUNNEL_H[stage]) return 1;
+    let lo = 0, hi = xs.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (xs[mid] <= ageDays) lo = mid + 1; else hi = mid; }
+    return lo / xs.length;
+  };
+}
+
+// rs 중 stage 기간이 다 지난 건만으로 비율. 덜 익은 건이 20% 넘으면 '진행 중' — 그래도 지금까지의 건수(k/n)는 사실이니 보여 주고,
+//   cdf 가 있으면 '반영'(과거 지원 기준으로 지금쯤 결과의 몇 %가 들어왔어야 하나 = 지원별 경과일의 누적 분포 평균)을 붙인다.
+//   반영이 낮은 칸의 비율은 아직 오를 수 있는 하한 — 다 지난 달과 나란히 비교하면 하락처럼 보이는 착시가 생긴다.
+function funnelRate(rs, stage, base = null, now = Date.now(), cdf = null) {
   const pool = rs.filter(r => (base ? r[base] : true) && (stage !== 'high' || r.high !== undefined));
   if (!pool.length) return null;
   const mature = pool.filter(r => r.t0 + FUNNEL_H[stage] * DAY <= now && r[stage] !== null);
-  if (mature.length < pool.length * FUNNEL_MATURE) return { pending: true, n: pool.length };
+  if (mature.length < pool.length * FUNNEL_MATURE) {
+    const known = pool.filter(r => r[stage] !== null);
+    const k = known.filter(r => r[stage]).length, n = known.length;
+    const fs = cdf ? known.map(r => cdf(stage, (now - r.t0) / DAY)) : [];
+    const done = fs.length && fs.every(f => f != null) ? fs.reduce((a, b) => a + b, 0) / fs.length : null;
+    return { pending: true, k, n, pct: n ? (100 * k / n) : 0, done };
+  }
   const k = mature.filter(r => r[stage]).length;
   return { k, n: mature.length, pct: mature.length ? (100 * k / mature.length) : 0 };
 }
 
 function FunnelCell({ r, strong }) {
   if (r === null) return <span style={{ color:'var(--text2)' }}>—</span>;
-  if (r.pending) return <span style={{ color:'var(--text2)', fontSize:'0.75rem' }} title={`기간이 아직 다 지나지 않음 (${r.n}건)`}>진행 중</span>;
+  if (r.pending && !r.n) return <span style={{ color:'var(--text2)' }} title="아직 판정할 수 있는 지원이 없음">—</span>;
+  if (r.pending) {
+    const tip = `기간이 아직 다 지나지 않음 — 지금까지 ${r.k}/${r.n}건` + (r.done != null ? `. 과거 지원 기준으로 지금쯤 결과의 약 ${Math.round(r.done * 100)}%가 들어왔어야 함 (나머지는 앞으로 더 생길 수 있음)` : '');
+    return (
+      <span style={{ whiteSpace:'nowrap', color:'var(--text2)' }} title={tip}>
+        <span style={{ fontWeight:500 }}>{r.pct.toFixed(0)}%</span>
+        <span style={{ fontSize:'0.75rem' }}> {r.k}/{r.n}</span>
+        <div style={{ fontSize:'0.7rem' }}>진행 중{r.done != null ? ` · 반영 ${Math.round(r.done * 100)}%` : ''}</div>
+      </span>
+    );
+  }
   return (
     <span style={{ whiteSpace:'nowrap' }}>
       <b style={{ fontWeight: strong ? 700 : 600 }}>{r.pct.toFixed(0)}%</b>
@@ -1204,6 +1246,7 @@ function FunnelAnalysis({ data }) {
       .then(({ data: ev, error }) => { if (error) setErr(true); else setEvents(ev || []); });
   }, []);
   const cohorts = useMemo(() => (events ? buildFunnelCohorts(events, data, visitCtx) : []), [events, data, visitCtx]);
+  const cdf = useMemo(() => funnelLatencyCdf(cohorts), [cohorts]);
   if (err) return null;   // 테이블 미배포 등 — 카드만 숨긴다
   const now = Date.now();
   // 최근 8개월 (KST 월 키)
@@ -1273,8 +1316,8 @@ function FunnelAnalysis({ data }) {
                     <tr key={k}>
                       <td style={{ ...td, ...stickyCol, fontFamily:'monospace', color:'var(--text2)' }}>{k}</td>
                       <td style={{ ...td, fontWeight:600 }}>{rs.length || '—'}</td>
-                      {stages.map(s => <td key={s.key} style={td}>{rs.length ? <FunnelCell r={funnelRate(rs, s.key, null, now)} /> : '—'}</td>)}
-                      {conv.map(s => <td key={s.label} style={td}>{rs.length ? <FunnelCell r={funnelRate(rs, s.key, s.base, now)} /> : '—'}</td>)}
+                      {stages.map(s => <td key={s.key} style={td}>{rs.length ? <FunnelCell r={funnelRate(rs, s.key, null, now, cdf)} /> : '—'}</td>)}
+                      {conv.map(s => <td key={s.label} style={td}>{rs.length ? <FunnelCell r={funnelRate(rs, s.key, s.base, now, cdf)} /> : '—'}</td>)}
                     </tr>
                   );
                 })}
@@ -1283,7 +1326,7 @@ function FunnelAnalysis({ data }) {
           </div>
           <div style={{ marginTop:8, fontSize:'0.75rem', color:'var(--text2)', lineHeight:1.6 }}>
             위 카드는 단계마다 기간이 다 지난 가장 최근 90일 지원을 그 직전 90일과 비교합니다(그래서 단계별 날짜 범위가 다름).
-            같은 공고 제목으로 지원 이후 이벤트를 잇습니다. '진행 중' = 기간이 아직 다 지나지 않은 지원이 많아 비율을 내지 않음.
+            같은 공고 제목으로 지원 이후 이벤트를 잇습니다. '진행 중' 칸은 지금까지의 건수와 '반영'(과거 지원 기준으로 지금쯤 결과의 몇 %가 들어왔어야 하는지)을 함께 보여 줍니다 — 반영이 낮을수록 앞으로 더 오를 수 있으니 다 지난 달과 바로 비교하지 마세요.
             '열람'은 위시켓 첫 열람 알림 기준입니다 — 다시 열어 본 것은 알림이 없어 셀 수 없고, 7일 안에 전체 열람의 약 95%가 들어옵니다.
             알림이 오지 않는 열람도 있어(미팅까지 갔는데 열람 알림이 없는 건 존재) 실제보다 약간 낮게 나옵니다.
             결과물 '높음'은 방문 수집이 시작된 10/21 이후 지원만. 월 지원 수십 건·계약 몇 건 규모라 월별 계약률은 흔들림이 큽니다 — 90일 비교와 건수를 함께 보세요.
