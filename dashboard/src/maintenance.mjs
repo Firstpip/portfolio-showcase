@@ -86,7 +86,7 @@ export function freeMaintDefault(p, manwon) {
   const days = freeMaintTerm(manwon, contractDate);
   if (isYmd(contractDate) && contractDate < FREE_MAINT_RULE_FROM) return { days, reason: `${contractDate} 계약 — 2026-10-15 이전 계약은 금액과 상관없이 180일` };
   if (!days) return { days: null, reason: '계약금액이 없어 사내 기준을 정할 수 없습니다 — 계약서 기간을 고르세요' };
-  return { days, reason: `계약금액 ${manwon.toLocaleString()}만원 — 1,000만원 ${days === FREE_MAINT_DAYS_SMALL ? '미만 90일' : '이상 180일'}` };
+  return { days, reason: `계약금액 ${manwon.toLocaleString('ko-KR')}만원 — 1,000만원 ${days === FREE_MAINT_DAYS_SMALL ? '미만 90일' : '이상 180일'}` };
 }
 
 /**

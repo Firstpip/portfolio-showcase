@@ -81,7 +81,7 @@ const dLeftLabel = (n, past = '지남') => n == null ? '' : n < 0 ? `${-n}일 ${
 // 무상 만료일이 어떻게 정해졌는지 (목록 칸 툴팁·정보 탭 안내)
 const freeMaintWhy = (fm, manwon) => {
   const rule = fm.legacy ? `${fm.contractDate} 계약 — 2026-10-15 이전 계약은 금액과 상관없이 180일`
-    : `계약금액 ${manwon.toLocaleString()}만원 · 1,000만원 ${manwon < FREE_MAINT_SMALL_LIMIT ? '미만' : '이상'}`;
+    : `계약금액 ${manwon.toLocaleString('ko-KR')}만원 · 1,000만원 ${manwon < FREE_MAINT_SMALL_LIMIT ? '미만' : '이상'}`;
   const calc = fm.auto ? `개발완료일 ${fm.base} + ${fm.term}일 (${rule})` : null;
   if (fm.manual) return `직접 입력한 날짜${calc ? ` — 회사 기준으로는 ${fm.auto} (${calc})` : ''}`;
   if (calc) return `회사 기준: ${calc}`;
@@ -103,7 +103,7 @@ const PROTECTED_DELETE_STATUSES = ['won','contracted','in_progress','maintenance
 const CONTRACT_NET_STATUSES = ['won', ...POST_WON];
 const wishketFeeRate = (manwon) => manwon <= 500 ? 0.25 : 0.20;
 const contractNet = (manwon) => manwon > 0 ? Math.round(manwon * (1 - wishketFeeRate(manwon)) * 10) / 10 : 0; // 0.1만원 단위, 부가세 제외
-const fmtManwon = (n) => n.toLocaleString(undefined, { maximumFractionDigits: 1 });
+const fmtManwon = (n) => n.toLocaleString('ko-KR', { maximumFractionDigits: 1 });
 // 위시켓 외 직계약은 수수료 미적용 — 기록 금액 그대로가 계약대금.
 //  ① wishket_url 자체가 없거나, ② direct_contract=true (위시켓 공고 URL은 참고로 남기되
 //     위시켓 외 경로로 직접 계약한 건 — 편집 모달의 '직계약' 체크박스로 토글).
@@ -305,6 +305,13 @@ const meetingTypeLabel = (k) => MEETING_TYPES.find(t => t.key===k)?.label || '�
 // 콤마는 천 단위 구분자로 먼저 제거(이전 구현은 "1,000~3,000"을 1로 읽었음 — 2026-09-18 수정).
 const BUDGET_RANGE_RE = /(\d)\s*[~\-–]\s*(\d)/;
 const isBudgetRange = (v) => BUDGET_RANGE_RE.test(String(v||'').replace(/,/g, ''));
+// 예산 문자열 표시용 정규화 — 저장 경로마다 형식이 달라("2000만원" / "2,000만원" / "1000~3000만원")
+// 화면에서 천 단위 콤마가 들쭉날쭉했다. 4자리 이상 숫자에만 콤마를 넣고 나머지 글자(만원·협의·~)는 그대로 둔다.
+// 소수부(앞이 '.')는 건드리지 않는다. DB 원본은 바꾸지 않음(표시 시점 변환).
+const fmtBudget = (v) => String(v ?? '').replace(/(?<![\d.])\d[\d,]*/g, (m) => {
+  const d = m.replace(/,/g, '');
+  return d.length >= 4 && !/^0\d/.test(d) ? Number(d).toLocaleString('ko-KR') : m;
+});
 function parseBudgetNum(v) {
   const s = String(v||'').replace(/,/g, '');
   if (!s) return 0;
@@ -727,7 +734,7 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
   const isFree = newStatus === 'maintenance_free';
   const doneOk = isYmd(done) && done <= today && (!project.start_date || done >= project.start_date);
   const days = choice === 'other' ? parseFreeDays(other) : choice ? Number(choice) : null;
-  const otherErr = choice === 'other' && other.trim() !== '' && days == null ? `1~${FREE_MAINT_MAX_DAYS.toLocaleString()} 사이의 정수(일)로 입력하세요` : '';
+  const otherErr = choice === 'other' && other.trim() !== '' && days == null ? `1~${FREE_MAINT_MAX_DAYS.toLocaleString('ko-KR')} 사이의 정수(일)로 입력하세요` : '';
   const until = !isFree || !doneOk || days == null ? null : addFreeDays(done, days);
   const ok = doneOk && (!isFree || !!until);
   const doneErr = !isYmd(done) ? '날짜를 입력하세요' : done > today ? '오늘 이후 날짜는 완료일이 될 수 없습니다'
@@ -1367,7 +1374,7 @@ function LostReasonRow({ item, saved, onSave }) {
       <div style={{ display:'flex', alignItems:'baseline', gap:8, flexWrap:'wrap', marginBottom:6 }}>
         <span style={{ fontWeight:600, fontSize:'0.85rem', flex:'1 1 200px', minWidth:0 }}>{item.title || item.slug}</span>
         <span style={{ fontSize:'0.75rem', color:'var(--text2)', whiteSpace:'nowrap' }}>
-          {item.budget ? `${item.budget} · ` : ''}미팅 {item.meeting_at ? String(item.meeting_at).slice(0, 10) : '—'} · 정리 {String(item.deleted_at).slice(0, 10)}{item.direct ? ' · 직거래' : ''}
+          {item.budget ? `${fmtBudget(item.budget)} · ` : ''}미팅 {item.meeting_at ? String(item.meeting_at).slice(0, 10) : '—'} · 정리 {String(item.deleted_at).slice(0, 10)}{item.direct ? ' · 직거래' : ''}
         </span>
       </div>
       <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:6 }}>
@@ -3190,7 +3197,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const [resultMemoChanged, setResultMemoChanged] = useState(false);
 
   const budgetIsRange = isBudgetRange(project?.budget);
-  const parseBN = (v) => { if (isBudgetRange(v)) return String(v||''); const n = parseBudgetNum(v); return n ? n.toLocaleString() : ''; };
+  const parseBN = (v) => { if (isBudgetRange(v)) return fmtBudget(v); const n = parseBudgetNum(v); return n ? n.toLocaleString('ko-KR') : ''; };
   const [budgetNum, setBudgetNum] = useState(() => parseBN(project?.budget));
   // Assignment
   const [assignManager, setAssignManager] = useState(project?.assigned_manager||null);
@@ -3281,7 +3288,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
 
   const handleBudgetChange = (val) => {
     const digits = val.replace(/[^0-9]/g,'');
-    const formatted = digits ? Number(digits).toLocaleString() : '';
+    const formatted = digits ? Number(digits).toLocaleString('ko-KR') : '';
     setBudgetNum(formatted);
     const full = formatted ? formatted+'만원' : '';
     setEditBudget(full);
@@ -4399,11 +4406,11 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:r.budget?'var(--text)':'var(--text2)' }}>{(() => {
                     const bn = parseBudgetNum(r.budget);
                     if (bn > 0 && CONTRACT_NET_STATUSES.includes(r.current_status) && !isDirectContract(r)) {
-                      return <span title={`지원가 ${r.budget} − 수수료 ${wishketFeeRate(bn)*100}% = ${fmtManwon(contractNet(bn))}만원 (부가세 제외)`}>
+                      return <span title={`지원가 ${fmtBudget(r.budget)} − 수수료 ${wishketFeeRate(bn)*100}% = ${fmtManwon(contractNet(bn))}만원 (부가세 제외)`}>
                         {fmtManwon(contractNet(bn))}만원
                       </span>;
                     }
-                    return r.budget || '—';
+                    return r.budget ? fmtBudget(r.budget) : '—';
                   })()}</td>
                   <td title={r.created_at ? formatMeetingAt(r.created_at) || r.created_at : ''} style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:'var(--text2)' }}>{r.created_at ? (r.created_at.length >= 10 ? r.created_at.slice(0,10) : r.created_at) : '—'}</td>
                   {!hideMeeting && (
@@ -5969,7 +5976,7 @@ function QuickAddModal({ onClose, onAdd, saving }) {
 
   const handleBudgetChange = (val) => {
     const digits = val.replace(/[^0-9]/g,'');
-    setBudget(digits ? Number(digits).toLocaleString() : '');
+    setBudget(digits ? Number(digits).toLocaleString('ko-KR') : '');
   };
 
   // 저장 전 중복 확인 — 같은 슬러그가 있으면 -2, -3 … 접미어. 자동 모드에서만 (직접 수정은 사용자 의도 존중 → 오류로 안내)
@@ -5991,7 +5998,7 @@ function QuickAddModal({ onClose, onAdd, saving }) {
     catch (e) { setSlugErr('슬러그 중복 확인 실패: ' + friendlyError(e)); return; }
     if (!slug) { setSlugErr('이미 존재하는 슬러그입니다. 다른 값으로 수정하세요.'); setManualSlug(true); setSlugBody(body); return; }
     const today = kstDateStr();
-    const budgetVal = budget ? budget.replace(/,/g,'')+'만원' : null;
+    const budgetVal = budget ? budget+'만원' : null;   // 편집 모달과 같은 형식(콤마 포함)으로 저장
     await onAdd({
       slug,
       title: title.trim(),
