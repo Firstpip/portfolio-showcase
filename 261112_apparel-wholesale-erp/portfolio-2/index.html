@@ -232,6 +232,10 @@ const ORDERS0 = [
 const lineAmt = (cust, l, field) => sum(Object.values(l[field || 'q'])) * priceFor(cust, l.pid);
 const orderQty = (o, f) => sum(o.lines.map(l => qtyOf(l[f || 'q'])));
 const orderAmt = (o, f) => sum(o.lines.map(l => lineAmt(o.cust, l, f)));
+/* 청구·입금·미수금은 부가세 포함 금액 기준 — 거래명세서와 장부가 같은 함수를 쓴다 */
+const vat = (n) => Math.round(n * 0.1);
+const withVat = (n) => n + vat(n);
+const shipBill = (o) => withVat(orderAmt(o, 'sh'));
 const ALLOC = ['배정', '부분 출고'];
 /* 재고: 실재고(입고 반영) − 배정(배정·부분 출고 주문의 남은 수량) = 가용 */
 function stockOf(orders, adj) {
@@ -255,7 +259,7 @@ const RETURNS0 = [
   { id: 'RT-2611-0592', date: '2026-11-05', cust: '늘봄상사', order: 'OD-2611-0414', pid: 'KN-2310', color: '브라운', size: 'L', qty: 3, reason: '봉제 불량', status: '불량 처리' },
 ];
 const RETURN_DONE = ['재입고 완료', '불량 처리'];
-const retCredit = (r) => RETURN_DONE.includes(r.status) ? r.qty * priceFor(r.cust, r.pid) : 0;
+const retCredit = (r) => RETURN_DONE.includes(r.status) ? withVat(r.qty * priceFor(r.cust, r.pid)) : 0;
 const DEPOSITS0 = [
   { id: 'DP-1113-01', at: '2026-11-13 09:12', name: '온결상사', amount: 1200000, cust: '온결상사', rule: '입금자명 일치' },
   { id: 'DP-1112-02', at: '2026-11-12 16:40', name: '하늘상회', amount: 1260000, cust: '하늘상회', rule: '입금자명 일치 · 미수금 일치' },
@@ -279,7 +283,7 @@ const CLOSED0 = '2026-09';
 function txOf(cust, orders, deposits, matches, returns) {
   const tx = [];
   if (cust === '온결상사') LEGACY.forEach(t => tx.push({ ...t, delta: t.kind === '출고' ? t.amount : -t.amount }));
-  orders.filter(o => o.cust === cust && o.shipDate).forEach(o => { const a = orderAmt(o, 'sh'); if (a) tx.push({ date: o.shipDate, kind: '출고', ref: o.id, amount: a, delta: a }); });
+  orders.filter(o => o.cust === cust && o.shipDate).forEach(o => { const a = shipBill(o); if (orderAmt(o, 'sh')) tx.push({ date: o.shipDate, kind: '출고', ref: o.id, amount: a, delta: a }); });
   deposits.filter(d => ((matches || {})[d.id] || d.cust) === cust).forEach(d => tx.push({ date: d.at.slice(0, 10), kind: '입금', ref: '입금', amount: d.amount, delta: -d.amount, depId: d.id }));
   returns.filter(r => r.cust === cust && retCredit(r)).forEach(r => tx.push({ date: r.date, kind: '반품', ref: r.id, amount: retCredit(r), delta: -retCredit(r) }));
   return tx.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
@@ -400,7 +404,7 @@ function App() {
       <PageHead title="현황판" sub={`${TODAY.replace(/-/g, '.')} 기준`} />
       <ul className="card divide-y divide-line-2 px-2 py-1 sm:px-3">{rows.map(([l, n, ex, r, q, lead]) => <li key={l} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-3.5"><button className="min-w-0 flex-1 text-left hover:underline" onClick={() => open(r, q || undefined)}><span className="block font-semibold text-ink">{l} <span className="tnum">{n}</span></span><span className="tnum block text-[13.5px] text-ink-3">{ex}</span></button>{lead && nOrd('접수') > 0 ? <Button variant="primary" onClick={() => open('orders', { id: todo[0] && todo[0].id.slice(-4) })}>접수 주문 확인</Button> : <Icon name="next" className="text-ink-4" />}</li>)}</ul>
       <section className="card mt-5 px-5 py-5 sm:px-6"><SectionTitle right={<span className="text-[14px] text-ink-3">처리 대기 {todo.length}건</span>}>처리 대기 주문</SectionTitle>
-        <div className="overflow-x-auto"><table className="tbl min-w-[640px]"><thead><tr><th>주문번호</th><th>거래처</th><th>품목</th><th className="num">수량</th><th className="num">금액</th><th>상태</th></tr></thead>
+        <div className="overflow-x-auto"><table className="tbl min-w-[640px]"><thead><tr><th>주문번호</th><th>거래처</th><th>품목</th><th className="num">수량</th><th className="num">주문 금액(공급가액)</th><th>상태</th></tr></thead>
           <tbody>{todo.map(o => <tr key={o.id} className="link cursor-pointer" onClick={() => open('orders', { id: o.id.slice(-4) })}><td className="tnum font-semibold">{o.id}</td><td>{o.cust}</td><td>{itemSum(o)}</td><td className="num">{orderQty(o)}</td><td className="num">{won(orderAmt(o))}</td><td><SP s={o.status} /></td></tr>)}</tbody></table></div></section>
       <section className="card mt-5 px-5 py-5 sm:px-6"><SectionTitle>최근 변경 기록</SectionTitle>
         <div className="overflow-x-auto"><table className="tbl min-w-[520px]"><thead><tr><th>시각</th><th>작업자</th><th>내용</th></tr></thead><tbody>{byNewest(logs).slice(0, 8).map((l, i) => <tr key={i}><td className="tnum whitespace-nowrap text-ink-2">{l.at}</td><td>{l.who}</td><td>{l.what}</td></tr>)}</tbody></table></div></section>
@@ -423,14 +427,14 @@ function App() {
     return (<>
       <PageHead title="주문 처리" sub={`주문 ${orders.length}건 · 거래처 ${new Set(orders.map(o => o.cust)).size}곳`} right={<Segmented label="상태로 거르기" value={filter} onChange={(k) => go('orders', k === '전체' ? {} : { status: k })} options={['전체', '접수', '확인', '배정', '부분 출고', '출고 완료'].map(f => ({ key: f, label: f }))} />} />
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
-        <div className="card overflow-x-auto px-2 py-2"><table className="tbl min-w-[700px]"><thead><tr><th>주문번호</th><th>주문일</th><th>거래처</th><th>품목</th><th className="num">수량</th><th className="num">금액</th><th>상태</th></tr></thead>
+        <div className="card overflow-x-auto px-2 py-2"><table className="tbl min-w-[700px]"><thead><tr><th>주문번호</th><th>주문일</th><th>거래처</th><th>품목</th><th className="num">수량</th><th className="num">주문 금액(공급가액)</th><th>상태</th></tr></thead>
           <tbody>{list.map(o => <tr key={o.id} className="link cursor-pointer" onClick={() => go('orders', { ...(p.status ? { status: p.status } : {}), id: o.id.slice(-4) })} style={o.id === sel.id ? { background: 'var(--color-accent-50)' } : null}><td className="tnum font-semibold">{o.id}</td><td className="tnum text-ink-2">{md(o.date)}</td><td>{o.cust}</td><td>{itemSum(o)}</td><td className="num">{orderQty(o)}</td><td className="num">{won(orderAmt(o))}</td><td><SP s={o.status} /></td></tr>)}</tbody></table></div>
         <div className="card px-5 py-5 sm:px-6" key={sel.id}>
           <div className="flex items-start justify-between gap-3"><div><div className="tnum text-[18px] font-bold">{sel.id}</div><div className="text-[13.5px] text-ink-3">{sel.cust} · {CUST[sel.cust].grade}등급 · {sel.date.replace(/-/g, '.')} 접수</div></div><SP s={sel.status} /></div>
           <div className="mt-4 flex flex-wrap gap-1.5 text-[13.5px]">{STEPS.map((s, i) => <span key={s} className={i <= STEPS.indexOf(sel.status) ? 'font-semibold text-accent-700' : 'text-ink-4'}>{s}</span>)}</div>
-          <div className="mt-3 overflow-x-auto"><table className="tbl"><thead><tr><th>품목</th><th className="num">주문</th><th className="num">출고</th><th className="num">단가</th><th className="num">금액</th></tr></thead><tbody>{sel.lines.map((l, i) => <tr key={i}><td>{PBY[l.pid].name}<div className="text-[13.5px] text-ink-3">{l.color} · {Object.entries(l.q).map(([s, n]) => `${s} ${n}`).join(' ')}</div></td><td className="num">{qtyOf(l.q)}</td><td className="num">{qtyOf(l.sh)}</td><td className="num">{fmtNum(priceFor(sel.cust, l.pid))}</td><td className="num">{fmtNum(lineAmt(sel.cust, l))}</td></tr>)}</tbody></table></div>
+          <div className="mt-3 overflow-x-auto"><table className="tbl"><thead><tr><th>품목</th><th className="num">주문</th><th className="num">출고</th><th className="num">단가</th><th className="num">공급가액</th></tr></thead><tbody>{sel.lines.map((l, i) => <tr key={i}><td>{PBY[l.pid].name}<div className="text-[13.5px] text-ink-3">{l.color} · {Object.entries(l.q).map(([s, n]) => `${s} ${n}`).join(' ')}</div></td><td className="num">{qtyOf(l.q)}</td><td className="num">{qtyOf(l.sh)}</td><td className="num">{fmtNum(priceFor(sel.cust, l.pid))}</td><td className="num">{fmtNum(lineAmt(sel.cust, l))}</td></tr>)}</tbody></table></div>
           {['접수', '확인'].includes(sel.status) && <div className="mt-3 rounded-2xl bg-surface-2 px-4 py-3 text-[14px]"><div className="font-semibold">재고 확인</div>{avOf(sel.lines[0]).concat(sel.lines.slice(1).flatMap(avOf)).slice(0, 4).map((x, i) => <div key={i} className="tnum text-ink-2">{x.z} 필요 {x.need} / 가용 {fmtNum(x.av)} {x.need > x.av ? '— 부족' : ''}</div>)}</div>}
-          <KV rows={[['공급가액', <span key="a" className="tnum">{won(orderAmt(sel))}</span>], ['부가세', <span key="b" className="tnum">{won(Math.round(orderAmt(sel) * 0.1))}</span>]]} />
+          <KV rows={[['공급가액', <span key="a" className="tnum">{won(orderAmt(sel))}</span>], ['부가세', <span key="b" className="tnum">{won(vat(orderAmt(sel)))}</span>]]} />
           <div className="mt-4 flex justify-end gap-2">{sel.status === '접수' && <Button variant="primary" onClick={advance}>주문 확인</Button>}{sel.status === '확인' && <Button variant="primary" onClick={advance}>재고 배정</Button>}{['배정', '부분 출고'].includes(sel.status) && <Button variant="secondary" onClick={() => go('shipping', { id: sel.id.slice(-4) })}>출고 처리로 이동</Button>}{['출고 완료'].includes(sel.status) && <span className="text-[14px] text-ink-3">출고가 끝난 주문입니다</span>}</div>
         </div>
       </div></>);
@@ -539,18 +543,18 @@ function App() {
       if (!shippedNow) return toast('출고 수량을 입력해 주세요', 'warn');
       setOrders(os => os.map(o => o.id === sel.id ? { ...o, lines: nl, status: full ? '출고 완료' : '부분 출고', shipDate: o.shipDate || TODAY, waybill: way } : o));
       setAdj(a => { const n = { ...a }; sel.lines.forEach((l, i) => Object.entries(plan[i]).forEach(([s, v]) => { const k = l.pid + '|' + l.color + '|' + s; n[k] = (n[k] || 0) - v; })); return n; });
-      const amt = sum(sel.lines.map((l, i) => qtyOf(plan[i]) * priceFor(sel.cust, l.pid)));
+      const amt = withVat(sum(sel.lines.map((l, i) => qtyOf(plan[i]) * priceFor(sel.cust, l.pid))));
       setRes({ id: sel.id, way, amt, qty: shippedNow, full }); log(`${sel.id} ${full ? '출고 완료' : '부분 출고'} · 송장 ${way}`, '서하은'); toast(`${sel.id} ${full ? '출고를 완료' : '부분 출고'}했습니다 · 송장 번호 ${way}`);
     };
     return (<>
       <PageHead title="출고·송장" sub={`출고 대기 ${wait.length}건`} />
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-        <div className="card overflow-x-auto px-2 py-2"><table className="tbl min-w-[560px]"><thead><tr><th>주문번호</th><th>거래처</th><th>품목</th><th className="num">남은 수량</th><th className="num">금액</th><th>상태</th></tr></thead><tbody>{wait.map(o => <tr key={o.id} className="link cursor-pointer" onClick={() => go('shipping', { id: o.id.slice(-4) })} style={o.id === sel.id ? { background: 'var(--color-accent-50)' } : null}><td className="tnum font-semibold">{o.id}</td><td>{o.cust}</td><td>{itemSum(o)}</td><td className="num">{sum(o.lines.map(remOf))}</td><td className="num">{won(orderAmt(o))}</td><td><SP s={o.status} /></td></tr>)}</tbody></table></div>
+        <div className="card overflow-x-auto px-2 py-2"><table className="tbl min-w-[560px]"><thead><tr><th>주문번호</th><th>거래처</th><th>품목</th><th className="num">남은 수량</th><th className="num">주문 금액(공급가액)</th><th>상태</th></tr></thead><tbody>{wait.map(o => <tr key={o.id} className="link cursor-pointer" onClick={() => go('shipping', { id: o.id.slice(-4) })} style={o.id === sel.id ? { background: 'var(--color-accent-50)' } : null}><td className="tnum font-semibold">{o.id}</td><td>{o.cust}</td><td>{itemSum(o)}</td><td className="num">{sum(o.lines.map(remOf))}</td><td className="num">{won(orderAmt(o))}</td><td><SP s={o.status} /></td></tr>)}</tbody></table></div>
         <div className="card px-5 py-5 sm:px-6" key={sel.id}><SectionTitle right={<SP s={sel.status} />}>{sel.id} · {sel.cust}</SectionTitle>
           <div className="overflow-x-auto"><table className="tbl"><thead><tr><th>품목</th><th className="num">주문</th><th className="num">기출고</th><th className="num">이번 출고</th></tr></thead><tbody>{sel.lines.map((l, i) => <tr key={i}><td>{PBY[l.pid].name}<div className="text-[13.5px] text-ink-3">{l.color}</div></td><td className="num">{qtyOf(l.q)}</td><td className="num">{qtyOf(l.sh)}</td><td className="num"><input type="number" min="0" max={remOf(l)} className="field w-20 text-right" aria-label={`${PBY[l.pid].name} ${l.color} 출고 수량`} value={qty[l.pid + l.color] === undefined ? remOf(l) : qty[l.pid + l.color]} onChange={(e) => setQty(q => ({ ...q, [l.pid + l.color]: e.target.value }))} /></td></tr>)}</tbody></table></div>
           <KV rows={[['남는 수량', <span key="r" className="tnum">{sum(sel.lines.map(l => remOf(l) - Math.min(remOf(l), qty[l.pid + l.color] === undefined ? remOf(l) : Number(qty[l.pid + l.color]) || 0)))}벌</span>], ['송장 번호', sel.waybill || '출고 시 발급']]} />
           <div className="mt-4 flex justify-end"><Button variant="primary" onClick={ship}>출고 완료</Button></div>
-          {res && <div className="mt-4 rounded-2xl bg-surface-2 px-4 py-3 text-[14.5px]"><div className="font-semibold">{res.id} 송장 발급 결과</div><div className="tnum text-ink-2">송장 번호 {res.way}{res.amt ? ` · 출고 금액 ${won(res.amt)} · 거래처 장부에 반영` : ''}</div><div className="mt-2 text-ink-3">거래명세서 미리보기: 공급가액 {res.amt ? won(res.amt) : won(orderAmt(orders.find(o => o.id === res.id) || sel, 'sh'))} + 부가세 10%</div></div>}
+          {res && <div className="mt-4 rounded-2xl bg-surface-2 px-4 py-3 text-[14.5px]"><div className="font-semibold">{res.id} 송장 발급 결과</div><div className="tnum text-ink-2">송장 번호 {res.way}{res.amt ? ` · 출고 금액(부가세 포함) ${won(res.amt)} · 거래처 장부에 반영` : ''}</div><div className="mt-2 text-ink-3">거래명세서 미리보기: 공급가액 {res.amt ? won(res.amt) : won(orderAmt(orders.find(o => o.id === res.id) || sel, 'sh'))} + 부가세 10%</div></div>}
         </div>
       </div>
       <div className="card mt-5 px-5 py-5 sm:px-6"><SectionTitle right={<span className="text-[14px] text-ink-3">택배사 연동 연결됨 · 마지막 확인 11.13 09:00</span>}>송장 발급 이력</SectionTitle>
@@ -573,7 +577,7 @@ function App() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
         <div className="card overflow-x-auto px-2 py-2"><table className="tbl min-w-[640px]"><thead><tr><th>접수번호</th><th>접수일</th><th>거래처</th><th>품목</th><th className="num">수량</th><th>사유</th><th>상태</th></tr></thead><tbody>{returns.map(r => <tr key={r.id} className="link cursor-pointer" onClick={() => go('returns', { id: r.id.slice(-4) })} style={r.id === sel.id ? { background: 'var(--color-accent-50)' } : null}><td className="tnum font-semibold">{r.id}</td><td className="tnum text-ink-2">{md(r.date)}</td><td>{r.cust}</td><td>{PBY[r.pid].name}<div className="text-[13.5px] text-ink-3">{r.color} {r.size}</div></td><td className="num">{r.qty}</td><td>{r.reason}</td><td><SP s={r.status} /></td></tr>)}</tbody></table></div>
         <div className="card px-5 py-5 sm:px-6" key={sel.id + sel.status}><SectionTitle right={<SP s={sel.status} />}>{sel.id}</SectionTitle>
-          <KV rows={[['거래처', sel.cust], ['원 주문', <span key="o" className="tnum">{sel.order}</span>], ['품목', `${PBY[sel.pid].name} ${sel.color} ${sel.size} ${sel.qty}벌`], ['사유', sel.reason], ['반품 금액', <span key="m" className="tnum">{won(sel.qty * priceFor(sel.cust, sel.pid))}</span>]]} />
+          <KV rows={[['거래처', sel.cust], ['원 주문', <span key="o" className="tnum">{sel.order}</span>], ['품목', `${PBY[sel.pid].name} ${sel.color} ${sel.size} ${sel.qty}벌`], ['사유', sel.reason], ['반품 금액(부가세 포함)', <span key="m" className="tnum">{won(withVat(sel.qty * priceFor(sel.cust, sel.pid)))}</span>]]} />
           <div className="mt-4 rounded-2xl bg-surface-2 px-4 py-3 text-[14.5px]"><div className="font-semibold">처리 결과 반영</div>{RETURN_DONE.includes(sel.status) ? <div className="tnum text-ink-2">{sel.status === '재입고 완료' ? `재고 +${sel.qty}벌 · ` : '재고 반영 없음 · '}{sel.cust} 장부 크레딧 −{won(retCredit(sel))}</div> : <div className="text-ink-2">검수 결과에 따라 재입고(재고 +{sel.qty}벌) 또는 불량으로 나뉩니다.</div>}</div>
           <div className="mt-4 flex flex-wrap justify-end gap-2">{sel.status === '접수' && <Button variant="primary" onClick={() => move('검수 중')}>검수 시작</Button>}{sel.status === '검수 중' && <><Button variant="secondary" onClick={() => move('불량 처리')}>불량 처리</Button><Button variant="primary" onClick={() => move('재입고 완료')}>재입고 처리</Button></>}{RETURN_DONE.includes(sel.status) && <span className="text-[14px] text-ink-3">처리가 끝난 반품입니다</span>}</div>
         </div>
@@ -604,7 +608,7 @@ function App() {
       {target && <Modal open onClose={() => go('settlement')} title="입금 수동 매칭" sub={`${target.id} · ${target.name} · ${won(target.amount)}`} footer={<><Button onClick={() => go('settlement')}>닫기</Button><Button variant="primary" onClick={registerMatch}>매칭 등록</Button></>}>
         <div className="grid gap-2 pb-2"><Lbl>거래처 고르기</Lbl>{cands.map(x => <button key={x.c} type="button" onClick={() => setPick(x.c)} className={cx('flex items-center justify-between rounded-2xl px-4 py-3 text-left press', pick === x.c ? 'bg-accent-50 text-accent-700' : 'bg-surface-2')}><span className="font-semibold">{x.c}</span><span className="tnum text-[14px]">미수금 {won(x.r)}{x.r === target.amount ? ' · 금액 일치' : ''}</span></button>)}</div></Modal>}
       {closing && <Modal open onClose={() => go('settlement')} title="10월 장부를 마감할까요?" sub="마감하면 10월 출고·입금·반품 금액을 수정할 수 없습니다" footer={<><Button onClick={() => go('settlement')}>취소</Button><Button variant="primary" disabled={isClosed} onClick={doClose}>10월 마감</Button></>}>
-        <KV rows={[['출고 금액', <span key="a" className="tnum">{won(mShip)}</span>], ['입금액', <span key="b" className="tnum">{won(mDep)}</span>], ['반품 크레딧', <span key="c" className="tnum">{won(mRet)}</span>], ['10월 순증감', <span key="d" className="tnum font-bold">{won(mShip - mDep - mRet)}</span>]]} /></Modal>}
+        <KV rows={[['출고 금액(부가세 포함)', <span key="a" className="tnum">{won(mShip)}</span>], ['입금액', <span key="b" className="tnum">{won(mDep)}</span>], ['반품 크레딧(부가세 포함)', <span key="c" className="tnum">{won(mRet)}</span>], ['10월 순증감', <span key="d" className="tnum font-bold">{won(mShip - mDep - mRet)}</span>]]} /></Modal>}
     </>);
   };
 
