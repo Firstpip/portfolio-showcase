@@ -1,4 +1,4 @@
-// 결과물 방문 등급 시험 — 2026-11-13 실데이터 재검토에서 나온 사례를 가상 공고명으로 옮겼다
+// 결과물 방문 판정 시험 — 2026-11-13·11-20 실데이터 사례를 가상 공고명으로 옮겼다 (발주처 방문 / 제외)
 import { visitSessions, buildCross } from './visits.mjs';
 
 let pass = 0, fail = 0;
@@ -21,55 +21,53 @@ const proj = (slug, ymd) => ({ slug, created_at: `2026-${ymd}T03:00:00Z`, histor
 const pvAt = (slug, kst) => ({ slug, viewed_on: `2026-${kst.slice(0, 5)}`, viewed_at: at(kst) });
 const grade = (rows, p, pv, all = rows) => visitSessions(rows, p, pv, buildCross(all)).reverse().map(v => [v.level, v.reasons[0] || '']);
 
-// 1) 열람 기록 행이 아직 없을 때 — 예전엔 '중간'(마지막 else)이었다
+// 1) 열람 전 — 발주처는 지원서를 열어야 링크를 본다
 {
   const p = proj('a', '11-13'), r = [row('a', '11-13 19:53')];
-  eq('열람 기록 행 없음 → 낮음', grade(r, p, undefined), [['low', '열람 기록 없음']]);
-  eq('행은 있는데 미열람 → 낮음', grade(r, p, { slug: 'a', viewed_on: null }), [['low', '지원서 열람 전']]);
+  eq('열람 기록 행 없음 → 제외', grade(r, p, undefined), [['skip', '열람 기록 없음']]);
+  eq('행은 있는데 미열람 → 제외', grade(r, p, { slug: 'a', viewed_on: null }), [['skip', '지원서 열람 전']]);
+  eq('열람 3시간 전(팀원 폰 링크 확인) → 제외', grade(r, p, pvAt('a', '11-13 22:53')), [['skip', '지원서 열람 전']]);
+  eq('열람 1분 전(알림 분 단위) → 발주처', grade(r, p, pvAt('a', '11-13 19:54')), [['client', '열람 +0분']]);
 }
-// 2) 바로 나감 — 끝 신호가 온 방문은 스크롤이 늘 100% 라 예전엔 2초·조작 0 이 통과했다
+// 2) 바로 나가도 발주처 방문이다 — 링크를 알 사람이 발주처뿐
 {
   const p = proj('b', '11-01'), pv = pvAt('b', '11-02 11:36');
-  eq('열람 +20분 · 2초 · 조작 0 · 결과물 1개 → 바로 나감', grade([row('b', '11-02 11:56', { dwell_ms: 2000, interactions: 0 })], p, pv), [['low', '바로 나감']]);
-  eq('열람 +20분 · 2초 · 조작 0 · P1+P2 → 높음',
-    grade([row('b', '11-02 11:56', { dwell_ms: 1000, interactions: 0 }), row('b', '11-02 11:56', { portfolio: 2, dwell_ms: 1000, interactions: 0 })], p, pv), [['high', '열람 +20분']]);
-  eq('열람 +1분 · 46초 → 높음, 4시간 뒤 다시 → 재방문 높음',
-    grade([row('b', '11-02 11:37', { dwell_ms: 46000 }), row('b', '11-02 15:36', { dwell_ms: 7000 })], p, pv), [['high', '열람 +1분'], ['high', '재방문']]);
+  eq('열람 +20분 · 2초 · 조작 0 → 발주처(바로 나감 표시)',
+    visitSessions([row('b', '11-02 11:56', { dwell_ms: 2000, interactions: 0 })], p, pv, buildCross([]))[0].reasons, ['열람 +20분', '바로 나감']);
+  eq('열람 +1분, 4시간 뒤 다시 → 둘 다 발주처, 두 번째는 재방문',
+    grade([row('b', '11-02 11:37', { dwell_ms: 46000 }), row('b', '11-02 15:36', { dwell_ms: 7000 })], p, pv), [['client', '열람 +1분'], ['client', '재방문']]);
+  eq('열람 +7일 → 발주처', grade([row('b', '11-09 16:42')], p, pv), [['client', '열람 +7일']]);
 }
-// 3) 위시켓 경유 + 몰입 — 열람 후 3일까지만 '높음'
+// 3) 우리 쪽 — 생성 자동화가 돈 IP 의 사람 방문
 {
-  const p = proj('c', '10-30'), pv = pvAt('c', '11-02 11:22');
-  eq('열람 +2일 위시켓 · 몰입 → 높음', grade([row('c', '11-04 16:42')], p, pv), [['high', '열람 +2일']]);
-  eq('열람 +7일 위시켓 · 몰입 → 중간', grade([row('c', '11-09 16:42')], p, pv), [['mid', '열람 +7일']]);
+  const p = proj('c', '11-10'), pv = pvAt('c', '11-10 12:00');
+  const r = [row('c', '11-11 14:30', { ip_hash: 'gen' })];
+  eq('자동화가 돈 IP → 제외', visitSessions(r, p, pv, buildCross(r, [{ ip_hash: 'gen' }])).map(v => [v.level, v.reasons[0]]), [['skip', '우리 쪽(생성 자동화가 돈 곳)']]);
+  eq('다른 IP 는 영향 없음', visitSessions(r, p, pv, buildCross(r, [{ ip_hash: 'other' }])).map(v => v.level), ['client']);
 }
-// 4) IP 가 바뀌는 폰 — 같은 기기 정보로 24시간 안에 본 다른 공고를 센다
+// 4) 크롤러 — 해외 시간대 + 바로 나감
+{
+  const p = proj('k', '05-20'), pv = pvAt('k', '05-26 18:48');
+  eq('상하이 시간대 · 0초 → 제외', grade([row('k', '11-08 08:31', { tz: 'Asia/Shanghai', dwell_ms: 0, interactions: 0 })], p, pv), [['skip', '크롤러(해외 시간대·바로 나감)']]);
+  eq('해외 시간대라도 33초·조작 24 → 발주처(해외 체류 발주처)', grade([row('k', '11-08 08:31', { tz: 'Pacific/Palau', dwell_ms: 33000, interactions: 24 })], p, pv), [['client', '열람 +165일']]);
+}
+// 5) 다른 결과물을 먼저 봤어도 열람 뒤면 발주처 — 설명으로만 남긴다
 {
   const phone = { ua: IPHONE, viewport: '393x651', referrer_origin: null };
-  const all = [
-    row('d1', '11-13 18:13', { ...phone, ip_hash: 'ip1' }),
-    row('d2', '11-13 19:17', { ...phone, ip_hash: 'ip2' }),
-    row('d3', '11-13 19:53', { ...phone, ip_hash: 'ip3' }),
-  ];
-  const pv = pvAt('d3', '11-13 19:40');   // 열람 뒤 방문이라도 먼저 다른 공고 2개를 봤으면 낮음
-  eq('IP 3개로 공고 3개 → 세 번째는 다른 공고 2개 먼저', grade([all[2]], proj('d3', '11-13'), pv, all), [['low', '다른 공고 2개 먼저 방문']]);
-  eq('첫 번째 방문은 나중에 본 공고를 감점하지 않음', visitSessions([all[0]], proj('d1', '11-13'), pvAt('d1', '11-13 18:10'), buildCross(all))[0].reasons,
-    ['열람 +3분', '다른 결과물 2개도 탐색']);
-  const far = [row('e1', '11-10 10:00', { ...phone, ip_hash: 'ip9' }), row('e2', '11-11 11:00', { ...phone, ip_hash: 'ip8' }), row('e3', '11-13 19:53', { ...phone, ip_hash: 'ip7' })];
-  eq('같은 기종이라도 24시간 밖이면 묶지 않음', grade([far[2]], proj('e3', '11-13'), pvAt('e3', '11-13 19:40'), far), [['high', '열람 +13분']]);
-  const noVp = all.map(r => ({ ...r, viewport: null }));
-  eq('화면 크기가 없으면 기기로 묶지 않음', grade([noVp[2]], proj('d3', '11-13'), pv, noVp), [['high', '열람 +13분']]);
+  const all = [row('d1', '11-13 18:13', { ...phone, ip_hash: 'ip1' }), row('d2', '11-13 19:17', { ...phone, ip_hash: 'ip2' }), row('d3', '11-13 19:53', { ...phone, ip_hash: 'ip3' })];
+  eq('같은 기기 24시간 안 다른 공고 2개 → 설명', visitSessions([all[2]], proj('d3', '11-13'), pvAt('d3', '11-13 19:40'), buildCross(all))[0].reasons, ['열람 +13분', '다른 결과물 2개도 봄']);
 }
-// 4-2) 우리 결과물끼리 이동(P1→P2)은 다른 사이트 경유가 아니다
-eq('출처 없음 → P2 로 이동(firstpip.github.io) → 높음',
-  grade([row('h', '11-09 19:31', { referrer_origin: null }), row('h', '11-09 19:32', { portfolio: 2, referrer_origin: 'https://firstpip.github.io' })], proj('h', '11-08'), pvAt('h', '11-09 19:30')),
-  [['high', '열람 +1분']]);
-eq('구글 경유 → 외부 사이트 경유', grade([row('h', '11-09 19:31', { referrer_origin: 'https://www.google.com' })], proj('h', '11-08'), pvAt('h', '11-09 19:30')), [['low', '외부 사이트 경유']]);
-// 5) 지원일은 한국 달력일 — 그날 새벽 방문은 지원 전이 아니다
-eq('지원 당일 00:30 방문은 지원 전 아님', grade([row('f', '11-05 00:30')], proj('f', '11-05'), pvAt('f', '11-05 00:20')), [['high', '열람 +10분']]);
-eq('지원 전날 방문 → 지원 전', grade([row('f', '11-04 23:50')], proj('f', '11-05'), pvAt('f', '11-05 00:20')), [['low', '지원 전']]);
-// 6) 열람일만 있고 시각이 없는 옛 행
-eq('열람일 이전 날짜 방문 → 열람 전', grade([row('g', '10-21 10:00')], proj('g', '10-20'), { slug: 'g', viewed_on: '2026-10-22', viewed_at: null }), [['low', '지원서 열람 전']]);
-eq('열람일 당일 방문 → 중간', grade([row('g', '10-22 10:00')], proj('g', '10-20'), { slug: 'g', viewed_on: '2026-10-22', viewed_at: null }), [['mid', '']]);
+// 6) 경유
+eq('구글 경유 · 열람 뒤 → 발주처(경유 표시)',
+  visitSessions([row('h', '11-09 19:31', { referrer_origin: 'https://www.google.com' })], proj('h', '11-08'), pvAt('h', '11-09 19:30'), buildCross([]))[0].reasons, ['열람 +1분', 'google.com 경유']);
+eq('P1 → P2 이동(firstpip.github.io)은 경유 아님',
+  visitSessions([row('h', '11-09 19:31', { referrer_origin: null }), row('h', '11-09 19:32', { portfolio: 2, referrer_origin: 'https://firstpip.github.io' })], proj('h', '11-08'), pvAt('h', '11-09 19:30'), buildCross([]))[0].reasons, ['열람 +1분']);
+// 7) 지원일은 한국 달력일 — 그날 새벽 방문은 지원 전이 아니다
+eq('지원 당일 00:30 방문은 지원 전 아님', grade([row('f', '11-05 00:30')], proj('f', '11-05'), pvAt('f', '11-05 00:20')), [['client', '열람 +10분']]);
+eq('지원 전날 방문 → 제외', grade([row('f', '11-04 23:50')], proj('f', '11-05'), pvAt('f', '11-05 00:20')), [['skip', '지원 전']]);
+// 8) 열람일만 있고 시각이 없는 옛 행
+eq('열람일 이전 날짜 방문 → 제외', grade([row('g', '10-21 10:00')], proj('g', '10-20'), { slug: 'g', viewed_on: '2026-10-22', viewed_at: null }), [['skip', '지원서 열람 전']]);
+eq('열람일 당일 방문 → 발주처', grade([row('g', '10-22 10:00')], proj('g', '10-20'), { slug: 'g', viewed_on: '2026-10-22', viewed_at: null }), [['client', '']]);
 
-console.log(`\n방문 등급: ${pass} 통과 / ${fail} 실패`);
+console.log(`\n방문 판정: ${pass} 통과 / ${fail} 실패`);
 if (fail) process.exit(1);

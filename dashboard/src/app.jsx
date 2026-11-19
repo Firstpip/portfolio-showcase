@@ -358,17 +358,15 @@ function daysBetween(d1, d2) { return daysBetweenKst(d1, d2); }
 // 결과물 방문 등급 판정은 visits.mjs (npm test 로 실데이터 사례 검증)
 const fmtViewedAt = (pv) => pv?.viewed_at ? fmtWhen(pv.viewed_at) : fmtViewedOn(pv?.viewed_on);
 const VISIT_LEVEL = {
-  high: { label: '높음', color: 'var(--green)' },
-  mid:  { label: '중간', color: 'var(--yellow)' },
-  low:  { label: '낮음', color: 'var(--text2)' },
+  client: { label: '발주처 방문', color: 'var(--green)' },
+  skip:   { label: '제외', color: 'var(--text2)' },
 };
 const fmtDwell = (ms) => { const s = Math.round((ms || 0) / 1000); return s < 60 ? `${s}초` : `${Math.floor(s / 60)}분 ${s % 60}초`; };
 const fmtWhen = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 const fmtViewedOn = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v || ''); return m ? `${+m[2]}/${+m[3]}` : ''; };
 
 // 목록 행 배지 — 지원서 열람일 + 결과물 방문
-//   '높음' 방문(클라이언트 방문 가능성 높음)이 있으면 그 첫 방문 날짜를 초록으로 강조 → 목록만 보고 판단 가능.
-//   없으면 외부 방문 횟수만 회색으로 (프로필을 둘러본 사람이 섞인 숫자라 강조하지 않는다).
+//   발주처 방문(우리 쪽·크롤러·열람 전을 뺀 방문)이 있으면 그 첫 방문 날짜를 초록으로. 없으면 배지를 달지 않는다(2026-11-20).
 function VisitBadge({ project }) {
   const { summary, views, visitsBySlug, cross } = React.useContext(VisitCtx);
   const slug = project.slug;
@@ -376,28 +374,24 @@ function VisitBadge({ project }) {
   const rows = visitsBySlug[slug];
   const visits = React.useMemo(() => (rows ? visitSessions(rows, project, pv, cross) : null), [rows, project, pv, cross]);
   if (!sv && !rows && !pv?.viewed_on) return null;
-  const highs = (visits || []).filter(v => v.level === 'high');
+  const highs = (visits || []).filter(v => v.level === 'client');
   const first = highs[highs.length - 1];   // 시작 역순 정렬 → 마지막이 첫 방문
-  const total = visits ? visits.length : sv?.sessions;
   return (
     <>
       {pv?.viewed_on && <span style={{ fontSize:'0.7rem', color:'var(--accent2)', fontWeight:500 }} title={`위시켓 지원서 열람 ${pv.viewed_at ? fmtWhen(pv.viewed_at) : pv.viewed_on}`}>📨{fmtViewedOn(pv.viewed_on)}</span>}
-      {first
-        ? <span style={{ fontSize:'0.7rem', color:'var(--green)', fontWeight:700 }}
-            title={`클라이언트 방문 가능성 높음 — 첫 방문 ${fmtWhen(first.start)}${first.reasons.length ? ` (${first.reasons.join(' · ')})` : ''} · '높음' ${highs.length}회 / 외부 ${total}회 방문`}>👀{fmtWhen(first.start).split(' ')[0]}</span>
-        : total > 0 && <span style={{ fontSize:'0.7rem', color:'var(--text2)', fontWeight:500 }}
-            title={`결과물 외부 방문 ${total}회${sv ? ` · 마지막 ${fmtWhen(sv.last_external_at)}` : ''} — 클라이언트로 볼 만한 방문은 아직 없음`}>👀{total}</span>}
+      {first && <span style={{ fontSize:'0.7rem', color:'var(--green)', fontWeight:700 }}
+            title={`발주처 방문 ${highs.length}회 — 첫 방문 ${fmtWhen(first.start)}${first.reasons.length ? ` (${first.reasons.join(' · ')})` : ''}`}>👀{fmtWhen(first.start).split(' ')[0]}{highs.length > 1 ? ` ×${highs.length}` : ''}</span>}
     </>
   );
 }
 
-// 상세 모달 패널 — 열람일 + 등급별 방문 횟수. 등급을 누르면 그 등급의 방문(근거·체류·조작)이 바로 밑에 펼쳐진다.
+// 상세 모달 패널 — 열람일 + 발주처 방문/제외 횟수. 누르면 그 방문(근거·체류·조작)이 바로 밑에 펼쳐진다.
 function VisitPanel({ project }) {
   const { views, cross } = React.useContext(VisitCtx);
   const pv = views[project.slug];
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
-  const [openLevel, setOpenLevel] = useState(null);   // 펼친 등급 (한 번에 하나)
+  const [openLevel, setOpenLevel] = useState('client');   // 펼친 쪽 (한 번에 하나) — 발주처 방문은 처음부터 펼친다
   useEffect(() => {
     let alive = true;
     supabase.from(VISITS_TABLE)
@@ -409,8 +403,9 @@ function VisitPanel({ project }) {
   if (err) return null;   // 테이블 미배포 등 — 패널만 숨긴다
   const external = (rows || []).filter(r => !r.is_bot && !r.is_automation && !r.is_internal);
   const excluded = (rows || []).length - external.length;
-  // 같은 IP·기기가 다른 공고 결과물을 언제 봤는가 — 프로필을 둘러보는 사람을 가려낸다 (맵은 목록 로드 때 한 번 만든다)
-  const visits = rows ? visitSessions(external, project, pv, cross) : [];
+  // 생성 자동화가 돈 IP 는 목록 로드 때 모은 것(cross.ownIps)에 이 공고 행의 자동화 IP 를 더한다
+  const ownIps = new Set([...(cross?.ownIps || []), ...(rows || []).filter(r => r.is_automation && r.ip_hash).map(r => r.ip_hash)]);
+  const visits = rows ? visitSessions(external, project, pv, { ...cross, ownIps }) : [];
   if (rows && !visits.length && !pv && !excluded) return null;
   return (
     <div style={{ marginBottom:'0.75rem', padding:'0.6rem 0.75rem', borderRadius:8, background:'var(--surface2)', border:'1px solid var(--border)', fontSize:'0.8rem' }}>
@@ -425,11 +420,11 @@ function VisitPanel({ project }) {
         : (
           <>
             <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-              {['high', 'mid', 'low'].map(lv => {
+              {['client', 'skip'].map(lv => {
                 const n = visits.filter(v => v.level === lv).length, on = openLevel === lv;
                 return (
                   <button key={lv} disabled={!n} aria-expanded={on} onClick={() => setOpenLevel(on ? null : lv)}
-                    title="본인 방문 가능성 (정황 추정) — 눌러서 방문 보기"
+                    title={lv === 'client' ? '우리 쪽·크롤러·열람 전을 뺀 방문 — 눌러서 보기' : '우리 쪽(생성 자동화가 돈 곳)·크롤러·지원 전·지원서 열람 전 방문 — 눌러서 보기'}
                     style={{ display:'inline-flex', alignItems:'center', gap:5, padding:'0.25rem 0.6rem', borderRadius:6, fontSize:'0.8rem',
                       border:`1px solid ${on ? VISIT_LEVEL[lv].color : 'var(--border)'}`, background: on ? 'var(--surface)' : 'transparent',
                       color: n ? VISIT_LEVEL[lv].color : 'var(--text2)', fontWeight:600, cursor: n ? 'pointer' : 'default', opacity: n ? 1 : 0.5 }}>
@@ -443,12 +438,12 @@ function VisitPanel({ project }) {
                 <span style={{ fontFamily:'monospace', color:'var(--text2)', whiteSpace:'nowrap' }}>{fmtWhen(v.start)}</span>
                 <span style={{ whiteSpace:'nowrap' }}>{[...v.portfolios].sort().map(n => `P${n}`).join('·')}</span>
                 <span style={{ color:'var(--text2)', whiteSpace:'nowrap' }}>{fmtDwell(v.dwell)} · 조작 {v.ix} · 스크롤 {v.scroll}%</span>
-                {v.reasons.length > 0 && <span style={{ color: v.level === 'high' ? 'var(--green)' : 'var(--text2)', whiteSpace:'nowrap' }}>{v.reasons.join(' · ')}</span>}
+                {v.reasons.length > 0 && <span style={{ color: v.level === 'client' ? 'var(--green)' : 'var(--text2)', whiteSpace:'nowrap' }}>{v.reasons.join(' · ')}</span>}
                 <span style={{ marginLeft:'auto', color:'var(--text2)', whiteSpace:'nowrap' }}>{v.fromWishket ? '위시켓' : v.otherRef ? '기타' : '직접'}</span>
               </div>
             ))}
             <div style={{ marginTop:6, color:'var(--text2)', fontSize:'0.75rem' }}>
-              등급은 정황 추정 — 열람 직후 방문·재방문일수록 높음, 위시켓 프로필은 다른 사용자도 볼 수 있음{excluded ? ` · 팀·자동화·봇 ${excluded}건 제외` : ''}
+              결과물 링크는 지원서 안에만 있어, 우리 쪽·크롤러·열람 전 방문을 빼면 발주처 쪽 방문으로 봅니다{excluded ? ` · 팀 네트워크·자동화·봇 ${excluded}건은 처음부터 뺌` : ''}
             </div>
           </>
         )}
@@ -1029,7 +1024,7 @@ function StatCard({ title, value, sub, color, delay }) {
 // 정의 (지원 건 하나를 지원월 코호트에 넣고, 같은 공고 제목의 이후 이벤트를 잇는다 — 'apply' 알림엔 공고 id 가 없다):
 //   열람 = 지원 후 7일 안 · 미팅 = 30일 안(미팅 제안/일정 안내) · 계약 = 60일 안 체결
 //   기간이 아직 다 지나지 않은 지원이 20% 넘게 섞인 칸은 회색 + '반영 N%' — 덜 익은 코호트가 하락처럼 보이는 착시 방지.
-//   데모 방문 = 지원 후 30일 안에 그 공고 데모(결과물)에 '높음' 등급 방문(visitSessions, 클라이언트로 추정)이 있었나 — 방문 수집이 10/21 부터라 그 이후 지원만.
+//   데모 방문 = 지원 후 30일 안에 그 공고 데모(결과물)에 발주처 방문(visitSessions — 우리 쪽·크롤러·열람 전 제외)이 있었나 — 방문 수집이 10/21 부터라 그 이후 지원만.
 // 표본이 작다(월 40~80 지원, 계약 0~4) — 월별 계약률은 흔들림이 크니 90일 비교와 건수를 함께 볼 것.
 const FUNNEL_H = { view: 7, meeting: 30, contract: 60, high: 30 };   // 일
 const FUNNEL_MATURE = 0.8;
@@ -1063,7 +1058,7 @@ function buildFunnelCohorts(rawEvents, projects, visitCtx) {
   const highAt = (slug) => {
     if (!highCache.has(slug)) {
       const rows = visitCtx.visitsBySlug?.[slug], p = projBySlug.get(slug);
-      const hs = rows && p ? visitSessions(rows, p, visitCtx.views?.[slug], visitCtx.cross).filter(v => v.level === 'high') : [];
+      const hs = rows && p ? visitSessions(rows, p, visitCtx.views?.[slug], visitCtx.cross).filter(v => v.level === 'client') : [];
       highCache.set(slug, hs.map(v => Date.parse(v.start)));
     }
     return highCache.get(slug);
@@ -1237,7 +1232,7 @@ function FunnelAnalysis({ data }) {
             같은 공고 제목으로 지원 이후 이벤트를 잇습니다. 회색 칸은 기간이 아직 다 지나지 않은 달의 현재까지 값입니다. '반영'은 과거 지원 기준으로 지금쯤 결과의 몇 %가 들어왔어야 하는지 — 낮을수록 앞으로 더 오를 수 있으니 다 지난 달과 바로 비교하지 마세요.
             '열람'은 위시켓 첫 열람 알림 기준입니다 — 다시 열어 본 것은 알림이 없어 셀 수 없고, 7일 안에 전체 열람의 약 95%가 들어옵니다.
             알림이 오지 않는 열람도 있어(미팅까지 갔는데 열람 알림이 없는 건 존재) 실제보다 약간 낮게 나옵니다.
-            '데모 방문'은 지원 후 30일 안에 그 공고 데모에 클라이언트로 추정되는 방문(방문 등급 '높음')이 있었던 비율로, 방문 수집이 시작된 10/21 이후 지원만 셉니다. 월 지원 수십 건·계약 몇 건 규모라 월별 계약률은 흔들림이 큽니다 — 90일 비교와 건수를 함께 보세요.
+            '데모 방문'은 지원 후 30일 안에 그 공고 데모에 발주처 방문(우리 쪽·크롤러·열람 전을 뺀 방문)이 있었던 비율로, 방문 수집이 시작된 10/21 이후 지원만 셉니다. 월 지원 수십 건·계약 몇 건 규모라 월별 계약률은 흔들림이 큽니다 — 90일 비교와 건수를 함께 보세요.
           </div>
         </>
       )}
@@ -4593,13 +4588,15 @@ function App({ session }) {
   // 결과물 방문 요약 + 지원서 열람 — 테이블이 아직 없거나 실패해도 조용히 빈 값 (보조 정보라 토스트 없음)
   const [visitData, setVisitData] = useState({ summary: {}, views: {}, visitsBySlug: {}, cross: {} });
   const loadVisits = useCallback(async () => {
-    // 외부 방문 원본(목록 배지의 '높음' 판정 + 교차 방문 맵용) — 세션 판정에 필요한 열만, 최근 순 상한
-    const [s, v, x] = await Promise.all([
+    // 외부 방문 원본(목록 배지의 발주처 방문 판정 + 교차 방문 맵용) — 세션 판정에 필요한 열만, 최근 순 상한
+    const [s, v, x, a] = await Promise.all([
       supabase.from(VISIT_SUMMARY_VIEW).select('*'),
       supabase.from(PROPOSAL_VIEWS_TABLE).select('slug,viewed_on,viewed_at,checked_at'),
       selectAll(() => supabase.from(VISITS_TABLE).select('slug,portfolio,session_id,ip_hash,ua,viewport,lang,tz,referrer_origin,created_at,last_seen_at,dwell_ms,max_scroll_pct,interactions')
         .eq('is_bot', false).eq('is_automation', false).eq('is_internal', false)
         .order('created_at', { ascending:false }).order('id'), 5000),
+      // 생성 자동화가 돈 IP — 같은 IP 의 사람 방문을 '우리 쪽'으로 뺀다(워크룸을 안 여는 자리라 팀 네트워크로 등록되지 않음)
+      selectAll(() => supabase.from(VISITS_TABLE).select('ip_hash').eq('is_automation', true).order('created_at', { ascending:false }).order('id'), 5000),
     ]);
     const summary = {}, views = {}, visitsBySlug = {};
     (s.error ? [] : s.data || []).forEach(r => { summary[r.slug] = r; });
@@ -4607,7 +4604,7 @@ function App({ session }) {
     const ext = x.error ? [] : x.data || [];
     ext.forEach(r => { (visitsBySlug[r.slug] ||= []).push(r); });
     // 같은 IP·같은 기기가 다른 공고 결과물을 언제 봤나 — 프로필을 둘러보는 사람을 가려낸다
-    setVisitData({ summary, views, visitsBySlug, cross: buildCross(ext) });
+    setVisitData({ summary, views, visitsBySlug, cross: buildCross(ext, a.error ? [] : a.data || []) });
   }, []);
   // 팀 브라우저 표식 — 같은 출처(firstpip.github.io)의 쇼케이스 페이지(assets/sv.js)가 읽어 내부 방문으로 분류한다
   //   새 주소(workroom.firstpip.co.kr)에서는 출처가 달라 효과가 없다 — 옛 주소의 마지막 정리(src/move.mjs)와 팀 IP 등록이 대신한다

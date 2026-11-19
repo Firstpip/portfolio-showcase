@@ -68,6 +68,26 @@
       { slug:'demo_deliv',       title:'[납품 완료] 포트폴리오 사이트 — 개발완료일 그대로',       current_status:'delivered',        budget:'60만원',    deadline:day(-50) },
     ].map((r, i) => ({ id:800 + i, created_at:`${day(-i)}T01:00:00Z`, wishket_url:W(i), ...base, ...r })));
   }
+  // ?demo=visits — 결과물 방문 '발주처 방문 / 제외' 눈으로 확인용 표본 (2026-11-20). 이름·IP 는 가상.
+  if (QS.get('demo') === 'visits' && !DB.wishket_projects.some(r => r.slug === 'demo_visit_a')) {
+    const T = (d, hm) => { const x = new Date(`${day(d)}T${hm}:00+09:00`); return x.toISOString(); };
+    DB.wishket_projects.push(
+      { id:900, slug:'demo_visit_a', portfolio_links:['https://firstpip.github.io/portfolio-showcase/demo_visit_a/portfolio-1/'], title:'[방문 표본] 가나다 물류 배차 관리 — 발주처 방문 3번', current_status:'applied', wishket_url:'https://www.wishket.com/project/900', created_at:`${day(-3)}T01:00:00Z`, history:[{ date:day(-3), status:'applied', note:'' }], memo:null },
+      { id:901, slug:'demo_visit_b', portfolio_links:['https://firstpip.github.io/portfolio-showcase/demo_visit_b/portfolio-1/'], title:'[방문 표본] 라마바 예약 앱 — 열람 전 방문만(팀원 폰)', current_status:'applied', wishket_url:'https://www.wishket.com/project/901', created_at:`${day(-1)}T01:00:00Z`, history:[{ date:day(-1), status:'applied', note:'' }], memo:null });
+    DB.proposal_views = [{ slug:'demo_visit_a', viewed_on:day(-2), viewed_at:T(-2, '10:00'), checked_at:T(0, '09:30') }, { slug:'demo_visit_b', viewed_on:null, viewed_at:null, checked_at:T(0, '09:30') }];
+    const IPH = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Version/26.5 Mobile Safari/604.1', WIN = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/157.0 Safari/537.36';
+    const v = (slug, t, o) => ({ id:uuid(), slug, portfolio:1, session_id:uuid(), ip_hash:'h1', ua:WIN, viewport:'1920x911', lang:'ko-KR', tz:'Asia/Seoul', referrer_origin:'https://www.wishket.com', created_at:t, last_seen_at:t, dwell_ms:38000, max_scroll_pct:100, interactions:12, is_bot:false, is_automation:false, is_internal:false, ...o });
+    DB.showcase_visits = [
+      v('demo_visit_a', T(-2, '10:01')), v('demo_visit_a', T(-2, '10:02'), { portfolio:2, referrer_origin:'https://firstpip.github.io' }),
+      v('demo_visit_a', T(-1, '15:20'), { ip_hash:'h2', dwell_ms:2000, interactions:0, referrer_origin:null }),
+      v('demo_visit_a', T(0, '08:27'), { ip_hash:'h3', ua:IPH, viewport:'393x651', referrer_origin:'https://pf.kakao.com' }),
+      v('demo_visit_a', T(-3, '13:00'), { ip_hash:'h4', ua:IPH, viewport:'393x651', referrer_origin:null }),
+      v('demo_visit_a', T(-1, '11:00'), { ip_hash:'h5', tz:'Asia/Shanghai', dwell_ms:0, interactions:0, referrer_origin:null }),
+      v('demo_visit_a', T(-1, '11:55'), { ip_hash:'h6' }), v('demo_visit_a', T(-1, '11:50'), { ip_hash:'h6', ua:'HeadlessChrome', is_automation:true }),
+      v('demo_visit_a', T(-2, '09:00'), { ip_hash:'h7', is_internal:true }),
+      v('demo_visit_b', T(-1, '18:13'), { ip_hash:'h8', ua:IPH, viewport:'393x651', referrer_origin:null }),
+    ];
+  }
   // QA: ?as=1,2,3… 로 로그인한 사람 바꾸기(팀원 목록 순서). 기본은 2번(이나래)
   const AS = Number(QS.get('as') || 0);
   const curUid = () => (AS && DB.team_members[AS-1]?.user_id) || ME_UID;
