@@ -297,10 +297,22 @@ function unmet(worker, typeId) {
   return t.req.filter((k) => !worker.q[k] || dayNum(worker.q[k]) < 0).map((k) => ({ key: k, label: TRAININGS[k], why: worker.q[k] ? "만료 " + md(worker.q[k]) : "미이수" }));
 }
 const unmetText = (worker, typeId) => unmet(worker, typeId).map((u) => u.label + " " + u.why).join(" · ");
+/* 작업자 자격 판정 — 협력사 화면과 발주사 화면이 같은 함수를 쓴다: ①만료된 교육·자격 ②14일 안에 만료 ③심사 중·승인된 허가의 필수조건 미충족 */
+const ACTIVE_STATUS = ["검토 대기", "검토 중", "재승인 대기", "승인"];
+const SOON_DAYS = 14;
+function workerIssues(w, permits) {
+  const out = [];
+  Object.entries(w.q).forEach(([k, d]) => { const n = dayNum(d); if (n < 0) out.push({ w, k, bad: true, why: "만료 " + md(d) }); else if (n <= SOON_DAYS) out.push({ w, k, bad: false, why: n + "일 내 만료 (" + md(d) + ")" }); });
+  permits.filter((x) => x.partner === w.partner && ACTIVE_STATUS.includes(x.status) && x.workers.includes(w.id)).forEach((x) => unmet(w, x.type).forEach((u) => { if (!out.find((z) => z.k === u.key)) out.push({ w, k: u.key, bad: true, why: u.why + " · " + x.id }); }));
+  return out;
+}
+const workerVerdict = (issues) => { const b = issues.filter((x) => x.bad).length; return b ? { kind: "bad", text: "미충족 " + b + "건" } : issues.length ? { kind: "soon", text: "만료 임박 " + issues.length + "건" } : { kind: "ok", text: "정상" }; };
+/* 사람 수와 항목 수를 따로 센다 */
+const issueCount = (issues) => ({ items: issues.length, badItems: issues.filter((x) => x.bad).length, soonItems: issues.filter((x) => !x.bad).length, badPeople: new Set(issues.filter((x) => x.bad).map((x) => x.w.id)).size, soonPeople: new Set(issues.filter((x) => !x.bad).map((x) => x.w.id)).size, people: new Set(issues.map((x) => x.w.id)).size });
 /* 허가: 상태는 검토 대기 · 검토 중 · 승인 · 반려 · 재승인 대기 · 종료 */
 const PERMITS = [
-  { id: "PTW-2611-041", partner: "c1", type: "height", site: "1도크", loc: "1도크 선미 블록 상부", work: "2026-11-19", to: "2026-11-20", status: "승인", workers: ["w3", "w4", "w10"], applied: "11-17 09:12", reviewed: "11-17 11:40", decided: "11-17 15:05", memo: "하부 통제 구역 도면 확인함" },
-  { id: "PTW-2611-042", partner: "c1", type: "hot", site: "선각공장", loc: "선각공장 B동 3번 정반", work: "2026-11-19", to: "2026-11-21", status: "승인", workers: ["w1", "w2", "w10"], applied: "11-17 10:03", reviewed: "11-17 13:22", decided: "11-18 08:50", memo: "화재감시자 배치표 첨부 확인" },
+  { id: "PTW-2611-041", partner: "c1", type: "height", site: "1도크", loc: "1도크 선미 블록 상부", work: "2026-11-19", to: "2026-11-20", status: "승인", workers: ["w3", "w5", "w10"], applied: "11-17 09:12", reviewed: "11-17 11:40", decided: "11-17 15:05", memo: "하부 통제 구역 도면 확인함" },
+  { id: "PTW-2611-042", partner: "c1", type: "hot", site: "선각공장", loc: "선각공장 B동 3번 정반", work: "2026-11-19", to: "2026-11-21", status: "승인", workers: ["w1", "w2"], applied: "11-17 10:03", reviewed: "11-17 13:22", decided: "11-18 08:50", memo: "화재감시자 배치표 첨부 확인" },
   { id: "PTW-2611-043", partner: "c1", type: "confined", site: "2도크", loc: "2도크 밸러스트 탱크 4번", work: "2026-11-20", to: "2026-11-20", status: "검토 중", workers: ["w5", "w6", "w10"], applied: "11-18 14:20", reviewed: "11-19 09:30", decided: "", memo: "w6 밀폐공간 특별교육 미이수 — 보완 요청 검토" },
   { id: "PTW-2611-044", partner: "c1", type: "heavy", site: "의장부두", loc: "의장부두 기관실 블록 인양", work: "2026-11-21", to: "2026-11-22", status: "검토 대기", workers: ["w8", "w9", "w10"], applied: "11-19 08:41", reviewed: "", decided: "", memo: "" },
   { id: "PTW-2611-045", partner: "c1", type: "elec", site: "전기공장", loc: "전기공장 분전반 교체", work: "2026-11-22", to: "2026-11-22", status: "검토 대기", workers: ["w7", "w10"], applied: "11-19 09:05", reviewed: "", decided: "", memo: "" },
@@ -352,7 +364,7 @@ const INSPECTIONS = [
   { id: "IN-1119-10", site: "도장공장", list: "도장공장 정기 점검", owner: "해성산업 안전담당", partner: "c3", status: "완료", bad: [10, 11] },
 ];
 const NCS = [
-  { id: "NC-2611-081", partner: "c1", site: "1도크", hazard: "안전난간 일부 이탈", loc: "1도크 선미 3층 통로", photos: 2, who: "윤도현", due: "2026-11-21", status: "조치 중", insp: "IN-1119-04" },
+  { id: "NC-2611-081", partner: "c1", site: "2도크", hazard: "안전난간 일부 이탈", loc: "2도크 안벽 3층 통로", photos: 2, who: "윤도현", due: "2026-11-21", status: "조치 중", insp: "IN-1119-04" },
   { id: "NC-2611-082", partner: "c1", site: "2도크", hazard: "작업발판 고정 클립 누락", loc: "2도크 비계 4단", photos: 3, who: "오민재", due: "2026-11-18", status: "조치 중", insp: "IN-1119-04" },
   { id: "NC-2611-083", partner: "c1", site: "야적장", hazard: "폐기물 분리 적치 미흡", loc: "야적장 C구역", photos: 1, who: "고영민", due: "2026-11-20", status: "확인 대기", insp: "IN-1119-07" },
   { id: "NC-2611-076", partner: "c1", site: "선각공장", hazard: "소화기 유효기간 경과", loc: "선각공장 B동 입구", photos: 1, who: "남기석", due: "2026-11-17", status: "조치 중", insp: "" },
@@ -452,16 +464,17 @@ function Main({ S }) {
     { label: "시정조치 기한 초과", n: over.length, extra: "처리 중 전체 " + open.length + "건 · 미배정 " + ncs.filter((n) => n.status === "미배정").length + "건", route: "issues" },
   ];
   const siteRows = SITES.map((s) => ({ s, proj: SITE_PROJ[s], today: permits.filter((p) => p.site === s && p.status === "승인" && p.work === TODAY).length, pend: pend.filter((p) => p.site === s).length, open: open.filter((n) => n.site === s).length, over: over.filter((n) => n.site === s).length }));
-  const pr = PARTNERS.map((c) => { const mine = permits.filter((p) => p.partner === c.id); const w = new Set(); mine.filter((p) => !["종료", "반려"].includes(p.status)).forEach((p) => permitUnmet(p).forEach((x) => w.add(x.id))); return { c, n: mine.length, rej: mine.filter((p) => p.status === "반려").length, un: w.size, open: open.filter((n) => n.partner === c.id).length }; });
+  const pr = PARTNERS.map((c) => { const mine = permits.filter((p) => p.partner === c.id); /* 필수조건 미충족 작업자 = 교육·자격 화면과 같은 workerIssues 판정이 미충족인 사람 수 */
+    const un = WORKERS.filter((x) => x.partner === c.id && workerVerdict(workerIssues(x, permits)).kind === "bad").length; return { c, n: mine.length, rej: mine.filter((p) => p.status === "반려").length, un, open: open.filter((n) => n.partner === c.id).length }; });
   return (<>
     <PageHead title="통합 현황" sub={"현장·프로젝트·협력사별 안전관리 현황 · " + TODAY.replaceAll("-", ".")} />
     <ul className="card divide-y divide-line-2 px-2 py-1 sm:px-3">{todo.map((t, i) => <Row key={t.label}>
       <A route={t.route} params={t.params} className="min-w-0 flex-1 hover:underline"><span className="block font-semibold text-ink">{t.label} <Num value={t.n} />건</span><span className="tnum block text-[13.5px] text-ink-3">{t.extra}</span></A>
       {i === 0 && t.n > 0 ? <AButton route={t.route} variant="primary" size="md">{t.action} <Icon name="next" /></AButton> : <Icon name="next" className="text-ink-4" />}</Row>)}</ul>
     <section className="card mt-5 px-5 py-5 sm:px-6"><SectionTitle>현장·프로젝트별</SectionTitle><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>현장</th><th className="hm">프로젝트</th><th className="num">오늘 작업 허가</th><th className="num">심사 대기</th><th className="num hm">열린 부적합</th><th className="num">기한 초과</th></tr></thead><tbody>
-      {siteRows.map((r) => <tr key={r.s}><td className="font-semibold">{r.s}</td><td className="hm text-ink-2">{r.proj}</td><td className="num">{r.today}</td><td className="num">{r.pend}</td><td className="num hm">{r.open}</td><td className="num">{r.over ? <span className="text-danger font-semibold">{r.over}</span> : 0}</td></tr>)}</tbody></table></div></section>
+      {siteRows.map((r) => <tr key={r.s}><td className="font-semibold">{r.s}</td><td className="hm text-ink-2">{r.proj}</td><td className="num">{r.today}</td><td className="num">{r.pend}</td><td className="num hm">{r.open}</td><td className="num">{r.over ? <span className="inline-flex items-center gap-1.5"><span className="tnum font-semibold">{r.over}</span><Pill tone="danger">초과</Pill></span> : 0}</td></tr>)}</tbody></table></div></section>
     <section className="card mt-5 px-5 py-5 sm:px-6"><SectionTitle>협력사별</SectionTitle><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>협력사</th><th className="hm">등급</th><th className="num">허가 건수</th><th className="num">반려</th><th className="num">필수조건 미충족 작업자</th><th className="num">열린 시정조치</th></tr></thead><tbody>
-      {pr.map((r) => <tr key={r.c.id}><td className="font-semibold">{r.c.name}</td><td className="hm">{r.c.grade}</td><td className="num">{r.n}</td><td className="num">{r.rej}</td><td className="num">{r.un}</td><td className="num">{r.open}</td></tr>)}</tbody></table></div></section>
+      {pr.map((r) => <tr key={r.c.id}><td className="font-semibold">{r.c.name}</td><td className="hm">{r.c.grade}</td><td className="num">{r.n}</td><td className="num">{r.rej}</td><td className="num">{r.un ? <A route="training" className="tnum font-semibold hover:underline">{r.un}명</A> : "0명"}</td><td className="num">{r.open}</td></tr>)}</tbody></table></div></section>
   </>);
 }
 
@@ -530,18 +543,21 @@ function Training({ S }) {
   const [st, set] = S; const p = useP();
   const [dlg, setDlg] = useState(p.dlg === "1"); const [msg, setMsg] = useState("");
   useEffect(() => { setDlg(p.dlg === "1"); }, [p]);
-  const rows = WORKERS.map((w) => { const ds = Object.values(w.q).map(dayNum); const min = Math.min(...ds); return { w, n: ds.length, min, bad: min < 0 }; });
-  const targets = rows.filter((r) => r.min <= 14);
-  useEffect(() => { if (dlg) setMsg("안전교육 이수 또는 자격 유효기간이 만료되었거나 14일 안에 만료됩니다. 교육 일정을 확인하고 허가 신청 전에 이수해 주세요."); }, [dlg]);
-  const send = () => { set((s) => logAdd({ ...s, notices: [...targets.map((r) => ({ at: "11-19 10:40", to: partnerName(r.w.partner) + " · " + r.w.name, what: r.bad ? "교육·자격 만료" : "만료 예정" })), ...s.notices] }, "미충족 알림 발송", targets.length + "명")); toast(targets.length + "명에게 알림을 보냈습니다"); setDlg(false); if (location.hash.includes("dlg")) go("training"); };
+  /* 표의 상태·알림 대상·통합 현황의 미충족 작업자 수는 모두 workerIssues 한 곳에서 나온다 */
+  const rows = WORKERS.map((w) => { const ds = Object.values(w.q).map(dayNum); const issues = workerIssues(w, st.permits); return { w, n: ds.length, min: Math.min(...ds), issues, v: workerVerdict(issues), why: issues.map((x) => TRAININGS[x.k] + " " + x.why).join(" / ") }; });
+  const targets = rows.filter((r) => r.issues.length > 0);
+  const tc = issueCount(rows.flatMap((r) => r.issues));
+  const V_TONE = { bad: "danger", soon: "warn", ok: "ok" };
+  useEffect(() => { if (dlg) setMsg("필수 교육·자격이 없거나 만료되었거나 14일 안에 만료됩니다. 교육 일정을 확인하고 작업 전에 이수해 주세요."); }, [dlg]);
+  const send = () => { set((s) => logAdd({ ...s, notices: [...targets.map((r) => ({ at: "11-19 10:40", to: partnerName(r.w.partner) + " · " + r.w.name, what: r.why })), ...s.notices] }, "미충족 알림 발송", targets.length + "명")); toast(targets.length + "명에게 알림을 보냈습니다"); setDlg(false); if (location.hash.includes("dlg")) go("training"); };
   const closeD = () => { setDlg(false); if (location.hash.includes("dlg")) go("training"); };
   return (<>
     <PageHead title="교육·자격" sub="작업유형별 필수 교육을 연결하고, 협력사 작업자의 이수와 자격 유효기간을 관리합니다." right={<Button variant="primary" onClick={() => setDlg(true)}>미충족 알림 보내기 {targets.length}명</Button>} />
     <section className="card px-5 py-5 sm:px-6"><SectionTitle>작업유형별 필수 교육·자격</SectionTitle><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>교육·자격</th>{st.types.map((t) => <th key={t.id}>{t.name}</th>)}</tr></thead><tbody>{Object.entries(TRAININGS).map(([k, v]) => <tr key={k}><td className="font-semibold">{v}</td>{st.types.map((t) => <td key={t.id}>{t.req.includes(k) ? <Icon name="check" className="text-accent" /> : <span className="text-ink-4">—</span>}</td>)}</tr>)}</tbody></table></div></section>
-    <section className="card mt-5 px-5 py-5 sm:px-6"><SectionTitle>협력사 작업자 {WORKERS.length}명</SectionTitle><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>이름</th><th>협력사</th><th className="hm">직무</th><th className="num hm">보유 교육·자격</th><th className="num">가장 빠른 만료</th><th>상태</th></tr></thead><tbody>{rows.map((r) => <tr key={r.w.id}><td className="font-semibold">{r.w.name}</td><td>{partnerName(r.w.partner)}</td><td className="hm text-ink-2">{r.w.job}</td><td className="num hm">{r.n}개</td><td className="num">{md(addDays(TODAY, r.min))}</td><td>{r.bad ? <Pill tone="danger">만료</Pill> : r.min <= 14 ? <Pill tone="warn">{r.min}일 내 만료</Pill> : <Pill tone="ok">정상</Pill>}</td></tr>)}</tbody></table></div></section>
+    <section className="card mt-5 px-5 py-5 sm:px-6"><SectionTitle>협력사 작업자 {WORKERS.length}명</SectionTitle><p className="tnum mb-3 text-[13.5px] text-ink-3">미충족 {tc.badPeople}명 · {tc.badItems}건 / 만료 임박 {tc.soonPeople}명 · {tc.soonItems}건 — 보유 교육·자격의 만료와 심사 중·승인된 허가의 필수조건으로 판정합니다.</p><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>이름</th><th>협력사</th><th className="hm">직무</th><th className="num hm">보유 교육·자격</th><th className="num hm">가장 빠른 만료</th><th>판정</th><th>사유</th></tr></thead><tbody>{rows.map((r) => <tr key={r.w.id}><td className="font-semibold">{r.w.name}</td><td>{partnerName(r.w.partner)}</td><td className="hm text-ink-2">{r.w.job}</td><td className="num hm">{r.n}개</td><td className="num hm">{md(addDays(TODAY, r.min))}</td><td><Pill tone={V_TONE[r.v.kind]}>{r.v.text}</Pill></td><td className="text-[13.5px] text-ink-2">{r.why || <span className="text-ink-4">—</span>}</td></tr>)}</tbody></table></div></section>
     <section className="card mt-5 px-5 py-5 sm:px-6"><SectionTitle>알림 발송 이력</SectionTitle><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>일시</th><th>받는 사람</th><th>내용</th></tr></thead><tbody>{st.notices.slice(0, 8).map((n, i) => <tr key={i}><td className="tnum text-ink-2">{n.at}</td><td>{n.to}</td><td>{n.what}</td></tr>)}</tbody></table></div></section>
-    <Modal open={dlg} onClose={closeD} title="미충족 알림 발송" sub={"만료되었거나 14일 안에 만료되는 작업자 " + targets.length + "명"} width={620} footer={<><Button variant="secondary" onClick={closeD}>취소</Button><Button variant="primary" onClick={send}>{targets.length}명에게 보내기</Button></>}>
-      <ul className="grid gap-1.5 mb-4 text-[14px]">{targets.map((r) => <li key={r.w.id} className="flex justify-between gap-3"><span>{partnerName(r.w.partner)} · {r.w.name}</span><span className={r.bad ? "text-danger" : "text-ink-3"}>{r.bad ? "만료" : r.min + "일 내 만료"}</span></li>)}</ul>
+    <Modal open={dlg} onClose={closeD} title="미충족 알림 발송" sub={"필수조건 미충족 " + tc.badPeople + "명 · 만료 임박 " + tc.soonPeople + "명 — 알림 대상 " + targets.length + "명"} width={620} footer={<><Button variant="secondary" onClick={closeD}>취소</Button><Button variant="primary" onClick={send}>{targets.length}명에게 보내기</Button></>}>
+      <ul className="grid gap-1.5 mb-4 text-[14px]">{targets.map((r) => <li key={r.w.id} className="flex justify-between gap-3"><span>{partnerName(r.w.partner)} · {r.w.name}</span><span className={cx("text-right", r.v.kind === "bad" ? "text-danger" : "text-ink-3")}>{r.why}</span></li>)}</ul>
       <Lbl t="알림 내용"><textarea className="field w-full" rows={3} value={msg} onChange={(e) => setMsg(e.target.value)} /></Lbl></Modal>
   </>);
 }
