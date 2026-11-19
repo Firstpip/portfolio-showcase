@@ -864,8 +864,15 @@ async function copyText(text) {
 //   SI Hub 「납품 포트폴리오 제작」 문서로 시작하는 한 문장(+ 워크룸 프로젝트 줄)을 복사한다. 순서·규칙은 그 문서와 제작 레포 런북에 있다
 //   (wishket-portfolio-system prompts/delivered-maker.md). 컴퓨터가 준비되지 않았으면 Claude 가 캡처만 하고 수령함으로 넘긴다.
 const PORTFOLIO_START_SENTENCE = 'SI Hub 의 「납품 포트폴리오 제작」 문서를 읽고 그대로 진행해 줘. 문서를 읽지 못하면 진행하지 말고 알려 줘.';
+// 워크룸이 아는 날짜를 계약 기간 후보로 같이 넘긴다 — 세션이 다시 묻지 않고 "이 날짜가 맞나요"만 확인한다(값은 후보일 뿐, 확정은 사람).
 function portfolioStartText(project) {
-  return (project ? `[워크룸 프로젝트] ${project.title} (워크룸 슬러그: ${project.slug})\n` : '') + PORTFOLIO_START_SENTENCE;
+  if (!project) return PORTFOLIO_START_SENTENCE;
+  const ymd = (v) => (/^\d{4}-\d{2}-\d{2}/.test(String(v || '')) ? String(v).slice(0, 10) : '');
+  const from = ymd(project.start_date); const to = ymd(project.deadline);
+  const dates = [from && `시작일 ${from}`, to && `마감(완료)일 ${to}`].filter(Boolean).join(' · ');
+  return `[워크룸 프로젝트] ${project.title} (워크룸 슬러그: ${project.slug})\n`
+    + (dates ? `[워크룸 일정] ${dates} — 계약 기간 후보, 확인 필요\n` : '')
+    + PORTFOLIO_START_SENTENCE;
 }
 function CapturePromptButton({ project, onAppendHistory, style, label = '📋 포트폴리오 만들기 시작 문장 복사' }) {
   const [state, setState] = useState('idle');   // idle | copied | failed
