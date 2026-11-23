@@ -4,6 +4,7 @@ import { runMove } from './move.mjs';
 import { freeMaintInfo, freeMaintDefault, freeMaintInitialChoice, freeMaintUntilToStore, addFreeDays, parseFreeDays, FREE_MAINT_PRESETS, FREE_MAINT_SMALL_LIMIT, FREE_MAINT_MAX_DAYS } from './maintenance.mjs';
 import { kstParts, kstToIso, kstDateStr, kstStartOfDay, isYmd, addDaysYmd, daysBetweenYmd, daysBetweenKst, scheduleFrom } from './dates.mjs';
 import { visitSessions, buildCross } from './visits.mjs';
+import { formatMeetingAt, sameInstant, latestMeetingMemo, meetingTypeLabel, planMeetingSave, planMeetingDelete } from './meeting.mjs';
 const { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } = React;
 
 // ─── Supabase ───
@@ -250,7 +251,7 @@ function useTheme() {
 // ─── Utils ───
 // ─── 미팅 시각 유틸 — 모든 미팅 시각은 Asia/Seoul 고정 (브라우저 시간대 무관, 2026-09-18).
 //     kstParts·kstToIso·kstDateStr 는 2026-11-02 에 src/dates.mjs 로 옮겼다(날짜 규칙을 한곳에 두고 node 로 검증하기 위해).
-function formatMeetingAt(iso) { const p = kstParts(iso); return p ? `${p.date} ${p.time}` : null; }
+// formatMeetingAt·sameInstant·latestMeetingMemo·meetingTypeLabel 은 src/meeting.mjs (캘린더 수주 미팅과 같은 규칙, 2026-11-23)
 // 예정/완료 뱃지 — 시각 비교가 아니라 프로젝트 상태 기준 (상태와 표시 불일치 방지)
 function getMeetingStatus(meetingAt, currentStatus) {
   if (!meetingAt) return null;
@@ -278,13 +279,6 @@ function meetingTimeWarnings(iso) {
   if (h < 8 || h >= 20) w.push('업무시간(08~20시) 외 일정입니다');
   return w;
 }
-const sameInstant = (a, b) => !!a && !!b && new Date(a).getTime() === new Date(b).getTime();
-// 같은 미팅(meeting_at 동일)의 가장 최근 메모 — history는 append-only라 "수정"은 새 항목 추가로 표현됨
-function latestMeetingMemo(history, meetingAt) {
-  if (!meetingAt) return '';
-  const hs = (history || []).filter(h => sameInstant(h.meeting_at, meetingAt) && h.meeting_memo);
-  return hs.length ? hs[hs.length - 1].meeting_memo : '';
-}
 // 미팅 이력을 meeting_at 단위로 묶기 — 종류/메모는 최신값, 노트는 최신 노트. 최신 미팅이 먼저
 function groupMeetingHistory(history) {
   const map = new Map();
@@ -301,7 +295,6 @@ function groupMeetingHistory(history) {
   });
   return [...map.entries()].sort((a,b) => b[0]-a[0]).map(([,g]) => g);
 }
-const meetingTypeLabel = (k) => MEETING_TYPES.find(t => t.key===k)?.label || '미지정';
 // 예산 문자열 → 만원 단위 숫자. 범위 표기("1,000~3,000만원", "1000-3000만원")는 하한값.
 // 콤마는 천 단위 구분자로 먼저 제거(이전 구현은 "1,000~3,000"을 1로 읽었음 — 2026-09-18 수정).
 const BUDGET_RANGE_RE = /(\d)\s*[~\-–]\s*(\d)/;
@@ -3554,38 +3547,15 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
               color: kind==='success'?'var(--green)':kind==='warning'?'var(--yellow)':kind==='danger'?'var(--red)':'var(--text2)',
             });
             const saveMeeting = () => {
-              const iso = editMeeting;
-              const type = editMeetingType || null;
-              const memo = editMeetingMemo.trim() || null;
-              if (willTransition) {
-                const entries = [];
-                if (st === 'meeting_done' && currentMeeting) {
-                  entries.push({ status:'meeting_done', note:'미팅 완료 (아카이브)', meeting_at:currentMeeting.meeting_at,
-                    meeting_type:currentMeeting.meeting_type||null, meeting_memo:latestMeetingMemo(project.history, currentMeeting.meeting_at)||null });
-                }
-                entries.push({ status:'interview', note: st==='meeting_done' ? '추가 미팅 예정' : '미팅 예정', meeting_at:iso, meeting_type:type, meeting_memo:memo });
-                onAppendHistory(project, entries, { meeting_at:iso, meeting_type:type, current_status:'interview' });
-              } else {
-                let note;
-                if (!currentMeeting) note = '미팅 등록';
-                else if (isAddMode) note = '지난 미팅 기록 추가';
-                else {
-                  const parts = [];
-                  if (!sameInstant(iso, currentMeeting.meeting_at)) parts.push(`일시 ${formatMeetingAt(currentMeeting.meeting_at)} → ${formatMeetingAt(iso)}`);
-                  if (type !== (currentMeeting.meeting_type||null)) parts.push(`종류 ${meetingTypeLabel(currentMeeting.meeting_type)} → ${meetingTypeLabel(type)}`);
-                  if ((memo||'') !== (latestMeetingMemo(project.history, currentMeeting.meeting_at)||'')) parts.push('메모 수정');
-                  note = parts.length ? `미팅 변경 — ${parts.join(', ')}` : '미팅 정보 재저장';
-                }
-                onAppendHistory(project, [{ status:st, note, meeting_at:iso, meeting_type:type, meeting_memo:memo }], { meeting_at:iso, meeting_type:type });
-              }
+              // 저장 규칙은 src/meeting.mjs — 캘린더 '수주 미팅'과 같은 계산 (2026-11-23)
+              const { entries, fields } = planMeetingSave(project, { iso:editMeeting, type:editMeetingType, memo:editMeetingMemo });
+              onAppendHistory(project, entries, fields);
               setMeetingChanged(false);
             };
             const deleteMeeting = () => {
               // '미팅 예정'에서 일정만 지우면 일정 없는 예정 상태에 갇힘 → 지원 완료로 함께 되돌림 (이력에 명시)
-              const revert = st === 'interview';
+              const { entries, fields, revert } = planMeetingDelete(project);
               const go = () => {
-                const entries = [{ status: revert ? 'applied' : st, note:`미팅 일정 삭제 (${formatMeetingAt(currentMeeting.meeting_at)})${revert ? ' — 지원 완료로 되돌림' : ''}` }];
-                const fields = { meeting_at:null, meeting_type:null, ...(revert ? { current_status:'applied' } : {}) };
                 onAppendHistory(project, entries, fields);
                 setEditMeeting(''); setEditMeetingType(''); setEditMeetingMemo(''); setMeetingChanged(false);
               };
@@ -5390,6 +5360,12 @@ function App({ session }) {
             onShortcuts={() => setShowShortcuts(true)} onSignOut={signOutClean} />
         </>}
         onOpenProject={(slug) => { const p = data.find(d => d.slug === slug); navigate({ name:'table' }); if (p) setSelectedProject(p); }}
+        onWishketMeeting={async ({ slug, action, date, time, type, memo }) => {
+          // 캘린더 '수주 미팅' — 프로젝트 탭과 같은 규칙(src/meeting.mjs)으로 프로젝트 미팅을 저장·삭제한다 (2026-11-23)
+          const p = data.find(d => d.slug === slug); if (!p) { toast('프로젝트를 찾지 못했어요. 새로고침해 주세요','error'); return null; }
+          const plan = action === 'delete' ? planMeetingDelete(p) : planMeetingSave(p, { iso: kstToIso(date, time), type, memo });
+          return handleAppendHistory(p, plan.entries, plan.fields);
+        }}
       />
       </>
     );
