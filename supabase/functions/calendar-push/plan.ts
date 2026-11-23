@@ -27,6 +27,7 @@ export type Note = {
   key: string; member: string; kind: "brief" | "change";
   day?: string; at?: number;   // 변경 알림만: 무슨 날에 대한 알림인지 · 변경 시각 (같은 실행의 안내와 겹침 판단용, 발송엔 안 씀)
   title: string; body: string; url: string; tag: string; ttl: number; urgency: "high" | "normal";
+  mtag?: string; meet?: boolean;   // 미팅과 함께 바꾼 근무지 묶기(2026-11-23): 같은 mtag 의 미팅 알림(meet)을 받는 사람에게는 근무지 알림을 따로 보내지 않는다
 };
 
 const KST = 9 * 3600e3;
@@ -247,6 +248,18 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
     } };
   const groups: Record<string, Row[]> = {};
   for (const x of s.audit) (groups[gkey(x)] ||= []).push(x);
+  // 미팅과 함께 바꾼 팀 근무지 (2026-11-23): 화면이 change_note 끝에 [m:<미팅 키>] 를 붙인다(src/meetloc.mjs).
+  //   같은 실행 안의 그 근무지 변경을 미팅 알림 본문에 한 줄로 넣고, 미팅 알림을 받는 사람에게는 근무지 알림을 따로 보내지 않는다.
+  const MTAG = /\[m:([^\]]+)\]/;
+  const tagOfGroup = (g: Row[]) => { for (const x of g) { const m = MTAG.exec(String((x.after || {}).change_note || "")); if (m) return m[1]; } return null; };
+  const mParts: Record<string, string[]> = {};
+  for (const g of Object.values(groups)) {
+    const last = g[g.length - 1]; if (last.table_name !== "team_work_overrides") continue;
+    const tg = tagOfGroup(g); if (!tg) continue;
+    const r = (last.op === "DELETE" ? last.before : last.after) || {}; const k = r.work_date as string; const tl = k ? teamLoc(k) : null; if (!tl) continue;
+    (mParts[tg] ||= []).push(last.op === "DELETE" ? `${fmtD(k)} 평소대로 ${short(teamFull(tl))}` : `${fmtD(k)} 팀 근무지 ${short(teamFull(tl))}`);
+  }
+  const markMeet = (tg: string) => { const n = notes[notes.length - 1]; if (n) { n.mtag = tg; n.meet = true; } };
 
   // 반복 일정 나누기 짝: 새 일정(parent_id) INSERT 와 원래 반복의 exdates·repeat_until 갱신 — 같은 사람이 몇 초 안에 한 것
   //   (감사 번호 차이로 판단하면 그 사이 다른 표의 기록이 끼어 짝을 놓친다)
@@ -309,8 +322,10 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       const t = teamLoc(k);
       // 팀 근무지를 따르는 사람에게만 (2026-11-04 사용자 결정): 종일 휴가·개인 근무지·종일 외근이 있으면 그 사람이 갈 곳은 안 바뀐다.
       //   반차·시간 있는 미팅은 팀 근무지로 출근하므로 받는다. 아무도 안 따르면 보내지 않음.
+      const i0 = notes.length, tg = tagOfGroup(g);
       for (const w of watchers(actor).filter((pid) => followsTeam(pid, k))) note(`c:${a.id}:${w}`, w, `🏢 ${dayWord(k)} 팀 근무지 ${short(teamFull(t))}`,
         join(dateLine(k), hasF ? f.note : "원래 근무지로", byWho(actor)), `team:${k}`);
+      if (tg) for (let i = i0; i < notes.length; i++) notes[i].mtag = tg;
     } else if (a.table_name === "member_work_overrides") {
       // 팀원 개인 근무지 → 바꾼 사람 뺀 전원 (남이 바꾸면 당사자도)
       const sig = (x: Row, has: boolean) => has ? `${x.loc}|${x.branch || ""}` : "";
@@ -374,8 +389,10 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
           retyped ? `${MT[b.meeting_type] || "-"} → ${MT[f.meeting_type]}` : null, rePlace ? `장소 ${b.meeting_place || "없음"} → ${f.meeting_place || "없음"}` : null,
           reOut ? (wIsOut(f) ? "외부 미팅으로" : "우리 사무실 미팅으로") : null] : [];
         const how = [retyped ? null : MT[cur.meeting_type], rePlace ? null : cur.meeting_place || null].filter(Boolean).join(" · ") || null;
+        const wtag = `wp:${f.slug || b.slug}`;
         note(`c:${a.id}:wm:${pid}`, pid, `${ic} ${title} 수주 미팅 ${verb}`,
-          join(moved || reEnd ? null : whenOf(cur), ...diff, how, byWho(actor, undefined, verb === "담당 빠짐" ? "변경" : verb)), `wp:${f.slug || b.slug}`);
+          join(moved || reEnd ? null : whenOf(cur), ...diff, how, ...(mParts[wtag] || []), byWho(actor, undefined, verb === "담당 빠짐" ? "변경" : verb)), wtag);
+        markMeet(wtag);
       }
       const crowd = new Set<string>([...bp, ...fp]);
       meetingLocNotes(a, actor, pids, watchers(actor).filter((t) => !crowd.has(t)), (pid, k) => hadB && wkOut(b, pid, k), (pid, k) => hasF && wkOut(f, pid, k),
@@ -461,13 +478,18 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
         const when = repeatAll ? `매주 ${WD[dow(base!.event_date)]} ${timeOf(base!)} · 반복 전체`
           : dateMoved ? (timeMoved ? null : timeOf(anchor)) : `${fmtD(anchorK)}${timeMoved ? "" : " " + timeOf(anchor)}`;
         const actVerb = verb[1] === "추가" ? "추가" : verb[1] === "취소" ? "취소" : "변경";
+        const etag = `ev:${f.id || base?.id}`;
         note(`c:${a.id}:${pid}`, pid, `${verb[0]} ${(f.title || base?.title) as string} ${verb[1]}`,
-          join(when, showDiff ? diff.join(", ") : null, splitWord, byWho(actor, undefined, actVerb)), `ev:${f.id || base?.id}`);
+          join(when, showDiff ? diff.join(", ") : null, splitWord, ...(mParts[etag] || []), byWho(actor, undefined, actVerb)), etag);
+        markMeet(etag);
       }
     }
   }
   // 같은 실행에서 다음 근무일 안내를 받는 사람에게, 그 날에 대한 변경 중 18:00(BRIEF_FROM) 전에 한 것은 안내에 이미 담겼으니 따로 보내지 않는다 (2026-11-03)
   //   18:00 이후 변경은 안내(첫 실행에 이미 나감)에 없을 수 있어 그대로 보낸다 — 알림이 빠지는 쪽으로는 줄이지 않는다
+  // 같은 저장에서 나온 근무지 알림은 그 미팅 알림을 받는 사람에게는 빼고(미팅 알림 본문에 들어 있다), 나머지 사람에게만 따로 보낸다
+  const mergedOut = new Set(notes.filter((n) => n.mtag && !n.meet && notes.some((m) => m.meet && m.mtag === n.mtag && m.member === n.member)));
+  if (mergedOut.size) for (let i = notes.length - 1; i >= 0; i--) if (mergedOut.has(notes[i])) notes.splice(i, 1);
   if (briefed.size) {
     const cut = Date.parse(`${today}T${String(Math.floor(BRIEF_FROM / 60)).padStart(2, "0")}:${String(BRIEF_FROM % 60).padStart(2, "0")}:00+09:00`);
     const kept = notes.filter((n) => !(n.kind === "change" && n.day === briefK && briefed.has(n.member) && (n.at || 0) < cut && n.at));

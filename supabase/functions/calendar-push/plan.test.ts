@@ -481,3 +481,25 @@ Deno.test("수주 미팅 외근: 우리 사무실로 고른 대면 미팅은 외
   s.audit = [{ id: 96, at: "", table_name: "wishket_projects", op: "UPDATE", actor_id: "u1", before: w0, after: legacy }];
   eq(change(s, "2026-11-04", "17:40").filter((n) => n.member === M3).map((n) => n.title), ["🚕 이나래 내일 14:00 외근 (창호 견적)"], "예전 기록: 장소에 사무실 이름이 없으면 외근");
 });
+
+Deno.test("미팅 ↔ 근무지 묶음: 미팅을 옮기며 새 날짜 팀 근무지 변경·옛 날짜 평소로 되돌림 → 담당자에게 한 건", () => {
+  const s = base(); s.events = [];
+  const tag = "[m:wp:esg]";
+  const w0 = { slug: "esg", title: "esg 2차 개발", meeting_at: "2026-12-02T05:00:00Z", meeting_type: "inperson", meeting_place: null, meeting_auto_out: null, assigned_main: M2, assigned_sub: M3, current_status: "interview" };
+  const w1 = { ...w0, meeting_at: "2026-11-26T05:00:00Z", meeting_place: "서울숲", meeting_auto_out: false };
+  const ov26 = { work_date: "2026-11-26", loc: "forest", branch: null, note: "esg 2차 개발 미팅", change_note: `11/26 (목) 팀 근무지 시청역 → 서울숲 (esg 2차 개발 미팅) ${tag}` };
+  const ov02 = { work_date: "2026-12-02", loc: "forest", branch: null, note: null, change_note: "" };
+  s.wishket = [w1]; s.teamOverrides = [ov26];
+  s.audit = [
+    { id: 201, at: "", table_name: "wishket_projects", op: "UPDATE", actor_id: "u1", before: w0, after: w1 },
+    { id: 202, at: "", table_name: "team_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: ov26 },
+    { id: 203, at: "", table_name: "team_work_overrides", op: "UPDATE", actor_id: "u1", before: ov02, after: { ...ov02, change_note: `12/2 (수) 팀 근무지 평소대로 ${tag}` } },
+    { id: 204, at: "", table_name: "team_work_overrides", op: "DELETE", actor_id: "u1", before: { ...ov02, change_note: `12/2 (수) 팀 근무지 평소대로 ${tag}` }, after: null },
+  ];
+  const r = change(s, "2026-11-25", "10:00");
+  eq(r.map((n) => n.member).sort(), [M2, M3], "담당자 두 명에게 한 건씩 — 근무지 알림 따로 없음");
+  // 담당자가 아닌 팀원(박다온 제외 — 여기선 담당)은 근무지 알림만 받는다: 보조 담당을 빼면 박다온은 팀 근무지 알림 한 건
+  const s2 = { ...s, audit: s.audit.map((x) => x.table_name === "wishket_projects" ? { ...x, before: { ...w0, assigned_sub: null }, after: { ...w1, assigned_sub: null } } : x) };
+  eq(change(s2, "2026-11-25", "10:00").map((n) => `${n.member}|${n.title}`).sort(), ["m2|✏️ esg 2차 개발 수주 미팅 변경", "m3|🏢 내일 팀 근무지 서울숲"], "담당 아닌 사람은 근무지 알림 한 건");
+  eq(r.find((n) => n.member === M2)!.body, "일시 12/2 (수) 14:00 → 11/26 (목) 14:00 · 장소 없음 → 서울숲 · 우리 사무실 미팅으로 · 대면 · 11/26 (목) 팀 근무지 서울숲 · 12/2 (수) 평소대로 재택 · 김가람 변경", "본문에 근무지 함께");
+});

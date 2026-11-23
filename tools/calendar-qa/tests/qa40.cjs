@@ -6,6 +6,8 @@ const S = __dirname + '/shots/';
   const ctx = await b.newContext({ viewport: { width: 1440, height: 900 }, locale: 'ko-KR', timezoneId: 'Asia/Seoul' });
   const p = await ctx.newPage();
   p.on('pageerror', e => errs.push(e.message)); p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
+  // 근무지 질문(2026-11-23)이 나오면 한 번 더 저장 — 이 점검은 미팅 저장 규칙만 본다(근무지는 qa41·qa42)
+  const submit = async () => { await p.evaluate(() => document.getElementById('f').requestSubmit()); await p.waitForTimeout(400); if (await p.$('#loc-q')) { await p.evaluate(() => document.getElementById('f').requestSubmit()); await p.waitForTimeout(400); } };
   const base = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html?n=4';
   await p.goto(base + '&reset=1#calendar'); await p.waitForSelector('#todaycard .today-head');
   // 지원 완료 프로젝트 하나를 넣고 다시 연다
@@ -25,7 +27,7 @@ const S = __dirname + '/shots/';
   await p.click('[data-where="office"]'); await p.fill('#f-place', '시청역 회의실');
   await p.click('#end-add'); await p.fill('#f-end', '16:30'); await p.dispatchEvent('#f-end', 'change');
   await p.screenshot({ path: S + 'qa40-add.png' });
-  await p.click('#f button[type=submit]'); await p.waitForTimeout(400);
+  await submit();
   let r = await p.evaluate(() => ({ ap: (__mock.appends || []).slice(-1)[0], row: __mock.DB.wishket_projects.find(x => x.slug === '261120_cafe') }));
   ok('저장 → 미팅 예정 전환', r.row.current_status === 'interview' && r.ap?.p_entries?.[0]?.note === '미팅 예정', JSON.stringify(r.ap?.p_fields));
   ok('장소·끝 시간·우리 사무실', r.row.meeting_place === '시청역 회의실' && r.row.meeting_auto_out === false && new Date(r.row.meeting_end_at).toISOString() === new Date(`${fut}T16:30:00+09:00`).toISOString(), JSON.stringify([r.row.meeting_place, r.row.meeting_end_at, r.row.meeting_auto_out]));
@@ -37,7 +39,7 @@ const S = __dirname + '/shots/';
   await p.click('#d-wedit'); await p.waitForSelector('#f-wp');
   const pre = await p.evaluate(() => ({ pl: document.getElementById('f-place').value, e: document.getElementById('f-end').value, wh: document.querySelector('[data-where][aria-pressed="true"]')?.dataset.where, d: document.getElementById('f-date').value, t: document.getElementById('f-start').value, n: document.getElementById('f-note').value, dis: document.getElementById('f-wp').disabled, tabs: !!document.querySelector('#sheet [data-t]') }));
   ok('수정 창에 기존 값', pre.d === fut && pre.t === '15:30' && pre.n === '메뉴 화면 시연' && pre.pl === '시청역 회의실' && pre.e === '16:30' && pre.wh === 'office' && pre.dis && !pre.tabs, JSON.stringify(pre));
-  await p.fill('#f-start', '16:00'); await p.dispatchEvent('#f-start', 'change'); await p.click('#f button[type=submit]'); await p.waitForTimeout(400);
+  await p.fill('#f-start', '16:00'); await p.dispatchEvent('#f-start', 'change'); await submit();
   r = await p.evaluate(() => (__mock.appends || []).slice(-1)[0]);
   ok('수정 → 미팅 변경 이력', /^미팅 변경 — 일시 .* 15:30 → .* 16:00/.test(r.p_entries[0].note) && r.p_entries[0].status === 'interview', r.p_entries[0].note);
   // 삭제: 한 번 더 눌러야 지운다

@@ -5,6 +5,7 @@ import { freeMaintInfo, freeMaintDefault, freeMaintInitialChoice, freeMaintUntil
 import { kstParts, kstToIso, kstDateStr, kstStartOfDay, isYmd, addDaysYmd, daysBetweenYmd, daysBetweenKst, scheduleFrom } from './dates.mjs';
 import { visitSessions, buildCross } from './visits.mjs';
 import { formatMeetingAt, sameInstant, latestMeetingMemo, meetingTypeLabel, planMeetingSave, planMeetingDelete, meetingIsOut } from './meeting.mjs';
+import { planMeetingLoc, applyMeetingLoc, teamAt, officeOfPlace, changeText, fmtDay, OFFICE_LABEL } from './meetloc.mjs';
 const { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } = React;
 
 // ─── Supabase ───
@@ -3033,7 +3034,7 @@ function MeetingDateTimePicker({ value, onChange, inputStyle, disabled }) {
   );
 }
 
-function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, onDelete, saving, teamMembers, milestones, milestonesSetupNeeded, onMilestoneUpdate, onMilestoneDelete, onMilestoneAdd, onMilestoneReorder, onCreateFromTemplate, onOpenProjectView, onBulkCreateWeekly, onClearWeeklyPlan, onRequestConfirm, onBackfillAssignees }) {
+function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, meetingLoc, onDelete, saving, teamMembers, milestones, milestonesSetupNeeded, onMilestoneUpdate, onMilestoneDelete, onMilestoneAdd, onMilestoneReorder, onCreateFromTemplate, onOpenProjectView, onBulkCreateWeekly, onClearWeeklyPlan, onRequestConfirm, onBackfillAssignees }) {
   const trapRef = useFocusTrap();
   const isPostWon = HAS_MILESTONES.includes(project?.current_status);
   const [tab, setTab] = useState(
@@ -3064,6 +3065,10 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const [editMeetingPlace, setEditMeetingPlace] = useState(isAddMode ? '' : (project?.meeting_place || ''));
   const [editMeetingEnd, setEditMeetingEnd] = useState(isAddMode ? '' : (kstParts(project?.meeting_end_at)?.time || ''));   // 'HH:MM' 또는 ''
   const [editMeetingOut, setEditMeetingOut] = useState(isAddMode || project?.meeting_type !== 'inperson' ? null : meetingIsOut(project));   // 대면: true=외부, false=우리 사무실
+  // 근무지도 함께 바꿀지 묻는 중 (2026-11-23) — { mode:'save'|'delete', plan, sig, choice:{change,revert} }
+  const [locAsk, setLocAsk] = useState(null);
+  const [locBusy, setLocBusy] = useState(false);
+  useEffect(() => { setLocAsk(a => a?.mode === 'save' ? null : a); }, [editMeeting, editMeetingType, editMeetingPlace, editMeetingOut]);
   const [editMemo, setEditMemo] = useState(project?.memo||'');
   const [memoChanged, setMemoChanged] = useState(false);
   const [editUrl, setEditUrl] = useState(project?.wishket_url||'');
@@ -3553,24 +3558,64 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
               background:`var(--surface-${kind}-soft)`, border:`1px solid var(--surface-${kind}-mid)`,
               color: kind==='success'?'var(--green)':kind==='warning'?'var(--yellow)':kind==='danger'?'var(--red)':'var(--text2)',
             });
-            const saveMeeting = () => {
+            const saveMeeting = async () => {
               // 저장 규칙은 src/meeting.mjs — 캘린더 '수주 미팅'과 같은 계산 (2026-11-23)
               const endIso = editMeetingEnd ? kstToIso(kstParts(editMeeting).date, editMeetingEnd) : null;
               const { entries, fields } = planMeetingSave(project, { iso:editMeeting, type:editMeetingType, memo:editMeetingMemo, place:editMeetingPlace, endIso, autoOut:editMeetingOut });
-              onAppendHistory(project, entries, fields);
+              // 근무지 영향(src/meetloc.mjs): 처음 누르면 묻고, 같은 내용으로 한 번 더 누르면 고른 대로 함께 저장
+              setLocBusy(true);
+              const plan = meetingLoc ? await meetingLoc.plan(project, { k: kstParts(editMeeting).date, type: editMeetingType, autoOut: editMeetingType==='inperson' ? editMeetingOut : null, place: editMeetingPlace }) : null;
+              setLocBusy(false);
+              const sig = plan ? JSON.stringify(plan) : '';
+              if (plan && (plan.change || plan.revert) && !(locAsk?.mode === 'save' && locAsk.sig === sig)) { setLocAsk({ mode:'save', plan, sig, choice:{ change:true, revert:true } }); return; }
+              const choice = locAsk?.choice || {};
+              const row = await onAppendHistory(project, entries, fields);
+              if (row && plan) await meetingLoc.apply(plan, choice, project);
+              setLocAsk(null);
               setMeetingChanged(false);
             };
-            const deleteMeeting = () => {
+            const deleteMeeting = async () => {
               // '미팅 예정'에서 일정만 지우면 일정 없는 예정 상태에 갇힘 → 지원 완료로 함께 되돌림 (이력에 명시)
               const { entries, fields, revert } = planMeetingDelete(project);
-              const go = () => {
-                onAppendHistory(project, entries, fields);
+              const plan = meetingLoc ? await meetingLoc.plan(project, null) : null;
+              const ask = plan?.revert ? { mode:'delete', plan, sig:JSON.stringify(plan), choice:{ revert:true } } : null;
+              const go = async (choice) => {
+                const row = await onAppendHistory(project, entries, fields);
+                if (row && plan?.revert && choice?.revert) await meetingLoc.apply(plan, { revert:true }, project);
+                setLocAsk(null);
                 setEditMeeting(''); setEditMeetingType(''); setEditMeetingMemo(''); setEditMeetingPlace(''); setEditMeetingEnd(''); setEditMeetingOut(null); setMeetingChanged(false);
               };
+              if (ask) { setLocAsk({ ...ask, go }); return; }   // 근무지 되돌리기를 같은 화면에서 고른 뒤 삭제
               const msg = `${formatMeetingAt(currentMeeting.meeting_at)} 일정을 삭제합니다.\n이력은 남고, 프로젝트의 미팅 일시만 비워집니다.` + (revert ? `\n\n일정이 없는 '미팅 예정'은 유지할 수 없어 상태가 '지원 완료'로 돌아갑니다. 새 일정을 잡으면 다시 '미팅 예정'으로 전환됩니다.` : '');
-              if (onRequestConfirm) onRequestConfirm({ title: revert ? '미팅 일정 삭제 + 지원 완료로 되돌리기' : '미팅 일정 삭제', message: msg, confirmLabel:'삭제', destructive:true, onConfirm:go });
-              else go();
+              if (onRequestConfirm) onRequestConfirm({ title: revert ? '미팅 일정 삭제 + 지원 완료로 되돌리기' : '미팅 일정 삭제', message: msg, confirmLabel:'삭제', destructive:true, onConfirm:() => go({}) });
+              else go({});
             };
+            // 근무지 질문 패널 — 캘린더 저장 창과 같은 문구
+            const segS = (sel) => ({ flex:1, padding:'0.45rem', borderRadius:8, border:`1px solid ${sel?'var(--accent)':'var(--border)'}`, background: sel?'var(--surface-info-soft)':'var(--surface2)', color: sel?'var(--text)':'var(--text2)', fontWeight: sel?600:400, cursor:'pointer' });
+            const setChoice = (k, v) => setLocAsk(a => a ? { ...a, choice:{ ...a.choice, [k]:v } } : a);
+            const locPanel = locAsk && (
+              <div role="group" aria-label="근무지도 함께 바꿀까요" style={{ ...bannerS('info'), display:'flex', flexDirection:'column', gap:8, color:'var(--text)' }}>
+                <div style={{ fontWeight:600 }}>{locAsk.mode === 'delete' ? '미팅을 지우면서 근무지도 되돌릴까요?' : '근무지도 함께 바꿀까요?'}</div>
+                {locAsk.plan.change && (<div>
+                  <div style={{ marginBottom:4 }}>{changeText(locAsk.plan.change, project.title)}</div>
+                  <div style={{ display:'flex', gap:6 }}>
+                    <button onClick={() => setChoice('change', true)} style={segS(locAsk.choice.change)}>팀 근무지 {OFFICE_LABEL[locAsk.plan.change.to]}(으)로</button>
+                    <button onClick={() => setChoice('change', false)} style={segS(!locAsk.choice.change)}>그대로</button>
+                  </div></div>)}
+                {locAsk.plan.revert && (<div>
+                  <div style={{ marginBottom:4 }}>{fmtDay(locAsk.plan.revert.k)} 팀 근무지가 {OFFICE_LABEL[locAsk.plan.revert.from] || locAsk.plan.revert.from}(으)로 바뀌어 있어요. 미팅이 빠졌으니 평소({OFFICE_LABEL[locAsk.plan.revert.usual] || locAsk.plan.revert.usual})로 되돌릴까요?</div>
+                  <div style={{ display:'flex', gap:6 }}>
+                    <button onClick={() => setChoice('revert', true)} style={segS(locAsk.choice.revert)}>평소대로 {OFFICE_LABEL[locAsk.plan.revert.usual] || locAsk.plan.revert.usual}</button>
+                    <button onClick={() => setChoice('revert', false)} style={segS(!locAsk.choice.revert)}>그대로 두기</button>
+                  </div></div>)}
+                <div style={{ fontSize:'0.75rem', color:'var(--text2)' }}>고른 근무지 변경은 미팅과 함께 저장되고, 담당자 알림도 한 번에 갑니다.</div>
+                {locAsk.mode === 'delete' && (
+                  <div style={{ display:'flex', gap:6 }}>
+                    <button onClick={() => locAsk.go(locAsk.choice)} disabled={saving} style={{ ...saveBtnS(true), flex:1, margin:0, background:'var(--red)' }}>{st === 'interview' ? '미팅 일정 삭제 (지원 완료로 돌아감)' : '미팅 일정 삭제'}</button>
+                    <button onClick={() => setLocAsk(null)} style={{ ...btn.secondary({ margin:0 }) }}>취소</button>
+                  </div>)}
+              </div>
+            );
             return (
               <>
                 {currentMeeting && (() => {
@@ -3646,6 +3691,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
 
                 <div style={{ fontSize:'0.85rem', fontWeight:600, marginBottom:8 }}>{formTitle}</div>
 
+                {locAsk?.mode === 'delete' && locPanel}
                 {/* 상태별 안내 — 저장하면 무슨 일이 생기는지 미리 알린다 */}
                 {editMeeting ? (
                   isFuture ? (
@@ -3714,13 +3760,14 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                       style={{ ...inputS, minHeight:72, resize:'vertical', fontFamily:'inherit', lineHeight:1.5 }} />
                   </div>
                 </div>
+                {locAsk?.mode === 'save' && locPanel}
                 {meetingChanged && (
                   <>
                     {missing.length > 0 && (
                       <div style={{ marginTop:8, fontSize:'0.8rem', color:'var(--red)' }}>미팅 {missing.join('·')}을(를) 입력해야 저장할 수 있습니다</div>
                     )}
                     <button onClick={saveMeeting} disabled={!canSave} style={{ ...saveBtnS(canSave), width:'100%', marginTop:missing.length?6:12, cursor:canSave?'pointer':'not-allowed' }}>
-                      {saving?'저장 중...':willTransition?'📅 미팅 등록 + 미팅 예정 전환':isAddMode?'지난 미팅 기록 저장':currentMeeting?'미팅 변경 저장':'미팅 저장'}
+                      {saving||locBusy?'저장 중...':locAsk?.mode==='save'?'확인하고 저장':willTransition?'📅 미팅 등록 + 미팅 예정 전환':isAddMode?'지난 미팅 기록 저장':currentMeeting?'미팅 변경 저장':'미팅 저장'}
                     </button>
                   </>
                 )}
@@ -4853,6 +4900,35 @@ function App({ session }) {
     } catch(err) { toast('저장 실패: '+friendlyError(err),'error'); return null; }
   }, [toast]);
 
+  // 미팅 ↔ 팀 근무지 (2026-11-23) — 프로젝트 탭에서 미팅을 잡거나 옮기거나 지울 때 근무지 영향 계산(캘린더와 같은 규칙, src/meetloc.mjs).
+  //   읽기 실패면 null(묻지 않고 미팅만 저장). next = { k, type, autoOut, place } 또는 null(삭제)
+  const meetingLoc = useMemo(() => ({
+    plan: async (project, next) => {
+      const prevK = project.meeting_at ? kstParts(project.meeting_at)?.date : null;
+      const prev = prevK ? { k:prevK, type:project.meeting_type, autoOut: project.meeting_auto_out ?? null, place: project.meeting_place } : null;
+      const ks = [...new Set([prevK, next?.k].filter(Boolean))]; if (!ks.length) return null;
+      try {
+        const [r, o, h, e] = await Promise.all([
+          supabase.from('team_work_routines').select('valid_from,days'),
+          supabase.from('team_work_overrides').select('work_date,loc,branch,note').in('work_date', ks),
+          supabase.from('calendar_holidays').select('holiday_date').in('holiday_date', ks),
+          supabase.from('calendar_events').select('id,type,meeting_type,auto_out,place,event_date').eq('type','meeting').is('deleted_at', null).in('event_date', ks)]);
+        if (r.error || o.error || h.error || e.error) return null;
+        const routines = (r.data||[]).map(x => ({ from:x.valid_from, days:x.days })), overrides = (o.data||[]).map(x => ({ date:x.work_date, loc:x.loc, branch:x.branch, note:x.note }));
+        const hol = new Set((h.data||[]).map(x => x.holiday_date));
+        const sameOffice = (place, code) => (officeOfPlace(place) || code) === code;
+        return planMeetingLoc(prev, next, { today: kstDateStr(), isOff: k => hol.has(k) || [0,6].includes(new Date(`${k}T12:00:00+09:00`).getUTCDay()),
+          team: k => teamAt(routines, overrides, k),
+          otherOfficeMeeting: (k, code) => (data||[]).some(p => p.slug!==project.slug && p.meeting_at && kstParts(p.meeting_at)?.date===k && p.meeting_type==='inperson' && !meetingIsOut(p) && sameOffice(p.meeting_place, code))
+            || (e.data||[]).some(x => x.event_date===k && x.meeting_type==='inperson' && !x.auto_out && sameOffice(x.place, code)) });
+      } catch (_) { return null; }
+    },
+    apply: async (plan, choice, project) => {
+      try { const done = await applyMeetingLoc(supabase, plan, choice, { key:'wp:'+project.slug, title: project.title || project.slug }); return done.length ? ` · ${done.join(' · ')}` : ''; }
+      catch (err) { toast('미팅은 저장했지만 근무지를 바꾸지 못했어요: '+friendlyError(err),'error'); return ''; }
+    },
+  }), [data, toast]);
+
   const handleMilestoneUpdate = useCallback(async (milestone, fields) => {
     setSaving(true);
     try {
@@ -5484,6 +5560,7 @@ function App({ session }) {
           onSave={handleSave}
           onFieldSave={handleFieldSave}
           onAppendHistory={handleAppendHistory}
+          meetingLoc={meetingLoc}
           onDelete={handleDelete}
           saving={saving}
           teamMembers={teamMembers}

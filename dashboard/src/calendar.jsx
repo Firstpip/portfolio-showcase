@@ -9,6 +9,7 @@
 //   - 폭에 따라 데스크톱(사이드바 + 월/주/목록)과 폰(5일 카드 → 선택일 → 월/주)을 컨테이너 쿼리로 바꾼다.
 //   - 스타일은 모두 .fpcal 아래로 한정해 워크룸 다른 화면에 영향이 없다.
 import { latestMeetingMemo, MEETING_STAGES } from './meeting.mjs';
+import { planMeetingLoc, applyMeetingLoc, changeText, officeOfPlace, OFFICE_LABEL, fmtDay } from './meetloc.mjs';
 const { useEffect: useEffectCal, useRef: useRefCal, useState: useStateCal } = React;
 // 다시 들어올 때 바로 보이게: 캘린더를 나갈 때 데이터·보기 상태를 기억해 두고, 다음에 열면 먼저 그린 뒤 뒤에서 새로 읽는다 (2026-11-04)
 //   같은 날·같은 사람·30분 안일 때만 쓴다. 실시간 갱신·탭 복귀 재조회는 그대로.
@@ -197,7 +198,8 @@ function mountCalendar(root, ctx) {
     WMP = (c.projects||[]).filter(p => MEETING_STAGES[p.current_status]).map(p => ({ slug:p.slug, title:p.title || p.slug, status:p.current_status,
       main:p.assigned_main || null, sub:p.assigned_sub || null, meeting_at: p.meeting_at ? toKst(p.meeting_at) : null, meeting_type:p.meeting_type || null,
       memo: latestMeetingMemo(p.history, p.meeting_at), place: p.meeting_place || '', end: p.meeting_end_at ? toKst(p.meeting_end_at).slice(11,16) : '',
-      autoOut: p.meeting_auto_out ?? (p.meeting_type==='inperson' ? !atOffice(p.meeting_place) : null) }));
+      autoOut: p.meeting_auto_out ?? (p.meeting_type==='inperson' ? !atOffice(p.meeting_place) : null),
+      rawOut: p.meeting_auto_out ?? null }));   // 근무지 되돌리기 판단은 예전 기록(NULL)을 그대로 넘긴다(src/meetloc.mjs 가 '어느 사무실이든'으로 본다)
     if (c.onWishketMeeting) onWm = c.onWishketMeeting;
     PROJECTS = (c.projects||[]).filter(p => secured.includes(p.current_status)).map(p => ({ slug:p.slug, title:p.title || p.slug }));
     if (mapChanged && loaded && !setupNeeded) loadAll(); else render();
@@ -297,6 +299,39 @@ function mountCalendar(root, ctx) {
   const atOffice = place => !!place && ['패스트파이브','시청역','서울숲','사무실'].some(w => place.includes(w));
   // 수주 미팅이 외근인지 — 직접 고른 값(meeting_auto_out)이 우선, 예전 기록은 장소 글자 (2026-11-23)
   const wOut = w => w.meeting_type==='inperson' && (w.autoOut ?? !atOffice(w.place));
+  // 미팅 ↔ 팀 근무지 (2026-11-23): 미팅을 잡거나 옮기거나 지울 때 근무지 영향을 계산하는 재료(src/meetloc.mjs 와 같은 규칙)
+  function locCtx(selfKey){
+    const sameOffice = (place, code) => (officeOfPlace(place) || code) === code;
+    return { today:TK, isOff:isOffDay,
+      team: k => { const t = teamLoc(k); return t ? { code:t.code, src:t.src, usual: routineAt(k).days[parse(k).getDay()] || 'cityhall' } : null; },
+      otherOfficeMeeting: (k, code) => WORKROOM.some(w => 'wp:'+w.slug!==selfKey && w.meeting_at.slice(0,10)===k && w.meeting_type==='inperson' && !wOut(w) && sameOffice(w.place, code))
+        || manual.some(m => 'ev:'+m.id!==selfKey && m.type==='meeting' && m.mt==='inperson' && !m.autoOut && occursOn(m, k) && sameOffice(m.place, code)) };
+  }
+  const lqText = (plan, title) => [plan.change ? changeText(plan.change, title) : null,
+    plan.revert ? `${fmtDay(plan.revert.k)} 팀 근무지가 ${OFFICE_LABEL[plan.revert.from]||plan.revert.from}(으)로 바뀌어 있어요. 미팅이 빠졌으니 평소(${OFFICE_LABEL[plan.revert.usual]||plan.revert.usual})로 되돌릴까요?` : null];
+  // 저장 창 안에 '근무지도 함께 바꿀까요?'를 보여 준다. 처음 보여 줄 때는 true(멈춤), 같은 내용으로 다시 저장하면 false(진행)
+  function locStep(plan, title){
+    const box = $('loc-q'), sig = JSON.stringify(plan);
+    if (!plan.change && !plan.revert) { box?.remove(); return false; }
+    if (box && box.dataset.sig === sig) return false;
+    box?.remove();
+    const [ct, rt] = lqText(plan, title);
+    const seg = (id, on, off) => `<div class="seg full" id="${id}"><button type="button" data-lq="1" aria-pressed="true">${on}</button><button type="button" data-lq="0" aria-pressed="false">${off}</button></div>`;
+    $('f').querySelector('.actions.foot').insertAdjacentHTML('beforebegin', `<div class="fld locq" id="loc-q" data-sig="${esc(sig)}"><label>근무지도 함께 바꿀까요?</label>
+      ${plan.change ? `<div class="hint">${esc(ct)}</div>${seg('lq-change', `팀 근무지 ${OFFICE_LABEL[plan.change.to]}(으)로`, '그대로')}` : ''}
+      ${plan.revert ? `<div class="hint">${esc(rt)}</div>${seg('lq-revert', `평소대로 ${OFFICE_LABEL[plan.revert.usual]||plan.revert.usual}`, '그대로 두기')}` : ''}
+      <div class="hint">고른 근무지 변경은 미팅과 함께 저장되고, 알림도 한 번에 갑니다.</div></div>`);
+    $('loc-q').querySelectorAll('[data-lq]').forEach(b => b.onclick = () => { b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x===b))); });
+    const sb2 = $('f').querySelector('button[type=submit]'); if (sb2) sb2.textContent = '확인하고 저장';
+    $('loc-q').scrollIntoView?.({ block:'center', behavior:'smooth' });
+    return true;
+  }
+  const locChoice = () => ({ change: $('lq-change')?.querySelector('[aria-pressed="true"]')?.dataset.lq === '1', revert: $('lq-revert')?.querySelector('[aria-pressed="true"]')?.dataset.lq === '1' });
+  async function applyLoc(plan, choice, key, title){
+    if (!plan || (!(plan.change && choice.change) && !(plan.revert && choice.revert))) return '';
+    try { const done = await applyMeetingLoc(sb, plan, choice, { key, title, table:T.team }); await reload(T.team); return done.length ? ` · ${done.join(' · ')}` : ''; }
+    catch (e) { console.warn(e); toast('미팅은 저장했지만 근무지를 바꾸지 못했어요: ' + friendly(e)); return ''; }
+  }
   // pid 가 k 날 사무실 밖 대면 미팅에 가는지. 수동 미팅은 '외근 표시' 체크한 것, 위시켓은 대면이면서 장소가 사무실이 아닌 것.
   // 대면 미팅 외근: 시간이 있는 미팅이면 그 시각(at)부터 외근이고 그 전엔 팀 근무지, 종일 미팅이면(at=null) 하루 전체 외근.
   //   여러 건이면 종일이 하나라도 있으면 종일, 아니면 가장 이른 시각 (2026-11-03 — 오전 출근 후 오후 미팅을 하루 외근으로 보던 문제)
@@ -1094,11 +1129,20 @@ function mountCalendar(root, ctx) {
     const where = $('sheet').querySelector('[data-where][aria-pressed="true"]')?.dataset.where;
     if (type==='inperson' && !where) { toast('대면 미팅은 어디서 하는지 골라 주세요 (우리 사무실 / 외부)'); $('f-where')?.scrollIntoView({ block:'center', behavior:'smooth' }); return; }
     if (!onWm) { toast('워크룸 화면에서만 저장할 수 있어요'); return; }
-    const w = WMP.find(x => x.slug===slug);
-    run(async () => { const row = await onWm({ slug, action:'save', date, time, end, type, memo:$('f-note').value, place:$('f-place').value, autoOut: type==='inperson' ? where==='out' : null });
-      if (!row) return;   // 실패 안내는 워크룸이 띄운다
-      closeSheet(); render();
-      toast(`${w?.title || '수주 미팅'} — ${fmtD(date)} ${time} 저장했어요`); });
+    const w = WMP.find(x => x.slug===slug), place = $('f-place').value, autoOut = type==='inperson' ? where==='out' : null;
+    const prev = w?.meeting_at ? { k:w.meeting_at.slice(0,10), type:w.meeting_type, autoOut:w.rawOut, place:w.place } : null;
+    const next = { k:date, type, autoOut, place };
+    const lo = [prev?.k, date].filter(Boolean).sort()[0], hi = [prev?.k, date].filter(Boolean).sort().pop();
+    ensureSpan(lo, hi).then(() => {
+      const plan = planMeetingLoc(prev, next, locCtx('wp:'+slug));
+      if (locStep(plan, w?.title)) return;
+      const choice = locChoice();
+      run(async () => { const row = await onWm({ slug, action:'save', date, time, end, type, memo:$('f-note').value, place, autoOut });
+        if (!row) return;   // 실패 안내는 워크룸이 띄운다
+        const extra = await applyLoc(plan, choice, 'wp:'+slug, w?.title || '수주 미팅');
+        closeSheet(); render();
+        toast(`${w?.title || '수주 미팅'} — ${fmtD(date)} ${time} 저장했어요${extra}`); });
+    });
   }
   // 저장: 값 검증은 화면에서 먼저, 최종 검증(겹치는 휴가·시간 순서 등)은 DB 제약이 한 번 더 합니다.
   function save(type, scope, ed, conflict){
@@ -1126,7 +1170,12 @@ function mountCalendar(root, ctx) {
         mt, place:v('f-place'), people, note:v('f-note'), repeat: repeat||undefined, until: until||undefined, skipHoliday: true, project: v('f-proj')||undefined, autoOut };
       const what = type==='meeting' ? '미팅' : '일정';
       const saved = msg => toast(msg);
-      run(async () => {
+      // 미팅 ↔ 팀 근무지 (2026-11-23): 반복이 아닌 미팅(또는 반복의 '이 회차만')을 잡거나 옮길 때 근무지 영향을 함께 묻는다
+      const rs0 = ed?.ref.repeat ? (pressed('[data-rs]')[0]?.dataset.rs || 'one') : 'all';
+      const locOn = type==='meeting' && !fields.repeat && (!ed || !ed.ref.repeat || rs0==='one');
+      const prevM = locOn && ed ? { k:ed.k, type:ed.ref.mt, autoOut:!!ed.ref.autoOut, place:ed.ref.place } : null;
+      const nextM = locOn ? { k:date, type:mt, autoOut, place:fields.place } : null;
+      const go = (plan, choice) => run(async () => {
         if (ed) {
           const m = ed.ref, k = ed.k, rs = m.repeat ? (pressed('[data-rs]')[0]?.dataset.rs || 'one') : 'all', diff = diffText(m, k, fields);
           // 반복 나누기는 새 일정 추가 + 원래 반복 수정을 한 번에(calendar_split_event, 2026-11-06) — 따로 저장하다 두 번째가 실패하면 일정이 겹쳤다
@@ -1141,11 +1190,20 @@ function mountCalendar(root, ctx) {
             await db(() => sb.from(T.events).update({ ...eventRow({ ...fields, exdates:m.exdates, parent:m.parent }), change_note:`${fmtD(date)} ${title} · ${diff}` }).eq('id', m.id));
           }
           const extra = rs==='all' ? await syncDirect(m, fields) : '';
-          await reload(T.events); done(); saved(`${what}을 고쳤어요${extra}`);
+          const lx = await applyLoc(plan, choice, 'ev:'+m.id, title);
+          await reload(T.events); done(); saved(`${what}을 고쳤어요${extra}${lx}`);
         } else {
-          await db(() => sb.from(T.events).insert({ ...eventRow(fields), change_note:`${fmtD(date)} ${title}${kind?' ('+KIND[kind].label+')':''} · ${names(people)}${autoOut?' — 참석자 외근 표시':''}` }));
-          await reload(T.events); done(); saved(`${what}을 추가했어요`);
+          const ins = await db(() => sb.from(T.events).insert({ ...eventRow(fields), change_note:`${fmtD(date)} ${title}${kind?' ('+KIND[kind].label+')':''} · ${names(people)}${autoOut?' — 참석자 외근 표시':''}` }).select('id').single());
+          const lx = ins?.id ? await applyLoc(plan, choice, 'ev:'+ins.id, title) : '';
+          await reload(T.events); done(); saved(`${what}을 추가했어요${lx}`);
         }
+      });
+      if (!locOn) { go(null, {}); return; }
+      const ks = [prevM?.k, date].filter(Boolean).sort();
+      ensureSpan(ks[0], ks[ks.length-1]).then(() => {
+        const plan = planMeetingLoc(prevM, nextM, locCtx(ed ? 'ev:'+ed.ref.id : ''));
+        if (locStep(plan, title)) return;
+        go(plan, locChoice());
       });
     } else if (type==='loc' && scope==='team') {
       const loc = pressed('.chip[data-loc]')[0]?.dataset.loc; if (!loc) { toast('근무지를 선택해 주세요'); return; }
@@ -1218,11 +1276,16 @@ function mountCalendar(root, ctx) {
     const meta = e.by ? `<div class="meta">등록 ${esc(P(e.by).name)} · ${fmtAt(e.at)}${e.editedBy?` · 수정 ${esc(P(e.editedBy).name)} · ${fmtAt(e.editedAt)}`:''}</div>` : '';
     const editable = e.type==='leave' || e.type==='meeting' || ['internal','deadline','other'].includes(e.type);
     const wmEditable = e.type==='wishket' && !e.done && e.ref.status==='interview' && WMP.some(w => w.slug===e.ref.slug);
+    // 지울 때 근무지 되돌리기 (2026-11-23) — 이 미팅 때문에 바꿨을 수 있는 그날 팀 근무지를 평소로 되돌릴지 같은 창에서 묻는다
+    const delKey = e.type==='wishket' ? 'wp:'+e.ref.slug : e.type==='meeting' && !e.repeat ? 'ev:'+e.ref.id : null;
+    const delPrev = !delKey ? null : e.type==='wishket' ? { k, type:e.ref.meeting_type, autoOut:e.ref.autoOut, place:e.ref.place } : { k, type:e.ref.mt, autoOut:!!e.ref.autoOut, place:e.ref.place };
+    const delPlan = delPrev && (e.type!=='wishket' || wmEditable) ? planMeetingLoc(delPrev, null, locCtx(delKey)) : null;
+    const lrev = delPlan?.revert ? `<label class="hint" style="display:flex;gap:.45rem;align-items:center;margin-top:.5rem"><input type="checkbox" id="d-lrev" checked style="width:auto"> 지우면서 ${fmtDay(delPlan.revert.k)} 팀 근무지를 평소(${OFFICE_LABEL[delPlan.revert.usual]||delPlan.revert.usual})로 되돌리기 — 지금 ${OFFICE_LABEL[delPlan.revert.from]||delPlan.revert.from}</label>` : '';
     const actions = e.type==='wishket' ? (wmEditable
-        ? `<div class="hint">워크룸 프로젝트의 미팅입니다. 여기서 고쳐도 프로젝트에 그대로 반영됩니다. 담당 변경은 워크룸에서 합니다.</div><div class="actions"><button class="btn primary" id="d-wedit">수정</button><button class="btn danger" id="d-wdel">삭제</button><button class="btn" id="d-open">워크룸에서 열기</button><button class="btn ghost" id="d-close">닫기</button></div>`
+        ? `<div class="hint">워크룸 프로젝트의 미팅입니다. 여기서 고쳐도 프로젝트에 그대로 반영됩니다. 담당 변경은 워크룸에서 합니다.</div>${lrev}<div class="actions"><button class="btn primary" id="d-wedit">수정</button><button class="btn danger" id="d-wdel">삭제</button><button class="btn" id="d-open">워크룸에서 열기</button><button class="btn ghost" id="d-close">닫기</button></div>`
         : `<div class="hint">워크룸 프로젝트의 지난 미팅입니다. 결과 기록은 워크룸에서 합니다.</div><div class="actions"><button class="btn primary" id="d-open">워크룸에서 열기</button><button class="btn ghost" id="d-close">닫기</button></div>`)
       : !editable ? `<div class="actions"><button class="btn ghost" id="d-close">닫기</button></div>`
-      : `<div class="actions"><button class="btn primary" id="d-edit">수정</button>${e.repeat?`<button class="btn danger" id="d-skip">이 회차만 삭제</button><button class="btn danger" id="d-del">반복 전체 삭제</button>`:`<button class="btn danger" id="d-del">삭제</button>`}<button class="btn ghost" id="d-close">닫기</button></div>`;
+      : `${lrev}<div class="actions"><button class="btn primary" id="d-edit">수정</button>${e.repeat?`<button class="btn danger" id="d-skip">이 회차만 삭제</button><button class="btn danger" id="d-del">반복 전체 삭제</button>`:`<button class="btn danger" id="d-del">삭제</button>`}<button class="btn ghost" id="d-close">닫기</button></div>`;
     openSheet(`<h2><span class="tag" style="font-size:.7rem;padding:.1rem .4rem;border-radius:4px;background:color-mix(in srgb,${c} 22%,transparent);color:${c}">${t.label}</span>${esc(e.title)}<button class="x" aria-label="닫기">✕</button></h2>
       <dl class="kv">${rows.map(([a,b])=>`<dt>${a}</dt><dd>${esc(b)}</dd>`).join('')}</dl>${meta}${actions}`);
     $('d-close').onclick = closeSheet;
@@ -1233,7 +1296,10 @@ function mountCalendar(root, ctx) {
     const wd = $('d-wdel'); if (wd) wd.onclick = () => {
       if (!wd.dataset.armed) { wd.dataset.armed = '1'; wd.textContent = "한 번 더 누르면 삭제 · '지원 완료'로 돌아갑니다"; return; }
       if (!onWm) { toast('워크룸 화면에서만 삭제할 수 있어요'); return; }
-      run(async () => { const row = await onWm({ slug:e.ref.slug, action:'delete' }); if (!row) return; closeSheet(); render(); toast(`${e.title} 미팅을 지웠어요 — 지원 완료로 돌아갔습니다`); }); };
+      const rv = !!$('d-lrev')?.checked;
+      run(async () => { const row = await onWm({ slug:e.ref.slug, action:'delete' }); if (!row) return;
+        const lx = rv ? await applyLoc(delPlan, { revert:true }, delKey, e.title) : '';
+        closeSheet(); render(); toast(`${e.title} 미팅을 지웠어요 — 지원 완료로 돌아갔습니다${lx}`); }); };
     const sk = $('d-skip'); if (sk) sk.onclick = () => { const prev = [...(e.ref.exdates||[])], what = `${fmtD(k)} ${e.title}`;
       run(async () => {
         await db(() => sb.from(T.events).update({ exdates:[...prev, k], change_note:`이 회차 삭제 · ${what}` }).eq('id', e.ref.id));
@@ -1247,12 +1313,14 @@ function mountCalendar(root, ctx) {
       const tied = e.type==='leave' ? [] : directOf(e.ref).map(o => ({ member_id:o.person, work_date:o.date, loc:o.loc, branch:o.branch, note:o.note }));
       const kids = [];
       if (e.type!=='leave' && e.repeat) { const walk = id => manual.filter(x => x.parent===id).forEach(x => { if (!kids.includes(x.id)) { kids.push(x.id); walk(x.id); } }); walk(e.ref.id); }
+      const rv = !!$('d-lrev')?.checked && e.type==='meeting'; let extraLoc = '';
       run(async () => {
         await db(() => sb.from(tbl).update({ deleted_at:new Date().toISOString(), change_note:what }).eq('id', e.ref.id));
+        if (rv) extraLoc = await applyLoc(delPlan, { revert:true }, delKey, e.title);
         if (kids.length) await db(() => sb.from(tbl).update({ deleted_at:new Date().toISOString(), change_note:`${what} (나뉜 일정 함께)` }).in('id', kids));
         const extra = e.type==='leave' ? '' : await syncDirect(e.ref, null);
         await reload(tbl); closeSheet(); render();
-        toast(`삭제했어요${extra}`, () => run(async () => { await db(() => sb.from(tbl).update({ deleted_at:null, change_note:what }).eq('id', e.ref.id));
+        toast(`삭제했어요${extra}${extraLoc}`, () => run(async () => { await db(() => sb.from(tbl).update({ deleted_at:null, change_note:what }).eq('id', e.ref.id));
           if (kids.length) await db(() => sb.from(tbl).update({ deleted_at:null, change_note:`${what} (나뉜 일정 함께)` }).in('id', kids));
           for (const r of tied) await db(() => sb.from(T.member).upsert({ ...r, change_note:`${fmtD(r.work_date)} ${P(r.member_id).name} → ${r.branch} · 미팅 삭제 되돌림` }, { onConflict:'member_id,work_date' }));
           if (tied.length) await reload(T.member); await reload(tbl); toast('되돌렸어요'); }));
