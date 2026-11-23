@@ -458,7 +458,26 @@ Deno.test("수주 미팅: 프로젝트 탭에서 잡은 미팅 — 담당자에�
   eq(run(w1, { ...w1, current_status: "meeting_done", history: [{ note: "x" }] }).length, 0, "상태만");
   // 지난 미팅 기록 추가(과거 일시) → 없음
   eq(run({ ...w1, meeting_at: "2026-11-01T05:00:00Z", current_status: "meeting_done" }, { ...w1, meeting_at: "2026-11-02T05:00:00Z", current_status: "meeting_done" }).length, 0, "지난 미팅");
+  // 장소·끝나는 시간 (3단계)
+  const w3 = { ...w1, meeting_type: "inperson", meeting_place: "고객사 본사", meeting_end_at: "2026-11-20T06:00:00Z", meeting_auto_out: true };
+  eq(run(w0, w3).find((n) => n.member === M2)!.body, "11/20 (금) 14:00–15:00 · 대면 · 고객사 본사 · 김가람 추가", "장소·끝 시간 포함");
+  eq(run(w3, { ...w3, meeting_place: "시청역 회의실", meeting_auto_out: false }).find((n) => n.member === M2)!.body,
+    "11/20 (금) 14:00–15:00 · 장소 고객사 본사 → 시청역 회의실 · 우리 사무실 미팅으로 · 대면 · 김가람 변경", "장소·외부 여부 변경");
+  eq(run(w3, { ...w3, meeting_end_at: "2026-11-20T06:30:00Z" }).find((n) => n.member === M2)!.body, "끝 15:00 → 15:30 · 대면 · 고객사 본사 · 김가람 변경", "끝 시간만 변경");
   // 밤에는 보내지 않음
   s.audit = [{ id: 91, at: "", table_name: "wishket_projects", op: "UPDATE", actor_id: "u1", before: w0, after: w1 }];
   eq(change(s, "2026-11-04", "23:00").length, 0, "밤");
+});
+
+Deno.test("수주 미팅 외근: 우리 사무실로 고른 대면 미팅은 외근이 아니다(예전 기록은 장소 글자)", () => {
+  const s = base(); s.events = [];
+  const w0 = { slug: "w8", title: "창호 견적", meeting_at: null, meeting_type: null, assigned_main: M2, assigned_sub: null, current_status: "applied" };
+  const office = { ...w0, meeting_at: "2026-11-05T05:00:00Z", meeting_type: "inperson", meeting_auto_out: false, current_status: "interview" };
+  s.wishket = [office];
+  s.audit = [{ id: 95, at: "", table_name: "wishket_projects", op: "UPDATE", actor_id: "u1", before: w0, after: office }];
+  eq(change(s, "2026-11-04", "17:40").filter((n) => n.member === M3).length, 0, "사무실 미팅은 외근 알림 없음");
+  const legacy = { ...office, meeting_auto_out: null, meeting_place: "고객사" };
+  s.wishket = [legacy];
+  s.audit = [{ id: 96, at: "", table_name: "wishket_projects", op: "UPDATE", actor_id: "u1", before: w0, after: legacy }];
+  eq(change(s, "2026-11-04", "17:40").filter((n) => n.member === M3).map((n) => n.title), ["🚕 이나래 내일 14:00 외근 (창호 견적)"], "예전 기록: 장소에 사무실 이름이 없으면 외근");
 });

@@ -140,7 +140,7 @@ async function runScheduled() {
     must<any[]>(sb.from("calendar_events").select("*").is("deleted_at", null).lte("event_date", ahead)
       .or(`event_date.gte.${yday},and(repeat.not.is.null,or(repeat_until.is.null,repeat_until.gte.${yday}))`)),
     must<any[]>(sb.from("calendar_holidays").select("holiday_date,name")),
-    must<any[]>(sb.from("wishket_projects").select("slug,title,meeting_at,meeting_type,assigned_main,assigned_sub,current_status")
+    must<any[]>(sb.from("wishket_projects").select("slug,title,meeting_at,meeting_type,meeting_place,meeting_end_at,meeting_auto_out,assigned_main,assigned_sub,current_status")
       .gte("meeting_at", new Date(now - 864e5).toISOString()).lte("meeting_at", new Date(now + 15 * 864e5).toISOString())),
     readAudit(cursor),
   ]);

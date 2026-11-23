@@ -191,11 +191,13 @@ function mountCalendar(root, ctx) {
       main:p.assigned_main || null, sub:p.assigned_sub || null,
       status: p.current_status==='interview' && new Date(p.meeting_at).getTime() > now ? 'interview' : 'meeting_done',
       memo: latestMeetingMemo(p.history, p.meeting_at),
+      place: p.meeting_place || '', end: p.meeting_end_at ? toKst(p.meeting_end_at).slice(11,16) : '', autoOut: p.meeting_auto_out ?? null,
       client: c.isDirect?.(p) ? '직거래' : '위시켓' }));
     // 캘린더에서 수주 미팅을 잡을 수 있는 프로젝트 — 지원 완료·미팅 예정·미팅 완료 (2026-11-23)
     WMP = (c.projects||[]).filter(p => MEETING_STAGES[p.current_status]).map(p => ({ slug:p.slug, title:p.title || p.slug, status:p.current_status,
       main:p.assigned_main || null, sub:p.assigned_sub || null, meeting_at: p.meeting_at ? toKst(p.meeting_at) : null, meeting_type:p.meeting_type || null,
-      memo: latestMeetingMemo(p.history, p.meeting_at) }));
+      memo: latestMeetingMemo(p.history, p.meeting_at), place: p.meeting_place || '', end: p.meeting_end_at ? toKst(p.meeting_end_at).slice(11,16) : '',
+      autoOut: p.meeting_auto_out ?? (p.meeting_type==='inperson' ? !atOffice(p.meeting_place) : null) }));
     if (c.onWishketMeeting) onWm = c.onWishketMeeting;
     PROJECTS = (c.projects||[]).filter(p => secured.includes(p.current_status)).map(p => ({ slug:p.slug, title:p.title || p.slug }));
     if (mapChanged && loaded && !setupNeeded) loadAll(); else render();
@@ -293,12 +295,14 @@ function mountCalendar(root, ctx) {
   }
   // 대면 미팅 장소가 우리 사무실이면 외근이 아님
   const atOffice = place => !!place && ['패스트파이브','시청역','서울숲','사무실'].some(w => place.includes(w));
+  // 수주 미팅이 외근인지 — 직접 고른 값(meeting_auto_out)이 우선, 예전 기록은 장소 글자 (2026-11-23)
+  const wOut = w => w.meeting_type==='inperson' && (w.autoOut ?? !atOffice(w.place));
   // pid 가 k 날 사무실 밖 대면 미팅에 가는지. 수동 미팅은 '외근 표시' 체크한 것, 위시켓은 대면이면서 장소가 사무실이 아닌 것.
   // 대면 미팅 외근: 시간이 있는 미팅이면 그 시각(at)부터 외근이고 그 전엔 팀 근무지, 종일 미팅이면(at=null) 하루 전체 외근.
   //   여러 건이면 종일이 하나라도 있으면 종일, 아니면 가장 이른 시각 (2026-11-03 — 오전 출근 후 오후 미팅을 하루 외근으로 보던 문제)
   function outMeetingOf(pid, k){
     const hits = [];
-    WORKROOM.forEach(w => { if (w.meeting_type==='inperson' && w.meeting_at.slice(0,10)===k && [w.main,w.sub].includes(pid) && !atOffice(w.place)) hits.push({ title:w.title, at:w.meeting_at.slice(11,16), place:w.place||'', people:[w.main,w.sub].filter(Boolean) }); });
+    WORKROOM.forEach(w => { if (wOut(w) && w.meeting_at.slice(0,10)===k && [w.main,w.sub].includes(pid)) hits.push({ title:w.title, at:w.meeting_at.slice(11,16), place:w.place||'', people:[w.main,w.sub].filter(Boolean) }); });
     manual.forEach(m => { if (m.type==='meeting' && m.mt==='inperson' && m.autoOut && m.people.includes(pid) && occursOn(m,k)) hits.push({ title:m.title, at: m.allday || !m.start ? null : m.start, place:m.place||'', people:m.people }); });
     if (!hits.length) return null;
     return hits.find(h => h.at===null) || hits.sort((a,b) => a.at.localeCompare(b.at))[0];
@@ -351,7 +355,7 @@ function mountCalendar(root, ctx) {
     if (HOLIDAYS[k]) out.push({ id:'h'+k, type:'holiday', title:HOLIDAYS[k], allday:true, people:[] });
     // 휴가는 근무일에만 표시 (주말·공휴일 칸에는 안 뜸)
     if (!isOffDay(k)) leaves.forEach(l => { if (l.from<=k && l.to>=k) out.push({ id:l.id, type:'leave', title:`${P(l.person).name} ${LOC[l.kind].label}`, allday:true, people:[l.person], note:l.note, ref:l, kind:l.kind, by:l.by, at:l.at, editedBy:l.editedBy, editedAt:l.editedAt }); });
-    WORKROOM.forEach(w => { if (w.meeting_at.slice(0,10)===k) out.push({ id:'w'+w.slug, type:'wishket', title:w.title, start:w.meeting_at.slice(11,16), mt:w.meeting_type, people:[w.main, w.sub].filter(Boolean), place:w.place, done:w.status==='meeting_done', ref:w }); });
+    WORKROOM.forEach(w => { if (w.meeting_at.slice(0,10)===k) out.push({ id:'w'+w.slug, type:'wishket', title:w.title, start:w.meeting_at.slice(11,16), end:w.end||undefined, mt:w.meeting_type, people:[w.main, w.sub].filter(Boolean), place:w.place, done:w.status==='meeting_done', ref:w }); });
     const nowMin = new Date().getHours()*60 + new Date().getMinutes();
     manual.forEach(m => { if (occursOn(m,k)) out.push({ ...m, ref:m, done: m.type==='meeting' && (k<TK || (k===TK && !m.allday && m.start && (m.end ? toMin(m.end) : toMin(m.start)+60) < nowMin)) }); });
     return out.sort((a,b) => (a.allday?0:1)-(b.allday?0:1) || (a.start||'').localeCompare(b.start||''));
@@ -898,16 +902,18 @@ function mountCalendar(root, ctx) {
         <div class="hint" id="ev-warn"></div>`;
     } else if (type==='wmeet') {
       // 수주 미팅(2026-11-23): 워크룸 프로젝트의 미팅 일정을 여기서 잡는다 — 저장은 프로젝트 탭과 같은 규칙(src/meeting.mjs).
-      //   참석 = 프로젝트의 주·보조 담당, 장소·끝나는 시간은 프로젝트에 칸이 없어 아직 받지 않는다(3단계).
+      //   참석 = 프로젝트의 주·보조 담당. 장소·끝나는 시간·어디서(외부면 담당자 외근)는 캘린더 미팅과 같은 칸(3단계, 2026-11-23).
       const wp0 = pre.wm ? WMP.find(w => w.slug===pre.wm) : null;
       body = `<div class="fld"><label for="f-wp">프로젝트</label><select id="f-wp" ${pre.wmEdit?'disabled':''}><option value="">프로젝트를 고르세요</option>${WMP.map(w=>`<option value="${w.slug}" ${w.slug===pre.wm?'selected':''}>${esc(w.title)} · ${MEETING_STAGES[w.status]}</option>`).join('')}</select>
           <div class="hint" id="wp-info">${WMP.length ? '지원 완료·미팅 예정·미팅 완료 단계의 프로젝트입니다.' : '미팅을 잡을 프로젝트(지원 완료·미팅 예정·미팅 완료)가 없습니다.'}</div></div>
         <div class="fld"><label for="f-date">날짜</label><input id="f-date" type="date" value="${pre.wmEdit && wp0?.meeting_at ? wp0.meeting_at.slice(0,10) : date}"></div>
         <div class="fld"><div class="lblrow"><label for="f-start">시간</label><label class="tgl" hidden><input type="checkbox" id="f-allday" role="switch"><i></i>종일</label></div>
-          <div class="trow" id="timerow"><input id="f-start" class="tin" type="text" inputmode="none" autocomplete="off" value="${pre.wmEdit && wp0?.meeting_at ? wp0.meeting_at.slice(11,16) : '14:00'}" aria-label="시작 시간"><span id="end-sep" aria-hidden="true" hidden>–</span><input id="f-end" class="tin" type="text" inputmode="none" autocomplete="off" value="" aria-label="끝나는 시간" hidden><button type="button" class="addend" id="end-add" hidden>＋ 끝나는 시간</button><button type="button" class="addend x" id="end-del" aria-label="끝나는 시간 빼기" hidden>✕</button></div>
+          <div class="trow" id="timerow"><input id="f-start" class="tin" type="text" inputmode="none" autocomplete="off" value="${pre.wmEdit && wp0?.meeting_at ? wp0.meeting_at.slice(11,16) : '14:00'}" aria-label="시작 시간"><span id="end-sep" aria-hidden="true" hidden>–</span><input id="f-end" class="tin" type="text" inputmode="none" autocomplete="off" value="${pre.wmEdit && wp0?.end ? wp0.end : ''}" aria-label="끝나는 시간" hidden><button type="button" class="addend" id="end-add">＋ 끝나는 시간</button><button type="button" class="addend x" id="end-del" aria-label="끝나는 시간 빼기" hidden>✕</button></div>
           <div class="tpk" id="tpk" hidden></div>
           <div class="allday-box" id="allday-box" hidden>하루 종일</div></div>
         <div class="fld"><label>방식</label><div class="seg full" id="f-mt">${Object.entries(MT).map(([k,v])=>`<button type="button" data-mt="${k}" aria-pressed="${k===((pre.wmEdit && wp0?.meeting_type) || 'video')}">${v}</button>`).join('')}</div></div>
+        <div class="fld" id="autoout-row" hidden><label>어디서</label><div class="seg full" id="f-where"><button type="button" data-where="office" aria-pressed="${pre.wmEdit && wp0?.meeting_type==='inperson' && wp0.autoOut===false}">우리 사무실</button><button type="button" data-where="out" aria-pressed="${pre.wmEdit && wp0?.meeting_type==='inperson' && wp0.autoOut===true}">외부</button></div><div class="hint">외부면 담당자가 시작 시각부터 외근으로 보여요.</div></div>
+        <div class="fld"><div class="lblrow"><label for="f-place" id="f-place-lbl">장소</label><a class="maplink" id="f-pmap" target="_blank" rel="noopener" hidden></a></div><input id="f-place" placeholder="${PLACE_LBL[''][1]}" value="${pre.wmEdit && wp0 ? esc(wp0.place||'') : ''}"></div>
         <div class="fld"><label for="f-note">메모</label><textarea id="f-note" rows="2" placeholder="안건, 준비물">${pre.wmEdit && wp0 ? esc(wp0.memo||'') : ''}</textarea></div>
         <div class="hint">저장하면 워크룸 프로젝트의 미팅 일정으로 들어갑니다. 지원 완료·미팅 완료 건은 '미팅 예정'으로 바뀌고 담당자에게 알림이 갑니다. 담당 변경은 워크룸 프로젝트에서 합니다.</div>`;
     } else if (type==='loc') {
@@ -982,7 +988,9 @@ function mountCalendar(root, ctx) {
     if ($('f-end')) { showEnd(!!$('f-end').value);
       $('end-add').onclick = () => { const st = $('f-start').value; if (/^\d\d:\d\d$/.test(st)) { const mm = Math.min(toMin(st)+60, 23*60+59); $('f-end').value = `${pad(Math.floor(mm/60))}:${pad(mm%60)}`; } showEnd(true); openTpk($('f-end')); evWarn(); };
       $('end-del').onclick = () => { showEnd(false); closeTpk(); evWarn(); }; }
-    if (type==='wmeet') { $('end-add').hidden = true;   // 프로젝트에 끝나는 시간 칸이 아직 없다(3단계)
+    if (type==='wmeet') {
+      const syncWhere = () => { $('autoout-row').hidden = sh.querySelector('[data-mt][aria-pressed="true"]')?.dataset.mt !== 'inperson'; };
+      sh.querySelectorAll('[data-mt]').forEach(b => b.addEventListener('click', syncWhere)); syncWhere();
       const info = () => { const w = WMP.find(x => x.slug===$('f-wp').value), el = $('wp-info'); if (!w) return;
         const crew = [w.main, w.sub].filter(Boolean).map(x => P(x).name), cur = w.meeting_at ? `${fmtD(w.meeting_at.slice(0,10))} ${w.meeting_at.slice(11,16)}` : '';
         el.className = 'hint';
@@ -1021,7 +1029,7 @@ function mountCalendar(root, ctx) {
         openAdd('meeting', { date:$('f-date').value, people:who, where:'out', carry:{ place:$('f-branch').value.trim(), note:$('f-note')?.value.trim() } }); }; }
     // 미팅·일정 장소 칸: 방식에 맞춘 칸 제목·placeholder, 적은 값에 맞춘 확인 링크(지도 / 링크 열기)
     const syncPlace = () => { const inp = $('f-place'); if (!inp) return;
-      const mt = type==='meeting' ? (sh.querySelector('[data-mt][aria-pressed="true"]')?.dataset.mt || 'inperson') : '';
+      const mt = type==='meeting' || type==='wmeet' ? (sh.querySelector('[data-mt][aria-pressed="true"]')?.dataset.mt || 'inperson') : '';
       const [lbl, ph] = PLACE_LBL[mt]; $('f-place-lbl').textContent = lbl; inp.placeholder = ph;
       const val = inp.value.trim(), a = $('f-pmap'), url = isUrl(val);
       a.hidden = !val || (!url && mt==='video');
@@ -1081,9 +1089,13 @@ function mountCalendar(root, ctx) {
     if (!slug) { toast('프로젝트를 골라 주세요'); $('f-wp').focus(); return; }
     if (!date) { toast('날짜를 골라 주세요'); return; }
     if (!time) { toast('시작 시간을 넣어 주세요'); $('f-start').focus(); return; }
+    const end = $('f-end').hidden ? '' : normT($('f-end').value);
+    if (end && toMin(end) <= toMin(time)) { toast('종료 시간이 시작보다 늦어야 해요'); $('f-end').focus(); return; }
+    const where = $('sheet').querySelector('[data-where][aria-pressed="true"]')?.dataset.where;
+    if (type==='inperson' && !where) { toast('대면 미팅은 어디서 하는지 골라 주세요 (우리 사무실 / 외부)'); $('f-where')?.scrollIntoView({ block:'center', behavior:'smooth' }); return; }
     if (!onWm) { toast('워크룸 화면에서만 저장할 수 있어요'); return; }
     const w = WMP.find(x => x.slug===slug);
-    run(async () => { const row = await onWm({ slug, action:'save', date, time, type, memo:$('f-note').value });
+    run(async () => { const row = await onWm({ slug, action:'save', date, time, end, type, memo:$('f-note').value, place:$('f-place').value, autoOut: type==='inperson' ? where==='out' : null });
       if (!row) return;   // 실패 안내는 워크룸이 띄운다
       closeSheet(); render();
       toast(`${w?.title || '수주 미팅'} — ${fmtD(date)} ${time} 저장했어요`); });
@@ -1199,7 +1211,7 @@ function mountCalendar(root, ctx) {
       e.type==='wishket' ? ['경로', e.ref.client] : null,
       e.people.length ? [e.type==='wishket'?'담당':'참석', e.people.map(p=>P(p).name).join(', ') + (e.type==='wishket'&&e.people.length>1?' (주 · 보조)':'')] : null,
       e.repeat ? ['반복', '매주 '+WD[d.getDay()]+'요일'+(e.skipHoliday?' (공휴일 건너뜀)':'')+(e.until?` · ${fmtD(e.until)}까지`:'')] : null,
-      (e.type==='meeting' && e.autoOut) || (e.type==='wishket' && e.mt==='inperson' && !atOffice(e.place)) ? ['근무지', '참석자 외근으로 표시됨'] : e.type==='meeting' && e.mt==='inperson' ? ['근무지', '그대로 (우리 사무실 미팅)'] : null,
+      (e.type==='meeting' && e.autoOut) || (e.type==='wishket' && wOut(e.ref)) ? ['근무지', '참석자 외근으로 표시됨'] : e.type==='meeting' && e.mt==='inperson' ? ['근무지', '그대로 (우리 사무실 미팅)'] : null,
       e.type==='leave' ? ['종류', LOC[e.kind].full] : null,
       e.project ? ['프로젝트', PROJECTS.find(w=>w.slug===e.project)?.title || '연결된 프로젝트 없음 (삭제됨)'] : null,
       e.note ? ['메모', e.note] : null ].filter(Boolean);

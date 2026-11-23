@@ -65,6 +65,8 @@ export const briefTitle = (when: string, k: string, place: { text: string; code:
 const short = (t: string) => t.replace(/패스트파이브 /g, "").replace("재택근무", "재택");
 const placeIcon = (p: { code: string; half?: boolean; partial?: boolean }) => p.half ? "🌓" : p.partial ? "🏢" : ICON[p.code] || "📍";
 const atOffice = (p: unknown) => typeof p === "string" && ["패스트파이브", "시청역", "서울숲", "사무실"].some((w) => p.includes(w));
+// 수주 미팅이 외근인지 — 직접 고른 값(meeting_auto_out, 2026-11-23)이 우선, 예전 기록(NULL)은 장소 글자로 판단
+const wIsOut = (w: Row) => w.meeting_type === "inperson" && (w.meeting_auto_out ?? !atOffice(w.meeting_place));
 
 export function occursOn(e: Row, k: string, holidays: Record<string, string>): boolean {
   if (!e || (e.exdates || []).includes(k)) return false;
@@ -104,8 +106,8 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
   //   여러 건이면 종일이 하나라도 있으면 종일, 아니면 가장 이른 시각.
   function outMeeting(pid: string, k: string): { title: string; at: string | null } | null {
     const hits: { title: string; at: string | null }[] = [];
-    for (const w of s.wishket) if (w.meeting_type === "inperson" && w.meeting_at && kstKey(Date.parse(w.meeting_at)) === k
-      && [w.assigned_main, w.assigned_sub].includes(pid) && !atOffice(w.meeting_place)) hits.push({ title: w.title, at: kstHm(Date.parse(w.meeting_at)) });
+    for (const w of s.wishket) if (wIsOut(w) && w.meeting_at && kstKey(Date.parse(w.meeting_at)) === k
+      && [w.assigned_main, w.assigned_sub].includes(pid)) hits.push({ title: w.title, at: kstHm(Date.parse(w.meeting_at)) });
     for (const e of s.events) if (e.type === "meeting" && e.meeting_type === "inperson" && e.auto_out && (e.people || []).includes(pid) && occursOn(e, k, s.holidays))
       hits.push({ title: e.title, at: e.all_day || !e.start_time ? null : hm(e.start_time) });
     if (!hits.length) return null;
@@ -145,7 +147,7 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
     for (const w of s.wishket) {
       if (w.current_status !== "interview" || !w.meeting_at || ![w.assigned_main, w.assigned_sub].includes(pid)) continue;
       const ms = Date.parse(w.meeting_at); if (kstKey(ms) !== k) continue;
-      out.push({ id: `w:${w.slug}`, start: kstHm(ms), title: w.title || w.slug, label: "수주 미팅", place: MT[w.meeting_type] || "" });
+      out.push({ id: `w:${w.slug}`, start: kstHm(ms), title: w.title || w.slug, label: "수주 미팅", place: [MT[w.meeting_type] || "", w.meeting_place || ""].filter(Boolean).join(" · ") });
     }
     return out.sort((a, b) => a.start.localeCompare(b.start));
   }
@@ -260,7 +262,7 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
 
   // 미팅 때문에 그날 외근인지 (캘린더 대면 미팅 '외근 표시' · 위시켓 대면 미팅)
   const evOut = (e: Row | null | undefined, pid: string, k: string) => alive(e) && e!.type === "meeting" && e!.meeting_type === "inperson" && !!e!.auto_out && (e!.people || []).includes(pid) && occursOn(e!, k, s.holidays);
-  const wkOut = (w: Row | null | undefined, pid: string, k: string) => !!w && w.meeting_type === "inperson" && !!w.meeting_at && kstKey(Date.parse(w.meeting_at)) === k && [w.assigned_main, w.assigned_sub].includes(pid) && !atOffice(w.meeting_place);
+  const wkOut = (w: Row | null | undefined, pid: string, k: string) => !!w && wIsOut(w) && !!w.meeting_at && kstKey(Date.parse(w.meeting_at)) === k && [w.assigned_main, w.assigned_sub].includes(pid);
   // 미팅으로 누군가의 근무지가 바뀌었을 때 → to 에게 근무지 알림. 개인 근무지를 직접 정한 날은 그게 우선이라 보내지 않는다.
   function meetingLocNotes(a: Row, actor: string | undefined, pids: string[], to: string[], wasOut: (pid: string, k: string) => boolean, isOut: (pid: string, k: string) => boolean, why: (k: string) => string) {
     for (const pid of pids) for (const k of rangeDays()) {
@@ -345,7 +347,7 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       }
     } else if (a.table_name === "wishket_projects") {
       // 위시켓 미팅 일시·방식·담당이 바뀌면 → 담당자에게 일정 알림, 대면 미팅으로 누군가의 근무지(외근)가 바뀌면 → 담당자 뺀 나머지에게 근무지 알림
-      if (hadB && hasF && !["meeting_at", "meeting_type", "assigned_main", "assigned_sub", "deleted_at"].some((c) => (b[c] ?? null) !== (f[c] ?? null))) continue;
+      if (hadB && hasF && !["meeting_at", "meeting_type", "assigned_main", "assigned_sub", "deleted_at", "meeting_place", "meeting_end_at", "meeting_auto_out"].some((c) => (b[c] ?? null) !== (f[c] ?? null))) continue;
       const pids = [...new Set([b.assigned_main, b.assigned_sub, f.assigned_main, f.assigned_sub].filter(Boolean))] as string[];
       const title = (f.title || b.title || "수주 미팅") as string;
       // 수주 미팅 일정 알림 (2026-11-23 사용자 결정) — 캘린더 일정과 같은 규칙: 주·보조 담당자(바꾸기 전·후)에게, 바꾼 본인 빼고,
@@ -358,16 +360,22 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
       const bp = wasM ? crew(b) : [], fp = isM ? crew(f) : [];
       const moved = wasM && isM && Date.parse(b.meeting_at) !== Date.parse(f.meeting_at);
       const retyped = wasM && isM && (b.meeting_type || "") !== (f.meeting_type || "") && !!f.meeting_type;
-      const whenOf = (x: Row) => `${fmtD(kstKey(Date.parse(x.meeting_at)))} ${kstHm(Date.parse(x.meeting_at))}`;
+      const endOf = (x: Row) => x.meeting_end_at ? kstHm(Date.parse(x.meeting_end_at)) : "";
+      const reEnd = wasM && isM && !moved && endOf(b) !== endOf(f), rePlace = wasM && isM && (b.meeting_place || "") !== (f.meeting_place || "");
+      const reOut = wasM && isM && f.meeting_type === "inperson" && wIsOut(b) !== wIsOut(f);
+      const whenOf = (x: Row) => `${fmtD(kstKey(Date.parse(x.meeting_at)))} ${kstHm(Date.parse(x.meeting_at))}${endOf(x) ? "–" + endOf(x) : ""}`;
       for (const pid of [...new Set([...bp, ...fp])]) {
         if (pid === actor || !subsOf(pid).some((y) => y.change_alerts)) continue;
         const inB = bp.includes(pid), inF = fp.includes(pid);
-        if (inB && inF && !moved && !retyped) continue;
+        if (inB && inF && !moved && !retyped && !reEnd && !rePlace && !reOut) continue;
         const [ic, verb] = !inB ? ["➕", "추가"] : !inF ? ["✖️", isM ? "담당 빠짐" : "취소"] : ["✏️", "변경"];
         const cur = inF ? f : b; curDay = (inF ? fk : bk) as string;
-        const diff = verb === "변경" ? [moved ? `일시 ${whenOf(b)} → ${whenOf(f)}` : null, retyped ? `${MT[b.meeting_type] || "-"} → ${MT[f.meeting_type]}` : null] : [];
+        const diff = verb === "변경" ? [moved ? `일시 ${whenOf(b)} → ${whenOf(f)}` : null, reEnd ? `끝 ${endOf(b) || "없음"} → ${endOf(f) || "없음"}` : null,
+          retyped ? `${MT[b.meeting_type] || "-"} → ${MT[f.meeting_type]}` : null, rePlace ? `장소 ${b.meeting_place || "없음"} → ${f.meeting_place || "없음"}` : null,
+          reOut ? (wIsOut(f) ? "외부 미팅으로" : "우리 사무실 미팅으로") : null] : [];
+        const how = [retyped ? null : MT[cur.meeting_type], rePlace ? null : cur.meeting_place || null].filter(Boolean).join(" · ") || null;
         note(`c:${a.id}:wm:${pid}`, pid, `${ic} ${title} 수주 미팅 ${verb}`,
-          join(moved ? null : whenOf(cur), ...diff, retyped ? null : MT[cur.meeting_type], byWho(actor, undefined, verb === "담당 빠짐" ? "변경" : verb)), `wp:${f.slug || b.slug}`);
+          join(moved || reEnd ? null : whenOf(cur), ...diff, how, byWho(actor, undefined, verb === "담당 빠짐" ? "변경" : verb)), `wp:${f.slug || b.slug}`);
       }
       const crowd = new Set<string>([...bp, ...fp]);
       meetingLocNotes(a, actor, pids, watchers(actor).filter((t) => !crowd.has(t)), (pid, k) => hadB && wkOut(b, pid, k), (pid, k) => hasF && wkOut(f, pid, k),

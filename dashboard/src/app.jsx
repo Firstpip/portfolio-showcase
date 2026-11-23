@@ -4,7 +4,7 @@ import { runMove } from './move.mjs';
 import { freeMaintInfo, freeMaintDefault, freeMaintInitialChoice, freeMaintUntilToStore, addFreeDays, parseFreeDays, FREE_MAINT_PRESETS, FREE_MAINT_SMALL_LIMIT, FREE_MAINT_MAX_DAYS } from './maintenance.mjs';
 import { kstParts, kstToIso, kstDateStr, kstStartOfDay, isYmd, addDaysYmd, daysBetweenYmd, daysBetweenKst, scheduleFrom } from './dates.mjs';
 import { visitSessions, buildCross } from './visits.mjs';
-import { formatMeetingAt, sameInstant, latestMeetingMemo, meetingTypeLabel, planMeetingSave, planMeetingDelete } from './meeting.mjs';
+import { formatMeetingAt, sameInstant, latestMeetingMemo, meetingTypeLabel, planMeetingSave, planMeetingDelete, meetingIsOut } from './meeting.mjs';
 const { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } = React;
 
 // ─── Supabase ───
@@ -3060,6 +3060,10 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
   const isAddMode = project?.current_status === 'meeting_done' && !!project?.meeting_at;
   const [editMeeting, setEditMeeting] = useState(isAddMode ? '' : (project?.meeting_at || ''));   // ISO(UTC) 또는 ''
   const [editMeetingType, setEditMeetingType] = useState(isAddMode ? '' : (project?.meeting_type || ''));
+  // 장소·끝나는 시간·대면 외부 여부 (2026-11-23, 캘린더 미팅과 같은 칸)
+  const [editMeetingPlace, setEditMeetingPlace] = useState(isAddMode ? '' : (project?.meeting_place || ''));
+  const [editMeetingEnd, setEditMeetingEnd] = useState(isAddMode ? '' : (kstParts(project?.meeting_end_at)?.time || ''));   // 'HH:MM' 또는 ''
+  const [editMeetingOut, setEditMeetingOut] = useState(isAddMode || project?.meeting_type !== 'inperson' ? null : meetingIsOut(project));   // 대면: true=외부, false=우리 사무실
   const [editMemo, setEditMemo] = useState(project?.memo||'');
   const [memoChanged, setMemoChanged] = useState(false);
   const [editUrl, setEditUrl] = useState(project?.wishket_url||'');
@@ -3539,6 +3543,9 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
             const missing = [];
             if (!editMeeting) missing.push('일시');
             if (!editMeetingType) missing.push('종류');
+            if (editMeetingType === 'inperson' && editMeetingOut == null) missing.push('장소 구분(우리 사무실·외부)');
+            const startHm = editMeeting ? kstParts(editMeeting)?.time : '';
+            if (editMeetingEnd && startHm && editMeetingEnd <= startHm) missing.push('시작보다 늦은 끝나는 시간');
             const canSave = meetingChanged && missing.length === 0 && !saving;
             const formTitle = isAddMode ? '추가 미팅 등록' : currentMeeting ? '미팅 수정' : '미팅 등록';
             const bannerS = (kind) => ({
@@ -3548,7 +3555,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
             });
             const saveMeeting = () => {
               // 저장 규칙은 src/meeting.mjs — 캘린더 '수주 미팅'과 같은 계산 (2026-11-23)
-              const { entries, fields } = planMeetingSave(project, { iso:editMeeting, type:editMeetingType, memo:editMeetingMemo });
+              const endIso = editMeetingEnd ? kstToIso(kstParts(editMeeting).date, editMeetingEnd) : null;
+              const { entries, fields } = planMeetingSave(project, { iso:editMeeting, type:editMeetingType, memo:editMeetingMemo, place:editMeetingPlace, endIso, autoOut:editMeetingOut });
               onAppendHistory(project, entries, fields);
               setMeetingChanged(false);
             };
@@ -3557,7 +3565,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
               const { entries, fields, revert } = planMeetingDelete(project);
               const go = () => {
                 onAppendHistory(project, entries, fields);
-                setEditMeeting(''); setEditMeetingType(''); setEditMeetingMemo(''); setMeetingChanged(false);
+                setEditMeeting(''); setEditMeetingType(''); setEditMeetingMemo(''); setEditMeetingPlace(''); setEditMeetingEnd(''); setEditMeetingOut(null); setMeetingChanged(false);
               };
               const msg = `${formatMeetingAt(currentMeeting.meeting_at)} 일정을 삭제합니다.\n이력은 남고, 프로젝트의 미팅 일시만 비워집니다.` + (revert ? `\n\n일정이 없는 '미팅 예정'은 유지할 수 없어 상태가 '지원 완료'로 돌아갑니다. 새 일정을 잡으면 다시 '미팅 예정'으로 전환됩니다.` : '');
               if (onRequestConfirm) onRequestConfirm({ title: revert ? '미팅 일정 삭제 + 지원 완료로 되돌리기' : '미팅 일정 삭제', message: msg, confirmLabel:'삭제', destructive:true, onConfirm:go });
@@ -3577,9 +3585,10 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                         <div>
                           <div style={{ fontSize:'0.8rem', color:'var(--text2)', marginBottom:2 }}>{isDone?'최근 미팅':'다음 미팅'}</div>
                           <div style={{ fontSize:'0.9rem', fontWeight:600, color:isDone?'var(--blue)':'var(--yellow)' }}>
-                            {mt&&mt.emoji+' '}{mStr}
+                            {mt&&mt.emoji+' '}{mStr}{project.meeting_end_at && kstParts(project.meeting_end_at) ? `–${kstParts(project.meeting_end_at).time}` : ''}
                             {urg && <span style={{ marginLeft:8, padding:'0.1rem 0.4rem', borderRadius:4, fontSize:'0.75rem', background:'var(--surface-warning-mid)' }}>{urg==='today'?'오늘':'내일'}</span>}
                           </div>
+                          {(project.meeting_place || meetingIsOut(project)) && <div style={{ fontSize:'0.78rem', color:'var(--text2)', marginTop:2 }}>{[project.meeting_place, project.meeting_type==='inperson' ? (meetingIsOut(project) ? '외부 · 담당자 외근' : '우리 사무실') : null].filter(Boolean).join(' · ')}</div>}
                         </div>
                         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                           <span style={{ padding:'0.15rem 0.45rem', borderRadius:5, fontSize:'0.8rem', fontWeight:600, background:isDone?'var(--surface-info-mid)':'var(--surface-warning-mid)', color:isDone?'var(--blue)':'var(--yellow)' }}>{isDone?'완료':'예정'}</span>
@@ -3671,6 +3680,32 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, o
                         return (<button key={mt.key} role="radio" aria-checked={sel} onClick={() => { setEditMeetingType(sel ? '' : mt.key); setMeetingChanged(true); }} title={sel ? '다시 클릭하면 선택 해제' : undefined} style={{ flex:1, padding:'0.5rem', borderRadius:8, fontSize:'0.85rem', cursor:'pointer', border:sel?'2px solid var(--yellow)':'2px solid transparent', transition:'all 0.15s', background:sel?'color-mix(in srgb, var(--yellow) 19%, transparent)':'var(--surface2)', color:sel?'var(--yellow)':'var(--text2)', fontWeight:sel?600:400 }}>{mt.emoji} {mt.label}</button>);
                       })}
                     </div>
+                  </div>
+                  <div>
+                    <div style={labelS}>끝나는 시간 <span style={{ color:'var(--text2)', fontWeight:400 }}>(선택)</span></div>
+                    <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                      <input type="time" step={600} value={editMeetingEnd} disabled={saving || !editMeeting} aria-label="끝나는 시간"
+                        onChange={e => { setEditMeetingEnd(e.target.value); setMeetingChanged(true); }} style={{ ...inputS, maxWidth:160 }} />
+                      {editMeetingEnd && <button type="button" onClick={() => { setEditMeetingEnd(''); setMeetingChanged(true); }} style={{ ...btn.secondary({ padding:'0.35rem 0.6rem', margin:0 }) }}>지우기</button>}
+                    </div>
+                  </div>
+                  {editMeetingType === 'inperson' && (
+                    <div>
+                      <div style={labelS}>어디서 <span style={{ color:'var(--red)' }}>*</span></div>
+                      <div style={{ display:'flex', gap:6 }} role="radiogroup" aria-label="대면 미팅 장소 구분">
+                        {[[false,'우리 사무실'],[true,'외부']].map(([v,l]) => {
+                          const sel = editMeetingOut === v;
+                          return (<button key={l} role="radio" aria-checked={sel} onClick={() => { setEditMeetingOut(v); setMeetingChanged(true); }}
+                            style={{ flex:1, padding:'0.5rem', borderRadius:8, border:`1px solid ${sel?'var(--accent)':'var(--border)'}`, background: sel?'var(--surface-info-soft)':'var(--surface2)', color: sel?'var(--text)':'var(--text2)', fontWeight: sel?600:400, cursor:'pointer' }}>{l}</button>);
+                        })}
+                      </div>
+                      <div style={{ fontSize:'0.75rem', color:'var(--text2)', marginTop:4 }}>외부면 담당자가 시작 시각부터 외근으로 캘린더에 보입니다.</div>
+                    </div>
+                  )}
+                  <div>
+                    <div style={labelS}>{editMeetingType === 'video' ? '화상 링크' : '장소'} <span style={{ color:'var(--text2)', fontWeight:400 }}>(선택)</span></div>
+                    <input value={editMeetingPlace} disabled={saving} placeholder={editMeetingType === 'video' ? '예: Zoom·Meet 링크' : editMeetingType === 'phone' ? '예: 고객 담당자 연락처 메모' : '예: 고객사 본사, 시청역 회의실'}
+                      onChange={e => { setEditMeetingPlace(e.target.value); setMeetingChanged(true); }} style={inputS} />
                   </div>
                   <div>
                     <div style={labelS}>미팅 메모</div>
@@ -5360,10 +5395,10 @@ function App({ session }) {
             onShortcuts={() => setShowShortcuts(true)} onSignOut={signOutClean} />
         </>}
         onOpenProject={(slug) => { const p = data.find(d => d.slug === slug); navigate({ name:'table' }); if (p) setSelectedProject(p); }}
-        onWishketMeeting={async ({ slug, action, date, time, type, memo }) => {
+        onWishketMeeting={async ({ slug, action, date, time, end, type, memo, place, autoOut }) => {
           // 캘린더 '수주 미팅' — 프로젝트 탭과 같은 규칙(src/meeting.mjs)으로 프로젝트 미팅을 저장·삭제한다 (2026-11-23)
           const p = data.find(d => d.slug === slug); if (!p) { toast('프로젝트를 찾지 못했어요. 새로고침해 주세요','error'); return null; }
-          const plan = action === 'delete' ? planMeetingDelete(p) : planMeetingSave(p, { iso: kstToIso(date, time), type, memo });
+          const plan = action === 'delete' ? planMeetingDelete(p) : planMeetingSave(p, { iso: kstToIso(date, time), type, memo, place, endIso: end ? kstToIso(date, end) : null, autoOut });
           return handleAppendHistory(p, plan.entries, plan.fields);
         }}
       />

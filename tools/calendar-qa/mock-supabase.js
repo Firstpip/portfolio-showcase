@@ -181,9 +181,11 @@
       if (fn === 'append_project_history') {
         const r = DB.wishket_projects.find(x => x.slug === args.p_slug);
         if (!r) return { data:null, error:null };
-        const ALLOWED = ['assigned_manager','assigned_main','assigned_sub','meeting_at','meeting_type','current_status','start_date','deadline'];
+        const ALLOWED = ['assigned_manager','assigned_main','assigned_sub','meeting_at','meeting_type','meeting_place','meeting_end_at','meeting_auto_out','current_status','start_date','deadline'];
         const patch = { history: [...(r.history || []), ...(args.p_entries || []).map(e => ({ ...e, date: day(0) }))] };
         for (const k of ALLOWED) if (args.p_fields && k in args.p_fields) patch[k] = args.p_fields[k];
+        // 운영 RPC 와 같게(2026-11-23): meeting_at 을 바꾸면서 끝나는 시각을 안 보내면 비운다
+        if (args.p_fields && 'meeting_at' in args.p_fields && !('meeting_end_at' in args.p_fields)) patch.meeting_end_at = null;
         const up = await new Q('wishket_projects').update(patch).eq('slug', args.p_slug);
         if (up.error) return up;
         (window.__mock.appends ||= []).push(args);
