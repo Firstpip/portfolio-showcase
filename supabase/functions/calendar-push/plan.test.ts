@@ -269,15 +269,16 @@ Deno.test("변경: 대면 미팅 외근 — 비참석자에게 근무지 알림,
   eq(change(s, "2026-11-04", "17:40").filter((n) => n.member === M3).length, 0, "다음 근무일 뒤");
 });
 
-Deno.test("변경: 위시켓 대면 미팅 — 바꾼 사람 뺀 전원(담당자 포함), 무관한 수정 무시", () => {
+Deno.test("변경: 위시켓 대면 미팅 — 담당자는 일정 알림, 나머지는 외근 알림, 무관한 수정 무시", () => {
   const s = base(); s.events = [];
   const w0 = { slug: "w9", title: "창호 견적", meeting_at: null, meeting_type: "video", assigned_main: M2, assigned_sub: null, current_status: "applied" };
   const w1 = { ...w0, meeting_at: "2026-11-05T05:00:00Z", meeting_type: "inperson", current_status: "interview" };
   s.wishket = [w1];
   s.audit = [{ id: 71, at: "", table_name: "wishket_projects", op: "UPDATE", actor_id: "u1", before: w0, after: w1 }];
   const r = change(s, "2026-11-04", "17:40");
-  eq(r.map((n) => `${n.member}|${n.title}`).sort(), ["m2|🚕 이나래 내일 14:00 외근 (창호 견적)", "m3|🚕 이나래 내일 14:00 외근 (창호 견적)"], "담당자 포함");
-  eq(r[0].body, "11/5 (목) · 수주 미팅 · 김가람 변경", "본문");
+  eq(r.map((n) => `${n.member}|${n.title}`).sort(), ["m2|➕ 창호 견적 수주 미팅 추가", "m3|🚕 이나래 내일 14:00 외근 (창호 견적)"], "담당자 일정 · 나머지 외근");
+  eq(r.find((n) => n.member === M3)!.body, "11/5 (목) · 수주 미팅 · 김가람 변경", "외근 본문");
+  eq(r.find((n) => n.member === M2)!.body, "11/5 (목) 14:00 · 대면 · 김가람 추가", "일정 본문");
   s.audit = [{ id: 72, at: "", table_name: "wishket_projects", op: "UPDATE", actor_id: "u1", before: w1, after: { ...w1, title: "창호 견적 시스템" } }];
   eq(change(s, "2026-11-04", "17:40").length, 0, "무관한 수정");
 });
@@ -433,4 +434,31 @@ Deno.test("겹침: 18:00 전 변경은 같은 실행의 안내에 담기니 변�
   s.audit = [{ id: 98, at: iso("2026-11-03", "17:58:00"), table_name: "member_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { member_id: M1, work_date: "2026-11-04", loc: "out", branch: null } }];
   s.memberOverrides = [{ member_id: M1, work_date: "2026-11-04", loc: "out", branch: null }];
   eq(planNotifications(s, at("2026-11-03", "18:00")).notes.filter((n) => n.kind === "change").map((n) => n.member), [M3], "안내를 끈 사람에겐 변경 알림 그대로");
+});
+
+// ───────── 수주 미팅 일정 알림 (2026-11-23) ─────────
+Deno.test("수주 미팅: 프로젝트 탭에서 잡은 미팅 — 담당자에게 추가·변경·취소, 본인·무관한 저장·지난 미팅은 없음", () => {
+  const s = base(); s.events = [];
+  const w0 = { slug: "w7", title: "호텔 예약 앱", meeting_at: null, meeting_type: null, assigned_main: M2, assigned_sub: M3, current_status: "applied" };
+  const w1 = { ...w0, meeting_at: "2026-11-20T05:00:00Z", meeting_type: "video", current_status: "interview" };
+  const run = (b: unknown, f: unknown, actor = "u1", op = "UPDATE") => { s.audit = [{ id: 90, at: "", table_name: "wishket_projects", op, actor_id: actor, before: b, after: f }]; return change(s, "2026-11-04", "11:00"); };
+  // 등록 — 먼 날짜 화상 미팅도 담당자 둘에게
+  let r = run(w0, w1);
+  eq(r.map((n) => `${n.member}|${n.title}|${n.body}`).sort(), ["m2|➕ 호텔 예약 앱 수주 미팅 추가|11/20 (금) 14:00 · 화상 · 김가람 추가", "m3|➕ 호텔 예약 앱 수주 미팅 추가|11/20 (금) 14:00 · 화상 · 김가람 추가"], "등록");
+  // 담당자 본인이 등록 → 본인은 빼고 보조에게만
+  eq(run(w0, w1, "u2").map((n) => n.member), [M3], "본인 제외");
+  // 일시·방식 변경
+  const w2 = { ...w1, meeting_at: "2026-11-23T01:00:00Z", meeting_type: "phone" };
+  eq(run(w1, w2).find((n) => n.member === M2)!.body, "일시 11/20 (금) 14:00 → 11/23 (월) 10:00 · 화상 → 전화 · 김가람 변경", "변경");
+  // 삭제(지원 완료로 되돌림)
+  eq(tb(run(w1, { ...w1, meeting_at: null, meeting_type: null, current_status: "applied" }).find((n) => n.member === M2)!), ["✖️ 호텔 예약 앱 수주 미팅 취소", "11/20 (금) 14:00 · 화상 · 김가람 취소"], "취소");
+  // 담당 교체: 보조 박다온 → 김가람(바꾼 본인이라 제외) — 박다온에게 '담당 빠짐'
+  eq(tb(run(w1, { ...w1, assigned_sub: M1 }, "u2").find((n) => n.member === M3)!), ["✖️ 호텔 예약 앱 수주 미팅 담당 빠짐", "11/20 (금) 14:00 · 화상 · 이나래 변경"], "담당 빠짐");
+  // 상태만 바뀜·메모만 바뀜 → 없음
+  eq(run(w1, { ...w1, current_status: "meeting_done", history: [{ note: "x" }] }).length, 0, "상태만");
+  // 지난 미팅 기록 추가(과거 일시) → 없음
+  eq(run({ ...w1, meeting_at: "2026-11-01T05:00:00Z", current_status: "meeting_done" }, { ...w1, meeting_at: "2026-11-02T05:00:00Z", current_status: "meeting_done" }).length, 0, "지난 미팅");
+  // 밤에는 보내지 않음
+  s.audit = [{ id: 91, at: "", table_name: "wishket_projects", op: "UPDATE", actor_id: "u1", before: w0, after: w1 }];
+  eq(change(s, "2026-11-04", "23:00").length, 0, "밤");
 });

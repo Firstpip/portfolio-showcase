@@ -344,11 +344,33 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
         for (const w of to) note(`c:${a.id}:${w}:${x.member_id}`, w, `🌴 ${memberName(x.member_id)} ${lb(f)} 변경`, join(changes, byWho(actor, x.member_id)), `leave:${f.id}`);
       }
     } else if (a.table_name === "wishket_projects") {
-      // 위시켓 대면 미팅 일시·방식·담당이 바뀌어 누군가의 근무지(외근)가 바뀌면 → 바꾼 사람 뺀 전원 (일정 알림 대상이 아니라 담당자도 받음)
-      if (hadB && hasF && !["meeting_at", "meeting_type", "assigned_main", "assigned_sub"].some((c) => (b[c] ?? null) !== (f[c] ?? null))) continue;
+      // 위시켓 미팅 일시·방식·담당이 바뀌면 → 담당자에게 일정 알림, 대면 미팅으로 누군가의 근무지(외근)가 바뀌면 → 담당자 뺀 나머지에게 근무지 알림
+      if (hadB && hasF && !["meeting_at", "meeting_type", "assigned_main", "assigned_sub", "deleted_at"].some((c) => (b[c] ?? null) !== (f[c] ?? null))) continue;
       const pids = [...new Set([b.assigned_main, b.assigned_sub, f.assigned_main, f.assigned_sub].filter(Boolean))] as string[];
       const title = (f.title || b.title || "수주 미팅") as string;
-      meetingLocNotes(a, actor, pids, watchers(actor), (pid, k) => hadB && wkOut(b, pid, k), (pid, k) => hasF && wkOut(f, pid, k),
+      // 수주 미팅 일정 알림 (2026-11-23 사용자 결정) — 캘린더 일정과 같은 규칙: 주·보조 담당자(바꾸기 전·후)에게, 바꾼 본인 빼고,
+      //   오늘 이후 1년 안 미팅만. 담당자는 일정 알림을 받으므로 아래 근무지(외근) 알림에서는 빠진다(캘린더 일정의 참석자와 같다).
+      //   지난 미팅 기록 추가·상태만 바뀐 저장·메모 수정은 미팅 일시·방식·담당이 그대로라 보내지 않는다.
+      const mDay = (x: Row, has: boolean) => has && x.meeting_at && !x.deleted_at ? kstKey(Date.parse(x.meeting_at)) : null;
+      const inEvW = (k: string | null) => !!k && k >= today && k <= addDay(today, EV_DAYS);
+      const bk = mDay(b, hadB), fk = mDay(f, hasF), wasM = inEvW(bk), isM = inEvW(fk);
+      const crew = (x: Row) => [x.assigned_main, x.assigned_sub].filter(Boolean) as string[];
+      const bp = wasM ? crew(b) : [], fp = isM ? crew(f) : [];
+      const moved = wasM && isM && Date.parse(b.meeting_at) !== Date.parse(f.meeting_at);
+      const retyped = wasM && isM && (b.meeting_type || "") !== (f.meeting_type || "") && !!f.meeting_type;
+      const whenOf = (x: Row) => `${fmtD(kstKey(Date.parse(x.meeting_at)))} ${kstHm(Date.parse(x.meeting_at))}`;
+      for (const pid of [...new Set([...bp, ...fp])]) {
+        if (pid === actor || !subsOf(pid).some((y) => y.change_alerts)) continue;
+        const inB = bp.includes(pid), inF = fp.includes(pid);
+        if (inB && inF && !moved && !retyped) continue;
+        const [ic, verb] = !inB ? ["➕", "추가"] : !inF ? ["✖️", isM ? "담당 빠짐" : "취소"] : ["✏️", "변경"];
+        const cur = inF ? f : b; curDay = (inF ? fk : bk) as string;
+        const diff = verb === "변경" ? [moved ? `일시 ${whenOf(b)} → ${whenOf(f)}` : null, retyped ? `${MT[b.meeting_type] || "-"} → ${MT[f.meeting_type]}` : null] : [];
+        note(`c:${a.id}:wm:${pid}`, pid, `${ic} ${title} 수주 미팅 ${verb}`,
+          join(moved ? null : whenOf(cur), ...diff, retyped ? null : MT[cur.meeting_type], byWho(actor, undefined, verb === "담당 빠짐" ? "변경" : verb)), `wp:${f.slug || b.slug}`);
+      }
+      const crowd = new Set<string>([...bp, ...fp]);
+      meetingLocNotes(a, actor, pids, watchers(actor).filter((t) => !crowd.has(t)), (pid, k) => hadB && wkOut(b, pid, k), (pid, k) => hasF && wkOut(f, pid, k),
         () => "수주 미팅");
     } else if (a.table_name === "team_work_routines") {
       // 바꾸기 전·후 패턴으로 앞으로 8일(근무일, 그날만 정한 팀 근무지가 없는 날)의 팀 근무지를 각각 계산해 달라지는 날만 알린다 (2026-11-05)
