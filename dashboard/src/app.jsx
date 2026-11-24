@@ -6,6 +6,7 @@ import { kstParts, kstToIso, kstDateStr, kstStartOfDay, isYmd, addDaysYmd, daysB
 import { visitSessions, buildCross } from './visits.mjs';
 import { formatMeetingAt, sameInstant, latestMeetingMemo, meetingTypeLabel, planMeetingSave, planMeetingDelete, meetingIsOut } from './meeting.mjs';
 import { planMeetingLoc, applyMeetingLoc, teamAt, officeOfPlace, changeText, fmtDay, OFFICE_LABEL } from './meetloc.mjs';
+import { PAID_TERM_PRESETS, PAID_MAX_MONTHS, paidUntil, parsePaidMonths, feeLabel, feeOther, termLabel, suggestedAnnual, paidMaintInfo, paidBadge, defaultPaidStart, planPaidMaint, renewalDraft } from './paidmaint.mjs';
 const { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } = React;
 
 // ─── Supabase ───
@@ -73,10 +74,12 @@ const ACTIVE_WORK = ['won','in_progress']; // 상단 '내 담당 프로젝트' �
 const POST_DEV = ['maintenance_free','maintenance_paid','delivered','settled']; // 개발 종료 후 상태 — 주차 진행/마감 초과 등 실시간 일정 표시 숨김
 // 목록의 날짜 칸은 상태마다 다른 날짜를 보인다 (2026-11-06 사용자 요청):
 //   개발 중 → 개발완료(예정)일(마감일) · 유지보수(무상) → 무상 만료일(src/maintenance.mjs) · 그 밖의 개발 종료 → 개발완료일 · 나머지 → 미팅일
-const dateColKind = (status) => status === 'in_progress' ? 'dev_due' : status === 'maintenance_free' ? 'free_until' : POST_DEV.includes(status) ? 'dev_done' : 'meeting';
-const dateColLabel = (filter) => filter === 'all' ? '일정' : ({ dev_due:'개발완료일', free_until:'무상 만료일', dev_done:'개발완료일', meeting:'미팅일' })[dateColKind(filter)];
+// 유지보수(유상)는 개발완료일 대신 유지보수 계약 만료일 (2026-11-24, src/paidmaint.mjs)
+const dateColKind = (status) => status === 'in_progress' ? 'dev_due' : status === 'maintenance_free' ? 'free_until' : status === 'maintenance_paid' ? 'paid_until' : POST_DEV.includes(status) ? 'dev_done' : 'meeting';
+const dateColLabel = (filter) => filter === 'all' ? '일정' : ({ dev_due:'개발완료일', free_until:'무상 만료일', paid_until:'계약만료일', dev_done:'개발완료일', meeting:'미팅일' })[dateColKind(filter)];
+const paidMaintOf = (r) => paidMaintInfo(r, kstDateStr());
 const freeMaintOf = (r) => freeMaintInfo(r, parseBudgetNum(r.budget), kstDateStr());
-const dateSortValue = (r) => { const k = dateColKind(r.current_status); return (k === 'free_until' ? freeMaintOf(r).until : k === 'meeting' ? r.meeting_at : r.deadline) || ''; };
+const dateSortValue = (r) => { const k = dateColKind(r.current_status); return (k === 'free_until' ? freeMaintOf(r).until : k === 'paid_until' ? paidMaintOf(r).until : k === 'meeting' ? r.meeting_at : r.deadline) || ''; };
 // 무상 만료일 배지 문구 — 기간 중엔 '무상 중', 30일 이내 '만료 임박', 지나면 '무상 만료' (2026-11-10)
 const freeMaintBadge = (left) => left < 0 ? '무상 만료' : left <= 30 ? '만료 임박' : '무상 중';
 // 남은 날: D-n · 오늘 · n일 지남(초과)
@@ -614,6 +617,66 @@ function ConfirmModal({ state, onCancel }) {
   );
 }
 
+// ─── 유상 유지보수 계약 입력 (2026-11-24) ───
+// 상태 전환 확인 창과 정보 탭이 같은 입력을 쓴다. v = { start, choice:'12'|'24'|'other', other, fee, unit }
+const paidDraftOf = (p, today, freeUntil) => {
+  const i = paidMaintInfo(p, today);
+  const months = i.months, preset = months && PAID_TERM_PRESETS.includes(months);
+  return { start: i.start || defaultPaidStart({ freeUntil, devDone: p?.deadline, today }), choice: months ? (preset ? String(months) : 'other') : '12',
+    other: months && !preset ? String(months) : '', fee: i.fee != null ? String(i.fee) : '', unit: i.unit || 'month' };
+};
+const paidMonthsOf = (v) => v.choice === 'other' ? parsePaidMonths(v.other) : Number(v.choice);
+const paidPlanOf = (v) => planPaidMaint({ start: v.start, months: paidMonthsOf(v) ?? v.other, fee: v.fee, unit: v.unit });
+function PaidMaintFields({ v, set, devManwon, showErrors }) {
+  const plan = paidPlanOf(v), err = plan.errors || {}, months = paidMonthsOf(v);
+  const until = paidUntil(v.start, months);
+  const sug = suggestedAnnual(devManwon);
+  const lbl = { fontSize:'0.8rem', fontWeight:600, color:'var(--text)', marginBottom:6 };
+  const inp = { width:'100%', padding:'0.5rem 0.7rem', borderRadius:8, border:'1px solid var(--border)', background:'var(--surface2)', color:'var(--text)', fontSize:'0.9rem', outline:'none', fontFamily:'inherit', boxSizing:'border-box' };
+  const bad = (k) => showErrors && err[k];
+  const pill = (on) => ({ flex:'1 1 0', minWidth:0, padding:'0.5rem 0.4rem', borderRadius:10, cursor:'pointer', textAlign:'center', fontSize:'0.88rem', fontWeight:on?600:500, color:'var(--text)',
+    border:`2px solid ${on ? 'var(--accent)' : 'var(--border)'}`, background: on ? 'var(--surface-info-mid)' : 'var(--surface2)' });
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+      <div>
+        <div style={lbl}>계약 체결일 <span style={{ color:'var(--red)' }}>*</span></div>
+        <input type="date" aria-label="유지보수 계약 체결일" value={v.start} onChange={e => set({ start:e.target.value })} style={{ ...inp, borderColor: bad('start') ? 'var(--red)' : 'var(--border)' }} />
+        {bad('start') && <div style={{ fontSize:'0.75rem', marginTop:5, color:'var(--red)' }}>{err.start}</div>}
+      </div>
+      <div>
+        <div style={lbl}>계약 기간 <span style={{ color:'var(--red)' }}>*</span></div>
+        <div role="radiogroup" aria-label="유지보수 계약 기간" style={{ display:'flex', gap:8 }}>
+          {PAID_TERM_PRESETS.map(m => <button key={m} type="button" role="radio" aria-checked={v.choice === String(m)} onClick={() => set({ choice:String(m) })} style={pill(v.choice === String(m))}>{termLabel(m)}</button>)}
+          <button type="button" role="radio" aria-checked={v.choice === 'other'} onClick={() => set({ choice:'other' })} style={pill(v.choice === 'other')}>기타</button>
+        </div>
+        {v.choice === 'other' && (
+          <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:8 }}>
+            <input type="text" inputMode="numeric" aria-label="계약 기간(개월)" placeholder="예: 6, 18" value={v.other} onChange={e => set({ other:e.target.value })} style={{ ...inp, maxWidth:110, borderColor: bad('months') ? 'var(--red)' : 'var(--border)' }} />
+            <span style={{ fontSize:'0.85rem', color:'var(--text2)' }}>개월 (1~{PAID_MAX_MONTHS})</span>
+          </div>
+        )}
+        <div style={{ fontSize:'0.8rem', marginTop:6, color: until ? 'var(--text)' : bad('months') ? 'var(--red)' : 'var(--text2)' }}>
+          {until ? <>계약 만료일 <b>{until}</b> <span style={{ color:'var(--text2)' }}>· {v.start} ~ {until} ({termLabel(months)}, 체결일 포함)</span></> : bad('months') ? err.months : '체결일과 기간을 정하면 만료일이 자동으로 계산됩니다'}
+        </div>
+      </div>
+      <div>
+        <div style={lbl}>유지보수 계약대금 <span style={{ color:'var(--red)' }}>*</span> <span style={{ fontWeight:400, color:'var(--text2)' }}>공급가 · 부가세 별도</span></div>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <div role="radiogroup" aria-label="계약대금 단위" style={{ display:'flex', gap:6, flexShrink:0 }}>
+            {[['month','월'],['year','연']].map(([k,l]) => <button key={k} type="button" role="radio" aria-checked={v.unit === k} onClick={() => set({ unit:k })} style={{ ...pill(v.unit === k), flex:'0 0 auto', padding:'0.5rem 0.9rem' }}>{l}</button>)}
+          </div>
+          <input type="text" inputMode="decimal" aria-label="유지보수 계약대금(만원)" placeholder={v.unit === 'year' ? '예: 360' : '예: 30'} value={v.fee} onChange={e => set({ fee:e.target.value })} style={{ ...inp, flex:1, borderColor: bad('fee') ? 'var(--red)' : 'var(--border)' }} />
+          <span style={{ fontSize:'0.85rem', color:'var(--text2)', flexShrink:0 }}>만원</span>
+        </div>
+        <div style={{ fontSize:'0.75rem', marginTop:5, color: bad('fee') ? 'var(--red)' : 'var(--text2)', lineHeight:1.5 }}>
+          {bad('fee') ? err.fee : plan.fields ? `${feeLabel(plan.fields.paid_maint_fee, v.unit)} = ${feeOther(plan.fields.paid_maint_fee, v.unit)}` : null}
+          {!bad('fee') && <>{plan.fields ? ' · ' : ''}사내 기준 연 {sug.toLocaleString('ko-KR')}만원(월 {Math.round(sug / 12 * 10) / 10}만원) — 개발 계약금액 10%, 연 180만 원 하한 <button type="button" onClick={() => set(v.unit === 'year' ? { fee:String(sug) } : { fee:String(Math.round(sug / 12 * 10) / 10) })} style={{ border:'none', background:'none', padding:0, color:'var(--accent)', cursor:'pointer', fontSize:'inherit' }}>넣기</button></>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── DevDoneModal ───
 // '개발 중' → 유지보수(무상)·유지보수(유상)·납품 완료로 넘길 때 실제 개발 완료일을 한 번 더 확인받는다 (2026-11-10).
 // 확인하면 그 날짜가 마감일(deadline) 칸에 들어가 '개발완료일'이 된다(예정일 → 실제 완료일).
@@ -638,23 +701,32 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
   }, [onCancel]);
   const sm = STATUS_META[newStatus];
   const isFree = newStatus === 'maintenance_free';
-  const doneOk = isYmd(done) && done <= today && (!project.start_date || done >= project.start_date);
+  // '개발 중'에서 넘길 때만 개발 완료일을 묻는다. 유지보수(유상)로 갈 때는 어디서 오든 계약(체결일·기간·대금)을 필수로 받는다 (2026-11-24)
+  const showDev = project.current_status === 'in_progress';
+  const isPaid = newStatus === 'maintenance_paid';
+  const [paid, setPaid0] = useState(() => paidDraftOf(project, today, freeMaintInfo(project, manwon, today).until));
+  const [paidTried, setPaidTried] = useState(false);
+  const setPaid = (patch) => setPaid0(v => ({ ...v, ...patch }));
+  const paidPlan = isPaid ? paidPlanOf(paid) : null;
+  const doneOk = !showDev || (isYmd(done) && done <= today && (!project.start_date || done >= project.start_date));
   const days = choice === 'other' ? parseFreeDays(other) : choice ? Number(choice) : null;
   const otherErr = choice === 'other' && other.trim() !== '' && days == null ? `1~${FREE_MAINT_MAX_DAYS.toLocaleString('ko-KR')} 사이의 정수(일)로 입력하세요` : '';
   const until = !isFree || !doneOk || days == null ? null : addFreeDays(done, days);
-  const ok = doneOk && (!isFree || !!until);
+  const ok = doneOk && (!isFree || !!until) && (!isPaid || !!paidPlan?.fields);
   const doneErr = !isYmd(done) ? '날짜를 입력하세요' : done > today ? '오늘 이후 날짜는 완료일이 될 수 없습니다'
     : project.start_date && done < project.start_date ? `착수일(${project.start_date})보다 앞설 수 없습니다` : '';
   const submit = () => {
+    if (isPaid && !paidPlan?.fields) { setPaidTried(true); return; }
     if (!ok) return;
-    const extra = { fields: { deadline: done }, entry: { dev_done: done } };
-    let noteAdd = `개발완료일 ${done}`;
+    const extra = showDev ? { fields: { deadline: done }, entry: { dev_done: done } } : {};
+    let noteAdd = showDev ? `개발완료일 ${done}` : '';
     if (isFree) {
       const store = freeMaintUntilToStore(done, days, def.days);
       if (store === undefined) return;   // ok 가 막지만 한 번 더 — 잘못된 값으로 저장하지 않는다
       if (store !== (project.free_maint_until || null)) extra.preFields = { free_maint_until: store };
       noteAdd += ` · 무상 ${days}일 ~${until}`;
     }
+    if (isPaid) { extra.preFields = { ...(extra.preFields || {}), ...paidPlan.fields }; noteAdd = [noteAdd, paidPlan.summary].filter(Boolean).join(' · '); }
     extra.noteAdd = noteAdd;
     onConfirm(extra);
   };
@@ -677,13 +749,14 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
       <div ref={trapRef} role="dialog" aria-modal="true" aria-label="개발 완료일 확인" onClick={e => e.stopPropagation()} style={{
         background:'var(--surface)', borderRadius:14, width:'100%', maxWidth:440, border:'1px solid var(--border)', animation:'slideUp 0.2s ease-out', boxShadow:'0 20px 50px var(--shadow)', overflow:'hidden' }}>
         <div style={{ padding:'1.1rem 1.3rem 0.4rem' }}>
-          <div style={{ fontSize:'1rem', fontWeight:600, color:'var(--text)', marginBottom:4 }}>개발 완료일 확인</div>
+          <div style={{ fontSize:'1rem', fontWeight:600, color:'var(--text)', marginBottom:4 }}>{showDev ? (isPaid ? '개발 완료일 · 유지보수 계약' : '개발 완료일 확인') : '유상 유지보수 계약'}</div>
           <div style={{ fontSize:'0.82rem', color:'var(--text2)', lineHeight:1.55 }}>
-            '{sm.label}'(으)로 넘기기 전에 실제로 개발이 끝난 날을 정해 주세요. 이 날짜가 개발완료일로 저장되고{isFree ? ', 무상 유지보수 기간도 이날부터 계산됩니다' : ''}.
+            {showDev ? <>'{sm.label}'(으)로 넘기기 전에 실제로 개발이 끝난 날을 정해 주세요. 이 날짜가 개발완료일로 저장되고{isFree ? ', 무상 유지보수 기간도 이날부터 계산됩니다' : ''}.</> : null}
+            {isPaid ? <>{showDev ? ' ' : ''}유상 유지보수 계약의 체결일·기간·계약대금을 정해 주세요. 목록에는 개발완료일 대신 계약 만료일이, 금액 칸에는 유지보수 계약대금이 보입니다.</> : null}
           </div>
         </div>
-        <div style={{ padding:'0.8rem 1.3rem 0.2rem', display:'flex', flexDirection:'column', gap:14 }}>
-          <div>
+        <div style={{ padding:'0.8rem 1.3rem 0.2rem', display:'flex', flexDirection:'column', gap:14, maxHeight:'70vh', overflowY:'auto' }}>
+          {showDev && (<div>
             <div style={lbl}>개발 완료일</div>
             <input type="date" aria-label="개발 완료일" autoFocus value={done} max={today} min={project.start_date || undefined} onChange={e => setDone(e.target.value)}
               style={{ ...inp, borderColor: doneErr ? 'var(--red)' : 'var(--border)' }} />
@@ -691,7 +764,7 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
               {doneErr || <>예정 마감일 {project.deadline || '없음'}{project.start_date ? ` · 착수 ${project.start_date}` : ''}{project.deadline && project.deadline !== done && project.deadline <= today
                 ? <> · <button type="button" onClick={() => setDone(project.deadline)} style={{ border:'none', background:'none', padding:0, color:'var(--accent)', cursor:'pointer', fontSize:'inherit', textDecoration:'underline' }}>예정일로 맞추기</button></> : null}</>}
             </div>
-          </div>
+          </div>)}
           {isFree && (
             <div>
               <div style={lbl}>무상 유지보수 기간</div>
@@ -720,9 +793,15 @@ function DevDoneModal({ project, newStatus, onCancel, onConfirm }) {
             </div>
           )}
         </div>
+        {isPaid && (
+          <div style={{ padding:'0.4rem 1.3rem 0.2rem' }}>
+            {showDev && <div style={{ fontSize:'0.85rem', fontWeight:600, color:'var(--text)', margin:'0.4rem 0 0.6rem', borderTop:'1px solid var(--border)', paddingTop:'0.8rem' }}>유상 유지보수 계약</div>}
+            <PaidMaintFields v={paid} set={setPaid} devManwon={manwon} showErrors={paidTried || !!(paid.fee || paid.other)} />
+          </div>
+        )}
         <div style={{ display:'flex', gap:8, padding:'1rem 1.1rem 1rem', justifyContent:'flex-end' }}>
           <button onClick={onCancel} style={btn.secondary({ padding:'0.55rem 1.1rem' })}>취소</button>
-          <button onClick={submit} disabled={!ok}
+          <button onClick={submit} disabled={!doneOk || (isFree && !until)}
             style={btn.primary({ padding:'0.55rem 1.2rem', background: ok ? 'var(--accent)' : 'var(--border)', color: ok ? '#fff' : 'var(--text2)', cursor: ok ? 'pointer' : 'not-allowed' })}>
             {sm.emoji} {sm.label}(으)로 변경
           </button>
@@ -3057,6 +3136,10 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, m
   // 무상 유지보수 만료일 — 비워 두면 회사 기준 자동 계산(src/maintenance.mjs), 입력하면 그 날짜가 우선 (2026-11-06)
   const [editFreeUntil, setEditFreeUntil] = useState(project?.free_maint_until||'');
   const [freeUntilChanged, setFreeUntilChanged] = useState(false);
+  // 유상 유지보수 계약 (2026-11-24) — 정보 탭에서 고치거나 갱신
+  const [editPaid, setEditPaid0] = useState(() => paidDraftOf(project || {}, kstDateStr(), project ? freeMaintInfo(project, parseBudgetNum(project.budget), kstDateStr()).until : null));
+  const [paidChanged, setPaidChanged] = useState(false);
+  const setEditPaid = (patch) => { setEditPaid0(v => ({ ...v, ...patch })); setPaidChanged(true); };
   // 미팅 폼 모드: '미팅 완료' + 기존 미팅 있음 → "추가 미팅 등록"(새 미팅, 빈 폼). 그 외 → 현재 미팅 수정(프리필)
   const isAddMode = project?.current_status === 'meeting_done' && !!project?.meeting_at;
   const [editMeeting, setEditMeeting] = useState(isAddMode ? '' : (project?.meeting_at || ''));   // ISO(UTC) 또는 ''
@@ -3373,6 +3456,28 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, m
                     </div>
                   );
                 })()}
+                {project.current_status === 'maintenance_paid' && (() => {
+                  const cur = paidMaintOf(project), plan = paidPlanOf(editPaid), rn = renewalDraft(cur);
+                  return (
+                    <div style={{ border:'1px solid var(--border)', borderRadius:10, padding:'0.8rem 0.9rem' }}>
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:10 }}>
+                        <div>
+                          <div style={{ ...labelS, marginBottom:2 }}>유상 유지보수 계약</div>
+                          <div style={{ fontSize:'0.8rem', color: cur.missing.length ? 'var(--yellow)' : 'var(--text2)' }}>
+                            {cur.missing.length ? `미입력: ${cur.missing.join('·')} — 아래에 입력하고 저장하세요` : `${cur.start} ~ ${cur.until} · ${feeLabel(cur.fee, cur.unit)} · ${paidBadge(cur.left)} ${dLeftLabel(cur.left)}`}
+                          </div>
+                        </div>
+                        {rn && !paidChanged && (
+                          <button type="button" onClick={() => setEditPaid({ start:rn.start, choice: PAID_TERM_PRESETS.includes(rn.months) ? String(rn.months) : 'other', other: PAID_TERM_PRESETS.includes(rn.months) ? '' : String(rn.months), fee:String(rn.fee ?? ''), unit:rn.unit })}
+                            title={`${rn.start}부터 같은 기간·금액으로 새 계약 — 고친 뒤 저장`}
+                            style={{ flexShrink:0, padding:'0.4rem 0.7rem', borderRadius:6, border:'1px solid var(--accent)', background:'transparent', color:'var(--accent)', fontSize:'0.8rem', cursor:'pointer', whiteSpace:'nowrap' }}>계약 갱신</button>
+                        )}
+                      </div>
+                      <PaidMaintFields v={editPaid} set={setEditPaid} devManwon={parseBudgetNum(editBudget)} showErrors={paidChanged || cur.missing.length > 0} />
+                      {paidChanged && plan.fields && <div style={{ marginTop:8, fontSize:'0.8rem', color:'var(--text)' }}>저장하면: {plan.summary}</div>}
+                    </div>
+                  );
+                })()}
                 <div>
                   <div style={labelS}>위시켓 공고 URL</div>
                   <input type="url" value={editUrl} placeholder="https://www.wishket.com/project/..." onChange={e => { setEditUrl(e.target.value); setUrlChanged(e.target.value!==(project.wishket_url||'')); }} style={inputS} />
@@ -3489,7 +3594,7 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, m
                   {linkErr && <div style={{ fontSize:'0.75rem', color:'var(--red)', marginTop:6 }}>⚠ {linkErr}</div>}
                 </div>
               </div>
-              {(infoChanged||dateChanged||startDateChanged||deadlineChanged||freeUntilChanged||urlChanged||memoChanged||linksChanged||directChanged) && (
+              {(infoChanged||dateChanged||startDateChanged||deadlineChanged||freeUntilChanged||paidChanged||urlChanged||memoChanged||linksChanged||directChanged) && (
                 <button onClick={() => {
                   const fields = {};
                   if (infoChanged) { fields.title=editTitle; fields.budget=editBudget; fields.timeline=editTimeline; }
@@ -3497,13 +3602,22 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, m
                   if (startDateChanged) fields.start_date = editStartDate || null;
                   if (deadlineChanged) fields.deadline = editDeadline || null;
                   if (freeUntilChanged) fields.free_maint_until = editFreeUntil || null;
+                  let paidNote = null;
+                  if (paidChanged) {
+                    const pp = paidPlanOf(editPaid); if (!pp.fields) return;   // 필수 값 — 버튼도 막혀 있다
+                    Object.assign(fields, pp.fields);
+                    const prevU = paidMaintOf(project).until, renewed = prevU && pp.fields.paid_maint_start > prevU;
+                    paidNote = `${renewed ? '유지보수 계약 갱신' : '유지보수 계약 변경'} — ${pp.summary}`;
+                    setPaidChanged(false);
+                  }
                   if (urlChanged)  fields.wishket_url = editUrl;
                   if (memoChanged) fields.memo = editMemo;
                   if (directChanged) fields.direct_contract = editDirect;
                   if (linksChanged) fields.portfolio_links = editLinks;
-                  onFieldSave(project, fields);
+                  // 이력은 칸 저장이 끝난 뒤에 남긴다 — 동시에 보내면 이력 RPC 가 돌려준 옛 행이 방금 저장한 계약 칸을 화면에서 덮는다
+                  Promise.resolve(onFieldSave(project, fields)).then(() => { if (paidNote) onAppendHistory?.({ ...project, ...fields }, [{ status: project.current_status, note: paidNote }]); });
                   setInfoChanged(false); setDateChanged(false); setStartDateChanged(false); setDeadlineChanged(false); setFreeUntilChanged(false); setUrlChanged(false); setMemoChanged(false); setLinksChanged(false); setDirectChanged(false);
-                }} disabled={saving || (!editDirect && !editUrl.trim())} style={{ ...saveBtnS(true), width:'100%', marginTop:10, ...((!editDirect && !editUrl.trim()) ? { opacity:0.5, cursor:'not-allowed' } : {}) }}>
+                }} disabled={saving || (!editDirect && !editUrl.trim()) || (paidChanged && !paidPlanOf(editPaid).fields)} style={{ ...saveBtnS(true), width:'100%', marginTop:10, ...((!editDirect && !editUrl.trim()) ? { opacity:0.5, cursor:'not-allowed' } : {}) }}>
                   {saving ? '저장 중...' : '저장'}
                 </button>
               )}
@@ -3957,7 +4071,8 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, m
                     // 'won'은 마일스톤 템플릿 자동 생성이 일어나므로 confirm.
                     const triggerSave = () => {
                       if (!newStatus) return;
-                      if (project.current_status === 'in_progress' && DEV_DONE_TARGETS.includes(newStatus)) { setDevDoneOpen(true); return; }
+                      // 유지보수(유상)는 어디서 오든 계약(체결일·기간·대금) 입력 창을 거친다 (2026-11-24)
+                      if ((project.current_status === 'in_progress' && DEV_DONE_TARGETS.includes(newStatus)) || newStatus === 'maintenance_paid') { setDevDoneOpen(true); return; }
                       if (newStatus==='won' && onRequestConfirm) {
                         const sm = STATUS_META[newStatus];
                         onRequestConfirm({
@@ -3975,8 +4090,6 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, m
                       <>
                         <input type="text" placeholder="메모 (선택)" value={note} onChange={e => setNote(e.target.value)} style={{ ...inputS, marginBottom:'0.75rem' }}
                           onKeyDown={e => { if (e.key==='Enter') triggerSave(); }} />
-                        {devDoneOpen && <DevDoneModal project={project} newStatus={newStatus} onCancel={() => setDevDoneOpen(false)}
-                          onConfirm={extra => { setDevDoneOpen(false); onSave(project, newStatus, note, extra); }} />}
                         <button onClick={triggerSave} disabled={!newStatus||saving}
                           style={{ width:'100%', padding:'0.65rem', borderRadius:10, border:'none', cursor:newStatus&&!saving?'pointer':'not-allowed', fontSize:'0.9rem', fontWeight:600, background:newStatus&&!saving?'var(--accent)':'var(--surface2)', color:newStatus&&!saving?'#fff':'var(--text2)', opacity:saving?0.7:1 }}>
                           {saving?'저장 중...':'상태 변경'}
@@ -3988,12 +4101,15 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, m
               ) : (!canRevert ? (
                 <div style={{ textAlign:'center', padding:'1rem', color:'var(--text2)', fontSize:'0.85rem', background:'var(--surface2)', borderRadius:8 }}>현재 전환 가능한 상태가 없습니다</div>
               ) : null)}
+              {devDoneOpen && newStatus && <DevDoneModal project={project} newStatus={newStatus} onCancel={() => setDevDoneOpen(false)}
+                onConfirm={extra => { setDevDoneOpen(false); onSave(project, newStatus, note, extra); }} />}
               {canRevert && (() => {
                 // ── 이전 상태로 되돌리기 ── (직전 상태 prevStatus는 위에서 hoist: history 최근값 또는 STATUS_ORDER 한 단계 이전)
                 // 전진 후보(forwardTargets)에서 직전 상태를 제외했으므로 이 버튼과 중복되지 않는다.
                 const pm = STATUS_META[prevStatus];
                 const doRevert = () => {
-                  const run = () => onSave(project, prevStatus, '↩ 이전 상태로 되돌리기');
+                  // 유지보수(유상)로 되돌리는데 계약 정보가 비어 있으면 계약 입력 창부터 (필수 값)
+                  const run = () => { if (prevStatus === 'maintenance_paid' && paidMaintOf(project).missing.length) { setNewStatus('maintenance_paid'); setNote('↩ 이전 상태로 되돌리기'); setDevDoneOpen(true); return; } onSave(project, prevStatus, '↩ 이전 상태로 되돌리기'); };
                   if (onRequestConfirm) {
                     const leavingWon = project.current_status === 'won';
                     // 개발 중 → 계약 논의 중 되돌리기: 착수일/마감일이 과거면 자동전환이 다시 끌어올리므로 날짜를 비운다.
@@ -4125,7 +4241,8 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
   const filtered = useMemo(() => {
     const sortFn = (a,b) => {
       let va, vb;
-      if (sortKey==='budget')     { va=parseBudgetNum(a.budget);  vb=parseBudgetNum(b.budget); }
+      if (sortKey==='budget')     { const amt = r => { if (r.current_status === 'maintenance_paid') { const pm = paidMaintOf(r); return pm.fee ? (pm.unit === 'month' ? pm.fee * 12 : pm.fee) : 0; } return parseBudgetNum(r.budget); };   // 유상 유지보수는 연 환산 계약대금
+                                    va=amt(a); vb=amt(b); }
       // 날짜 칸 정렬은 행마다 보이는 날짜 그대로 (dateColKind — 미팅일·개발완료일·무상 만료일)
       else if (sortKey==='meeting_at') { va=dateSortValue(a); vb=dateSortValue(b); }
       else { va=a.created_at||''; vb=b.created_at||''; }
@@ -4257,6 +4374,12 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                     if (fm.until) parts.push(<span key="fm" style={{ color:fm.left<0?'var(--red)':fm.left<=30?'var(--yellow)':'var(--text2)', fontWeight:fm.left<=30?600:400 }}>🔧 {freeMaintBadge(fm.left)} {fm.until}{fm.manual?' ✎':''} · {dLeftLabel(fm.left)}</span>);
                     else parts.push(<span key="fm" style={{ color:'var(--yellow)', fontWeight:600 }}>⚠️ {freeMaintMissing(fm)} — 정보 탭에서 입력</span>);
                   }
+                  else if (kind === 'paid_until') {
+                    // 유지보수(유상): 계약 만료일·계약대금 (2026-11-24)
+                    const pm = paidMaintOf(r);
+                    if (pm.until) parts.push(<span key="pm" style={{ color:pm.left<0?'var(--red)':pm.left<=30?'var(--yellow)':'var(--text2)', fontWeight:pm.left<=30?600:400 }}>🛠️ {paidBadge(pm.left)} ~{pm.until} · {dLeftLabel(pm.left)}{pm.fee && pm.unit ? ` · ${feeLabel(pm.fee, pm.unit)}` : ''}</span>);
+                    else parts.push(<span key="pm" style={{ color:'var(--yellow)', fontWeight:600 }}>⚠️ 계약 정보 없음 — 정보 탭에서 입력</span>);
+                  }
                   else if (isPostDev) { if (r.deadline) parts.push(<span key="dl" style={{ color:'var(--green)' }}>✅ 개발완료 {r.deadline}</span>); }
                   else if (kind === 'dev_due') {
                     const left = r.deadline ? daysBetweenYmd(kstDateStr(), r.deadline) : null;
@@ -4351,6 +4474,13 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                   </td>
                   <td style={{ padding:'0.7rem 1rem', whiteSpace:'nowrap', fontSize:'0.8rem', color:r.budget?'var(--text)':'var(--text2)' }}>{(() => {
                     const bn = parseBudgetNum(r.budget);
+                    // 유지보수(유상): 개발 대금 대신 유지보수 계약대금 (2026-11-24)
+                    if (r.current_status === 'maintenance_paid') {
+                      const pm = paidMaintOf(r);
+                      return pm.fee && pm.unit
+                        ? <span title={`유지보수 계약대금 ${feeLabel(pm.fee, pm.unit)} = ${feeOther(pm.fee, pm.unit)} (공급가·부가세 별도)${r.budget ? ` · 개발 계약 ${fmtBudget(r.budget)}` : ''}`}>{feeLabel(pm.fee, pm.unit)}</span>
+                        : <span title="유지보수 계약대금을 정보 탭에서 입력하세요" style={{ color:'var(--yellow)' }}>미입력</span>;
+                    }
                     if (bn > 0 && CONTRACT_NET_STATUSES.includes(r.current_status) && !isDirectContract(r)) {
                       return <span title={`지원가 ${fmtBudget(r.budget)} − 수수료 ${wishketFeeRate(bn)*100}% = ${fmtManwon(contractNet(bn))}만원 (부가세 제외)`}>
                         {fmtManwon(contractNet(bn))}만원
@@ -4375,6 +4505,23 @@ function ProjectTable({ data, filter, search, onRowClick, sortKey, sortOrder, on
                           <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.8rem', fontWeight:600, background:over?'var(--surface-danger-mid)':soon?'var(--surface-warning-mid)':'var(--surface-info-mid)', color:over?'var(--red)':soon?'var(--yellow)':'var(--blue)' }}>{freeMaintBadge(fm.left)}</span>
                           <span style={{ color:'var(--text2)' }}>{fm.until}{fm.manual && <span aria-label="직접 입력" style={{ marginLeft:2 }}>✎</span>}</span>
                           <span style={{ fontSize:'0.75rem', fontWeight:600, color:over?'var(--red)':soon?'var(--yellow)':'var(--text2)' }}>{dLeftLabel(fm.left)}</span>
+                        </span>
+                      );
+                    })() : dateColKind(r.current_status) === 'paid_until' ? (() => {
+                      // 유지보수(유상): 계약 만료일 (2026-11-24)
+                      const pm = paidMaintOf(r);
+                      if (!pm.until) return (
+                        <span title="유상 유지보수 계약(체결일·기간·계약대금)을 정보 탭에서 입력하세요" style={{ display:'flex', alignItems:'center', gap:4 }}>
+                          <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.8rem', fontWeight:600, background:'var(--surface-warning-mid)', color:'var(--yellow)' }}>계약 정보 없음</span>
+                          <span style={{ fontSize:'0.75rem', color:'var(--text2)' }}>정보 탭에서 입력</span>
+                        </span>
+                      );
+                      const over = pm.left < 0, soon = !over && pm.left <= 30;
+                      return (
+                        <span title={`유지보수 계약 ${pm.start} ~ ${pm.until}${pm.months ? ` (${termLabel(pm.months)})` : ''}`} style={{ display:'flex', alignItems:'center', gap:4 }}>
+                          <span style={{ padding:'0.1rem 0.35rem', borderRadius:4, fontSize:'0.8rem', fontWeight:600, background:over?'var(--surface-danger-mid)':soon?'var(--surface-warning-mid)':'var(--surface-info-mid)', color:over?'var(--red)':soon?'var(--yellow)':'var(--blue)' }}>{paidBadge(pm.left)}</span>
+                          <span style={{ color:'var(--text2)' }}>{pm.until}</span>
+                          <span style={{ fontSize:'0.75rem', fontWeight:600, color:over?'var(--red)':soon?'var(--yellow)':'var(--text2)' }}>{dLeftLabel(pm.left)}</span>
                         </span>
                       );
                     })() : dateColKind(r.current_status) === 'dev_due' ? (
