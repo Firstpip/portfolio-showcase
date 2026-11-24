@@ -131,7 +131,7 @@ async function runScheduled() {
   // 근무지·휴가·일정은 1년 남짓 앞까지 읽는다 — 남이 바꾼 먼 날의 근무지·휴가도 당사자에게 알리므로 그날 상태를 정확히 계산해야 한다 (2026-11-04, 전엔 2주).
   // 팀 규모가 작아 행 수는 적다. 일정은 어제 이후 + 아직 끝나지 않은 반복만(전부 읽으면 쌓일수록 조회 한도에 잘림)
   const yday = addDay(today, -1), ahead = addDay(today, 400);
-  const [members, routines, teamOverrides, memberOverrides, leaves, events, holidays, wishket, audit] = await Promise.all([
+  const [members, routines, teamOverrides, memberOverrides, leaves, events, holidays, wishket, maint, audit] = await Promise.all([
     must<any[]>(sb.from("team_members").select("id,name,user_id,is_active")),
     must<any[]>(sb.from("team_work_routines").select("valid_from,days")),
     must<any[]>(sb.from("team_work_overrides").select("work_date,loc,branch,note").gte("work_date", yday).lte("work_date", ahead)),
@@ -142,13 +142,16 @@ async function runScheduled() {
     must<any[]>(sb.from("calendar_holidays").select("holiday_date,name")),
     must<any[]>(sb.from("wishket_projects").select("slug,title,meeting_at,meeting_type,meeting_place,meeting_end_at,meeting_auto_out,assigned_main,assigned_sub,current_status")
       .gte("meeting_at", new Date(now - 864e5).toISOString()).lte("meeting_at", new Date(now + 15 * 864e5).toISOString())),
+    // 유지보수 만료 2주 전 알림 (2026-11-24) — 무상·유상 프로젝트(건수 적음)
+    must<any[]>(sb.from("wishket_projects").select("slug,title,current_status,assigned_manager,budget,deadline,free_maint_until,history,paid_maint_start,paid_maint_until,paid_maint_fee,paid_maint_fee_unit")
+      .in("current_status", ["maintenance_free", "maintenance_paid"])),   // wishket_projects 에는 deleted_at 이 없다(삭제는 별도 보관 표로 옮김)
     readAudit(cursor),
   ]);
   const fresh = audit.findIndex((a) => Date.parse(a.at) > now - AUDIT_SETTLE_MS);
   if (fresh >= 0) audit.length = fresh;
   const snap: Snapshot = {
     members: members.filter((m) => m.is_active !== false), subs, routines, teamOverrides, memberOverrides, leaves, events,
-    holidays: Object.fromEntries(holidays.map((h) => [h.holiday_date, h.name])), wishket, audit,
+    holidays: Object.fromEntries(holidays.map((h) => [h.holiday_date, h.name])), wishket, maint, audit,
   };
   const { notes, cursor: nextCursor } = planNotifications(snap, now);
 

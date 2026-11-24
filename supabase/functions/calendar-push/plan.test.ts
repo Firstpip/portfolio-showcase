@@ -504,3 +504,39 @@ Deno.test("미팅 ↔ 근무지 묶음: 미팅을 옮기며 새 날짜 팀 근�
   eq(change(s2, "2026-11-25", "10:00").find((n) => n.member === M3)!.body, "11/26 (목) 팀 근무지 서울숲 · 12/2 (수) 평소대로 재택 · 김가람 변경", "합친 본문");
   eq(r.find((n) => n.member === M2)!.body, "일시 12/2 (수) 14:00 → 11/26 (목) 14:00 · 장소 없음 → 서울숲 · 우리 사무실 미팅으로 · 대면 · 11/26 (목) 팀 근무지 서울숲 · 12/2 (수) 평소대로 재택 · 김가람 변경", "본문에 근무지 함께");
 });
+
+// ───────── 유지보수 만료 2주 전 알림 (2026-11-24) ─────────
+import { freeUntil, parseBudgetNum as pbn } from "./maint.ts";
+import { freeMaintInfo } from "../../../dashboard/src/maintenance.mjs";
+Deno.test("유지보수 만료일: 알림 서버 계산 = 워크룸 화면 계산(maintenance.mjs)", () => {
+  const cases = [
+    { budget: "1,500만원", deadline: "2026-06-01", history: [{ status: "won", date: "2026-11-01" }] },
+    { budget: "900만원", deadline: "2026-06-01", history: [{ status: "won", date: "2026-11-01" }] },
+    { budget: "500만원", deadline: "2026-06-01", history: [{ status: "contracted", date: "2026-03-01" }] },
+    { budget: "1000~3000만원", deadline: "2026-09-10", history: [] },
+    { budget: "", deadline: "2026-09-10", history: [] },
+    { budget: "2,000만원", deadline: null, history: [] },
+    { budget: "2,000만원", deadline: "2026-09-10", free_maint_until: "2027-01-15", history: [] },
+  ];
+  for (const p of cases) eq(freeUntil(p), freeMaintInfo(p, pbn(p.budget), "2026-11-24").until || null, JSON.stringify(p));
+});
+Deno.test("유지보수 만료 알림: PM 에게 2주 전부터 만료일까지 한 번, 09:00 이후·밤 제외, PM 없으면 전원", () => {
+  const s = base(); s.events = []; s.wishket = [];
+  const free = { slug: "f1", title: "흡연부스 앱", current_status: "maintenance_free", assigned_manager: M2, budget: "450만원", deadline: "2026-09-08", history: [{ status: "won", date: "2026-10-20" }] };   // 90일 → 12/7
+  const paid = { slug: "p1", title: "ESG 진단", current_status: "maintenance_paid", assigned_manager: M3, paid_maint_start: "2025-12-08", paid_maint_until: "2026-12-07", paid_maint_fee: 30, paid_maint_fee_unit: "month" };
+  s.maint = [free, paid];
+  const run = (d: string, t: string) => planNotifications(s, at(d, t)).notes.filter((n) => n.key.startsWith("mx:"));
+  eq(run("2026-11-22", "10:00").length, 0, "15일 전은 아직");
+  const r = run("2026-11-23", "10:00");
+  eq(r.map((n) => `${n.member}|${n.title}`).sort(), ["m2|🛠️ 흡연부스 앱 무상 유지보수 D-14", "m3|🛠️ ESG 진단 유상 유지보수 계약 D-14"], "2주 전 PM 에게");
+  eq(r.find((n) => n.member === M3)!.body, "12/7 (월) 만료 · 계약 2025-12-08 ~ 2026-12-07 · 월 30만원 · 갱신 여부를 확인하세요", "유상 본문");
+  eq(r.find((n) => n.member === M2)!.key, "mx:f1:free:2026-12-07:m2", "키에 만료일");
+  eq(run("2026-11-23", "08:30").length, 0, "09:00 전은 아직");
+  eq(run("2026-11-23", "23:00").length, 0, "밤 제외");
+  eq(run("2026-12-07", "10:00").map((n) => n.title), ["🛠️ 흡연부스 앱 무상 유지보수 오늘 만료", "🛠️ ESG 진단 유상 유지보수 계약 오늘 만료"], "만료일까지 (보냈으면 키로 막힘)");
+  eq(run("2026-12-08", "10:00").length, 0, "지나면 없음");
+  s.maint = [{ ...paid, assigned_manager: null }];
+  eq(run("2026-11-23", "10:00").map((n) => n.member).sort(), [M1, M2, M3], "PM 없으면 전원");
+  s.maint = [{ ...free, current_status: "delivered" }];
+  eq(run("2026-11-23", "10:00").length, 0, "유지보수 상태가 아니면 없음");
+});

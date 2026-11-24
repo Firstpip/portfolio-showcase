@@ -1,3 +1,4 @@
+import { maintNotes, MAINT_NOTICE_FROM } from "./maint.ts";
 // 알림 계획 — DB 스냅샷과 지금 시각으로 '지금 보낼 알림' 목록을 만든다.
 // 보내는 알림은 두 가지 (2026-10-30 사용자 결정: 미팅 시작 전 알림은 두지 않는다)
 //   ① 다음 근무일 안내: 근무일 18:00~19:30 첫 실행에 '다음 근무일' 내 근무지·일정·팀원 부재. 매 근무일 보낸다(다음 근무일 종일 휴가인 사람만 제외).
@@ -21,6 +22,7 @@ export type Snapshot = {
   events: Row[];          // calendar_events (삭제 안 된 것)
   holidays: Record<string, string>;
   wishket: Row[];         // wishket_projects (meeting_at 이 있는 것)
+  maint?: Row[];          // 유지보수(무상·유상) 프로젝트 — 만료 2주 전 알림용 (2026-11-24)
   audit: Row[];           // project_audit_log (처리 위치 이후, id 오름차순)
 };
 export type Note = {
@@ -219,6 +221,11 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
   //   문구: 제목 = 누가/무엇이 어떻게, 본문 = 언제 · 바뀐 내용 · 이유 · 바꾼 사람(당사자와 다를 때). 제목을 본문에서 반복하지 않는다.
   let cursor: number | null = null;
   if (quiet) return { notes, cursor };
+  // 유지보수 만료 2주 전 알림 (2026-11-24 사용자 결정) — 개발을 맡았던 PM 에게, 09:00 이후 첫 실행. 키(만료일 포함)로 한 번만 나간다
+  if (nowMin >= MAINT_NOTICE_FROM) for (const m of maintNotes(s.maint || [], s.members.map((x) => x.id), today, fmtD)) {
+    if (!subsOf(m.member).some((x) => x.change_alerts)) continue;
+    notes.push({ key: m.key, member: m.member, kind: "change", title: m.title, body: m.body, url: m.url, tag: m.tag, ttl: 86400 * 3, urgency: "normal" });
+  }
   const watchers = (exclude: string | undefined) => s.members.filter((m) => m.id !== exclude && subsOf(m.id).some((x) => x.change_alerts)).map((m) => m.id);
   // 당사자: 남이 내 근무지·휴가·일정을 바꾸면 날짜와 상관없이(오늘 이후) 나에게는 보낸다 (2026-11-04 사용자 결정 — 다른 팀원 범위는 그대로)
   const ownerOnly = (pid: string | null | undefined, actor: string | undefined) => pid && pid !== actor && subsOf(pid).some((x) => x.change_alerts) ? [pid] : [];
