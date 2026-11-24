@@ -25,7 +25,10 @@ const S = __dirname + '/shots/';
   console.log('예시:', labels.week.slice(3,6).join(' | '), '||', labels.week.find(t=>(t.match(/년/g)||[]).length===2), '||', labels.list.slice(1,3).join(' | '));
   // 주 보기 제목 = 실제 주간 달력 (월 보기에서 다른 주 날짜 고른 뒤 전환)
   await p.click('#v-month'); await p.click('#btn-today');
-  const k = await p.evaluate(() => __mock.day(17)); await p.click(`#mgrid .mc[data-k="${k}"]`); await p.keyboard.press('Escape');
+  // 월 보기 안에 있는, 오늘과 다른 주의 날짜를 고른다 (2026-11-24 수정 — 예전엔 '오늘+17일'이라 월말에는 달력 밖이라 실패했다)
+  const k = await p.evaluate(() => { const today = __mock.day(0), far = (a, b) => Math.abs(new Date(a) - new Date(b)) / 864e5 >= 8;
+    const ks = [...document.querySelectorAll('#mgrid .mc[data-k]')].map(x => x.dataset.k); return ks.filter(x => far(x, today)).pop() || ks[ks.length - 1]; });
+  await p.click(`#mgrid .mc[data-k="${k}"]`); await p.keyboard.press('Escape');
   await p.click('#v-week'); await p.waitForTimeout(100);
   const wk = await p.evaluate(() => { const c = document.querySelectorAll('#week .col'); return { head: document.getElementById('range').textContent, first: c[0].dataset.k, last: c[6].dataset.k }; });
   const d = s => { const [y,m,dd] = s.split('-').map(Number); return { y, m, dd }; };
