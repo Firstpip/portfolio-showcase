@@ -316,7 +316,9 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
 
     if (a.table_name === "team_work_overrides") {
       const k = (f.work_date || b.work_date) as string; curDay = k;
-      if (!inLoc(k)) continue;
+      // 팀 근무지 변경은 날짜 제한 없이(오늘 이후 1년 안 근무일) 바로 알린다 (2026-11-24 사용자 결정 B안 — 3명이라 며칠 뒤 변경도 바로 알아야 함).
+      //   전에는 오늘~다음 근무일만 보내고 그 뒤는 전날 18:00 안내에 맡겼다. 받는 사람 기준(그날 팀 근무지로 출근하는 사람)은 그대로.
+      if (!k || k < today || k > addDay(today, EV_DAYS) || isOff(k)) continue;
       if (hadB && hasF && b.loc === f.loc && (b.branch || "") === (f.branch || "") && (b.note || "") === (f.note || "")) continue;
       if (!hadB && !hasF) continue;
       const t = teamLoc(k);
@@ -490,6 +492,17 @@ export function planNotifications(s: Snapshot, now: number): { notes: Note[]; cu
   // 같은 저장에서 나온 근무지 알림은 그 미팅 알림을 받는 사람에게는 빼고(미팅 알림 본문에 들어 있다), 나머지 사람에게만 따로 보낸다
   const mergedOut = new Set(notes.filter((n) => n.mtag && !n.meet && notes.some((m) => m.meet && m.mtag === n.mtag && m.member === n.member)));
   if (mergedOut.size) for (let i = notes.length - 1; i >= 0; i--) if (mergedOut.has(notes[i])) notes.splice(i, 1);
+  // 미팅 알림을 받지 않는 사람이 같은 저장의 근무지 알림을 여러 날짜로 받으면 한 건으로 합친다 (예: 새 날짜 서울숲 + 옛 날짜 평소대로)
+  const byMt = new Map<string, Note[]>();
+  for (const n of notes) if (n.mtag && !n.meet) { const g = byMt.get(`${n.member}|${n.mtag}`) || []; g.push(n); byMt.set(`${n.member}|${n.mtag}`, g); }
+  for (const g of byMt.values()) {
+    if (g.length < 2) continue;
+    const head = g[0], parts = mParts[head.mtag!] || g.map((n) => n.title.replace(/^\S+\s/, ""));
+    const who = /· (\S+ (변경|추가|취소))$/.exec(head.body)?.[1] || null;
+    head.title = `🏢 팀 근무지 변경 ${parts.length}건`; head.body = join(...parts, who);
+    head.day = g.map((n) => n.day).filter(Boolean).sort()[0]; head.tag = `team:${head.mtag}`;
+    for (const n of g.slice(1)) notes.splice(notes.indexOf(n), 1);
+  }
   if (briefed.size) {
     const cut = Date.parse(`${today}T${String(Math.floor(BRIEF_FROM / 60)).padStart(2, "0")}:${String(BRIEF_FROM % 60).padStart(2, "0")}:00+09:00`);
     const kept = notes.filter((n) => !(n.kind === "change" && n.day === briefK && briefed.has(n.member) && (n.at || 0) < cut && n.at));

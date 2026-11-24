@@ -136,7 +136,7 @@ Deno.test("변경: 같은 대상을 한 실행 안에서 여러 번 — 마지�
 });
 
 // ───────── 변경 알림: 근무지 ─────────
-Deno.test("변경: 팀 근무지 — 오늘~다음 근무일, 바꾼 사람 제외, 원래대로", () => {
+Deno.test("변경: 팀 근무지 — 날짜 제한 없이(1년 안 근무일, 2026-11-24 B안), 바꾼 사람 제외, 원래대로", () => {
   const s = base();
   s.teamOverrides = [{ work_date: "2026-11-03", loc: "forest", branch: null, note: "킥오프" }];
   s.audit = [
@@ -144,7 +144,7 @@ Deno.test("변경: 팀 근무지 — 오늘~다음 근무일, 바꾼 사람 제�
     { id: 12, at: "", table_name: "team_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { work_date: "2026-11-20", loc: "home" } },
   ];
   const r = planNotifications(s, at("2026-11-02", "15:00"));
-  eq(r.notes.filter((n) => n.kind === "change").map((n) => n.key).sort(), ["c:11:m2", "c:11:m3"], "김가람 제외, 11/20 범위 밖");
+  eq(r.notes.filter((n) => n.kind === "change").map((n) => n.key).sort(), ["c:11:m2", "c:11:m3", "c:12:m2", "c:12:m3"], "김가람 제외, 먼 날(11/20)도 바로");
   eq(tb(r.notes.find((x) => x.key === "c:11:m2")!), ["🏢 내일 팀 근무지 서울숲", "11/3 (화) · 킥오프 · 김가람 변경"], "문구");
   eq(r.cursor, 12, "처리 위치 전진");
   s.teamOverrides = [];
@@ -179,14 +179,14 @@ Deno.test("변경: 팀 근무지 — 그날 팀 근무지를 따르는 사람에
   eq(change(s, "2026-11-02", "15:00").map((n) => n.member).sort(), [M2, M3], "시간 있는 미팅은 아침에 팀 근무지로 출근 → 받음");
 });
 
-Deno.test("변경: 팀 근무지 — 금요일 오후 이후 월요일 변경도 (다음 근무일까지)", () => {
+Deno.test("변경: 팀 근무지 — 금요일 오후 이후 월요일·그 뒤 날짜 변경도 바로", () => {
   const s = base();
   s.teamOverrides = [{ work_date: "2026-11-09", loc: "home", branch: null, note: null }];
   s.audit = [
     { id: 21, at: "", table_name: "team_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { work_date: "2026-11-09", loc: "home" } },
     { id: 22, at: "", table_name: "team_work_overrides", op: "INSERT", actor_id: "u1", before: null, after: { work_date: "2026-11-10", loc: "forest" } },
   ];
-  eq(change(s, "2026-11-06", "17:10").map((n) => n.key).sort(), ["c:21:m2", "c:21:m3"], "월요일만");
+  eq(change(s, "2026-11-06", "17:10").map((n) => n.key).sort(), ["c:21:m2", "c:21:m3", "c:22:m2", "c:22:m3"], "월요일과 그 뒤 날짜도");
   eq(change(s, "2026-11-06", "17:10")[0].title, "🏢 11/9 (월) 팀 근무지 재택", "제목");
   s.holidays["2026-11-09"] = "임시공휴일"; s.teamOverrides = [{ work_date: "2026-11-10", loc: "forest", branch: null, note: null }];
   eq(change(s, "2026-11-06", "17:10").map((n) => n.key).sort(), ["c:22:m2", "c:22:m3"], "월요일 공휴일이면 화요일");
@@ -500,6 +500,7 @@ Deno.test("미팅 ↔ 근무지 묶음: 미팅을 옮기며 새 날짜 팀 근�
   eq(r.map((n) => n.member).sort(), [M2, M3], "담당자 두 명에게 한 건씩 — 근무지 알림 따로 없음");
   // 담당자가 아닌 팀원(박다온 제외 — 여기선 담당)은 근무지 알림만 받는다: 보조 담당을 빼면 박다온은 팀 근무지 알림 한 건
   const s2 = { ...s, audit: s.audit.map((x) => x.table_name === "wishket_projects" ? { ...x, before: { ...w0, assigned_sub: null }, after: { ...w1, assigned_sub: null } } : x) };
-  eq(change(s2, "2026-11-25", "10:00").map((n) => `${n.member}|${n.title}`).sort(), ["m2|✏️ esg 2차 개발 수주 미팅 변경", "m3|🏢 내일 팀 근무지 서울숲"], "담당 아닌 사람은 근무지 알림 한 건");
+  eq(change(s2, "2026-11-25", "10:00").map((n) => `${n.member}|${n.title}`).sort(), ["m2|✏️ esg 2차 개발 수주 미팅 변경", "m3|🏢 팀 근무지 변경 2건"], "담당 아닌 사람은 근무지 알림 한 건(두 날짜 합침)");
+  eq(change(s2, "2026-11-25", "10:00").find((n) => n.member === M3)!.body, "11/26 (목) 팀 근무지 서울숲 · 12/2 (수) 평소대로 재택 · 김가람 변경", "합친 본문");
   eq(r.find((n) => n.member === M2)!.body, "일시 12/2 (수) 14:00 → 11/26 (목) 14:00 · 장소 없음 → 서울숲 · 우리 사무실 미팅으로 · 대면 · 11/26 (목) 팀 근무지 서울숲 · 12/2 (수) 평소대로 재택 · 김가람 변경", "본문에 근무지 함께");
 });
