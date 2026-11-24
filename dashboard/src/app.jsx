@@ -293,6 +293,9 @@ function groupMeetingHistory(history) {
     const g = map.get(t) || { meeting_at:h.meeting_at, meeting_type:null, meeting_memo:'', note:'', count:0 };
     if (h.meeting_type) g.meeting_type = h.meeting_type;
     if (h.meeting_memo) g.meeting_memo = h.meeting_memo;
+    // 장소·끝나는 시각(2026-11-23~ 이력에 함께 남김) — 마지막으로 저장한 값. 지운 경우(null)도 반영한다
+    if ('meeting_place' in h) g.meeting_place = h.meeting_place || '';
+    if ('meeting_end_at' in h) g.meeting_end_at = h.meeting_end_at || null;
     if (h.note) g.note = h.note;
     g.count++;
     map.set(t, g);
@@ -3683,10 +3686,10 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, m
               const sig = plan ? JSON.stringify(plan) : '';
               if (plan && (plan.change || plan.revert) && !(locAsk?.mode === 'save' && locAsk.sig === sig)) { setLocAsk({ mode:'save', plan, sig, choice:{ change:true, revert:true } }); return; }
               const choice = locAsk?.choice || {};
+              // 저장 요청과 같은 순간에 '편집 중'을 끈다 — 기다린 뒤 끄면 저장 결과로 바뀐 프로젝트를 남의 변경으로 보고 경고가 뜬다
+              setLocAsk(null); setMeetingChanged(false);
               const row = await onAppendHistory(project, entries, fields);
               if (row && plan) await meetingLoc.apply(plan, choice, project);
-              setLocAsk(null);
-              setMeetingChanged(false);
             };
             const deleteMeeting = async () => {
               // '미팅 예정'에서 일정만 지우면 일정 없는 예정 상태에 갇힘 → 지원 완료로 함께 되돌림 (이력에 명시)
@@ -3787,13 +3790,17 @@ function StatusModal({ project, onClose, onSave, onFieldSave, onAppendHistory, m
                       {meetingHistory.map((h,i) => {
                         const mt = MEETING_TYPES.find(t => t.key===h.meeting_type);
                         const isCur = currentMeeting && sameInstant(h.meeting_at, currentMeeting.meeting_at);
+                        // 지금 미팅은 프로젝트 칸이 기준, 지난 미팅은 이력에 남은 값 (예전 이력에는 없을 수 있음)
+                        const place = isCur ? project.meeting_place : h.meeting_place, endT = kstParts(isCur ? project.meeting_end_at : h.meeting_end_at)?.time;
                         return (
                           <div key={i} style={{ padding:'0.45rem 0.6rem', borderRadius:6, background:'var(--surface2)', fontSize:'0.8rem', border:isCur?'1px solid var(--border)':'1px solid transparent' }}>
-                            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                              <span>{mt?mt.emoji:'📅'}</span>
-                              <span style={{ color:'var(--text2)' }}>{formatMeetingAt(h.meeting_at)}</span>
-                              {mt && <span style={{ color:'var(--text2)', opacity:0.7 }}>{mt.label}</span>}
-                              {h.note && <span style={{ color:'var(--text2)', opacity:0.6, fontSize:'0.8rem', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>— {h.note}</span>}
+                            {/* 날짜·방식·장소는 줄이지 않고, 남는 폭은 이력 메모가 쓴다(길면 …) — 2026-11-24 장소 추가 뒤 날짜가 세로로 접히던 것 */}
+                            <div style={{ display:'flex', alignItems:'center', gap:8, minWidth:0 }}>
+                              <span style={{ flexShrink:0 }}>{mt?mt.emoji:'📅'}</span>
+                              <span style={{ color:'var(--text2)', flexShrink:0, whiteSpace:'nowrap' }}>{formatMeetingAt(h.meeting_at)}{endT ? `–${endT}` : ''}</span>
+                              {mt && <span style={{ color:'var(--text2)', opacity:0.7, flexShrink:0, whiteSpace:'nowrap' }}>{mt.label}</span>}
+                              {place && <span style={{ color:'var(--text2)', opacity:0.85, flexShrink:1, minWidth:40, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:160 }} title={place}>· {place}</span>}
+                              {h.note && <span title={h.note} style={{ color:'var(--text2)', opacity:0.6, fontSize:'0.8rem', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:'1 1 0', minWidth:0 }}>— {h.note}</span>}
                             </div>
                             {h.meeting_memo && <div style={{ marginTop:4, fontSize:'0.8rem', color:'var(--text2)', lineHeight:1.5, paddingLeft:22, whiteSpace:'pre-wrap' }}>{h.meeting_memo}</div>}
                           </div>

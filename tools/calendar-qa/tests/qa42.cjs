@@ -28,6 +28,11 @@ const S = __dirname + '/shots/';
   await saveBtn().click(); await p.waitForTimeout(800);
   const r = await p.evaluate(([wed, thu]) => ({ ap: (__mock.appends || []).slice(-1)[0], th: __mock.DB.team_work_overrides.find(o => o.work_date === thu), we: __mock.DB.team_work_overrides.find(o => o.work_date === wed) }), [wed, thu]);
   ok('미팅 저장 + 목요일 서울숲 + 수요일 평소대로', r.ap && r.th?.loc === 'forest' && /\[m:wp:261120_esg\]$/.test(r.th.change_note) && !r.we, JSON.stringify([r.th?.loc, !!r.we]));
+  // 미팅 이력에 장소가 보인다 (2026-11-24)
+  const hist = await p.evaluate(() => { const h = [...document.querySelectorAll('div')].find(d => /^미팅 이력/.test(d.textContent || '') && d.children.length <= 2); return h ? h.parentElement.innerText : document.body.innerText; });
+  await p.locator('text=미팅 이력').first().scrollIntoViewIfNeeded(); await p.screenshot({ path: S + 'qa42-history.png' });
+  ok('자기 저장에 "외부 변경" 경고 없음', !(await p.evaluate(() => /방금 외부\(자동화·다른 기기\)에서 변경/.test(document.body.innerText))));
+  ok('미팅 이력에 장소', /· 서울숲/.test(hist), hist.replace(/\n/g, ' / ').slice(0, 120));
   ok('콘솔 오류 없음', errs.length === 0, errs.slice(0, 3).join(' / '));
   console.log(out.join('\n')); await b.close(); process.exit(out.some(x => x.startsWith('FAIL')) ? 1 : 0);
 })();
