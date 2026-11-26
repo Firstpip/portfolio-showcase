@@ -1,9 +1,10 @@
 // 반복 일정 나누기 한 번에 저장 (2026-11-06): '이 회차만'·'이후 전부'는 calendar_split_event 하나로, 실패하면 아무것도 안 바뀐다
+// 시계 고정(2026-11-26): 만든 날(2026-11-06) 기준으로 짠 점검이라, 날짜가 바뀌면 이번 주·읽는 기간이 달라져 거짓 실패가 났다
 const { chromium } = require(process.env.PW_CORE || 'playwright-core');
 (async () => {
   const b = await chromium.launch(); const errs = []; const out = []; const ok = (n,c,x='') => out.push(`${c?'PASS':'FAIL'}  ${n}${x!==''?'  | '+x:''}`);
   const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
-  const ctx = await b.newContext({ viewport:{ width:1440, height:900 }, locale:'ko-KR', timezoneId:'Asia/Seoul' });
+  const ctx = await b.newContext({ viewport:{ width:1440, height:900 }, locale:'ko-KR', timezoneId:'Asia/Seoul' }); await ctx.clock.install({ time: new Date('2026-11-06T10:00:00+09:00') });
   const p = await ctx.newPage(); p.on('pageerror', e => errs.push(e.message));
   await p.goto(U + '?reset=1#calendar'); await p.waitForSelector('#cal-body:not([hidden])'); await p.waitForTimeout(500);
 

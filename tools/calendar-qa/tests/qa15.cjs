@@ -1,4 +1,5 @@
 // 2026-11-04 팀원 QA 반영: 다른 장소(직접 입력) 출근 · 폰 하단 달력 '‹ 연월 ›' · 18:00 매일 안내 · 남이 바꾼 내 일정·근무지 알림
+// 시계 고정(2026-11-26): 만든 날(2026-11-04) 기준으로 짠 점검이라, 날짜가 바뀌면 이번 주·읽는 기간이 달라져 거짓 실패가 났다
 const { chromium } = require(process.env.PW_CORE || 'playwright-core');
 const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
 (async () => {
@@ -6,7 +7,7 @@ const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
   const watch = p => { p.on('pageerror', e => errs.push(e.message)); p.on('console', m => { if (m.type() === 'error' && !/404|sw\.js/i.test(m.text())) errs.push(m.text()); }); };
 
   // ── PC: 다른 장소 표시·지도 링크·입력 ──
-  const ctx = await b.newContext({ viewport: { width: 1440, height: 900 }, locale: 'ko-KR', timezoneId: 'Asia/Seoul' });
+  const ctx = await b.newContext({ viewport: { width: 1440, height: 900 }, locale: 'ko-KR', timezoneId: 'Asia/Seoul' }); await ctx.clock.install({ time: new Date('2026-11-04T10:00:00+09:00') });
   const p = await ctx.newPage(); watch(p);
   await p.goto(U + '?reset=1#calendar'); await p.waitForSelector('#todaycard .today-head'); await p.waitForTimeout(300);
   const [k2, k4] = await p.evaluate(() => [__mock.wday(2), __mock.wday(4)]);
@@ -70,7 +71,7 @@ const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
 
   // ── 폰: 하단 달력 '‹ 2026년 11월 ›' ──
   for (const w of [320, 390, 430]) {
-    const c2 = await b.newContext({ viewport: { width: w, height: 800 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ko-KR', timezoneId: 'Asia/Seoul' });
+    const c2 = await b.newContext({ viewport: { width: w, height: 800 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ko-KR', timezoneId: 'Asia/Seoul' }); await c2.clock.install({ time: new Date('2026-11-04T10:00:00+09:00') });
     const q = await c2.newPage(); watch(q);
     await q.goto(U + '#calendar'); await q.waitForSelector('#m-crange'); await q.waitForTimeout(300);
     const pos = async () => q.evaluate(() => { const g = id => document.getElementById(id).getBoundingClientRect(); return { a: g('m-cprev'), t: g('m-crange'), c: g('m-cnext'), sw: document.documentElement.scrollWidth, txt: document.getElementById('m-crange').textContent }; });

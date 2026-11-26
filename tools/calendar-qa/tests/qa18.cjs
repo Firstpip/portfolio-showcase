@@ -1,11 +1,12 @@
 // 2026-11-04 사용자 QA: 팀 근무지에 실제로 오는 사람이 없는데 팀 근무지만 보이던 문제
+// 시계 고정(2026-11-26): 만든 날(2026-11-04) 기준으로 짠 점검이라, 날짜가 바뀌면 이번 주·읽는 기간이 달라져 거짓 실패가 났다
 //   표시: 전원 같은 곳 → '전원 ○○', 제각각 → '각자 근무', 모두 휴가 → '전원 휴가' (데이터는 그대로)
 //   저장 뒤: 모두 같은 곳이 되면 '팀 근무지도 바꾸기' 제안 / 아무도 안 오는 팀 근무지로 바꾸면 알려 줌
 const { chromium } = require(process.env.PW_CORE || 'playwright-core');
 const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
 (async () => {
   const b = await chromium.launch(); const errs = []; const out = []; const ok = (n, c, x = '') => out.push(`${c ? 'PASS' : 'FAIL'}  ${n}${x !== '' ? '  | ' + String(x).replace(/\s+/g, ' ').slice(0, 260) : ''}`);
-  const ctx = await b.newContext({ viewport: { width: 1512, height: 900 }, locale: 'ko-KR', timezoneId: 'Asia/Seoul' });
+  const ctx = await b.newContext({ viewport: { width: 1512, height: 900 }, locale: 'ko-KR', timezoneId: 'Asia/Seoul' }); await ctx.clock.install({ time: new Date('2026-11-04T10:00:00+09:00') });
   const p = await ctx.newPage(); p.on('pageerror', e => errs.push(e.message));
   await p.goto(U + '?reset=1#calendar'); await p.waitForSelector('#todaycard .today-head'); await p.waitForTimeout(400);
   const [k6, k7, k5] = await p.evaluate(() => [__mock.wday(6), __mock.wday(7), __mock.wday(5)]);
@@ -56,7 +57,7 @@ const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
   await ctx.close();
 
   // 폰: 5일 카드 라벨
-  const c2 = await b.newContext({ viewport: { width: 390, height: 800 }, isMobile: true, hasTouch: true, locale: 'ko-KR', timezoneId: 'Asia/Seoul' }); const q = await c2.newPage(); q.on('pageerror', e => errs.push(e.message));
+  const c2 = await b.newContext({ viewport: { width: 390, height: 800 }, isMobile: true, hasTouch: true, locale: 'ko-KR', timezoneId: 'Asia/Seoul' }); await c2.clock.install({ time: new Date('2026-11-04T10:00:00+09:00') }); const q = await c2.newPage(); q.on('pageerror', e => errs.push(e.message));
   await q.goto(U + '?reset=1#calendar'); await q.waitForSelector('#m-crange'); await q.waitForTimeout(300);
   await q.click(`#m-mgrid .mc[data-k="${k7}"]`); await q.waitForTimeout(300);
   const lb = await q.evaluate(k => document.querySelector(`#m-strip button[data-k="${k}"] .lb`)?.textContent, k7);

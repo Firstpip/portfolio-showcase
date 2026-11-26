@@ -1,10 +1,11 @@
 // 2026-11-04 주간 근무 패턴을 설정(⚙)으로 옮김: 날짜 창 '주간 패턴 (…부터)' 문구·팀 근무지 변경 창 체크 제거
+// 시계 고정(2026-11-26): 만든 날(2026-11-04) 기준으로 짠 점검이라, 날짜가 바뀌면 이번 주·읽는 기간이 달라져 거짓 실패가 났다
 const { chromium } = require(process.env.PW_CORE || 'playwright-core');
 const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
 (async () => {
   const b = await chromium.launch(); const errs = []; const out = []; const ok = (n, c, x = '') => out.push(`${c ? 'PASS' : 'FAIL'}  ${n}${x !== '' ? '  | ' + String(x).replace(/\s+/g, ' ').slice(0, 260) : ''}`);
   const watch = p => { p.on('pageerror', e => errs.push(e.message)); p.on('console', m => { if (m.type() === 'error' && !/404|sw\.js/i.test(m.text())) errs.push(m.text()); }); };
-  const ctx = await b.newContext({ viewport: { width: 1440, height: 900 }, locale: 'ko-KR', timezoneId: 'Asia/Seoul' });
+  const ctx = await b.newContext({ viewport: { width: 1440, height: 900 }, locale: 'ko-KR', timezoneId: 'Asia/Seoul' }); await ctx.clock.install({ time: new Date('2026-11-04T10:00:00+09:00') });
   const p = await ctx.newPage(); watch(p); p.on('dialog', d => d.accept());
   await p.goto(U + '?reset=1#calendar'); await p.waitForSelector('#todaycard .today-head'); await p.waitForTimeout(300);
   const k5 = await p.evaluate(() => __mock.wday(5));   // 패턴대로인 평일
@@ -51,7 +52,7 @@ const U = (process.env.QA_URL || 'http://127.0.0.1:8791') + '/index.html';
   await ctx.close();
   // 폰: 헤더에 ⚙ 들어가도 넘침 없음
   for (const w of [320, 390]) {
-    const c2 = await b.newContext({ viewport: { width: w, height: 800 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ko-KR', timezoneId: 'Asia/Seoul' });
+    const c2 = await b.newContext({ viewport: { width: w, height: 800 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ko-KR', timezoneId: 'Asia/Seoul' }); await c2.clock.install({ time: new Date('2026-11-04T10:00:00+09:00') });
     const q = await c2.newPage(); watch(q);
     await q.goto(U + '#calendar'); await q.waitForSelector('#m-crange'); await q.waitForTimeout(300);
     const m = await q.evaluate(() => { const r = document.getElementById('btn-set').getBoundingClientRect(), t = document.querySelector('.top').getBoundingClientRect(); return { sw: document.documentElement.scrollWidth, vis: r.width > 0, oneRow: t.height < 80, h: t.height }; });

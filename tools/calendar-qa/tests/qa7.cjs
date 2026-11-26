@@ -1,8 +1,9 @@
 // 기간 한정 읽기·탭 복귀·재연결 검증
+// 시계 고정(2026-11-26): 만든 날(2026-11-04) 기준으로 짠 점검이라, 날짜가 바뀌면 이번 주·읽는 기간이 달라져 거짓 실패가 났다
 const { chromium } = require(process.env.PW_CORE || 'playwright-core');
 (async () => {
   const b = await chromium.launch(); const errs = []; const out = []; const ok = (n,c,x='') => out.push(`${c?'PASS':'FAIL'}  ${n}${x!==''?'  | '+x:''}`);
-  const ctx = await b.newContext({ viewport:{ width:1440, height:790 }, locale:'ko-KR', timezoneId:'Asia/Seoul' });
+  const ctx = await b.newContext({ viewport:{ width:1440, height:790 }, locale:'ko-KR', timezoneId:'Asia/Seoul' }); await ctx.clock.install({ time: new Date('2026-11-04T10:00:00+09:00') });
   // Date.now 를 앞으로 돌릴 수 있게 (탭 숨김 시간 흉내)
   await ctx.addInitScript(() => { const real = Date.now.bind(Date); window.__skew = 0; Date.now = () => real() + window.__skew;
     // 시드 추가: 오래된 반복·끝난 반복·먼 과거/미래
