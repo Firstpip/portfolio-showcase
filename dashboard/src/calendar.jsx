@@ -884,6 +884,17 @@ function mountCalendar(root, ctx) {
 
   // 근무지 '다른 장소' 입력 줄: 지도 검색이 맞도록 장소만 적게 하고, 시간이 정해진 방문은 미팅으로 보낸다 (2026-11-05 사용자 QA —
   //   장소 칸에 '나라장터 질의응답 14:00'처럼 적으면 하루 종일 그곳에 있는 것으로 보이고 지도 검색도 빗나간다)
+  // 팀 근무지 변경 창: 그날 개인 근무지가 따로 있는 사람을 보여 주고, 고른 사람만 팀 근무지로 맞춘다 (2026-11-26 —
+  //   잘못 눌린 '미팅 장소로 바로 출근' 3건 때문에 팀 근무지를 바꿔도 '전원 (미팅 장소)'로 남던 문제. 자동으로 덮어쓰지 않고 고르게 한다)
+  function povHtml(k){
+    const ovs = k ? personOverrides.filter(o => o.date===k && PEOPLE.some(p => p.id===o.person)) : [];
+    if (!ovs.length) return '';
+    const place = o => o.loc==='other' && o.branch ? o.branch : (LOC[o.loc]?.label || o.loc);
+    const all = ovs.length >= PEOPLE.length;
+    return `<label>이 날 개인 근무지가 따로 있는 사람 (${ovs.length}명)</label>
+      ${ovs.map(o => `<label class="hint" style="display:flex;gap:.45rem;align-items:flex-start;margin-top:.35rem;color:var(--text)"><input type="checkbox" data-pov="${o.id}" data-pp="${o.person}" style="width:auto;margin-top:.2rem"><span><b>${esc(P(o.person)?.name||'')}</b> · ${esc(place(o))}${o.note ? ` <span style="color:var(--text2)">(${esc(o.note)})</span>` : ''}</span></label>`).join('')}
+      <div class="hint${all ? ' warn' : ''}" style="margin-top:.4rem">${all ? '지금은 모두 개인 근무지가 있어 팀 근무지로 오는 사람이 없어요. ' : ''}체크한 사람은 개인 근무지를 지우고 팀 근무지로 출근합니다. 체크하지 않으면 개인 근무지가 그대로 우선합니다. 미팅 일정은 바뀌지 않아요.</div>`;
+  }
   const placeRow = (show, val) => `<div class="fld" id="branch-row" ${show?'':'hidden'}><div class="lblrow"><label for="f-branch">장소</label><a class="maplink" id="f-map" target="_blank" rel="noopener" ${val?`href="https://map.naver.com/p/search/${encodeURIComponent(val)}"`:'hidden'}>지도에서 확인</a></div>
     <input id="f-branch" placeholder="이름이나 주소" value="${esc(val||'')}">
     <div class="hint">아침부터 그곳으로 바로 갈 때 고르세요. 사무실에 있다가 정해진 시각에 나가면 미팅으로 등록하세요. <button type="button" class="linkbtn" id="to-meeting">미팅으로 등록 ›</button></div></div>`;
@@ -960,6 +971,7 @@ function mountCalendar(root, ctx) {
           <div class="fld"><label>근무지</label><div class="chips grid2" id="f-loc">${['cityhall','forest','other','home'].map(c=>`<button type="button" class="chip" data-loc="${c}" style="--c:${LOC[c].color}" aria-pressed="${team?.code===c}"><i class="sw"></i>${LOC[c].full}</button>`).join('')}</div></div>
           ${placeRow(team?.code==='other', team?.branch)}
           <div class="fld"><label for="f-note">사유·메모 (선택 · 팀에 공개)</label><input id="f-note" placeholder="예: 마감일이라 전원 재택" value="${esc(team?.note||'')}"></div>
+          <div class="fld" id="f-pov"></div>
           <div class="hint">이 날 하루만 바뀝니다. 매주 반복되는 근무지는 ⚙️ 설정의 '주간 근무 패턴'에서 바꿉니다.</div>`;
       } else {
         body = teamTab + `<div class="fld"><label for="f-person">누구</label><select id="f-person">${PEOPLE.map(p=>`<option value="${p.id}" ${p.id===person?'selected':''}>${esc(p.name)}</option>`).join('')}</select></div>
@@ -1080,9 +1092,10 @@ function mountCalendar(root, ctx) {
         if (s) prevStart = s; }); }
     const ph = () => { $('past-hint').hidden = !($('f-date').value && $('f-date').value < TK); };
     $('f-date').addEventListener('input', ph); $('f-date').addEventListener('change', ph); ph();
+    if ($('f-pov')) { sh._povFill = () => { if ($('f-pov')) $('f-pov').innerHTML = povHtml($('f-date').value); }; $('f-date').addEventListener('change', sh._povFill); sh._povFill(); }
     // 읽은 기간 밖 날짜를 고르면 그 기간을 읽고 나서 겹침·휴가 경고를 다시 계산
     ['f-date','f-to'].forEach(i => $(i)?.addEventListener('change', () => { const a = $('f-date').value, b = $('f-to')?.value || a; if (!a) return;
-      const form = $('f'); ensureSpan(a < b ? a : b, a < b ? b : a).then(() => { if ($('f') !== form) return; render(); evWarn(); sh._leaveWarn?.(); }); }));
+      const form = $('f'); ensureSpan(a < b ? a : b, a < b ? b : a).then(() => { if ($('f') !== form) return; render(); evWarn(); sh._leaveWarn?.(); sh._povFill?.(); }); }));
     function evWarn(){ const w = $('ev-warn'); if (!w) return;
       const k=$('f-date').value, people=[...sh.querySelectorAll('.chip[data-pc][aria-pressed="true"]')].map(b=>b.dataset.pc), mt=sh.querySelector('[data-mt][aria-pressed="true"]')?.dataset.mt;
       const me = { allday:$('f-allday').checked, start:$('f-start').value, end:$('f-end').value };
@@ -1213,13 +1226,15 @@ function mountCalendar(root, ctx) {
       if (conflict()) return;
       const before = teamLoc(k), wd = parse(k).getDay();
       const label = `${fmtD(k)} ${teamLocName(before)} → ${branch||LOC[loc].label}${note?' ('+note+')':''}`;
+      const povs = [...$('f').querySelectorAll('[data-pov]:checked')].map(c => ({ id:c.dataset.pov, person:c.dataset.pp }));
       run(async () => {
         const pattern = routineAt(k);
         if ((pattern.days[wd]||'cityhall')!==loc || branch || note) await db(() => sb.from(T.team).upsert({ work_date:k, loc, branch:branch||null, note:note||null, change_note:label }, { onConflict:'work_date' }));
         else await db(() => sb.from(T.team).delete().eq('work_date', k));
-        await reload(T.team); done();
-        const v = teamView(k);
-        toast(v?.empty ? `${fmtD(k)} 팀 근무지를 ${branch||LOC[loc].label}로 바꿨어요. 다만 모두 개인 근무지가 있어 이곳으로 오는 사람은 없어요` : `${fmtD(k)} 팀 근무지를 ${branch||LOC[loc].label}로 바꿨어요`);
+        if (povs.length) await db(() => sb.from(T.member).delete().eq('work_date', k).in('id', povs.map(o => o.id)));
+        await reload(T.team); if (povs.length) await reload(T.member); done();
+        const v = teamView(k), with_ = povs.length ? ` · ${names(povs.map(o => o.person))} 팀 근무지로 맞췄어요` : '';
+        toast(v?.empty ? `${fmtD(k)} 팀 근무지를 ${branch||LOC[loc].label}로 바꿨어요${with_}. 다만 모두 개인 근무지가 있어 이곳으로 오는 사람은 없어요` : `${fmtD(k)} 팀 근무지를 ${branch||LOC[loc].label}로 바꿨어요${with_}`);
       });
     } else if (type==='loc') {
       const loc = pressed('.chip[data-loc]')[0]?.dataset.loc ?? '', p = v('f-person'), k = v('f-date'), branch = loc==='other' ? v('f-branch') : '', note = v('f-note');
